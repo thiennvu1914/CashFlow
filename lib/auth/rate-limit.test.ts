@@ -24,13 +24,14 @@ import { createAuth } from './create-auth'
 const BASE_URL = 'http://localhost:3000'
 const TEST_SECRET = 'rate-limit-unit-test-secret-32characte'
 
-function makeAuth() {
+function makeAuth(trustedProxies?: string[]) {
   const db: MemoryDB = { user: [], session: [], account: [], verification: [] }
   return createAuth({
     database: memoryAdapter(db),
     baseURL: BASE_URL,
     secret: TEST_SECRET,
     sendResetPasswordEmail: async () => {},
+    trustedProxies,
   })
 }
 
@@ -84,10 +85,12 @@ describe('auth rate limiting', () => {
 
     const sixth = await signIn(auth, ip, email, 'wrong-password')
     expect(sixth.status).toBe(429)
+    // `rateLimitResponse` in
+    // `node_modules/better-auth/dist/api/rate-limiter/index.mjs` always sets
+    // this header on a 429, so it is asserted unconditionally.
     const retryAfter = sixth.headers.get('X-Retry-After')
-    if (retryAfter !== null) {
-      expect(Number(retryAfter)).toBeGreaterThan(0)
-    }
+    expect(retryAfter).not.toBeNull()
+    expect(Number(retryAfter)).toBeGreaterThan(0)
   })
 
   it('does not share a sign-in lockout across different IPs', async () => {
@@ -132,5 +135,86 @@ describe('auth rate limiting', () => {
 
     const eleventh = await auth.handler(getSessionRequest(ip))
     expect(eleventh.status).toBe(429)
+  })
+})
+
+/**
+ * With `trustedProxies` configured, `getIPFromHeader`
+ * (`node_modules/@better-auth/core/dist/utils/ip.mjs`) walks the
+ * `x-forwarded-for` chain from RIGHT to LEFT, skipping every hop that matches a
+ * trusted CIDR, and returns the first address that does not. The left-most
+ * entries — the only ones a client can forge — are therefore never consulted
+ * once a real proxy has appended its own hop. Without `trustedProxies` the same
+ * function trusts a header only when it carries exactly one value, which is
+ * both forgeable by a direct client and never true behind an appending proxy.
+ */
+describe('rate-limit client-IP resolution through trusted proxies', () => {
+  const TRUSTED = ['10.0.0.0/8']
+
+  it('keys one bucket on the real client IP even when the spoofable left-most entry changes', async () => {
+    const auth = makeAuth(TRUSTED)
+    const email = 'spoofer@example.com'
+    // Same real client (5.5.5.5) behind the same trusted proxy (10.0.0.1), but
+    // each request forges a different left-most value. If Better Auth trusted
+    // the left-most entry these would be six separate buckets and none would
+    // ever trip.
+    const chains = [
+      '9.9.9.1, 5.5.5.5, 10.0.0.1',
+      '9.9.9.2, 5.5.5.5, 10.0.0.1',
+      '9.9.9.3, 5.5.5.5, 10.0.0.1',
+      '9.9.9.4, 5.5.5.5, 10.0.0.1',
+      '9.9.9.5, 5.5.5.5, 10.0.0.1',
+    ]
+
+    for (const chain of chains) {
+      const response = await signIn(auth, chain, email, 'wrong-password')
+      expect(response.status).toBe(401)
+    }
+
+    const sixth = await signIn(auth, '9.9.9.6, 5.5.5.5, 10.0.0.1', email, 'wrong-password')
+    expect(sixth.status).toBe(429)
+    expect(sixth.headers.get('X-Retry-After')).not.toBeNull()
+  })
+
+  it('does not limit a different real client behind the same trusted proxy', async () => {
+    const auth = makeAuth(TRUSTED)
+    const email = 'neighbour@example.com'
+    // A real client distinct from the previous test's 5.5.5.5: Better Auth's
+    // rate-limit store is a module-level Map shared by every instance in the
+    // process (`memory` in
+    // `node_modules/better-auth/dist/api/rate-limiter/index.mjs`), so a bucket
+    // reused across `it()` blocks would carry the earlier count over.
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      await signIn(auth, '9.9.9.9, 5.5.5.7, 10.0.0.1', email, 'wrong-password')
+    }
+    // Confirm 5.5.5.7 really is locked out before checking the neighbour.
+    expect((await signIn(auth, '5.5.5.7, 10.0.0.1', email, 'wrong-password')).status).toBe(429)
+
+    const other = await signIn(auth, '6.6.6.6, 10.0.0.1', email, 'wrong-password')
+    expect(other.status).toBe(401)
+  })
+
+  it('collapses a multi-hop chain into one bucket when no trusted proxies are configured', async () => {
+    // The counterpart of the two cases above, and the reason the option is
+    // needed: with `trustedProxies` unset, a chain of more than one value
+    // resolves to no IP at all, and `getIP` falls back to `127.0.0.1` in
+    // dev/test — one shared bucket for every distinct client.
+    const auth = makeAuth()
+    const email = 'shared-bucket@example.com'
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const response = await signIn(
+        auth,
+        `9.9.9.${attempt}, 5.5.5.${attempt}, 10.0.0.1`,
+        email,
+        'wrong-password',
+      )
+      expect(response.status).toBe(401)
+    }
+
+    // A sixth request from a completely different chain still trips the limit,
+    // because all six landed in the same fallback bucket.
+    const sixth = await signIn(auth, '7.7.7.7, 8.8.8.8, 10.0.0.1', email, 'wrong-password')
+    expect(sixth.status).toBe(429)
   })
 })

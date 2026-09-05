@@ -13,7 +13,13 @@ describe('getEmailSender', () => {
   })
 
   it('returns the console sender when SMTP is not configured', async () => {
+    // Every input to the selection is stubbed, including the two that would
+    // otherwise be picked up from the developer's own `.env` (loaded by the
+    // `dotenv/config` setup file in `vitest.config.ts`) and flip this case to
+    // the file sender or the production throw.
     vi.stubEnv('SMTP_HOST', '')
+    vi.stubEnv('EMAIL_OUTBOX_FILE', '')
+    vi.stubEnv('NODE_ENV', 'development')
     const { getEmailSender } = await import('./get-sender')
     const { ConsoleEmailSender } = await import('./console-sender')
     expect(getEmailSender()).toBeInstanceOf(ConsoleEmailSender)
@@ -29,12 +35,25 @@ describe('getEmailSender', () => {
     expect(getEmailSender()).toBeInstanceOf(SmtpEmailSender)
   })
 
-  it('returns the file sender when SMTP is empty and EMAIL_OUTBOX_FILE is set', async () => {
+  it('returns the file sender when SMTP is empty and EMAIL_OUTBOX_FILE is set outside production', async () => {
     vi.stubEnv('SMTP_HOST', '')
     vi.stubEnv('EMAIL_OUTBOX_FILE', '/tmp/some-outbox.jsonl')
+    vi.stubEnv('NODE_ENV', 'development')
     const { getEmailSender } = await import('./get-sender')
     const { FileEmailSender } = await import('./file-sender')
     expect(getEmailSender()).toBeInstanceOf(FileEmailSender)
+  })
+
+  it('throws in production even when EMAIL_OUTBOX_FILE is set — the file outbox is never a production transport', async () => {
+    // A reset link is a bearer token. If a stray EMAIL_OUTBOX_FILE could win in
+    // production, those tokens would land on disk and never reach the user.
+    vi.stubEnv('SMTP_HOST', '')
+    vi.stubEnv('EMAIL_OUTBOX_FILE', '/tmp/some-outbox.jsonl')
+    vi.stubEnv('NODE_ENV', 'production')
+    const { getEmailSender } = await import('./get-sender')
+    expect(() => getEmailSender()).toThrowError(
+      'Email is not configured: set SMTP_HOST (and related SMTP_* variables) in production',
+    )
   })
 
   it('throws a configuration error in production when nothing is configured', async () => {

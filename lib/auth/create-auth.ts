@@ -24,6 +24,26 @@ export interface CreateAuthOptions {
    * tests pass a fake that records what would have been sent.
    */
   sendResetPasswordEmail: (to: string, url: string) => Promise<void>
+  /**
+   * IPs / CIDR ranges of the reverse proxies or CDN nodes in front of this app,
+   * passed straight through to Better Auth's
+   * `advanced.ipAddress.trustedProxies`
+   * (`node_modules/@better-auth/core/dist/types/init-options.d.mts`).
+   *
+   * Rate limiting keys on `<clientIp>|<path>`, and the client IP comes from
+   * `x-forwarded-for`. With no trusted proxies configured, Better Auth trusts
+   * a header only when it holds exactly one value
+   * (`getIPFromHeader` in `node_modules/@better-auth/core/dist/utils/ip.mjs`)
+   * — which a direct client can forge, and which a chain-appending proxy never
+   * produces, collapsing every caller into a single bucket. With them set, the
+   * chain is walked right to left, trusted hops are skipped, and the first
+   * untrusted address wins — so a spoofed left-most entry is ignored.
+   *
+   * `lib/auth/auth.ts` fills this from `TRUSTED_PROXY_CIDRS` and requires it in
+   * production. Left undefined (dev/test, or a direct-to-Node deployment),
+   * Better Auth keeps its single-value-header behaviour.
+   */
+  trustedProxies?: string[]
 }
 
 /**
@@ -39,6 +59,15 @@ export function createAuth(options: CreateAuthOptions) {
     // falsy value as "not provided").
     baseURL: options.baseURL,
     secret: options.secret,
+    advanced: {
+      ipAddress: {
+        // `ipAddressHeaders` is deliberately left out so Better Auth keeps its
+        // default of `["x-forwarded-for"]` (`DEFAULT_IP_HEADERS` in
+        // `node_modules/@better-auth/core/dist/utils/ip.mjs`). Only the
+        // trusted-proxy list is configured here.
+        trustedProxies: options.trustedProxies,
+      },
+    },
     // Better Auth only rate-limits by default when `NODE_ENV=production`
     // (`enabled: options.rateLimit?.enabled ?? isProduction` in
     // `node_modules/better-auth/dist/context/create-context.mjs`). Setting
