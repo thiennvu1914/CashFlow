@@ -176,8 +176,10 @@ model FinancialAccount {
   status         RecordStatus @default(ACTIVE)
   createdAt      DateTime     @default(now())
 
-  accountType  AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
-  transactions Transaction[]
+  accountType   AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
+  transactions  Transaction[]
+  transfersFrom Transfer[]    @relation("TransferFromAccount")
+  transfersTo   Transfer[]    @relation("TransferToAccount")
 
   @@unique([userId, id])
   @@index([userId])
@@ -236,6 +238,10 @@ model Transaction {
   accountId        String
   categoryId       String?
   type             TransactionType
+  /// >= 0 is also enforced by a database CHECK constraint
+  /// (`Transaction_amount_nonnegative`), written by hand in the
+  /// `add_transfer` migration — Prisma's schema language has no CHECK syntax,
+  /// so the constraint lives in SQL and this comment is its only trace here.
   amount           Decimal         @db.Decimal(18, 2)
   currency         Currency
   date             DateTime
@@ -253,4 +259,40 @@ model Transaction {
   @@index([userId, date])
   @@index([userId, accountId, date])
   @@index([userId, categoryId, date])
+}
+
+/// An internal move of money between two of the user's own accounts (§4.5).
+///
+/// A transfer is its own entity, never a pair of transactions: it has no
+/// category, never appears as income or expense in any report, and carries no
+/// FX snapshot — the only rate that matters here is the one actually applied
+/// between the two accounts, stored as `exchangeRateUsed`.
+///
+/// `exchangeRateUsed` is NULL for a same-currency transfer, where `toAmount`
+/// is derived from `fromAmount` server-side and money is conserved by
+/// construction. For a cross-currency transfer it is `toAmount / fromAmount`,
+/// the effective rate the user actually got, kept for the audit trail.
+///
+/// Both legs are composite `(userId, accountId)` foreign keys, so neither end
+/// of a transfer can ever point at another user's account. Positivity of both
+/// amounts is enforced by database CHECK constraints
+/// (`Transfer_fromAmount_positive`, `Transfer_toAmount_positive`) added by
+/// hand in this model's migration, since Prisma has no CHECK syntax.
+model Transfer {
+  id               String   @id @default(cuid())
+  userId           String
+  fromAccountId    String
+  toAccountId      String
+  fromAmount       Decimal  @db.Decimal(18, 2)
+  toAmount         Decimal  @db.Decimal(18, 2)
+  exchangeRateUsed Decimal? @db.Decimal(18, 6)
+  date             DateTime
+  note             String?
+  createdAt        DateTime @default(now())
+
+  fromAccount FinancialAccount @relation("TransferFromAccount", fields: [userId, fromAccountId], references: [userId, id])
+  toAccount   FinancialAccount @relation("TransferToAccount", fields: [userId, toAccountId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, date])
 }
