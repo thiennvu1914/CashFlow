@@ -39,6 +39,42 @@ export function createAuth(options: CreateAuthOptions) {
     // falsy value as "not provided").
     baseURL: options.baseURL,
     secret: options.secret,
+    // Better Auth only rate-limits by default when `NODE_ENV=production`
+    // (`enabled: options.rateLimit?.enabled ?? isProduction` in
+    // `node_modules/better-auth/dist/context/create-context.mjs`). Setting
+    // `enabled: true` explicitly makes dev/test behave the same as prod
+    // instead of silently having no protection outside production.
+    //
+    // Storage is left at its default, an in-memory Map local to this process
+    // (`node_modules/better-auth/dist/api/rate-limiter/index.mjs`). That is
+    // fine for the single-instance MVP; if this app is ever horizontally
+    // scaled, a shared store (`rateLimit.storage: 'secondary-storage'` backed
+    // by Redis, or a custom store) is needed so one instance's count is seen
+    // by the others.
+    //
+    // Rule paths are matched against the request path with the
+    // `/api/auth` base stripped (`normalizePathname` in
+    // `node_modules/@better-auth/core/dist/utils/url.mjs`), so `/sign-in/email`
+    // and `/request-password-reset` below match `POST /api/auth/sign-in/email`
+    // and `POST /api/auth/request-password-reset` respectively — confirmed in
+    // `node_modules/better-auth/dist/api/rate-limiter/index.mjs`
+    // (`resolveRateLimitConfig`). Better Auth also ships its own built-in
+    // "special rules" for these same paths (`getDefaultSpecialRules` in that
+    // file): sign-in/sign-up/change-password/change-email get 3 requests per
+    // 10s, and request-password-reset/forget-password/send-verification-email
+    // get 3 per 60s. A `customRules` entry with an exact-path key (no `*`)
+    // always wins over those built-ins when present, so the values below are
+    // the ones actually enforced for these two paths, not Better Auth's
+    // (stricter) defaults.
+    rateLimit: {
+      enabled: true,
+      window: 60,
+      max: 10,
+      customRules: {
+        '/sign-in/email': { window: 60, max: 5 },
+        '/request-password-reset': { window: 60, max: 5 },
+      },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
