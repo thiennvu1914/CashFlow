@@ -51,20 +51,10 @@ function todayIsoDate(): string {
 
 const DEFAULT_TYPE: TransactionType = 'EXPENSE'
 
-/**
- * The visible `<select>` selection and the field's stored value must agree
- * from the first render: an untouched, uncontrolled `<select>` with no
- * matching option shows its first `<option>` (here, the "Select a category"
- * placeholder, value `""`) regardless of what `defaultValues` claims, so a
- * `categoryId` default of `undefined` would silently submit `""` instead
- * (see the identical note in `account-form.tsx` for `accountTypeId`).
- * Defaulting to the first category that actually matches `DEFAULT_TYPE`
- * keeps the two in sync.
- */
-function defaultValues(accounts: Account[], categories: Category[]): FormInput {
+function defaultValues(accounts: Account[]): FormInput {
   return {
     accountId: accounts[0]?.id ?? '',
-    categoryId: categories.find((c) => c.type === DEFAULT_TYPE)?.id,
+    categoryId: undefined,
     type: DEFAULT_TYPE,
     date: todayIsoDate(),
     amount: 0,
@@ -90,7 +80,7 @@ export function TransactionForm({
     formState: { errors, isSubmitting },
   } = useForm<FormInput, unknown, CreateTransactionInput>({
     resolver: zodResolver(createTransactionSchema),
-    defaultValues: defaultValues(accounts, categories),
+    defaultValues: defaultValues(accounts),
   })
 
   const type = useWatch({ control, name: 'type' })
@@ -111,7 +101,7 @@ export function TransactionForm({
         setError(ACTION_ERROR_MESSAGES[result.error])
         return
       }
-      reset(defaultValues(accounts, categories))
+      reset(defaultValues(accounts))
       router.refresh()
     } catch {
       console.error('TransactionForm: create failed')
@@ -149,8 +139,17 @@ export function TransactionForm({
       {needsCategory && (
         <div>
           <select
-            {...register('categoryId')}
+            {...register('categoryId', {
+              // An emptied/untouched select's DOM value is `""` (the
+              // placeholder option) — converting that to `undefined` here is
+              // what lets the schema's friendly "Category is required for
+              // income and expense transactions" refine message fire,
+              // instead of the generic "at least 1 character" message a
+              // stray `""` would otherwise trigger.
+              setValueAs: (v: string) => (v === '' ? undefined : v),
+            })}
             aria-label="Category"
+            defaultValue=""
             className="rounded-md border p-2"
           >
             <option value="">Select a category</option>

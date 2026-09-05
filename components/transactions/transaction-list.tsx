@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { format } from 'date-fns'
+import { formatInTimeZone } from 'date-fns-tz'
 import type { TransactionType } from '@prisma/client'
+import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import {
   deleteTransactionAction,
   type TransactionActionError,
@@ -22,9 +23,6 @@ type Row = {
   category: { name: string } | null
 }
 
-/** Types whose amount adds to the account — everything else subtracts. */
-const POSITIVE_TYPES = new Set<TransactionType>(['INCOME', 'CASH_IN', 'ADJUSTMENT_INCREASE'])
-
 const GENERIC_ERROR = 'Something went wrong. Please try again.'
 
 const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
@@ -38,7 +36,7 @@ const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
 const amountFormatter = new Intl.NumberFormat('vi-VN')
 
 function formatSignedAmount(tx: Row): { sign: string; text: string; className: string } {
-  const positive = POSITIVE_TYPES.has(tx.type)
+  const positive = isBalanceIncreasing(tx.type)
   // Display only — the sign is derived from `type`, never stored or computed
   // arithmetically; `Number(tx.amount)` only feeds the formatter.
   return {
@@ -48,7 +46,21 @@ function formatSignedAmount(tx: Row): { sign: string; text: string; className: s
   }
 }
 
-export function TransactionList({ transactions }: { transactions: Row[] }) {
+export function TransactionList({
+  transactions,
+  timezone,
+}: {
+  transactions: Row[]
+  /**
+   * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
+   * from the page). `date` is a UTC instant with no time-of-day meaning to
+   * the user; formatting it in their own calendar day — rather than the
+   * server's or the browser's — is what keeps the date shown here identical
+   * on the server render and the client hydration (no mismatch) while still
+   * showing *their* day, not UTC's.
+   */
+  timezone: string
+}) {
   const router = useRouter()
   const [errors, setErrors] = useState<Record<string, string>>({})
 
@@ -89,7 +101,7 @@ export function TransactionList({ transactions }: { transactions: Row[] }) {
                 {tx.category?.name ?? tx.type} · {tx.account.name}
               </p>
               <p className="text-sm text-foreground/60">
-                {format(tx.date, 'yyyy-MM-dd')}
+                {formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd')}
                 {tx.note ? ` · ${tx.note}` : ''}
               </p>
               {showCacheFallbackHint && (
@@ -106,7 +118,7 @@ export function TransactionList({ transactions }: { transactions: Row[] }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                aria-label={`Delete transaction on ${format(tx.date, 'yyyy-MM-dd')}`}
+                aria-label={`Delete transaction on ${formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd')}`}
                 onClick={() => handleDelete(tx.id)}
                 className="text-negative"
               >
