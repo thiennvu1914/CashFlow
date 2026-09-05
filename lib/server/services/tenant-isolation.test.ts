@@ -30,6 +30,24 @@ function isKnownRequestError(error: unknown): error is Prisma.PrismaClientKnownR
   return error instanceof Prisma.PrismaClientKnownRequestError
 }
 
+/**
+ * Asserts a promise rejects with Prisma's own not-found error (P2025), thrown
+ * by `findUniqueOrThrow` / `update` on a composite `(userId, id)` lookup that
+ * does not match — the shape every cross-tenant service call below produces,
+ * confirmed empirically against this codebase's actual services rather than
+ * assumed from Prisma's docs.
+ */
+async function expectRejectsWithP2025(promise: Promise<unknown>) {
+  let caught: unknown
+  try {
+    await promise
+  } catch (error) {
+    caught = error
+  }
+  expect(isKnownRequestError(caught)).toBe(true)
+  expect((caught as Prisma.PrismaClientKnownRequestError).code).toBe('P2025')
+}
+
 async function createUserWithAccount(currency: 'VND' | 'USD' = 'VND') {
   const user = await prisma.user.create({
     data: {
@@ -260,13 +278,13 @@ describe('tenant isolation through the services', () => {
     const userB = await createUserWithAccount()
 
     try {
-      await expect(
+      await expectRejectsWithP2025(
         createTransaction(
           userA.userId,
           { accountId: userB.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
           fakeProvider(),
         ),
-      ).rejects.toThrow()
+      )
 
       expect(await prisma.transaction.count({ where: { userId: userA.userId } })).toBe(0)
       expect(await prisma.transaction.count({ where: { userId: userB.userId } })).toBe(0)
@@ -281,7 +299,7 @@ describe('tenant isolation through the services', () => {
     const userB = await createUserWithAccount()
 
     try {
-      await expect(
+      await expectRejectsWithP2025(
         createTransaction(
           userA.userId,
           {
@@ -293,7 +311,7 @@ describe('tenant isolation through the services', () => {
           },
           fakeProvider(),
         ),
-      ).rejects.toThrow()
+      )
 
       expect(await prisma.transaction.count({ where: { userId: userA.userId } })).toBe(0)
       expect(await prisma.transaction.count({ where: { userId: userB.userId } })).toBe(0)
@@ -308,7 +326,7 @@ describe('tenant isolation through the services', () => {
     const userB = await createUserWithAccount()
 
     try {
-      await expect(
+      await expectRejectsWithP2025(
         createTransfer(userA.userId, {
           fromAccountId: userA.accountId,
           toAccountId: userB.accountId,
@@ -316,7 +334,7 @@ describe('tenant isolation through the services', () => {
           toAmount: 100,
           date: new Date(),
         }),
-      ).rejects.toThrow()
+      )
 
       expect(await prisma.transfer.count({ where: { userId: userA.userId } })).toBe(0)
       expect(await prisma.transfer.count({ where: { userId: userB.userId } })).toBe(0)
@@ -359,9 +377,9 @@ describe('tenant isolation through the services', () => {
     const userB = await createUserWithAccount()
 
     try {
-      await expect(
+      await expectRejectsWithP2025(
         updateFinancialAccount(userA.userId, userB.accountId, { name: 'Hijacked' }),
-      ).rejects.toThrow()
+      )
 
       const stored = await prisma.financialAccount.findUniqueOrThrow({
         where: { userId_id: { userId: userB.userId, id: userB.accountId } },
@@ -403,7 +421,7 @@ describe('tenant isolation through the services', () => {
         fakeProvider(),
       )
 
-      await expect(deleteTransaction(userA.userId, txOfUserB.id)).rejects.toThrow()
+      await expectRejectsWithP2025(deleteTransaction(userA.userId, txOfUserB.id))
 
       expect(
         await prisma.transaction.count({
@@ -427,14 +445,14 @@ describe('tenant isolation through the services', () => {
         fakeProvider(),
       )
 
-      await expect(
+      await expectRejectsWithP2025(
         updateTransaction(
           userA.userId,
           txOfUserB.id,
           { accountId: userB.accountId, type: 'CASH_IN', amount: 9999, date: new Date() },
           fakeProvider(25500, 'fake'),
         ),
-      ).rejects.toThrow()
+      )
 
       const stored = await prisma.transaction.findUniqueOrThrow({
         where: { userId_id: { userId: userB.userId, id: txOfUserB.id } },
