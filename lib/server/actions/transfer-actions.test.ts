@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
 const createTransferMock = vi.hoisted(() => vi.fn())
+const deleteTransferMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
 class MockArchivedAccountError extends Error {
@@ -34,6 +35,7 @@ vi.mock('@/lib/auth/require-user', () => ({
 
 vi.mock('@/lib/server/services/transfer', () => ({
   createTransfer: createTransferMock,
+  deleteTransfer: deleteTransferMock,
   SameAccountTransferError: MockSameAccountTransferError,
 }))
 
@@ -45,7 +47,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: revalidatePathMock,
 }))
 
-const { createTransferAction } = await import('./transfer-actions')
+const { createTransferAction, deleteTransferAction } = await import('./transfer-actions')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -92,6 +94,7 @@ function notFoundError() {
 beforeEach(() => {
   requireUserMock.mockReset()
   createTransferMock.mockReset()
+  deleteTransferMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
@@ -181,5 +184,50 @@ describe('createTransferAction', () => {
 
     await expect(createTransferAction(validInput)).rejects.toThrow('Not authenticated')
     expect(createTransferMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteTransferAction', () => {
+  it('calls the service with the session user id and the transfer id only', async () => {
+    deleteTransferMock.mockResolvedValue(undefined)
+
+    const result = await deleteTransferAction('transfer_1')
+
+    expect(result).toEqual({ ok: true })
+    expect(deleteTransferMock).toHaveBeenCalledTimes(1)
+    expect(deleteTransferMock).toHaveBeenCalledWith(FIXED_USER.id, 'transfer_1')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/transfers')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
+  })
+
+  it('maps ArchivedAccountError to ARCHIVED_ACCOUNT and does not revalidate', async () => {
+    deleteTransferMock.mockRejectedValue(new MockArchivedAccountError())
+
+    const result = await deleteTransferAction('transfer_1')
+
+    expect(result).toEqual({ ok: false, error: 'ARCHIVED_ACCOUNT' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it("maps Prisma's P2025 not-found error to NOT_FOUND", async () => {
+    deleteTransferMock.mockRejectedValue(notFoundError())
+
+    const result = await deleteTransferAction('transfer_1')
+
+    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' })
+  })
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    deleteTransferMock.mockRejectedValue(new Error('boom'))
+
+    await expect(deleteTransferAction('transfer_1')).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(deleteTransferAction('transfer_1')).rejects.toThrow('Not authenticated')
+    expect(deleteTransferMock).not.toHaveBeenCalled()
   })
 })

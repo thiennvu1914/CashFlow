@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { createTransferSchema } from '@/lib/validation/transfer'
-import { createTransfer, listTransfers, SameAccountTransferError } from './transfer'
+import { createTransfer, deleteTransfer, listTransfers, SameAccountTransferError } from './transfer'
 import { ArchivedAccountError } from './transaction'
 import { getAccountBalance } from './balance'
 
@@ -380,6 +380,86 @@ describe('transfer service', () => {
       })
       expect(rows.map((r) => r.id)).toEqual(byIdDesc.map((r) => r.id))
       expect(rows).toHaveLength(3)
+    })
+  })
+
+  describe('deleteTransfer', () => {
+    it('restores both balances exactly', async () => {
+      const s = await setupTwoAccounts()
+      const transfer = await createTransfer(s.userId, {
+        fromAccountId: s.accountAId,
+        toAccountId: s.accountBId,
+        fromAmount: 250_000,
+        toAmount: 250_000,
+        date: new Date('2026-02-01'),
+      })
+      expect((await getAccountBalance(s.userId, s.accountAId)).toString()).toBe('750000')
+      expect((await getAccountBalance(s.userId, s.accountBId)).toString()).toBe('250000')
+
+      await deleteTransfer(s.userId, transfer.id)
+
+      // No stored balance anywhere: removing the row is the whole undo.
+      expect((await getAccountBalance(s.userId, s.accountAId)).toString()).toBe('1000000')
+      expect((await getAccountBalance(s.userId, s.accountBId)).toString()).toBe('0')
+      expect(await prisma.transfer.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('refuses to delete a transfer whose source account is archived, leaving the row in place', async () => {
+      const s = await setupTwoAccounts()
+      const transfer = await createTransfer(s.userId, {
+        fromAccountId: s.accountAId,
+        toAccountId: s.accountBId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date('2026-02-01'),
+      })
+      await archiveAccount(s.userId, s.accountAId)
+
+      await expect(deleteTransfer(s.userId, transfer.id)).rejects.toThrow(ArchivedAccountError)
+
+      expect(await readTransfer(s.userId, transfer.id)).toBeTruthy()
+    })
+
+    it('refuses to delete a transfer whose destination account is archived', async () => {
+      const s = await setupTwoAccounts()
+      const transfer = await createTransfer(s.userId, {
+        fromAccountId: s.accountAId,
+        toAccountId: s.accountBId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date('2026-02-01'),
+      })
+      // B holds the 100 that arrived, so archiving it needs the balance back
+      // at zero first — a second transfer returning the money does that
+      // without touching the row under test.
+      await createTransfer(s.userId, {
+        fromAccountId: s.accountBId,
+        toAccountId: s.accountAId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date('2026-02-02'),
+      })
+      await archiveAccount(s.userId, s.accountBId)
+
+      await expect(deleteTransfer(s.userId, transfer.id)).rejects.toThrow(ArchivedAccountError)
+
+      expect(await readTransfer(s.userId, transfer.id)).toBeTruthy()
+    })
+
+    it("refuses to delete another user's transfer (P2025) and leaves the row in place", async () => {
+      const s = await setupTwoAccounts()
+      const other = await setupTwoAccounts()
+      const transfer = await createTransfer(other.userId, {
+        fromAccountId: other.accountAId,
+        toAccountId: other.accountBId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date('2026-02-01'),
+      })
+
+      await expectNotFound(deleteTransfer(s.userId, transfer.id))
+
+      expect(await readTransfer(other.userId, transfer.id)).toBeTruthy()
     })
   })
 

@@ -91,3 +91,28 @@ export async function createTransfer(userId: string, input: CreateTransferInput)
     },
   })
 }
+
+/**
+ * Removes a transfer, mirroring `deleteTransaction`.
+ *
+ * There is no stored balance, so deleting the row *is* the undo: both accounts
+ * simply stop counting its two legs the next time a balance is derived. Both
+ * ends must still be ACTIVE — an archived account has a zero balance by
+ * construction, and removing a leg it can no longer show would silently change
+ * history behind it. Without this operation a transfer would permanently lock
+ * both of its accounts (`accountHasActivity` counts transfers), which is why
+ * it exists at all.
+ *
+ * The ownership-scoped `findUniqueOrThrow` on `(userId, id)` is what makes
+ * another user's transfer a P2025 rather than a deletable row.
+ */
+export async function deleteTransfer(userId: string, transferId: string) {
+  const existing = await prisma.transfer.findUniqueOrThrow({
+    where: { userId_id: { userId, id: transferId } },
+  })
+  await Promise.all([
+    requireActiveAccount(userId, existing.fromAccountId),
+    requireActiveAccount(userId, existing.toAccountId),
+  ])
+  await prisma.transfer.delete({ where: { userId_id: { userId, id: transferId } } })
+}

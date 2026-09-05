@@ -4,7 +4,11 @@ import { revalidatePath } from 'next/cache'
 import { Prisma } from '@prisma/client'
 import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
-import { createTransfer, SameAccountTransferError } from '@/lib/server/services/transfer'
+import {
+  createTransfer,
+  deleteTransfer,
+  SameAccountTransferError,
+} from '@/lib/server/services/transfer'
 import { ArchivedAccountError } from '@/lib/server/services/transaction'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { calendarDateToInstant } from '@/lib/datetime/calendar-date'
@@ -53,6 +57,20 @@ export async function createTransferAction(
   } catch (e) {
     return mapError(e)
   }
+  revalidatePath('/transfers')
+  revalidatePath('/accounts')
+  return { ok: true }
+}
+
+export async function deleteTransferAction(id: string): Promise<TransferActionResult> {
+  const user = await requireUser()
+  try {
+    await deleteTransfer(user.id, id)
+  } catch (e) {
+    return mapError(e)
+  }
+  // Both pages change: the transfer disappears, and both accounts' derived
+  // balances move back.
   revalidatePath('/transfers')
   revalidatePath('/accounts')
   return { ok: true }

@@ -1,4 +1,13 @@
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { formatInTimeZone } from 'date-fns-tz'
+import {
+  deleteTransferAction,
+  type TransferActionError,
+} from '@/lib/server/actions/transfer-actions'
+import { Button } from '@/components/ui/button'
 
 /**
  * No Prisma import here — the page fetches and shapes the rows; this
@@ -18,6 +27,15 @@ type Row = {
 
 const amountFormatter = new Intl.NumberFormat('vi-VN')
 
+const GENERIC_ERROR = 'Something went wrong. Please try again.'
+
+const ACTION_ERROR_MESSAGES: Record<TransferActionError, string> = {
+  SAME_ACCOUNT: 'Choose two different accounts.',
+  ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That record no longer exists.',
+}
+
 export function TransferList({
   transfers,
   timezone,
@@ -31,6 +49,29 @@ export function TransferList({
    */
   timezone: string
 }) {
+  const router = useRouter()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+
+  async function handleDelete(id: string) {
+    if (!window.confirm('Delete this transfer? Both account balances will move back.')) return
+    setErrors((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    try {
+      const result = await deleteTransferAction(id)
+      if (!result.ok) {
+        setErrors((prev) => ({ ...prev, [id]: ACTION_ERROR_MESSAGES[result.error] }))
+        return
+      }
+      router.refresh()
+    } catch {
+      console.error('TransferList: delete failed')
+      setErrors((prev) => ({ ...prev, [id]: GENERIC_ERROR }))
+    }
+  }
+
   if (transfers.length === 0) {
     return <p className="text-sm text-foreground/60">No transfers yet — add one below.</p>
   }
@@ -39,27 +80,39 @@ export function TransferList({
     <ul className="flex flex-col gap-2">
       {transfers.map((t) => {
         const crossCurrency = t.fromAccount.currency !== t.toAccount.currency
+        const day = formatInTimeZone(t.date, timezone, 'yyyy-MM-dd')
         return (
-          <li key={t.id} className="rounded-md border p-3">
-            <p className="font-medium">
-              {t.fromAccount.name} → {t.toAccount.name}:{' '}
-              {/* Display only — amounts arrive pre-formatted as fixed-2-decimal
-                 strings from the page; `Number(...)` here only feeds the
-                 formatter, never any arithmetic. */}
-              {amountFormatter.format(Number(t.fromAmount))} {t.fromAccount.currency}
-              {crossCurrency && (
-                <>
-                  {' '}
-                  → {amountFormatter.format(Number(t.toAmount))} {t.toAccount.currency}
-                </>
+          <li key={t.id} className="flex items-start justify-between rounded-md border p-3">
+            <div>
+              <p className="font-medium">
+                {t.fromAccount.name} → {t.toAccount.name}:{' '}
+                {/* Display only — amounts arrive pre-formatted as fixed-2-decimal
+                   strings from the page; `Number(...)` here only feeds the
+                   formatter, never any arithmetic. */}
+                {amountFormatter.format(Number(t.fromAmount))} {t.fromAccount.currency}
+                {crossCurrency && (
+                  <>
+                    {' '}
+                    → {amountFormatter.format(Number(t.toAmount))} {t.toAccount.currency}
+                  </>
+                )}
+              </p>
+              <p className="text-sm text-foreground/60">{day}</p>
+              {crossCurrency && t.exchangeRateUsed && (
+                <p className="text-xs text-foreground/50">rate {t.exchangeRateUsed}</p>
               )}
-            </p>
-            <p className="text-sm text-foreground/60">
-              {formatInTimeZone(t.date, timezone, 'yyyy-MM-dd')}
-            </p>
-            {crossCurrency && t.exchangeRateUsed && (
-              <p className="text-xs text-foreground/50">rate {t.exchangeRateUsed}</p>
-            )}
+              {errors[t.id] && <p className="text-sm text-negative">{errors[t.id]}</p>}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={`Delete transfer on ${day}`}
+              onClick={() => handleDelete(t.id)}
+              className="text-negative"
+            >
+              Delete
+            </Button>
           </li>
         )
       })}
