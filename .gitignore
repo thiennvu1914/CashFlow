@@ -44,3 +44,7 @@ next-env.d.ts
 # Claude Code worktrees and SDD scratch
 .claude/worktrees/
 .superpowers/
+e2e/.outbox/
+e2e/.results/
+playwright-report/
+test-results/
