@@ -509,6 +509,80 @@ describe('transaction service', () => {
       expect(rows.map((r) => r.id)).toEqual(byIdDesc.map((r) => r.id))
       expect(rows).toHaveLength(created.length)
     })
+
+    it('honours an explicit limit, keeping the newest rows', async () => {
+      const s = await setup()
+      const created = []
+      for (const day of ['2026-01-01', '2026-02-01', '2026-03-01']) {
+        created.push(
+          await createTransaction(
+            s.userId,
+            { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date(day) },
+            fakeProvider().provider,
+          ),
+        )
+      }
+
+      const rows = await listTransactions(s.userId, { limit: 2 })
+
+      expect(rows).toHaveLength(2)
+      // Newest first, so the January row is the one dropped.
+      expect(rows.map((r) => r.id)).toEqual([created[2].id, created[1].id])
+    })
+
+    it('clamps a limit above the hard cap and refuses a non-positive one', async () => {
+      const s = await setup()
+      await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date('2026-01-01') },
+        fakeProvider().provider,
+      )
+
+      // An absurd limit is clamped rather than honoured — the point of the
+      // bound is that no caller can ask the page to load the whole ledger.
+      expect(await listTransactions(s.userId, { limit: 10_000 })).toHaveLength(1)
+      await expect(listTransactions(s.userId, { limit: 0 })).rejects.toThrow('limit')
+      await expect(listTransactions(s.userId, { limit: -5 })).rejects.toThrow('limit')
+    })
+
+    it('selects only the columns the list renders — no userId or initialBalance on the joined account', async () => {
+      const s = await setup()
+      await createTransaction(
+        s.userId,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+        },
+        fakeProvider().provider,
+      )
+
+      const [row] = await listTransactions(s.userId)
+
+      expect(Object.keys(row).sort()).toEqual(
+        [
+          'account',
+          'amount',
+          'category',
+          'currency',
+          'date',
+          'fxRateSource',
+          'id',
+          'note',
+          'type',
+        ].sort(),
+      )
+      expect(Object.keys(row.account)).toEqual(['name'])
+      expect(row.category).not.toBeNull()
+      expect(Object.keys(row.category as { name: string })).toEqual(['name'])
+      // Nothing the list never renders travels to the client component: no
+      // `userId`, no FX rate, no opening balance of the joined account.
+      expect(row).not.toHaveProperty('userId')
+      expect(row).not.toHaveProperty('vndPerUsdAtEntry')
+      expect(row.account).not.toHaveProperty('initialBalance')
+    })
   })
 
   describe('updateTransaction — FX re-snapshot on economic edits (R-6)', () => {

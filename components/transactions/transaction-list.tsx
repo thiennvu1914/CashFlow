@@ -11,10 +11,16 @@ import {
 } from '@/lib/server/actions/transaction-actions'
 import { Button } from '@/components/ui/button'
 
+/**
+ * No Prisma import here — the page fetches, bounds and shapes the rows; this
+ * component only renders. `amount` arrives as a fixed-2-decimal string (the
+ * page's `Decimal#toFixed(2)`) rather than a raw `Decimal`, which cannot cross
+ * the server-to-client-component boundary.
+ */
 type Row = {
   id: string
   type: TransactionType
-  amount: unknown
+  amount: string
   currency: string
   date: Date
   note: string | null
@@ -38,7 +44,8 @@ const amountFormatter = new Intl.NumberFormat('vi-VN')
 function formatSignedAmount(tx: Row): { sign: string; text: string; className: string } {
   const positive = isBalanceIncreasing(tx.type)
   // Display only — the sign is derived from `type`, never stored or computed
-  // arithmetically; `Number(tx.amount)` only feeds the formatter.
+  // arithmetically; `Number(tx.amount)` only feeds the formatter, and the
+  // string it parses already came out of `Prisma.Decimal` arithmetic.
   return {
     sign: positive ? '+' : '−',
     text: amountFormatter.format(Number(tx.amount)),

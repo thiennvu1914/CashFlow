@@ -20,7 +20,23 @@ export default async function TransactionsPage() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <TransactionList transactions={transactions} timezone={timezone} />
+      <TransactionList
+        transactions={transactions.map((tx) => ({
+          id: tx.id,
+          type: tx.type,
+          // A `Prisma.Decimal` cannot cross the server-to-client-component
+          // boundary, so the amount crosses as a fixed-2-decimal string and is
+          // formatted for display only — no arithmetic happens on the client.
+          amount: tx.amount.toFixed(2),
+          currency: tx.currency,
+          date: tx.date,
+          note: tx.note,
+          fxRateSource: tx.fxRateSource,
+          account: { name: tx.account.name },
+          category: tx.category ? { name: tx.category.name } : null,
+        }))}
+        timezone={timezone}
+      />
       <div>
         <h2 className="mb-3 text-lg font-semibold">Add transaction</h2>
         <TransactionForm

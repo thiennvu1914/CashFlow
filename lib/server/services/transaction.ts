@@ -94,15 +94,55 @@ async function resolveCategoryId(
   return category.id
 }
 
-export async function listTransactions(userId: string) {
+/** How many rows the transactions list loads when no caller says otherwise. */
+export const DEFAULT_TRANSACTION_LIST_LIMIT = 200
+
+/** The most any caller may ask for. Phase 3 adds real paging; until then this
+ *  is what keeps a long-lived ledger from being loaded whole into a page. */
+export const MAX_TRANSACTION_LIST_LIMIT = 500
+
+/**
+ * The newest transactions for `userId`, bounded and projected.
+ *
+ * Two deliberate narrowings versus a plain `findMany`:
+ *
+ * 1. **Bounded.** An account that has been in use for a year has thousands of
+ *    rows; without a limit the page fetches every one of them, serialises them
+ *    all across the server/client boundary, and renders them. The limit is
+ *    clamped to `MAX_TRANSACTION_LIST_LIMIT` rather than trusted, so no caller
+ *    can opt out of the bound.
+ * 2. **Projected.** Only the columns the list actually renders are selected.
+ *    Everything a `include: { account: true }` would drag along — the joined
+ *    account's `userId`, `initialBalance` and `currency`, the row's own
+ *    `vndPerUsdAtEntry`/`fxRateTimestamp` — is data the UI never shows and
+ *    should not be shipped to a client component.
+ */
+export async function listTransactions(userId: string, options?: { limit?: number }) {
+  const requested = options?.limit ?? DEFAULT_TRANSACTION_LIST_LIMIT
+  if (!Number.isInteger(requested) || requested <= 0) {
+    throw new RangeError(`listTransactions: limit must be a positive integer, got ${requested}`)
+  }
+  const take = Math.min(requested, MAX_TRANSACTION_LIST_LIMIT)
+
   return prisma.transaction.findMany({
     where: { userId },
-    include: { account: true, category: true },
+    select: {
+      id: true,
+      type: true,
+      amount: true,
+      currency: true,
+      date: true,
+      note: true,
+      fxRateSource: true,
+      account: { select: { name: true } },
+      category: { select: { name: true } },
+    },
     // `date` alone is not a total order — several transactions a day is the
     // normal case, and a paged or re-rendered list must not shuffle. `createdAt`
     // breaks the tie by entry order, and `id` breaks a same-millisecond tie so
     // the sort is fully deterministic.
     orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    take,
   })
 }
 
