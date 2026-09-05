@@ -1,5 +1,6 @@
 import { prismaAdapter } from 'better-auth/adapters/prisma'
 import { prisma } from '@/lib/prisma'
+import { sendResetPasswordEmail } from '@/lib/email/send-reset-password-email'
 import { createAuth } from './create-auth'
 
 /**
@@ -9,4 +10,5 @@ import { createAuth } from './create-auth'
  */
 export const auth = createAuth({
   database: prismaAdapter(prisma, { provider: 'postgresql' }),
+  sendResetPasswordEmail,
 })

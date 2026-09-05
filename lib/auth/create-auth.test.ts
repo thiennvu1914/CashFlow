@@ -16,6 +16,7 @@ function makeAuth() {
     database: memoryAdapter(db),
     baseURL: BASE_URL,
     secret: TEST_SECRET,
+    sendResetPasswordEmail: async () => {},
   })
   return { auth, db }
 }

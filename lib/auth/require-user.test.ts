@@ -32,6 +32,7 @@ vi.mock('@/lib/auth/auth', async () => {
     database: memoryAdapter(db),
     baseURL: BASE_URL,
     secret: TEST_SECRET,
+    sendResetPasswordEmail: async () => {},
   })
   return { auth }
 })

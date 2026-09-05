@@ -17,6 +17,13 @@ export interface CreateAuthOptions {
    * from the environment.
    */
   secret?: string
+  /**
+   * Delivers the password-reset link. Required — every auth instance must have
+   * real delivery, so a misconfigured build fails at construction rather than
+   * silently dropping reset emails. `lib/auth/auth.ts` passes the real sender;
+   * tests pass a fake that records what would have been sent.
+   */
+  sendResetPasswordEmail: (to: string, url: string) => Promise<void>
 }
 
 /**
@@ -35,11 +42,21 @@ export function createAuth(options: CreateAuthOptions) {
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
-      // `sendResetPassword` is added in Task 6, once Task 5's EmailSender
-      // abstraction exists for real — not stubbed here and replaced later.
-      // Forgot Password simply isn't wired up between now and Task 6; every
-      // other auth flow (register / login / logout / change password) works
-      // fully from this commit onward.
+      // Same bounds as `registerSchema` / `resetPasswordSchema` in
+      // `lib/validation/auth.ts`. These happen to be Better Auth's defaults;
+      // stating them keeps the client-side Zod rules and the server-side
+      // enforcement provably in step.
+      minPasswordLength: 8,
+      maxPasswordLength: 128,
+      // Deliberately not wrapped in try/catch: a rejection must propagate, not
+      // be turned into a fake success here. (Better Auth 1.7.2 awaits this via
+      // `runInBackgroundOrAwait`, which logs a rejection and still answers 200
+      // — see `node_modules/better-auth/dist/context/create-context.mjs`. That
+      // is its choice, not ours: the endpoint intentionally returns the same
+      // "if this email exists…" body for every address so nothing leaks.)
+      sendResetPassword: async ({ user, url }) => {
+        await options.sendResetPasswordEmail(user.email, url)
+      },
     },
     user: {
       // `input: false` on every additional field means none of them can be set
