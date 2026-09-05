@@ -22,6 +22,6 @@ export const auth = createAuth({
   sendResetPasswordEmail,
   trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXY_CIDRS),
   // Every new account starts with its own default account types and categories
-  // (§4.3 of the spec), created in the same request that creates the user.
+  // (§4.2 of the spec), created in the same request that creates the user.
   onUserCreated: (user) => seedDefaultsForUser(user.id),
 })

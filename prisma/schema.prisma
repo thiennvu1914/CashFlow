@@ -117,7 +117,7 @@ model Verification {
 //
 // The `@@unique([userId, id])` on each is what lets later models carry a
 // composite `(userId, <fk>)` foreign key, so a row can never reference another
-// user's AccountType or Category (§4.3 of the spec).
+// user's AccountType or Category (§4.12 of the spec).
 // ---------------------------------------------------------------------------
 
 enum RecordStatus {

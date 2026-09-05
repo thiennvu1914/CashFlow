@@ -3,71 +3,53 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { config as loadEnv } from 'dotenv'
 import { Client } from 'pg'
-
-/**
- * Fallback when `TEST_DATABASE_URL` is unset. Same credentials and port as the
- * `docker compose` Postgres in `docker-compose.yml`, but a separate database.
- */
-export const DEFAULT_TEST_DATABASE_URL =
-  'postgresql://cashflow:cashflow_dev_password@localhost:5439/cashflow_test'
-
-/** The test database URL, with the default applied. Shared with `vitest.setup.ts`. */
-export function resolveTestDatabaseUrl(env: NodeJS.ProcessEnv): string {
-  return env.TEST_DATABASE_URL?.trim() || DEFAULT_TEST_DATABASE_URL
-}
+import {
+  adminConnectionCandidates,
+  assertCreatableDatabaseName,
+  databaseNameOf,
+  isSameDatabase,
+  parseConnectionString,
+  resolveTestDatabaseUrl,
+} from './lib/testing/database-url'
 
 const repoRoot = new URL('.', import.meta.url)
 
-function databaseNameOf(connectionString: string): string {
-  const name = decodeURIComponent(new URL(connectionString).pathname.replace(/^\//, ''))
-  // The name is interpolated into `CREATE DATABASE` — no bind parameters exist
-  // for identifiers — so anything but a plain identifier is refused outright
-  // rather than quoted and hoped for.
-  if (!/^[A-Za-z0-9_]+$/.test(name)) {
-    throw new Error(
-      `TEST_DATABASE_URL must name a database matching /^[A-Za-z0-9_]+$/; got ${JSON.stringify(name)}.`,
-    )
-  }
-  return name
-}
-
 /**
- * Connection used only to issue `CREATE DATABASE`: the dev database from
- * `DATABASE_URL` when there is one, otherwise `postgres` on the test server.
+ * Creates the test database if it is missing, using the first admin connection
+ * that answers. Every candidate is on the test server, so nothing here can
+ * reach a different host than the one the tests will use.
  */
-function adminConnectionString(
-  testDatabaseUrl: string,
-  devDatabaseUrl: string | undefined,
-): string {
-  if (devDatabaseUrl) return devDatabaseUrl
-  const url = new URL(testDatabaseUrl)
-  url.pathname = '/postgres'
-  return url.toString()
-}
-
 async function createTestDatabaseIfMissing(
-  adminUrl: string,
+  candidates: string[],
   databaseName: string,
-  testDatabaseUrl: string,
+  serverLabel: string,
 ): Promise<void> {
-  const client = new Client({ connectionString: adminUrl })
-  try {
-    await client.connect()
-  } catch (cause) {
-    throw new Error(
-      `Cannot reach PostgreSQL at ${new URL(testDatabaseUrl).host} to prepare the test database ` +
-        `"${databaseName}". Start it with \`docker compose up -d\` and run the tests again.`,
-      { cause },
-    )
+  const failures: unknown[] = []
+
+  for (const connectionString of candidates) {
+    const client = new Client({ connectionString })
+    try {
+      await client.connect()
+    } catch (cause) {
+      failures.push(cause)
+      continue
+    }
+    try {
+      const existing = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [
+        databaseName,
+      ])
+      if (existing.rowCount === 0) await client.query(`CREATE DATABASE "${databaseName}"`)
+      return
+    } finally {
+      await client.end()
+    }
   }
-  try {
-    const existing = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [
-      databaseName,
-    ])
-    if (existing.rowCount === 0) await client.query(`CREATE DATABASE "${databaseName}"`)
-  } finally {
-    await client.end()
-  }
+
+  throw new Error(
+    `Cannot reach PostgreSQL at ${serverLabel} to prepare the test database "${databaseName}". ` +
+      'Start it with `docker compose up -d` and run the tests again.',
+    { cause: failures[0] },
+  )
 }
 
 function migrateTestDatabase(testDatabaseUrl: string): void {
@@ -111,21 +93,25 @@ export async function setup(): Promise<void> {
   loadEnv()
 
   const testDatabaseUrl = resolveTestDatabaseUrl(process.env)
-  const devDatabaseUrl = process.env.DATABASE_URL?.trim()
+  const devDatabaseUrl = process.env.DATABASE_URL?.trim() || undefined
+  const testUrl = parseConnectionString(testDatabaseUrl, 'TEST_DATABASE_URL')
 
-  if (devDatabaseUrl && devDatabaseUrl === testDatabaseUrl) {
+  if (devDatabaseUrl && isSameDatabase(devDatabaseUrl, testDatabaseUrl)) {
     throw new Error(
-      'TEST_DATABASE_URL is identical to DATABASE_URL. The test suite truncates and rewrites ' +
-        'whatever it connects to, so it must never run against the development database. ' +
-        'Point TEST_DATABASE_URL at a separate database (e.g. cashflow_test).',
+      'TEST_DATABASE_URL and DATABASE_URL address the same database. The test suite truncates ' +
+        'and rewrites whatever it connects to, so it must never run against the development ' +
+        'database. Point TEST_DATABASE_URL at a separate database (e.g. cashflow_test).',
     )
   }
 
-  const databaseName = databaseNameOf(testDatabaseUrl)
+  const databaseName = assertCreatableDatabaseName(
+    databaseNameOf(testDatabaseUrl, 'TEST_DATABASE_URL'),
+    'TEST_DATABASE_URL',
+  )
   await createTestDatabaseIfMissing(
-    adminConnectionString(testDatabaseUrl, devDatabaseUrl),
+    adminConnectionCandidates(testDatabaseUrl, devDatabaseUrl),
     databaseName,
-    testDatabaseUrl,
+    testUrl.host,
   )
   migrateTestDatabase(testDatabaseUrl)
 

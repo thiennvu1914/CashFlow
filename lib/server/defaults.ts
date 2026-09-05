@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma'
 
 /**
  * The starter AccountType and Category rows every new user gets, so the app is
- * usable the moment registration finishes (§4.3 of the spec). They are ordinary
+ * usable the moment registration finishes (§4.2 of the spec). They are ordinary
  * per-user rows — `isDefault: true` only marks where they came from; the user
  * can rename, archive or add to them freely.
  */

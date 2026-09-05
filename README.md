@@ -18,14 +18,14 @@ console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
 
 ## Testing
 
-- `npm run test` — Vitest. The auth tests need no database and no network: they
-  run the real Better Auth instance against an in-memory adapter, built through
-  `lib/auth/__testing__/auth-harness.ts`. Everything else runs against a
-  dedicated `cashflow_test` database, created and migrated automatically before
-  the first test file, so Postgres must be up (`docker compose up -d`).
-  `TEST_DATABASE_URL` in `.env` chooses that database; the suite refuses to
-  start when it equals `DATABASE_URL`, because tests must never write to the
-  development database.
+- `npm run test` — Vitest. Requires PostgreSQL to be running
+  (`docker compose up -d`): before the first test file, the global setup creates
+  and migrates a dedicated `cashflow_test` database. `TEST_DATABASE_URL` in
+  `.env` chooses it, and the suite refuses to start when that address resolves
+  to the same database as `DATABASE_URL` — tests must never write to the
+  development database. The auth tests themselves need no network and no
+  database rows: they run the real Better Auth instance against an in-memory
+  adapter, built through `lib/auth/__testing__/auth-harness.ts`.
 - `npm run test:e2e` — Playwright. Needs PostgreSQL running and the schema
   migrated. It starts the dev server itself with `EMAIL_OUTBOX_FILE` pointed at
   `e2e/.outbox/emails.jsonl` and reads the reset link back out of that file.

@@ -33,9 +33,14 @@ describe('seedDefaultsForUser', () => {
   afterEach(async () => {
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
-    await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
-    await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
-    await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    // The user rows go last but unconditionally: a failure while deleting the
+    // seeded rows must not leave orphan users behind for the next run.
+    try {
+      await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+      await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    }
   })
 
   it('creates 5 default account types and 16 default categories owned by the user', async () => {

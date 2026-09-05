@@ -171,9 +171,19 @@ export function createAuth(options: CreateAuthOptions) {
           // `(user: User & Record<string, unknown>, context: GenericEndpointContext | null) => Promise<void>`
           // (`databaseHooks` in
           // `node_modules/@better-auth/core/dist/types/init-options.d.mts`).
-          // Deliberately not wrapped in try/catch: if seeding a new user's
-          // defaults fails, the registration must fail loudly rather than hand
-          // back an account with no account types or categories.
+          // This runs AFTER the user row is committed (`with-hooks.mjs` in
+          // `node_modules/better-auth/dist/db/`, whose transaction has already
+          // closed by then — see
+          // `node_modules/@better-auth/core/dist/context/transaction.mjs`), so
+          // it is not part of the same atomic unit. A throw here therefore
+          // leaves a committed user whose defaults are missing, and turns the
+          // sign-up response into an error.
+          //
+          // Still deliberately not wrapped in try/catch: surfacing the failure
+          // beats silently handing back an account with no account types or
+          // categories, and the damage is repairable — `seedDefaultsForUser`
+          // skips tables that already have rows, so re-running it for that user
+          // finishes the job without duplicating what did get written.
           after: async (user) => {
             await options.onUserCreated?.(user)
           },
