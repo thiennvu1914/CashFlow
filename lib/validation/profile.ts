@@ -1,5 +1,22 @@
 import { z } from 'zod'
 
+/**
+ * True only for a string `Intl.DateTimeFormat` accepts as an IANA time zone
+ * (e.g. `'Asia/Ho_Chi_Minh'`, `'UTC'`) — `Intl` throws a `RangeError` for
+ * anything else (`'Vietnam'`, a typo'd zone, `''`), which is what this
+ * catches. Exported so `profileSchema.timezone` and `resolveProfileDefaults`
+ * enforce the exact same rule (Ruling P-16).
+ */
+export function isValidIanaTimezone(value: string): boolean {
+  if (!value) return false
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Deliberately excludes `isDemo`: this is the second of the two independent
 // layers blocking a client-set `isDemo` (§4.1, §13 of the spec). The first is
 // `additionalFields.isDemo.input: false` in `lib/auth/create-auth.ts`. Zod
@@ -10,7 +27,10 @@ export const profileSchema = z.object({
   baseCurrency: z.enum(['VND', 'USD']),
   locale: z.enum(['vi', 'en']),
   theme: z.enum(['light', 'dark']),
-  timezone: z.string().min(1, 'Timezone is required'),
+  timezone: z
+    .string()
+    .min(1, 'Timezone is required')
+    .refine(isValidIanaTimezone, 'Enter a valid IANA timezone, e.g. Asia/Ho_Chi_Minh'),
 })
 
 export type ProfileInput = z.infer<typeof profileSchema>
