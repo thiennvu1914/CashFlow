@@ -3,10 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Currency } from '@prisma/client'
-import {
-  archiveFinancialAccountAction,
-  type FinancialAccountActionError,
-} from '@/lib/server/actions/financial-account-actions'
+import { archiveFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
+import { ACCOUNT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
 import { AccountEditForm } from '@/components/accounts/account-edit-form'
 import { Button } from '@/components/ui/button'
 
@@ -34,17 +32,6 @@ type AccountWithBalance = {
    */
   locked: boolean
 }
-
-const ARCHIVE_ERROR_MESSAGES: Record<FinancialAccountActionError, string> = {
-  NON_ZERO_BALANCE:
-    'This account must have a zero balance before it can be archived. Transfer or adjust the balance first.',
-  ACCOUNT_LOCKED: 'Currency and opening balance cannot be changed once the account has activity.',
-  ARCHIVED_ACCOUNT: 'This account is archived and can no longer be edited.',
-  INVALID_ACCOUNT_TYPE: 'Choose a valid account type.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That account no longer exists.',
-}
-const ARCHIVE_GENERIC_ERROR = 'Something went wrong. Please try again.'
 
 function formatBalance(balance: string, currency: Currency): string {
   // `Number()` here is for DISPLAY ONLY — the value driving this string
@@ -79,14 +66,14 @@ export function AccountList({
       if (!result.ok) {
         setErrorByAccountId((prev) => ({
           ...prev,
-          [accountId]: ARCHIVE_ERROR_MESSAGES[result.error],
+          [accountId]: ACCOUNT_ERROR_MESSAGES[result.error],
         }))
         return
       }
       router.refresh()
     } catch {
       console.error('AccountList: archive failed')
-      setErrorByAccountId((prev) => ({ ...prev, [accountId]: ARCHIVE_GENERIC_ERROR }))
+      setErrorByAccountId((prev) => ({ ...prev, [accountId]: GENERIC_ERROR_MESSAGE }))
     }
   }
 

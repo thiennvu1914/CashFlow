@@ -9,26 +9,12 @@ import {
   updateFinancialAccountSchema,
   type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
-import {
-  updateFinancialAccountAction,
-  type FinancialAccountActionError,
-} from '@/lib/server/actions/financial-account-actions'
+import { updateFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
+import { ACCOUNT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 type AccountType = { id: string; name: string }
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-
-const ACTION_ERROR_MESSAGES: Record<FinancialAccountActionError, string> = {
-  NON_ZERO_BALANCE:
-    'This account must have a zero balance before it can be archived. Transfer or adjust the balance first.',
-  ACCOUNT_LOCKED: 'Currency and opening balance cannot be changed once the account has activity.',
-  ARCHIVED_ACCOUNT: 'This account is archived and can no longer be edited.',
-  INVALID_ACCOUNT_TYPE: 'Choose a valid account type.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That account no longer exists.',
-}
 
 /**
  * Edits an existing FinancialAccount. Kept as its own (small) component
@@ -94,14 +80,14 @@ export function AccountEditForm({
     try {
       const result = await updateFinancialAccountAction(accountId, payload)
       if (!result.ok) {
-        setError(ACTION_ERROR_MESSAGES[result.error])
+        setError(ACCOUNT_ERROR_MESSAGES[result.error])
         return
       }
       router.refresh()
       onDone?.()
     } catch {
       console.error('AccountEditForm: update failed')
-      setError(GENERIC_ERROR)
+      setError(GENERIC_ERROR_MESSAGE)
     }
   }
 

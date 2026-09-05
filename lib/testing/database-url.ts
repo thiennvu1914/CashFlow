@@ -62,6 +62,27 @@ export function assertCreatableDatabaseName(name: string, variableName: string):
   return name
 }
 
+/**
+ * Every spelling of "this machine". `URL#hostname` strips the brackets from
+ * an IPv6 literal, so `[::1]` arrives here as `::1`; both forms are listed
+ * anyway so a caller comparing raw strings gets the same answer.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+
+/**
+ * A hostname reduced to one canonical form per physical server.
+ *
+ * `localhost`, `127.0.0.1` and `::1` all reach the same Postgres, so treating
+ * them as three different hosts would let a development URL written one way
+ * and a test URL written another slip past `isSameDatabase` — exactly the
+ * guard that keeps `vitest` from migrating and truncating the developer's own
+ * database.
+ */
+function canonicalHostname(hostname: string): string {
+  const lower = hostname.toLowerCase()
+  return LOOPBACK_HOSTNAMES.has(lower) ? 'localhost' : lower
+}
+
 interface DatabaseIdentity {
   hostname: string
   port: string
@@ -71,7 +92,7 @@ interface DatabaseIdentity {
 
 function identify(url: URL): DatabaseIdentity {
   return {
-    hostname: url.hostname.toLowerCase(),
+    hostname: canonicalHostname(url.hostname),
     port: url.port || DEFAULT_POSTGRES_PORT,
     database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     schema: url.searchParams.get('schema') || DEFAULT_SCHEMA,
@@ -136,7 +157,7 @@ export function adminConnectionCandidates(
   if (!devDatabaseUrl) return candidates
   const dev = parseConnectionString(devDatabaseUrl, 'DATABASE_URL')
   const sameServer =
-    dev.hostname.toLowerCase() === test.hostname.toLowerCase() &&
+    canonicalHostname(dev.hostname) === canonicalHostname(test.hostname) &&
     (dev.port || DEFAULT_POSTGRES_PORT) === (test.port || DEFAULT_POSTGRES_PORT)
   if (sameServer) candidates.push(devDatabaseUrl)
   return candidates

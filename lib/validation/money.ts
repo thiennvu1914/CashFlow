@@ -24,10 +24,14 @@ export function hasAtMostTwoDecimalPlaces(value: number): boolean {
   return frac === undefined || frac.length <= 2
 }
 
-// Decimal(18, 2) can hold up to 16 integer digits; capping the magnitude well
-// under that keeps every accepted value representable without depending on
-// Postgres to reject an overflow after the fact.
-export const MAX_MONEY_MAGNITUDE = 1e15
+// Decimal(18, 2) can hold up to 16 integer digits, but the binding limit is
+// the double these amounts travel in, not the column: a JS number stops being
+// able to represent every 2-decimal value exactly at around 9e13
+// (`Number.MAX_SAFE_INTEGER / 100`), above which `x.99` silently rounds to a
+// neighbouring value before Zod or Postgres ever sees it. The cap is set an
+// order of magnitude below that, which still leaves room for ~10 trillion VND
+// — far beyond any personal balance this app is for.
+export const MAX_MONEY_MAGNITUDE = 1e13
 
 /**
  * Shared money-amount schema for every Zod object that accepts a monetary

@@ -836,7 +836,8 @@ describe('financial-account service', () => {
       expect(parseWithBalance(-5.5)).toBe(true)
     })
 
-    it('rejects a balance at the magnitude cap', () => {
+    it('rejects a balance at or above the magnitude cap', () => {
+      expect(parseWithBalance(1e13)).toBe(false)
       expect(parseWithBalance(1e15)).toBe(false)
     })
   })

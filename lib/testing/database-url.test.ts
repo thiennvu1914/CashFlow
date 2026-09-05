@@ -102,6 +102,31 @@ describe('isSameDatabase', () => {
     ).toBe(true)
   })
 
+  it('treats every spelling of loopback as the same host', () => {
+    // `localhost`, `127.0.0.1` and `::1` all reach the same Postgres, so a
+    // dev URL written one way and a test URL written another must not slip
+    // past the "am I about to wipe the development database?" guard.
+    const spellings = [
+      'postgresql://u:p@localhost:5439/cashflow',
+      'postgresql://u:p@127.0.0.1:5439/cashflow',
+      'postgresql://u:p@[::1]:5439/cashflow',
+    ]
+    for (const a of spellings) {
+      for (const b of spellings) {
+        expect(isSameDatabase(a, b)).toBe(true)
+      }
+    }
+  })
+
+  it('still separates loopback from a real host with the same database name', () => {
+    expect(
+      isSameDatabase(
+        'postgresql://u:p@127.0.0.1:5439/cashflow',
+        'postgresql://u:p@db.example.com:5439/cashflow',
+      ),
+    ).toBe(false)
+  })
+
   it('is false for a different database name', () => {
     expect(isSameDatabase(DEV, TEST)).toBe(false)
   })
@@ -153,6 +178,15 @@ describe('adminConnectionCandidates', () => {
   it('offers the dev database as a second attempt on the same server', () => {
     expect(adminConnectionCandidates(TEST, DEV)).toHaveLength(2)
     expect(adminConnectionCandidates(TEST, DEV)[1]).toBe(DEV)
+  })
+
+  it('recognises a dev database on the same loopback server written a different way', () => {
+    expect(
+      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@127.0.0.1:5439/cashflow'),
+    ).toHaveLength(2)
+    expect(
+      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@[::1]:5439/cashflow'),
+    ).toHaveLength(2)
   })
 
   it('never reaches for a dev database on another server', () => {

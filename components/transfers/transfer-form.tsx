@@ -6,10 +6,8 @@ import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import type { Currency } from '@prisma/client'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
-import {
-  createTransferAction,
-  type TransferActionError,
-} from '@/lib/server/actions/transfer-actions'
+import { createTransferAction } from '@/lib/server/actions/transfer-actions'
+import { GENERIC_ERROR_MESSAGE, TRANSFER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { todayInZone } from '@/lib/datetime/today-in-zone'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,15 +22,6 @@ import { Input } from '@/components/ui/input'
 type FormInput = CreateTransferFormInput
 
 type Account = { id: string; name: string; currency: Currency }
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-
-const ACTION_ERROR_MESSAGES: Record<TransferActionError, string> = {
-  SAME_ACCOUNT: 'Choose two different accounts.',
-  ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
-}
 
 function defaultValues(accounts: Account[], timezone: string): FormInput {
   return {
@@ -110,14 +99,14 @@ export function TransferForm({
       const payload = sameCurrency ? { ...values, toAmount: values.fromAmount } : values
       const result = await createTransferAction(payload)
       if (!result.ok) {
-        setError(ACTION_ERROR_MESSAGES[result.error])
+        setError(TRANSFER_ERROR_MESSAGES[result.error])
         return
       }
       reset(defaultValues(accounts, timezone))
       router.refresh()
     } catch {
       console.error('TransferForm: create failed')
-      setError(GENERIC_ERROR)
+      setError(GENERIC_ERROR_MESSAGE)
     }
   }
 

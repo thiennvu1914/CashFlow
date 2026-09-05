@@ -5,10 +5,8 @@ import { useRouter } from 'next/navigation'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { TransactionType } from '@prisma/client'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
-import {
-  deleteTransactionAction,
-  type TransactionActionError,
-} from '@/lib/server/actions/transaction-actions'
+import { deleteTransactionAction } from '@/lib/server/actions/transaction-actions'
+import { GENERIC_ERROR_MESSAGE, TRANSACTION_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -27,18 +25,6 @@ type Row = {
   fxRateSource: string
   account: { name: string }
   category: { name: string } | null
-}
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-
-const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
-  FX_UNAVAILABLE: 'Exchange rate is temporarily unavailable. Please try again in a moment.',
-  ARCHIVED_ACCOUNT: 'This account is archived.',
-  CURRENCY_MISMATCH:
-    'Move the transaction to an account in the same currency, or delete and re-enter it.',
-  INVALID_CATEGORY: 'Choose a valid category for this type.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
 }
 
 const amountFormatter = new Intl.NumberFormat('vi-VN')
@@ -83,13 +69,13 @@ export function TransactionList({
     try {
       const result = await deleteTransactionAction(id)
       if (!result.ok) {
-        setErrors((prev) => ({ ...prev, [id]: ACTION_ERROR_MESSAGES[result.error] }))
+        setErrors((prev) => ({ ...prev, [id]: TRANSACTION_ERROR_MESSAGES[result.error] }))
         return
       }
       router.refresh()
     } catch {
       console.error('TransactionList: delete failed')
-      setErrors((prev) => ({ ...prev, [id]: GENERIC_ERROR }))
+      setErrors((prev) => ({ ...prev, [id]: GENERIC_ERROR_MESSAGE }))
     }
   }
 

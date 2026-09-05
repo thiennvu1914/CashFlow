@@ -3,10 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatInTimeZone } from 'date-fns-tz'
-import {
-  deleteTransferAction,
-  type TransferActionError,
-} from '@/lib/server/actions/transfer-actions'
+import { deleteTransferAction } from '@/lib/server/actions/transfer-actions'
+import { GENERIC_ERROR_MESSAGE, TRANSFER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -26,15 +24,6 @@ type Row = {
 }
 
 const amountFormatter = new Intl.NumberFormat('vi-VN')
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-
-const ACTION_ERROR_MESSAGES: Record<TransferActionError, string> = {
-  SAME_ACCOUNT: 'Choose two different accounts.',
-  ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
-}
 
 export function TransferList({
   transfers,
@@ -62,13 +51,13 @@ export function TransferList({
     try {
       const result = await deleteTransferAction(id)
       if (!result.ok) {
-        setErrors((prev) => ({ ...prev, [id]: ACTION_ERROR_MESSAGES[result.error] }))
+        setErrors((prev) => ({ ...prev, [id]: TRANSFER_ERROR_MESSAGES[result.error] }))
         return
       }
       router.refresh()
     } catch {
       console.error('TransferList: delete failed')
-      setErrors((prev) => ({ ...prev, [id]: GENERIC_ERROR }))
+      setErrors((prev) => ({ ...prev, [id]: GENERIC_ERROR_MESSAGE }))
     }
   }
 

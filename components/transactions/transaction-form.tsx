@@ -10,10 +10,8 @@ import {
   type CreateTransactionFormInput,
   type CreateTransactionInput,
 } from '@/lib/validation/transaction'
-import {
-  createTransactionAction,
-  type TransactionActionError,
-} from '@/lib/server/actions/transaction-actions'
+import { createTransactionAction } from '@/lib/server/actions/transaction-actions'
+import { GENERIC_ERROR_MESSAGE, TRANSACTION_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { todayInZone } from '@/lib/datetime/today-in-zone'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -38,18 +36,6 @@ type Category = { id: string; name: string; type: 'INCOME' | 'EXPENSE' }
 /** The two types that hit the P&L and therefore need a matching category
  *  (mirrors `CATEGORY_REQUIRED_TYPES` in `lib/validation/transaction.ts`). */
 const CATEGORY_REQUIRED_TYPES = new Set<TransactionType>(['INCOME', 'EXPENSE'])
-
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-
-const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
-  FX_UNAVAILABLE: 'Exchange rate is temporarily unavailable. Please try again in a moment.',
-  ARCHIVED_ACCOUNT: 'This account is archived.',
-  CURRENCY_MISMATCH:
-    'Move the transaction to an account in the same currency, or delete and re-enter it.',
-  INVALID_CATEGORY: 'Choose a valid category for this type.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
-}
 
 const DEFAULT_TYPE: TransactionType = 'EXPENSE'
 
@@ -108,14 +94,14 @@ export function TransactionForm({
     try {
       const result = await createTransactionAction(values)
       if (!result.ok) {
-        setError(ACTION_ERROR_MESSAGES[result.error])
+        setError(TRANSACTION_ERROR_MESSAGES[result.error])
         return
       }
       reset(defaultValues(accounts, timezone))
       router.refresh()
     } catch {
       console.error('TransactionForm: create failed')
-      setError(GENERIC_ERROR)
+      setError(GENERIC_ERROR_MESSAGE)
     }
   }
 

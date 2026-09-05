@@ -11,12 +11,20 @@ export default defineConfig({
     },
   },
   test: {
+    // `.tsx` mirrors every `.ts` glob: a component test has to be written in
+    // `.tsx` to contain JSX, and without these patterns such a file would be
+    // silently skipped — a green run that never executed it.
     include: [
       'lib/**/*.test.ts',
+      'lib/**/*.test.tsx',
       'app/**/*.test.ts',
+      'app/**/*.test.tsx',
       'components/**/*.test.ts',
+      'components/**/*.test.tsx',
       'scripts/**/*.test.ts',
+      'scripts/**/*.test.tsx',
       'e2e-unit/**/*.test.ts',
+      'e2e-unit/**/*.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/.git/**', '.next/**', '.claude/**', 'docs/**', 'e2e/**'],
     // Creates and migrates the dedicated `cashflow_test` database once per run,
