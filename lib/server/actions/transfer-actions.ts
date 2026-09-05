@@ -11,7 +11,7 @@ import {
 } from '@/lib/server/services/transfer'
 import { ArchivedAccountError } from '@/lib/server/services/transaction'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { calendarDateToInstant } from '@/lib/datetime/calendar-date'
+import { localDateTimeToInstant } from '@/lib/datetime/local-date-time'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 
 /**
@@ -22,9 +22,9 @@ import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/va
  * `input` always comes from the client; `userId` never does — the only call
  * into the service below is `(user.id, input)` from `requireUser()`.
  *
- * As in `transaction-actions.ts`, this layer owns the calendar-date → instant
- * conversion (ruling R-21b): the form submits the plain `yyyy-MM-dd` the user
- * picked, and only here is the session user's IANA timezone known.
+ * As in `transaction-actions.ts`, this layer owns the local-date-time → instant
+ * conversion: the form submits the plain `yyyy-MM-ddTHH:mm` the user entered,
+ * and only here is the session user's IANA timezone known.
  */
 export type TransferActionError =
   'ARCHIVED_ACCOUNT' | 'SAME_ACCOUNT' | 'INVALID_INPUT' | 'NOT_FOUND'
@@ -52,7 +52,7 @@ export async function createTransferAction(
     const parsed = createTransferFormSchema.parse(input)
     await createTransfer(user.id, {
       ...parsed,
-      date: calendarDateToInstant(parsed.date, timezone),
+      date: localDateTimeToInstant(parsed.date, timezone),
     })
   } catch (e) {
     return mapError(e)

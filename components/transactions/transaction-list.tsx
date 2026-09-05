@@ -48,11 +48,10 @@ export function TransactionList({
   transactions: Row[]
   /**
    * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
-   * from the page). `date` is a UTC instant with no time-of-day meaning to
-   * the user; formatting it in their own calendar day — rather than the
-   * server's or the browser's — is what keeps the date shown here identical
-   * on the server render and the client hydration (no mismatch) while still
-   * showing *their* day, not UTC's.
+   * from the page). `date` is a UTC instant; formatting it in the user's own
+   * zone — rather than the server's or the browser's — is what keeps the date
+   * and time shown here identical on the server render and the client
+   * hydration (no mismatch) while still showing *their* wall clock, not UTC's.
    */
   timezone: string
 }) {
@@ -89,6 +88,7 @@ export function TransactionList({
         const amount = formatSignedAmount(tx)
         // Never render the raw rate here — only a fallback-source hint.
         const showCacheFallbackHint = tx.fxRateSource.startsWith('cache-fallback:')
+        const when = formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd HH:mm')
         return (
           <li key={tx.id} className="flex items-center justify-between rounded-md border p-3">
             <div>
@@ -96,7 +96,7 @@ export function TransactionList({
                 {tx.category?.name ?? tx.type} · {tx.account.name}
               </p>
               <p className="text-sm text-foreground/60">
-                {formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd')}
+                {when}
                 {tx.note ? ` · ${tx.note}` : ''}
               </p>
               {showCacheFallbackHint && (
@@ -113,7 +113,7 @@ export function TransactionList({
                 type="button"
                 variant="ghost"
                 size="sm"
-                aria-label={`Delete transaction on ${formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd')}`}
+                aria-label={`Delete transaction on ${when}`}
                 onClick={() => handleDelete(tx.id)}
                 className="text-negative"
               >

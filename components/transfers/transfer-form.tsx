@@ -8,16 +8,16 @@ import type { Currency } from '@prisma/client'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 import { createTransferAction } from '@/lib/server/actions/transfer-actions'
 import { GENERIC_ERROR_MESSAGE, TRANSFER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
-import { todayInZone } from '@/lib/datetime/today-in-zone'
+import { nowInZone } from '@/lib/datetime/local-date-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
  * Same convention as `TransactionForm`: the form validates and submits
- * `createTransferFormSchema`, whose `date` stays the raw `yyyy-MM-dd` string
- * the `<input type="date">` produced. `createTransferAction` converts that
- * calendar day to an instant in the session user's IANA zone (ruling R-21b);
- * see `lib/datetime/calendar-date.ts`.
+ * `createTransferFormSchema`, whose `date` stays the raw `yyyy-MM-ddTHH:mm`
+ * string the `<input type="datetime-local">` produced. `createTransferAction`
+ * converts that wall-clock moment to an instant in the session user's IANA
+ * zone; see `lib/datetime/local-date-time.ts`.
  */
 type FormInput = CreateTransferFormInput
 
@@ -29,7 +29,7 @@ function defaultValues(accounts: Account[], timezone: string): FormInput {
     toAccountId: accounts[1]?.id ?? accounts[0]?.id ?? '',
     fromAmount: 0,
     toAmount: 0,
-    date: todayInZone(timezone),
+    date: nowInZone(timezone),
     note: undefined,
   }
 }
@@ -41,9 +41,9 @@ export function TransferForm({
   accounts: Account[]
   /**
    * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
-   * from the page) — the default date must land on *their* today, not
-   * whatever calendar day it happens to be in UTC at the moment they open
-   * the form.
+   * from the page) — the pre-filled date and time must be *their* now, not
+   * whatever the clock happens to read in UTC at the moment they open the
+   * form.
    */
   timezone: string
 }) {
@@ -175,7 +175,7 @@ export function TransferForm({
          field is never silently hidden by the field itself being hidden. */}
       {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
       <div>
-        <Input type="date" aria-label="Date" {...register('date')} />
+        <Input type="datetime-local" aria-label="Date & time" {...register('date')} />
         {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
       </div>
       <div>

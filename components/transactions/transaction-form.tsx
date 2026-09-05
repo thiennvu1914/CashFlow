@@ -12,7 +12,7 @@ import {
 } from '@/lib/validation/transaction'
 import { createTransactionAction } from '@/lib/server/actions/transaction-actions'
 import { GENERIC_ERROR_MESSAGE, TRANSACTION_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
-import { todayInZone } from '@/lib/datetime/today-in-zone'
+import { nowInZone } from '@/lib/datetime/local-date-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -20,13 +20,14 @@ type TransactionType = CreateTransactionInput['type']
 
 /**
  * The form validates and submits `createTransactionFormSchema`, whose `date`
- * is the raw `yyyy-MM-dd` string the `<input type="date">` produced — input
- * and output types are the same here, so no `Date` ever exists client-side.
+ * is the raw `yyyy-MM-ddTHH:mm` string the `<input type="datetime-local">`
+ * produced — input and output types are the same here, so no `Date` ever
+ * exists client-side.
  *
- * That is deliberate (ruling R-21b): a calendar day only becomes an instant
- * once a timezone is chosen, and the browser's zone is not necessarily the
- * user's configured zone. `createTransactionAction` does the conversion in
- * the session user's IANA zone; see `lib/datetime/calendar-date.ts`.
+ * That is deliberate: a local date and time only becomes an instant once a
+ * timezone is chosen, and the browser's zone is not necessarily the user's
+ * configured zone. `createTransactionAction` does the conversion in the
+ * session user's IANA zone; see `lib/datetime/local-date-time.ts`.
  */
 type FormInput = CreateTransactionFormInput
 
@@ -44,7 +45,7 @@ function defaultValues(accounts: Account[], timezone: string): FormInput {
     accountId: accounts[0]?.id ?? '',
     categoryId: undefined,
     type: DEFAULT_TYPE,
-    date: todayInZone(timezone),
+    date: nowInZone(timezone),
     amount: 0,
     note: undefined,
   }
@@ -59,9 +60,9 @@ export function TransactionForm({
   categories: Category[]
   /**
    * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
-   * from the page) — the default date must land on *their* today, not
-   * whatever calendar day it happens to be in UTC at the moment they open
-   * the form.
+   * from the page) — the pre-filled date and time must be *their* now, not
+   * whatever the clock happens to read in UTC at the moment they open the
+   * form.
    */
   timezone: string
 }) {
@@ -174,7 +175,7 @@ export function TransactionForm({
       </div>
       {errors.amount && <p className="text-sm text-negative">{errors.amount.message}</p>}
       <div>
-        <Input type="date" aria-label="Date" {...register('date')} />
+        <Input type="datetime-local" aria-label="Date & time" {...register('date')} />
         {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
       </div>
       <div>

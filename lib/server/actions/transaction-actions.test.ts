@@ -80,9 +80,9 @@ const { Prisma } = await import('@prisma/client')
 
 /**
  * The session user carries a real IANA timezone: the action resolves the
- * submitted calendar day against it (ruling R-21b), so the zone is part of
- * what these tests pin down. `Asia/Ho_Chi_Minh` is UTC+7 year-round, which
- * makes the expected instant unambiguous.
+ * submitted local date and time against it, so the zone is part of what these
+ * tests pin down. `Asia/Ho_Chi_Minh` is UTC+7 year-round, which makes the
+ * expected instant unambiguous.
  */
 const FIXED_USER = {
   id: 'user_1',
@@ -94,16 +94,16 @@ const FIXED_USER = {
   timezone: 'Asia/Ho_Chi_Minh',
 }
 
-/** What the form submits: `date` is the plain `yyyy-MM-dd` the user picked. */
+/** What the form submits: `date` is the plain `yyyy-MM-ddTHH:mm` the user entered. */
 const validInput = {
   accountId: 'account_1',
   type: 'CASH_IN' as const,
   amount: 1000,
-  date: '2026-02-01',
+  date: '2026-02-01T09:15',
 }
 
-/** Local midnight on 2026-02-01 in Asia/Ho_Chi_Minh (UTC+7). */
-const EXPECTED_INSTANT = new Date('2026-01-31T17:00:00.000Z')
+/** 09:15 on 2026-02-01 in Asia/Ho_Chi_Minh (UTC+7). */
+const EXPECTED_INSTANT = new Date('2026-02-01T02:15:00.000Z')
 
 /** What the service must receive: the same fields, with `date` as that instant. */
 const expectedServiceInput = {
@@ -142,35 +142,51 @@ describe('createTransactionAction', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
   })
 
-  it("resolves the submitted calendar day to local midnight in the user's timezone", async () => {
+  it("resolves the submitted local date and time in the user's timezone", async () => {
     createTransactionMock.mockResolvedValue(undefined)
 
     await createTransactionAction(validInput)
 
     const [, serviceInput] = createTransactionMock.mock.calls[0]
     expect(serviceInput.date).toBeInstanceOf(Date)
-    // Not UTC midnight (2026-02-01T00:00:00Z) — that instant is still
-    // 2026-02-01 07:00 in Ho Chi Minh City, and for a zone behind UTC the
-    // equivalent mistake lands the row on the previous day entirely.
-    expect(serviceInput.date.toISOString()).toBe('2026-01-31T17:00:00.000Z')
+    // Not 09:15 UTC — that instant is 16:15 in Ho Chi Minh City, and for a zone
+    // behind UTC the equivalent mistake can land the row on another day.
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T02:15:00.000Z')
   })
 
-  it('resolves the same calendar day differently for a user west of UTC', async () => {
+  it('preserves the time of day: a later entry on the same local day is a later instant', async () => {
+    createTransactionMock.mockResolvedValue(undefined)
+
+    await createTransactionAction({ ...validInput, date: '2026-02-01T18:45' })
+
+    const [, serviceInput] = createTransactionMock.mock.calls[0]
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T11:45:00.000Z')
+  })
+
+  it('resolves the same local date and time differently for a user west of UTC', async () => {
     requireUserMock.mockResolvedValue({ ...FIXED_USER, timezone: 'America/New_York' })
     createTransactionMock.mockResolvedValue(undefined)
 
     await createTransactionAction(validInput)
 
     const [, serviceInput] = createTransactionMock.mock.calls[0]
-    expect(serviceInput.date.toISOString()).toBe('2026-02-01T05:00:00.000Z')
+    // 09:15 on 2026-02-01 in New York is EST (UTC-5).
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T14:15:00.000Z')
   })
 
-  it('maps a malformed calendar date to INVALID_INPUT and never calls the service', async () => {
-    const result = await createTransactionAction({ ...validInput, date: '01/02/2026' })
+  it('maps a malformed date-time to INVALID_INPUT and never calls the service', async () => {
+    const result = await createTransactionAction({ ...validInput, date: '01/02/2026 09:15' })
 
     expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
     expect(createTransactionMock).not.toHaveBeenCalled()
     expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps a date with no time to INVALID_INPUT — a transaction carries both', async () => {
+    const result = await createTransactionAction({ ...validInput, date: '2026-02-01' })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createTransactionMock).not.toHaveBeenCalled()
   })
 
   it('maps FxUnavailableError to FX_UNAVAILABLE and does not revalidate', async () => {

@@ -33,8 +33,8 @@ export function TransferList({
   /**
    * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
    * from the page) — same rationale as `TransactionList`: formatting `date`
-   * (a UTC instant) in the user's own calendar day keeps the server render
-   * and client hydration identical while still showing *their* day.
+   * (a UTC instant) in the user's own zone keeps the server render and client
+   * hydration identical while still showing *their* wall clock.
    */
   timezone: string
 }) {
@@ -69,7 +69,7 @@ export function TransferList({
     <ul className="flex flex-col gap-2">
       {transfers.map((t) => {
         const crossCurrency = t.fromAccount.currency !== t.toAccount.currency
-        const day = formatInTimeZone(t.date, timezone, 'yyyy-MM-dd')
+        const when = formatInTimeZone(t.date, timezone, 'yyyy-MM-dd HH:mm')
         return (
           <li key={t.id} className="flex items-start justify-between rounded-md border p-3">
             <div>
@@ -86,7 +86,7 @@ export function TransferList({
                   </>
                 )}
               </p>
-              <p className="text-sm text-foreground/60">{day}</p>
+              <p className="text-sm text-foreground/60">{when}</p>
               {crossCurrency && t.exchangeRateUsed && (
                 <p className="text-xs text-foreground/50">rate {t.exchangeRateUsed}</p>
               )}
@@ -96,7 +96,7 @@ export function TransferList({
               type="button"
               variant="ghost"
               size="sm"
-              aria-label={`Delete transfer on ${day}`}
+              aria-label={`Delete transfer on ${when}`}
               onClick={() => handleDelete(t.id)}
               className="text-negative"
             >

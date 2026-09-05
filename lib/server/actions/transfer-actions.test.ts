@@ -53,8 +53,8 @@ const { Prisma } = await import('@prisma/client')
 
 /**
  * The session user carries a real IANA timezone: the action resolves the
- * submitted calendar day against it (ruling R-21b), so the zone is part of
- * what these tests pin down. `Asia/Ho_Chi_Minh` is UTC+7 year-round.
+ * submitted local date and time against it, so the zone is part of what these
+ * tests pin down. `Asia/Ho_Chi_Minh` is UTC+7 year-round.
  */
 const FIXED_USER = {
   id: 'user_1',
@@ -66,22 +66,22 @@ const FIXED_USER = {
   timezone: 'Asia/Ho_Chi_Minh',
 }
 
-/** What the form submits: `date` is the plain `yyyy-MM-dd` the user picked. */
+/** What the form submits: `date` is the plain `yyyy-MM-ddTHH:mm` the user entered. */
 const validInput = {
   fromAccountId: 'account_1',
   toAccountId: 'account_2',
   fromAmount: 1000,
   toAmount: 1000,
-  date: '2026-02-01',
+  date: '2026-02-01T09:15',
 }
 
-/** What the service must receive: local midnight on that day in UTC+7. */
+/** What the service must receive: that wall-clock moment read in UTC+7. */
 const expectedServiceInput = {
   fromAccountId: 'account_1',
   toAccountId: 'account_2',
   fromAmount: 1000,
   toAmount: 1000,
-  date: new Date('2026-01-31T17:00:00.000Z'),
+  date: new Date('2026-02-01T02:15:00.000Z'),
 }
 
 function notFoundError() {
@@ -112,32 +112,48 @@ describe('createTransferAction', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
   })
 
-  it("resolves the submitted calendar day to local midnight in the user's timezone", async () => {
+  it("resolves the submitted local date and time in the user's timezone", async () => {
     createTransferMock.mockResolvedValue(undefined)
 
     await createTransferAction(validInput)
 
     const [, serviceInput] = createTransferMock.mock.calls[0]
     expect(serviceInput.date).toBeInstanceOf(Date)
-    expect(serviceInput.date.toISOString()).toBe('2026-01-31T17:00:00.000Z')
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T02:15:00.000Z')
   })
 
-  it('resolves the same calendar day differently for a user west of UTC', async () => {
+  it('preserves the time of day: a later entry on the same local day is a later instant', async () => {
+    createTransferMock.mockResolvedValue(undefined)
+
+    await createTransferAction({ ...validInput, date: '2026-02-01T18:45' })
+
+    const [, serviceInput] = createTransferMock.mock.calls[0]
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T11:45:00.000Z')
+  })
+
+  it('resolves the same local date and time differently for a user west of UTC', async () => {
     requireUserMock.mockResolvedValue({ ...FIXED_USER, timezone: 'America/New_York' })
     createTransferMock.mockResolvedValue(undefined)
 
     await createTransferAction(validInput)
 
     const [, serviceInput] = createTransferMock.mock.calls[0]
-    expect(serviceInput.date.toISOString()).toBe('2026-02-01T05:00:00.000Z')
+    expect(serviceInput.date.toISOString()).toBe('2026-02-01T14:15:00.000Z')
   })
 
-  it('maps a malformed calendar date to INVALID_INPUT and never calls the service', async () => {
-    const result = await createTransferAction({ ...validInput, date: '2026-2-1' })
+  it('maps a malformed date-time to INVALID_INPUT and never calls the service', async () => {
+    const result = await createTransferAction({ ...validInput, date: '2026-2-1T09:15' })
 
     expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
     expect(createTransferMock).not.toHaveBeenCalled()
     expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps a date with no time to INVALID_INPUT — a transfer carries both', async () => {
+    const result = await createTransferAction({ ...validInput, date: '2026-02-01' })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createTransferMock).not.toHaveBeenCalled()
   })
 
   it('maps ArchivedAccountError to ARCHIVED_ACCOUNT and does not revalidate', async () => {

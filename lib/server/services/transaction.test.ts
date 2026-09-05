@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { createTransactionSchema } from '@/lib/validation/transaction'
+import { instantToLocalDateTime, localDateTimeToInstant } from '@/lib/datetime/local-date-time'
 import {
   ArchivedAccountError,
   CurrencyMismatchError,
@@ -1057,6 +1058,48 @@ describe('transaction service', () => {
       })
       expect(stored.accountId).toBe(s.accountId)
       expect(stored.currency).toBe('VND')
+    })
+  })
+
+  describe('date and time are both preserved', () => {
+    const TIMEZONE = 'Asia/Ho_Chi_Minh'
+
+    it('stores two entries on the same local day as distinct instants, newest first', async () => {
+      const s = await setup()
+      // What the action layer does with what the form submitted.
+      const morning = localDateTimeToInstant('2026-02-01T09:15', TIMEZONE)
+      const evening = localDateTimeToInstant('2026-02-01T18:45', TIMEZONE)
+
+      const morningTx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: morning },
+        fakeProvider().provider,
+      )
+      const eveningTx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_OUT', amount: 200, date: evening },
+        fakeProvider().provider,
+      )
+
+      // Two different moments in the database, not two copies of midnight.
+      const storedMorning = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: morningTx.id } },
+      })
+      const storedEvening = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: eveningTx.id } },
+      })
+      expect(storedMorning.date.toISOString()).toBe('2026-02-01T02:15:00.000Z')
+      expect(storedEvening.date.toISOString()).toBe('2026-02-01T11:45:00.000Z')
+
+      // And they read back as the two times the user actually entered.
+      expect(instantToLocalDateTime(storedMorning.date, TIMEZONE)).toBe('2026-02-01T09:15')
+      expect(instantToLocalDateTime(storedEvening.date, TIMEZONE)).toBe('2026-02-01T18:45')
+
+      // The list orders by `date` first, so the evening entry leads — under the
+      // old calendar-midnight convention both rows tied and the order came
+      // from `createdAt` by accident.
+      const rows = await listTransactions(s.userId)
+      expect(rows.map((r) => r.id)).toEqual([eveningTx.id, morningTx.id])
     })
   })
 

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { moneyAmountSchema } from '@/lib/validation/money'
-import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-date'
+import { LOCAL_DATE_TIME_RE, isRealLocalDateTime } from '@/lib/datetime/local-date-time'
 
 /**
  * An internal transfer's client-supplied fields (spec §4.5).
@@ -18,7 +18,7 @@ import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-da
  * constraints, so neither depends on this schema being reached.
  */
 /** Everything except `date`, which is the only field the service and the form
- *  disagree about (an instant vs. the user's calendar day — see below). */
+ *  disagree about (an instant vs. the user's local date and time — see below). */
 const transferFields = {
   fromAccountId: z.string().min(1),
   toAccountId: z.string().min(1),
@@ -47,23 +47,23 @@ export const createTransferSchema = z
 
 /**
  * What a *form* submits: identical to `createTransferSchema` except that
- * `date` stays the raw `yyyy-MM-dd` string the `<input type="date">`
- * produced. `createTransferAction` converts it to an instant with
- * `calendarDateToInstant` in the session user's IANA zone (ruling R-21b) —
- * see the longer rationale in `lib/datetime/calendar-date.ts`.
+ * `date` stays the raw `yyyy-MM-ddTHH:mm` string the
+ * `<input type="datetime-local">` produced. `createTransferAction` converts it
+ * to an instant with `localDateTimeToInstant` in the session user's IANA zone —
+ * see the longer rationale in `lib/datetime/local-date-time.ts`.
  */
 export const createTransferFormSchema = z
   .object({
     ...transferFields,
     date: z
       .string()
-      .regex(CALENDAR_DATE_RE, 'Enter a valid date')
-      .refine(isRealCalendarDate, 'Enter a valid date'),
+      .regex(LOCAL_DATE_TIME_RE, 'Enter a valid date and time')
+      .refine(isRealLocalDateTime, 'Enter a valid date and time'),
   })
   .refine(distinctAccounts.check, distinctAccounts.options)
 
 /** The parsed shape services work with (`date` is a real `Date`). */
 export type CreateTransferInput = z.infer<typeof createTransferSchema>
 
-/** The shape a form submits and an action accepts (`date` is `yyyy-MM-dd`). */
+/** The shape a form submits and an action accepts (`date` is `yyyy-MM-ddTHH:mm`). */
 export type CreateTransferFormInput = z.infer<typeof createTransferFormSchema>

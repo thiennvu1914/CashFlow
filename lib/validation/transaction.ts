@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { moneyAmountSchema } from '@/lib/validation/money'
-import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-date'
+import { LOCAL_DATE_TIME_RE, isRealLocalDateTime } from '@/lib/datetime/local-date-time'
 
 export const transactionTypeSchema = z.enum([
   'INCOME',
@@ -30,7 +30,7 @@ const CATEGORY_REQUIRED_TYPES = new Set<z.infer<typeof transactionTypeSchema>>([
  * never by a sign.
  */
 /** Everything except `date`, which is the only field the service and the form
- *  disagree about (an instant vs. the user's calendar day — see below). */
+ *  disagree about (an instant vs. the user's local date and time — see below). */
 const transactionFields = {
   accountId: z.string().min(1),
   categoryId: z.string().min(1).optional(),
@@ -59,27 +59,27 @@ export const createTransactionSchema = z
 
 /**
  * What a *form* submits: identical to `createTransactionSchema` except that
- * `date` stays the raw `yyyy-MM-dd` string the `<input type="date">` produced.
+ * `date` stays the raw `yyyy-MM-ddTHH:mm` string the
+ * `<input type="datetime-local">` produced.
  *
- * A calendar day is not an instant until someone supplies a timezone, and the
- * browser is the wrong place to pick one — the client's zone is not
- * necessarily the user's configured zone, and `new Date('2026-09-05')` is UTC
- * midnight, which is the previous day for everyone behind UTC. So the string
- * travels as a string, and `createTransactionAction` converts it with
- * `calendarDateToInstant` in the session user's IANA zone (ruling R-21b).
+ * A local date-time is not an instant until someone supplies a timezone, and
+ * the browser is the wrong place to pick one — the client's zone is not
+ * necessarily the user's configured zone. So the string travels as a string,
+ * and `createTransactionAction` converts it with `localDateTimeToInstant` in
+ * the session user's IANA zone; see `lib/datetime/local-date-time.ts`.
  */
 export const createTransactionFormSchema = z
   .object({
     ...transactionFields,
     date: z
       .string()
-      .regex(CALENDAR_DATE_RE, 'Enter a valid date')
-      .refine(isRealCalendarDate, 'Enter a valid date'),
+      .regex(LOCAL_DATE_TIME_RE, 'Enter a valid date and time')
+      .refine(isRealLocalDateTime, 'Enter a valid date and time'),
   })
   .refine(categoryRequirement.check, categoryRequirement.options)
 
 /** The parsed shape services work with (`date` is a real `Date`). */
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>
 
-/** The shape a form submits and an action accepts (`date` is `yyyy-MM-dd`). */
+/** The shape a form submits and an action accepts (`date` is `yyyy-MM-ddTHH:mm`). */
 export type CreateTransactionFormInput = z.infer<typeof createTransactionFormSchema>

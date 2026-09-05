@@ -7,7 +7,7 @@ import { requireUser } from '@/lib/auth/require-user'
 import * as transactionService from '@/lib/server/services/transaction'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { calendarDateToInstant } from '@/lib/datetime/calendar-date'
+import { localDateTimeToInstant } from '@/lib/datetime/local-date-time'
 import {
   createTransactionFormSchema,
   type CreateTransactionFormInput,
@@ -25,10 +25,10 @@ import {
  * into the service below is `(user.id, ...)` from `requireUser()`, and the
  * real FX policy runs (no `providerOverride` is ever passed here).
  *
- * This layer also owns the calendar-date → instant conversion (ruling R-21b):
- * the form submits the plain `yyyy-MM-dd` the user picked, and only here is
- * the session user's IANA timezone known, so only here can that day be pinned
- * to the right instant. See `lib/datetime/calendar-date.ts`.
+ * This layer also owns the local-date-time → instant conversion: the form
+ * submits the plain `yyyy-MM-ddTHH:mm` the user entered, and only here is the
+ * session user's IANA timezone known, so only here can that wall-clock moment
+ * be pinned to the right instant. See `lib/datetime/local-date-time.ts`.
  */
 export type TransactionActionError =
   | 'FX_UNAVAILABLE'
@@ -64,15 +64,15 @@ function mapError(e: unknown): TransactionActionResult {
 
 /**
  * Re-validates the form shape server-side (a malformed `date` is a ZodError,
- * i.e. INVALID_INPUT, never an unmapped throw out of `calendarDateToInstant`)
- * and resolves the calendar day against the caller's own timezone.
+ * i.e. INVALID_INPUT, never an unmapped throw out of `localDateTimeToInstant`)
+ * and resolves the entered date and time against the caller's own timezone.
  */
 function toServiceInput(
   input: CreateTransactionFormInput,
   timezone: string,
 ): CreateTransactionInput {
   const parsed = createTransactionFormSchema.parse(input)
-  return { ...parsed, date: calendarDateToInstant(parsed.date, timezone) }
+  return { ...parsed, date: localDateTimeToInstant(parsed.date, timezone) }
 }
 
 export async function createTransactionAction(
