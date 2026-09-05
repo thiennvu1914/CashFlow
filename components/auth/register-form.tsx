@@ -19,13 +19,19 @@ export function RegisterForm() {
   } = useForm<RegisterInput>({ resolver: zodResolver(registerSchema) })
 
   async function onSubmit(values: RegisterInput) {
-    const { error } = await authClient.signUp.email({
-      email: values.email,
-      password: values.password,
-      name: values.name,
-    })
-    if (error) {
-      setError('root', { message: error.message ?? 'Registration failed' })
+    try {
+      const { error } = await authClient.signUp.email({
+        email: values.email,
+        password: values.password,
+        name: values.name,
+      })
+      if (error) {
+        setError('root', { message: error.message ?? 'Registration failed' })
+        return
+      }
+    } catch {
+      console.error('Registration request failed')
+      setError('root', { message: 'Something went wrong. Please try again.' })
       return
     }
     router.push('/dashboard')
