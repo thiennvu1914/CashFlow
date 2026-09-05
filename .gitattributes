@@ -1,0 +1,13 @@
+# Normalize line endings: the repo is LF-only regardless of the OS checking it out.
+# Prettier (.prettierrc.json endOfLine: lf) and ESLint both assume LF sources.
+* text=auto eol=lf
+
+# Binary assets — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.wasm binary

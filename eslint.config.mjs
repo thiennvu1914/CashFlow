@@ -13,6 +13,10 @@ const eslintConfig = defineConfig([
     'out/**',
     'build/**',
     'next-env.d.ts',
+    // Tooling infrastructure, never application code: Claude worktrees (which contain
+    // full nested checkouts with their own .next output) and SDD scratch space.
+    '.claude/**',
+    '.superpowers/**',
   ]),
   prettierConfig,
 ])
