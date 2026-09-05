@@ -1,89 +1,46 @@
 import { describe, it, expect } from 'vitest'
-import { memoryAdapter, type MemoryDB } from 'better-auth/adapters/memory'
-import { createAuth } from './create-auth'
+import {
+  makeTestAuth,
+  nextTestIp,
+  signIn,
+  getSession,
+  requestPasswordReset,
+  type TestAuth,
+} from './__testing__/auth-harness'
 
 /**
  * Pins Task 8's rate-limit configuration at the HTTP level against the real
  * Better Auth instance and its default in-memory store, so these tests need
  * neither Postgres nor the network. They never import `lib/prisma.ts` or
- * `lib/auth/auth.ts` (the app singleton) for that reason — same pattern as
- * `lib/auth/sign-in.test.ts`.
+ * `lib/auth/auth.ts` (the app singleton) for that reason.
  *
  * Better Auth keys each rate-limit bucket on `<ip>|<path>`
- * (`createRateLimitKey` in `node_modules/@better-auth/core/dist/utils/ip.mjs`).
- * In a test/dev process with no trustworthy IP header it falls back to a
- * single shared `127.0.0.1` bucket per path (same file, `getIP`), which would
- * make every test in this file (and every other auth test file that shares
- * the module-level in-memory store within one Vitest worker) fight over the
- * same counter. Each request below therefore carries an explicit
- * `x-forwarded-for` header — the default `ipAddressHeaders` entry
- * (`DEFAULT_IP_HEADERS` in that same file) — with an IP unique to its test
- * case, so counters never bleed between cases even though they share the
- * module-level memory store within this file.
+ * (`createRateLimitKey` in `node_modules/@better-auth/core/dist/utils/ip.mjs`),
+ * and its store is a module-level Map shared by every instance in the process
+ * (`memory` in `node_modules/better-auth/dist/api/rate-limiter/index.mjs`) — so
+ * an IP reused across two `it()` blocks carries the earlier count over. Every
+ * request below therefore carries an `x-forwarded-for` IP that the shared
+ * `nextTestIp()` allocator guarantees is unique, or, in the trusted-proxy
+ * block, a hand-written chain whose real client IP is stated in the test.
  */
-const BASE_URL = 'http://localhost:3000'
-const TEST_SECRET = 'rate-limit-unit-test-secret-32characte'
+const WRONG_PASSWORD = 'wrong-password'
 
-function makeAuth(trustedProxies?: string[]) {
-  const db: MemoryDB = { user: [], session: [], account: [], verification: [] }
-  return createAuth({
-    database: memoryAdapter(db),
-    baseURL: BASE_URL,
-    secret: TEST_SECRET,
-    sendResetPasswordEmail: async () => {},
-    trustedProxies,
-  })
-}
-
-type Auth = ReturnType<typeof createAuth>
-
-function signInRequest(ip: string, email: string, password: string) {
-  return new Request(`${BASE_URL}/api/auth/sign-in/email`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      origin: BASE_URL,
-      'x-forwarded-for': ip,
-    },
-    body: JSON.stringify({ email, password }),
-  })
-}
-
-function requestPasswordResetRequest(ip: string, email: string) {
-  return new Request(`${BASE_URL}/api/auth/request-password-reset`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      origin: BASE_URL,
-      'x-forwarded-for': ip,
-    },
-    body: JSON.stringify({ email }),
-  })
-}
-
-function getSessionRequest(ip: string) {
-  return new Request(`${BASE_URL}/api/auth/get-session`, {
-    method: 'GET',
-    headers: { origin: BASE_URL, 'x-forwarded-for': ip },
-  })
-}
-
-async function signIn(auth: Auth, ip: string, email: string, password: string) {
-  return auth.handler(signInRequest(ip, email, password))
+function wrongPasswordSignIn(auth: TestAuth, ip: string, email: string) {
+  return signIn(auth, { email, password: WRONG_PASSWORD }, { ip })
 }
 
 describe('auth rate limiting', () => {
   it('locks out sign-in after 5 wrong-password attempts within the window, per IP', async () => {
-    const auth = makeAuth()
-    const ip = '203.0.113.10'
-    const email = 'nobody-203-0-113-10@example.com'
+    const { auth } = makeTestAuth()
+    const ip = nextTestIp()
+    const email = 'locked-out@example.com'
 
     for (let attempt = 1; attempt <= 5; attempt++) {
-      const response = await signIn(auth, ip, email, 'wrong-password')
+      const response = await wrongPasswordSignIn(auth, ip, email)
       expect(response.status).toBe(401)
     }
 
-    const sixth = await signIn(auth, ip, email, 'wrong-password')
+    const sixth = await wrongPasswordSignIn(auth, ip, email)
     expect(sixth.status).toBe(429)
     // `rateLimitResponse` in
     // `node_modules/better-auth/dist/api/rate-limiter/index.mjs` always sets
@@ -94,46 +51,44 @@ describe('auth rate limiting', () => {
   })
 
   it('does not share a sign-in lockout across different IPs', async () => {
-    const auth = makeAuth()
-    const lockedOutIp = '203.0.113.11'
-    const otherIp = '203.0.113.12'
-    const email = 'nobody-203-0-113-11@example.com'
+    const { auth } = makeTestAuth()
+    const lockedOutIp = nextTestIp()
+    const otherIp = nextTestIp()
+    const email = 'not-shared@example.com'
 
     for (let attempt = 1; attempt <= 6; attempt++) {
-      await signIn(auth, lockedOutIp, email, 'wrong-password')
+      await wrongPasswordSignIn(auth, lockedOutIp, email)
     }
     // Confirm that IP is now actually locked out before testing the other one.
-    expect((await signIn(auth, lockedOutIp, email, 'wrong-password')).status).toBe(429)
+    expect((await wrongPasswordSignIn(auth, lockedOutIp, email)).status).toBe(429)
 
-    const fromOtherIp = await signIn(auth, otherIp, email, 'wrong-password')
+    const fromOtherIp = await wrongPasswordSignIn(auth, otherIp, email)
     expect(fromOtherIp.status).toBe(401)
   })
 
   it('locks out request-password-reset after 5 attempts within the window', async () => {
-    const auth = makeAuth()
-    const ip = '203.0.113.20'
-    const email = 'reset-203-0-113-20@example.com'
+    const { auth } = makeTestAuth()
+    const ip = nextTestIp()
+    const email = 'reset-limited@example.com'
 
     for (let attempt = 1; attempt <= 5; attempt++) {
-      const response = await auth.handler(requestPasswordResetRequest(ip, email))
+      const response = await requestPasswordReset(auth, { email }, { ip })
       expect(response.status).toBe(200)
     }
 
-    const sixth = await auth.handler(requestPasswordResetRequest(ip, email))
+    const sixth = await requestPasswordReset(auth, { email }, { ip })
     expect(sixth.status).toBe(429)
   })
 
   it('applies the general 10-per-60s rule to an endpoint with no custom rule', async () => {
-    const auth = makeAuth()
-    const ip = '203.0.113.30'
+    const { auth } = makeTestAuth()
+    const ip = nextTestIp()
 
-    let lastResponse: Response | undefined
     for (let attempt = 1; attempt <= 10; attempt++) {
-      lastResponse = await auth.handler(getSessionRequest(ip))
-      expect(lastResponse.status).toBe(200)
+      expect((await getSession(auth, { ip })).status).toBe(200)
     }
 
-    const eleventh = await auth.handler(getSessionRequest(ip))
+    const eleventh = await getSession(auth, { ip })
     expect(eleventh.status).toBe(429)
   })
 })
@@ -152,7 +107,7 @@ describe('rate-limit client-IP resolution through trusted proxies', () => {
   const TRUSTED = ['10.0.0.0/8']
 
   it('keys one bucket on the real client IP even when the spoofable left-most entry changes', async () => {
-    const auth = makeAuth(TRUSTED)
+    const { auth } = makeTestAuth({ trustedProxies: TRUSTED })
     const email = 'spoofer@example.com'
     // Same real client (5.5.5.5) behind the same trusted proxy (10.0.0.1), but
     // each request forges a different left-most value. If Better Auth trusted
@@ -167,30 +122,27 @@ describe('rate-limit client-IP resolution through trusted proxies', () => {
     ]
 
     for (const chain of chains) {
-      const response = await signIn(auth, chain, email, 'wrong-password')
+      const response = await wrongPasswordSignIn(auth, chain, email)
       expect(response.status).toBe(401)
     }
 
-    const sixth = await signIn(auth, '9.9.9.6, 5.5.5.5, 10.0.0.1', email, 'wrong-password')
+    const sixth = await wrongPasswordSignIn(auth, '9.9.9.6, 5.5.5.5, 10.0.0.1', email)
     expect(sixth.status).toBe(429)
     expect(sixth.headers.get('X-Retry-After')).not.toBeNull()
   })
 
   it('does not limit a different real client behind the same trusted proxy', async () => {
-    const auth = makeAuth(TRUSTED)
+    const { auth } = makeTestAuth({ trustedProxies: TRUSTED })
     const email = 'neighbour@example.com'
-    // A real client distinct from the previous test's 5.5.5.5: Better Auth's
-    // rate-limit store is a module-level Map shared by every instance in the
-    // process (`memory` in
-    // `node_modules/better-auth/dist/api/rate-limiter/index.mjs`), so a bucket
-    // reused across `it()` blocks would carry the earlier count over.
+    // A real client distinct from the previous test's 5.5.5.5, because the
+    // rate-limit store outlives a single `it()`.
     for (let attempt = 1; attempt <= 6; attempt++) {
-      await signIn(auth, '9.9.9.9, 5.5.5.7, 10.0.0.1', email, 'wrong-password')
+      await wrongPasswordSignIn(auth, '9.9.9.9, 5.5.5.7, 10.0.0.1', email)
     }
     // Confirm 5.5.5.7 really is locked out before checking the neighbour.
-    expect((await signIn(auth, '5.5.5.7, 10.0.0.1', email, 'wrong-password')).status).toBe(429)
+    expect((await wrongPasswordSignIn(auth, '5.5.5.7, 10.0.0.1', email)).status).toBe(429)
 
-    const other = await signIn(auth, '6.6.6.6, 10.0.0.1', email, 'wrong-password')
+    const other = await wrongPasswordSignIn(auth, '6.6.6.6, 10.0.0.1', email)
     expect(other.status).toBe(401)
   })
 
@@ -199,22 +151,21 @@ describe('rate-limit client-IP resolution through trusted proxies', () => {
     // needed: with `trustedProxies` unset, a chain of more than one value
     // resolves to no IP at all, and `getIP` falls back to `127.0.0.1` in
     // dev/test — one shared bucket for every distinct client.
-    const auth = makeAuth()
+    const { auth } = makeTestAuth()
     const email = 'shared-bucket@example.com'
 
     for (let attempt = 1; attempt <= 5; attempt++) {
-      const response = await signIn(
+      const response = await wrongPasswordSignIn(
         auth,
         `9.9.9.${attempt}, 5.5.5.${attempt}, 10.0.0.1`,
         email,
-        'wrong-password',
       )
       expect(response.status).toBe(401)
     }
 
     // A sixth request from a completely different chain still trips the limit,
     // because all six landed in the same fallback bucket.
-    const sixth = await signIn(auth, '7.7.7.7, 8.8.8.8, 10.0.0.1', email, 'wrong-password')
+    const sixth = await wrongPasswordSignIn(auth, '7.7.7.7, 8.8.8.8, 10.0.0.1', email)
     expect(sixth.status).toBe(429)
   })
 })

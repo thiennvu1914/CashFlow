@@ -1,29 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { memoryAdapter, type MemoryDB } from 'better-auth/adapters/memory'
-import { createAuth } from './create-auth'
+import { makeTestAuth, nextTestIp, post } from './__testing__/auth-harness'
 
 /**
  * These tests exercise the real Better Auth instance against an in-memory
  * database, so they need neither Postgres nor the network. They never import
  * `lib/prisma.ts` or `lib/auth/auth.ts` (the app singleton) for that reason.
  */
-const BASE_URL = 'http://localhost:3000'
-const TEST_SECRET = 'create-auth-unit-test-secret-32chars'
-
-function makeAuth() {
-  const db: MemoryDB = { user: [], session: [], account: [], verification: [] }
-  const auth = createAuth({
-    database: memoryAdapter(db),
-    baseURL: BASE_URL,
-    secret: TEST_SECRET,
-    sendResetPasswordEmail: async () => {},
-  })
-  return { auth, db }
-}
-
 describe('createAuth', () => {
   it('applies the CashFlow defaults to a user created by email sign-up', async () => {
-    const { auth, db } = makeAuth()
+    const { auth, db } = makeTestAuth()
 
     const { headers, response } = await auth.api.signUpEmail({
       body: {
@@ -67,20 +52,19 @@ describe('createAuth', () => {
   })
 
   it('ignores additional user fields supplied in the sign-up request body', async () => {
-    const { auth, db } = makeAuth()
+    const { auth, db } = makeTestAuth()
 
-    const response = await auth.handler(
-      new Request(`${BASE_URL}/api/auth/sign-up/email`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', origin: BASE_URL },
-        body: JSON.stringify({
-          name: 'Tran Thi B',
-          email: 'tran@example.com',
-          password: 'correct-horse-battery-staple',
-          isDemo: true,
-          baseCurrency: 'USD',
-        }),
-      }),
+    const response = await post(
+      auth,
+      '/sign-up/email',
+      {
+        name: 'Tran Thi B',
+        email: 'tran@example.com',
+        password: 'correct-horse-battery-staple',
+        isDemo: true,
+        baseCurrency: 'USD',
+      },
+      { ip: nextTestIp() },
     )
 
     expect(response.status).toBe(200)
@@ -94,33 +78,28 @@ describe('createAuth', () => {
   })
 
   it('rejects an update-user request that tries to set isDemo', async () => {
-    const { auth, db } = makeAuth()
+    const { auth, db } = makeTestAuth()
+    const ip = nextTestIp()
 
-    const signUp = await auth.handler(
-      new Request(`${BASE_URL}/api/auth/sign-up/email`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', origin: BASE_URL },
-        body: JSON.stringify({
-          name: 'Le Van C',
-          email: 'le@example.com',
-          password: 'correct-horse-battery-staple',
-        }),
-      }),
+    const signUpResponse = await post(
+      auth,
+      '/sign-up/email',
+      {
+        name: 'Le Van C',
+        email: 'le@example.com',
+        password: 'correct-horse-battery-staple',
+      },
+      { ip },
     )
-    expect(signUp.status).toBe(200)
-    const cookie = signUp.headers.get('set-cookie')
+    expect(signUpResponse.status).toBe(200)
+    const cookie = signUpResponse.headers.get('set-cookie')
     expect(cookie).toBeTruthy()
 
-    const response = await auth.handler(
-      new Request(`${BASE_URL}/api/auth/update-user`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          origin: BASE_URL,
-          cookie: cookie as string,
-        },
-        body: JSON.stringify({ isDemo: true }),
-      }),
+    const response = await post(
+      auth,
+      '/update-user',
+      { isDemo: true },
+      { ip, cookie: cookie as string },
     )
 
     // Better Auth rejects the request outright rather than silently dropping

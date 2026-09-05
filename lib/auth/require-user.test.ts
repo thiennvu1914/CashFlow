@@ -10,11 +10,6 @@ import { describe, it, expect, vi } from 'vitest'
  * `lib/auth/create-auth.test.ts` — so signing up through it produces a real
  * session cookie.
  */
-const { BASE_URL, TEST_SECRET } = vi.hoisted(() => ({
-  BASE_URL: 'http://localhost:3000',
-  TEST_SECRET: 'require-user-unit-test-secret-32chars',
-}))
-
 const headersMock = vi.hoisted(() => vi.fn())
 
 vi.mock('next/headers', () => ({
@@ -39,19 +34,11 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('@/lib/auth/auth', async () => {
-  // Dynamic imports here (rather than referencing top-level imports of this
-  // file) are required by Vitest's mock hoisting: this factory runs before
-  // this file's own top-level statements, including any `import` bindings.
-  const { createAuth } = await import('./create-auth')
-  const { memoryAdapter } = await import('better-auth/adapters/memory')
-  const db = { user: [], session: [], account: [], verification: [] }
-  const auth = createAuth({
-    database: memoryAdapter(db),
-    baseURL: BASE_URL,
-    secret: TEST_SECRET,
-    sendResetPasswordEmail: async () => {},
-  })
-  return { auth }
+  // The dynamic import here (rather than a top-level import of this file) is
+  // required by Vitest's mock hoisting: this factory runs before this file's
+  // own top-level statements, including any `import` bindings.
+  const { makeTestAuth } = await import('./__testing__/auth-harness')
+  return { auth: makeTestAuth().auth }
 })
 
 const { auth } = await import('@/lib/auth/auth')
