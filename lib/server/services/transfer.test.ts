@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { createTransferSchema } from '@/lib/validation/transfer'
 import { createTransfer, listTransfers, SameAccountTransferError } from './transfer'
@@ -57,6 +58,27 @@ describe('transfer service', () => {
     return { userId: user.id, accountAId: a.id, accountBId: b.id }
   }
 
+  /** Reads the row back independently of whatever `createTransfer` returned, so
+   *  an assertion is about what the database actually holds. */
+  async function readTransfer(userId: string, id: string) {
+    return prisma.transfer.findUniqueOrThrow({ where: { userId_id: { userId, id } } })
+  }
+
+  /**
+   * Asserts the rejection is specifically Prisma's not-found. Ownership here
+   * comes from the composite `(userId, id)` lookup missing the row, so a bare
+   * `rejects.toThrow()` would also pass if the call had failed for an unrelated
+   * reason — this pins down *why* another user's account is unusable.
+   */
+  async function expectNotFound(promise: Promise<unknown>) {
+    const error = await promise.then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError)
+    expect((error as Prisma.PrismaClientKnownRequestError).code).toBe('P2025')
+  }
+
   async function archiveAccount(userId: string, accountId: string) {
     // Task 15 adds the archive service; setting the status directly here proves
     // the transfer service itself refuses an archived account at either end.
@@ -108,6 +130,10 @@ describe('transfer service', () => {
       })
 
       expect(transfer.exchangeRateUsed).toBeNull()
+      const stored = await readTransfer(s.userId, transfer.id)
+      expect(stored.exchangeRateUsed).toBeNull()
+      expect(stored.fromAmount.toString()).toBe('500000')
+      expect(stored.toAmount.toString()).toBe('500000')
     })
 
     it('records the effective exchangeRateUsed for a cross-currency transfer', async () => {
@@ -121,11 +147,20 @@ describe('transfer service', () => {
         date: new Date(),
       })
 
-      expect(transfer.exchangeRateUsed?.toNumber()).toBeCloseTo(10 / 250_000)
+      // Exact, not approximate: `toBeCloseTo` at its default precision of 2
+      // would also accept 0, which is exactly the failure mode that matters for
+      // a rate this small. `Decimal.toString()` normalises the trailing zeros
+      // the `Decimal(24, 12)` column pads it with, so this is the whole value.
+      expect(transfer.exchangeRateUsed?.toString()).toBe('0.00004')
       // Cross-currency keeps both client amounts: they are genuinely different
       // quantities of two different currencies, not a conservation violation.
       expect(transfer.fromAmount.toNumber()).toBe(250_000)
       expect(transfer.toAmount.toNumber()).toBe(10)
+
+      const stored = await readTransfer(s.userId, transfer.id)
+      expect(stored.exchangeRateUsed?.toString()).toBe('0.00004')
+      expect(stored.fromAmount.toString()).toBe('250000')
+      expect(stored.toAmount.toString()).toBe('10')
     })
 
     it('conserves money on a same-currency transfer: a crafted mismatched toAmount is overridden server-side', async () => {
@@ -142,12 +177,19 @@ describe('transfer service', () => {
 
       expect(transfer.toAmount.toNumber()).toBe(100)
       expect(transfer.fromAmount.toNumber()).toBe(100)
+      // Re-read: what the service returned and what the database holds are two
+      // different claims, and it is the stored row that later balances read.
+      const stored = await readTransfer(s.userId, transfer.id)
+      expect(stored.toAmount.toString()).toBe('100')
+      expect(stored.fromAmount.toString()).toBe('100')
+      expect(stored.exchangeRateUsed).toBeNull()
       // Total money across both accounts is unchanged: 1,000,000 + 0 before,
-      // 999,900 + 100 after. `getAccountBalance` gains its transfer terms in
-      // Task 13 — until then this assertion is satisfied by the stored amounts
-      // above; it is kept because it becomes the live conservation check then.
+      // 999,900 + 100 after. `getAccountBalance` includes the transfer legs
+      // since Task 13, so this is a live conservation check.
       const a = await getAccountBalance(s.userId, s.accountAId)
       const b = await getAccountBalance(s.userId, s.accountBId)
+      expect(a.toString()).toBe('999900')
+      expect(b.toString()).toBe('100')
       expect(a.add(b).toNumber()).toBe(1_000_000)
     })
 
@@ -189,7 +231,7 @@ describe('transfer service', () => {
       const s = await setupTwoAccounts()
       const other = await setupTwoAccounts()
 
-      await expect(
+      await expectNotFound(
         createTransfer(s.userId, {
           fromAccountId: s.accountAId,
           toAccountId: other.accountBId,
@@ -197,7 +239,7 @@ describe('transfer service', () => {
           toAmount: 100,
           date: new Date(),
         }),
-      ).rejects.toThrow()
+      )
 
       expect(await prisma.transfer.count({ where: { userId: s.userId } })).toBe(0)
       expect(await prisma.transfer.count({ where: { userId: other.userId } })).toBe(0)
@@ -207,7 +249,7 @@ describe('transfer service', () => {
       const s = await setupTwoAccounts()
       const other = await setupTwoAccounts()
 
-      await expect(
+      await expectNotFound(
         createTransfer(s.userId, {
           fromAccountId: other.accountAId,
           toAccountId: s.accountBId,
@@ -215,7 +257,7 @@ describe('transfer service', () => {
           toAmount: 100,
           date: new Date(),
         }),
-      ).rejects.toThrow()
+      )
 
       expect(await prisma.transfer.count({ where: { userId: s.userId } })).toBe(0)
       expect(await prisma.transfer.count({ where: { userId: other.userId } })).toBe(0)
@@ -368,8 +410,23 @@ describe('transfer service', () => {
       expect(parseWithAmounts(12.34)).toBe(true)
     })
 
+    // `toAmount` gets the same treatment as `fromAmount`: it is only ignored
+    // for a same-currency transfer, and on the cross-currency path it is the
+    // amount actually received, so it has to satisfy the same money rule.
     it('rejects a toAmount of zero', () => {
       expect(parseWithAmounts(100, 0)).toBe(false)
+    })
+
+    it('rejects a negative toAmount', () => {
+      expect(parseWithAmounts(100, -1)).toBe(false)
+    })
+
+    it('rejects a toAmount with more than 2 decimal places', () => {
+      expect(parseWithAmounts(100, 12.345)).toBe(false)
+    })
+
+    it('accepts a toAmount with exactly 2 decimal places', () => {
+      expect(parseWithAmounts(100, 12.34)).toBe(true)
     })
 
     it('rejects an unparseable date', () => {
