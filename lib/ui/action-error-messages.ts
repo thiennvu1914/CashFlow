@@ -39,6 +39,7 @@ export const TRANSACTION_ERROR_MESSAGES: Record<TransactionActionError, string> 
   CURRENCY_MISMATCH:
     'Move the transaction to an account in the same currency, or delete and re-enter it.',
   INVALID_CATEGORY: 'Choose a valid category for this type.',
+  CONFLICT: 'This record changed while you were editing it. Reload and try again.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That record no longer exists.',
 }

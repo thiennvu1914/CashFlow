@@ -7,11 +7,11 @@ import {
 } from '@/lib/validation/financial-account'
 import type { Prisma } from '@prisma/client'
 import { getAccountBalance, AccountNotFoundError } from './balance'
-// `transaction.ts` owns `ArchivedAccountError` and imports nothing from this
-// module, so reusing it here introduces no cycle. One error type for "this
-// account is archived" keeps the code the UI sees identical whether the frozen
-// thing was a transaction, a transfer, or the account row itself.
-import { ArchivedAccountError } from './transaction'
+// `account-lock.ts` owns the locking read and the `ArchivedAccountError` it
+// raises, and imports nothing from this module, so there is no cycle. One error
+// type for "this account is archived" keeps the code the UI sees identical
+// whether the frozen thing was a transaction, a transfer, or the account row.
+import { lockAccountRows, lockAccountsForUpdate } from './account-lock'
 
 /**
  * Thrown when a create/update targets an `accountTypeId` that either does not
@@ -50,10 +50,16 @@ export class AccountLockedError extends Error {
  * currency underneath it would change the meaning of money that has already
  * moved.
  */
-export async function accountHasActivity(userId: string, accountId: string): Promise<boolean> {
+export async function accountHasActivity(
+  userId: string,
+  accountId: string,
+  // `updateFinancialAccount` passes its own transaction client so the activity
+  // check runs under the account's row lock rather than beside it.
+  db: Prisma.TransactionClient = prisma,
+): Promise<boolean> {
   const [transactionCount, transferCount] = await Promise.all([
-    prisma.transaction.count({ where: { userId, accountId } }),
-    prisma.transfer.count({
+    db.transaction.count({ where: { userId, accountId } }),
+    db.transfer.count({
       where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
     }),
   ])
@@ -125,41 +131,54 @@ export class AccountHasNonZeroBalanceError extends Error {
  * account id must fail here as `AccountNotFoundError`, before any balance is
  * computed for it.
  *
- * **The balance check and the write are not atomic**, and that is accepted for
- * Phase 2. Under READ COMMITTED the balance is derived from rows committed at
- * the moment of the `groupBy`, so a transaction inserted between the check and
- * the `UPDATE` could in principle leave an archived account holding money.
- * Two things bound the risk: every query here is scoped to a single `userId`,
- * so the only way to lose the race is for one person to archive an account in
- * the same instant they are writing to it from another tab; and the `UPDATE`
- * below is a compare-and-set (`status: 'ACTIVE'` in the `where`), so two
- * concurrent archives cannot both succeed — the loser gets a P2025 rather than
- * a second write over a row whose state has already moved. Closing the
- * remaining window needs `SELECT … FOR UPDATE` on the account row inside an
- * explicit transaction, which is deferred (see the Phase 2 final review).
+ * **The balance check and the write are atomic.** The account row is locked
+ * with `SELECT … FOR UPDATE` and the balance is then derived *through the same
+ * transaction*, so a transaction or transfer being written to this account
+ * either commits first — and the balance check sees it, refusing the archive —
+ * or waits until the archive has committed and is then refused itself by
+ * `lockAccountsForUpdate`. Neither order can produce an archived account
+ * holding money. The `UPDATE` keeps its compare-and-set (`status: 'ACTIVE'` in
+ * the `where`) as a second line: with the lock held it can no longer fail, and
+ * if it ever did, a P2025 is what the action layer already maps to NOT_FOUND.
+ * See `account-lock.ts` for the full locking design.
  */
 export async function archiveFinancialAccount(userId: string, accountId: string) {
-  const account = await prisma.financialAccount.findUnique({
-    where: { userId_id: { userId, id: accountId } },
-  })
-  if (!account) throw new AccountNotFoundError(accountId)
-  if (account.status === 'ARCHIVED') return account
+  return prisma.$transaction(async (tx) => {
+    // `requireActive: false`: archiving an already-archived account is a no-op
+    // for this function, not an `ArchivedAccountError`, so the status decision
+    // is made here rather than by the lock helper.
+    const [locked] = await lockAccountRows(tx, userId, [accountId], {
+      requireActive: false,
+      notFound: (id) => new AccountNotFoundError(id),
+    })
 
-  const balance = await getAccountBalance(userId, accountId)
-  if (!balance.isZero()) throw new AccountHasNonZeroBalanceError()
+    // Idempotent, and safe without re-deriving a balance: the transaction and
+    // transfer services refuse every kind of new activity against an archived
+    // account, so its balance cannot have moved since it was archived. The
+    // locked row carries only the columns the lock needs, so the full row is
+    // re-read (still inside the transaction) for the caller.
+    if (locked.status === 'ARCHIVED') {
+      return tx.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: accountId } },
+      })
+    }
 
-  // Compare-and-set: the row must still be ACTIVE when the write lands.
-  // Prisma allows non-unique filters alongside a unique selector in
-  // `update`'s `where`; when nothing matches it raises P2025, which the action
-  // layer already maps to NOT_FOUND.
-  return prisma.financialAccount.update({
-    where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
-    data: { status: 'ARCHIVED' },
+    const balance = await getAccountBalance(userId, accountId, undefined, tx)
+    if (!balance.isZero()) throw new AccountHasNonZeroBalanceError()
+
+    return tx.financialAccount.update({
+      where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
+      data: { status: 'ARCHIVED' },
+    })
   })
 }
 
-async function assertActiveAccountType(userId: string, accountTypeId: string) {
-  const accountType = await prisma.accountType.findUnique({
+async function assertActiveAccountType(
+  userId: string,
+  accountTypeId: string,
+  db: Prisma.TransactionClient = prisma,
+) {
+  const accountType = await db.accountType.findUnique({
     where: { userId_id: { userId, id: accountTypeId } },
   })
   if (!accountType || accountType.status !== 'ACTIVE') {
@@ -211,6 +230,11 @@ export async function createFinancialAccount(userId: string, input: CreateFinanc
  * stopped tracking. The freeze covers `name` and `description` too: reopening
  * an account is not in Phase 2's scope, so there is no state in which an
  * archived row is meant to change at all.
+ *
+ * Atomic: the account row is locked before its status and activity are read,
+ * and the write goes through the same transaction — so an archive or a first
+ * transaction landing concurrently cannot slip between the checks and the
+ * `UPDATE`.
  */
 export async function updateFinancialAccount(
   userId: string,
@@ -219,44 +243,44 @@ export async function updateFinancialAccount(
 ) {
   const parsed = updateFinancialAccountSchema.parse(input)
 
-  // Ownership-scoped and first: another user's id is a P2025 here, before any
-  // status or activity is read for it.
-  const existing = await prisma.financialAccount.findUniqueOrThrow({
-    where: { userId_id: { userId, id: accountId } },
-  })
-  if (existing.status !== 'ACTIVE') throw new ArchivedAccountError()
+  return prisma.$transaction(async (tx) => {
+    // Ownership-scoped and first: another user's id is a P2025 here, before any
+    // status or activity is read for it. The ACTIVE requirement is the lock
+    // helper's own — an archived account is frozen outright.
+    await lockAccountsForUpdate(tx, userId, [accountId])
 
-  if (parsed.accountTypeId !== undefined) {
-    await assertActiveAccountType(userId, parsed.accountTypeId)
-  }
+    if (parsed.accountTypeId !== undefined) {
+      await assertActiveAccountType(userId, parsed.accountTypeId, tx)
+    }
 
-  // The lock is on the *attempt*, not on a difference in value: an update that
-  // carries either field at all is refused once activity exists, so no caller
-  // can rely on "it happened to be the same" and no balance is ever recomputed
-  // against a changed foundation. The count query only runs when one of the two
-  // locked fields is actually present.
-  if (parsed.currency !== undefined || parsed.initialBalance !== undefined) {
-    if (await accountHasActivity(userId, accountId)) throw new AccountLockedError()
-  }
+    // The lock is on the *attempt*, not on a difference in value: an update
+    // that carries either field at all is refused once activity exists, so no
+    // caller can rely on "it happened to be the same" and no balance is ever
+    // recomputed against a changed foundation. The count query only runs when
+    // one of the two locked fields is actually present.
+    if (parsed.currency !== undefined || parsed.initialBalance !== undefined) {
+      if (await accountHasActivity(userId, accountId, tx)) throw new AccountLockedError()
+    }
 
-  // Rebuilt field-by-field (never `data: parsed`) so an undefined key is
-  // omitted from the update rather than explicitly writing `undefined` over
-  // an existing value — Zod's `.optional()` fields are absent-or-present, not
-  // null-or-present, and Prisma treats an explicit `undefined` the same as
-  // "don't touch this field", but rebuilding keeps the intent explicit here
-  // rather than relying on that Prisma behaviour.
-  const data: Prisma.FinancialAccountUncheckedUpdateInput = {}
-  if (parsed.name !== undefined) data.name = parsed.name
-  if (parsed.accountTypeId !== undefined) data.accountTypeId = parsed.accountTypeId
-  if (parsed.initialBalance !== undefined) data.initialBalance = parsed.initialBalance
-  if (parsed.currency !== undefined) data.currency = parsed.currency
-  if (parsed.description !== undefined) data.description = parsed.description
+    // Rebuilt field-by-field (never `data: parsed`) so an undefined key is
+    // omitted from the update rather than explicitly writing `undefined` over
+    // an existing value — Zod's `.optional()` fields are absent-or-present, not
+    // null-or-present, and Prisma treats an explicit `undefined` the same as
+    // "don't touch this field", but rebuilding keeps the intent explicit here
+    // rather than relying on that Prisma behaviour.
+    const data: Prisma.FinancialAccountUncheckedUpdateInput = {}
+    if (parsed.name !== undefined) data.name = parsed.name
+    if (parsed.accountTypeId !== undefined) data.accountTypeId = parsed.accountTypeId
+    if (parsed.initialBalance !== undefined) data.initialBalance = parsed.initialBalance
+    if (parsed.currency !== undefined) data.currency = parsed.currency
+    if (parsed.description !== undefined) data.description = parsed.description
 
-  // Compare-and-set on the same `status: 'ACTIVE'` the guard above read: if
-  // the account was archived between that read and this write, nothing
-  // matches and Prisma raises P2025 instead of editing a frozen row.
-  return prisma.financialAccount.update({
-    where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
-    data,
+    // Compare-and-set on the same `status: 'ACTIVE'` the lock above read: with
+    // the row locked this can no longer fail, and if it ever did, Prisma raises
+    // P2025 rather than editing a frozen row.
+    return tx.financialAccount.update({
+      where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
+      data,
+    })
   })
 }

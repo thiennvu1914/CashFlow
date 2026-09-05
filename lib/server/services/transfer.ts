@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { createTransferSchema, type CreateTransferInput } from '@/lib/validation/transfer'
-import { requireActiveAccount } from './transaction'
+import { lockAccountsForUpdate } from './account-lock'
 
 /**
  * Transfer service (spec §4.5).
@@ -18,9 +18,11 @@ import { requireActiveAccount } from './transaction'
  *    the client's value, so a crafted request cannot take 100 out of one
  *    account and put 500 into another. Only a genuine cross-currency transfer
  *    uses both amounts, and it records the effective rate for the audit trail.
- * 2. **Both ends must be ACTIVE.** Reusing Task 9's `requireActiveAccount`
- *    means an archived account can neither fund a transfer nor regain a hidden
- *    balance through one.
+ * 2. **Both ends must be ACTIVE, checked under a row lock.**
+ *    `lockAccountsForUpdate` takes `SELECT … FOR UPDATE` on both accounts
+ *    inside the same transaction as the write, so an archived account can
+ *    neither fund a transfer nor regain a hidden balance through one — not even
+ *    when the archive lands in the same instant (see `account-lock.ts`).
  * 3. **Both ends must belong to the caller, and they must differ.** Ownership
  *    comes from the composite `(userId, id)` lookup — another user's account is
  *    a NotFound, never a usable reference.
@@ -56,39 +58,49 @@ export async function listTransfers(userId: string) {
 
 export async function createTransfer(userId: string, input: CreateTransferInput) {
   const parsed = createTransferSchema.parse(input)
-  const [fromAccount, toAccount] = await Promise.all([
-    requireActiveAccount(userId, parsed.fromAccountId),
-    requireActiveAccount(userId, parsed.toAccountId),
-  ])
-  if (fromAccount.id === toAccount.id) throw new SameAccountTransferError()
 
-  const sameCurrency = fromAccount.currency === toAccount.currency
-  // Same currency: money is conserved by construction — `toAmount` is derived,
-  // never trusted from the client. Cross-currency: the client's explicit
-  // `toAmount` is the amount actually received, and the effective rate is
-  // recorded so the conversion can be audited later.
-  const toAmount = sameCurrency ? parsed.fromAmount : parsed.toAmount
-  const exchangeRateUsed = sameCurrency
-    ? null
-    : new Prisma.Decimal(parsed.toAmount).div(parsed.fromAmount)
+  return prisma.$transaction(async (tx) => {
+    // One statement locks both ends in sorted id order, so two concurrent
+    // transfers over the same pair queue rather than deadlock.
+    const accounts = await lockAccountsForUpdate(tx, userId, [
+      parsed.fromAccountId,
+      parsed.toAccountId,
+    ])
+    const fromAccount = accounts.find((row) => row.id === parsed.fromAccountId)
+    const toAccount = accounts.find((row) => row.id === parsed.toAccountId)
+    // Both are guaranteed present — `lockAccountsForUpdate` throws unless every
+    // requested id resolved — so a missing one here can only mean both legs are
+    // the same account, which is the error below.
+    if (!fromAccount || !toAccount || fromAccount.id === toAccount.id) {
+      throw new SameAccountTransferError()
+    }
 
-  // A single row, so a `$transaction` wrapper would add nothing: the insert is
-  // already atomic. The read-check-write gap between `requireActiveAccount` and
-  // this create is accepted for Phase 2 exactly as it is for transactions —
-  // every query is scoped to one `userId`, so the only way to lose the race is
-  // for the same user to archive one of their own accounts in the same instant
-  // they transfer from it.
-  return prisma.transfer.create({
-    data: {
-      userId,
-      fromAccountId: parsed.fromAccountId,
-      toAccountId: parsed.toAccountId,
-      fromAmount: parsed.fromAmount,
-      toAmount,
-      exchangeRateUsed,
-      date: parsed.date,
-      note: parsed.note ?? null,
-    },
+    // Derived from the LOCKED rows' currencies, not from a copy read earlier:
+    // the currency lock (`AccountLockedError`) already prevents a currency
+    // change once activity exists, and reading it under the lock closes the
+    // remaining window on the very first transfer.
+    const sameCurrency = fromAccount.currency === toAccount.currency
+    // Same currency: money is conserved by construction — `toAmount` is
+    // derived, never trusted from the client. Cross-currency: the client's
+    // explicit `toAmount` is the amount actually received, and the effective
+    // rate is recorded so the conversion can be audited later.
+    const toAmount = sameCurrency ? parsed.fromAmount : parsed.toAmount
+    const exchangeRateUsed = sameCurrency
+      ? null
+      : new Prisma.Decimal(parsed.toAmount).div(parsed.fromAmount)
+
+    return tx.transfer.create({
+      data: {
+        userId,
+        fromAccountId: parsed.fromAccountId,
+        toAccountId: parsed.toAccountId,
+        fromAmount: parsed.fromAmount,
+        toAmount,
+        exchangeRateUsed,
+        date: parsed.date,
+        note: parsed.note ?? null,
+      },
+    })
   })
 }
 
@@ -110,9 +122,8 @@ export async function deleteTransfer(userId: string, transferId: string) {
   const existing = await prisma.transfer.findUniqueOrThrow({
     where: { userId_id: { userId, id: transferId } },
   })
-  await Promise.all([
-    requireActiveAccount(userId, existing.fromAccountId),
-    requireActiveAccount(userId, existing.toAccountId),
-  ])
-  await prisma.transfer.delete({ where: { userId_id: { userId, id: transferId } } })
+  await prisma.$transaction(async (tx) => {
+    await lockAccountsForUpdate(tx, userId, [existing.fromAccountId, existing.toAccountId])
+    await tx.transfer.delete({ where: { userId_id: { userId, id: transferId } } })
+  })
 }

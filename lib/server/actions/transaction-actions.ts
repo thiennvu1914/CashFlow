@@ -35,6 +35,7 @@ export type TransactionActionError =
   | 'ARCHIVED_ACCOUNT'
   | 'CURRENCY_MISMATCH'
   | 'INVALID_CATEGORY'
+  | 'CONFLICT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -50,6 +51,9 @@ function mapError(e: unknown): TransactionActionResult {
   }
   if (e instanceof transactionService.InvalidCategoryError) {
     return { ok: false, error: 'INVALID_CATEGORY' }
+  }
+  if (e instanceof transactionService.ConcurrentModificationError) {
+    return { ok: false, error: 'CONFLICT' }
   }
   if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {

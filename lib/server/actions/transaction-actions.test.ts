@@ -37,6 +37,13 @@ class MockCurrencyMismatchError extends Error {
   }
 }
 
+class MockConcurrentModificationError extends Error {
+  constructor() {
+    super('This transaction changed while you were editing it.')
+    this.name = 'ConcurrentModificationError'
+  }
+}
+
 class MockFxUnavailableError extends Error {
   constructor() {
     super('Unable to retrieve an exchange rate.')
@@ -55,6 +62,7 @@ vi.mock('@/lib/server/services/transaction', () => ({
   ArchivedAccountError: MockArchivedAccountError,
   CurrencyMismatchError: MockCurrencyMismatchError,
   InvalidCategoryError: MockInvalidCategoryError,
+  ConcurrentModificationError: MockConcurrentModificationError,
 }))
 
 vi.mock('@/lib/currency/current-rate-policy', () => ({
@@ -267,6 +275,15 @@ describe('updateTransactionAction', () => {
     const result = await updateTransactionAction('tx_1', validInput)
 
     expect(result).toEqual({ ok: false, error: 'INVALID_CATEGORY' })
+  })
+
+  it('maps ConcurrentModificationError to CONFLICT and does not revalidate', async () => {
+    updateTransactionMock.mockRejectedValue(new MockConcurrentModificationError())
+
+    const result = await updateTransactionAction('tx_1', validInput)
+
+    expect(result).toEqual({ ok: false, error: 'CONFLICT' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 
   it('maps a ZodError to INVALID_INPUT', async () => {

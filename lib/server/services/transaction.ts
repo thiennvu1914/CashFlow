@@ -4,11 +4,12 @@ import type { TransactionType } from '@prisma/client'
 import { createTransactionSchema, type CreateTransactionInput } from '@/lib/validation/transaction'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
+import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
 
 /**
  * Transaction service (spec §4.4, §6.3).
  *
- * Three invariants live here and are never delegated to the UI:
+ * Four invariants live here and are never delegated to the UI:
  *
  * 1. **No fabricated rate.** Every FX snapshot comes from `getUsableCurrentRate`
  *    — never a constant, never 1, never `new Date()` in place of the provider's
@@ -20,6 +21,12 @@ import type { ExchangeRateProvider } from '@/lib/currency/provider'
  * 3. **Archived accounts are frozen.** An archived account has a zero balance
  *    by construction (Task 15), so no row may be created in, edited in, moved
  *    into, moved out of, or deleted from one.
+ * 4. **The check and the write are atomic.** Every mutation below opens one
+ *    interactive transaction, takes `SELECT … FOR UPDATE` on every account it
+ *    touches (`lockAccountsForUpdate`), and writes through that same
+ *    transaction — so invariant 3 cannot be lost to a concurrent archive. The
+ *    FX lookup deliberately happens *before* the transaction: see the design
+ *    notes in `account-lock.ts`.
  *
  * `userId` always arrives as an argument (server actions pass
  * `requireUser().id`) and scopes every query — there is no ambient user here.
@@ -29,10 +36,26 @@ import type { ExchangeRateProvider } from '@/lib/currency/provider'
  *  does not change which rate is recorded, only how it is later applied. */
 const SNAPSHOT_PAIR = { base: 'USD', quote: 'VND' } as const
 
-export class ArchivedAccountError extends Error {
+// `ArchivedAccountError` now lives with the locking code that raises it;
+// re-exported here so every existing importer (the transfer service, the
+// financial-account service, both action error maps) is unaffected.
+export { ArchivedAccountError }
+
+/**
+ * Thrown when a transaction was edited by someone else between the read that
+ * decided *how* to edit it and the locked write that would apply that decision.
+ *
+ * `updateTransaction` derives `economicChange` — and therefore whether the FX
+ * snapshot is replaced — from the row as it stood before the transaction
+ * opened. If that row has since moved, the decision was made against data that
+ * no longer exists, and applying it would silently discard the other edit. The
+ * honest answer is to refuse and let the user reload; the action layer maps
+ * this to `CONFLICT`.
+ */
+export class ConcurrentModificationError extends Error {
   constructor() {
-    super('This account is archived and cannot receive new activity.')
-    this.name = 'ArchivedAccountError'
+    super('This transaction changed while you were editing it.')
+    this.name = 'ConcurrentModificationError'
   }
 }
 
@@ -64,16 +87,6 @@ export class InvalidCategoryError extends Error {
 
 const P_AND_L_TYPES = new Set<TransactionType>(['INCOME', 'EXPENSE'])
 
-/** Ownership-safe lookup that also enforces the ACTIVE invariant (exported so Task 12's
- *  transfer service can reuse it for both ends of a transfer). */
-export async function requireActiveAccount(userId: string, accountId: string) {
-  const account = await prisma.financialAccount.findUniqueOrThrow({
-    where: { userId_id: { userId, id: accountId } },
-  })
-  if (account.status !== 'ACTIVE') throw new ArchivedAccountError()
-  return account
-}
-
 /**
  * Returns the categoryId to store (null for P&L-neutral types with no category
  * supplied).
@@ -87,6 +100,7 @@ export async function requireActiveAccount(userId: string, accountId: string) {
  * row cannot become INCOME while keeping its (archived) EXPENSE category.
  */
 async function resolveCategoryId(
+  db: Prisma.TransactionClient,
   userId: string,
   type: TransactionType,
   categoryId?: string,
@@ -97,8 +111,10 @@ async function resolveCategoryId(
     return null
   }
   // `findUniqueOrThrow` on the composite `(userId, id)` key is what makes
-  // another user's category a NotFound rather than a usable reference.
-  const category = await prisma.category.findUniqueOrThrow({
+  // another user's category a NotFound rather than a usable reference. Read
+  // through the caller's transaction client so the check and the write that
+  // depends on it are the same transaction.
+  const category = await db.category.findUniqueOrThrow({
     where: { userId_id: { userId, id: categoryId } },
   })
   const isUnchanged = keptCategoryId !== undefined && categoryId === keptCategoryId
@@ -171,26 +187,34 @@ export async function createTransaction(
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ) {
   const parsed = createTransactionSchema.parse(input)
-  const account = await requireActiveAccount(userId, parsed.accountId)
-  const categoryId = await resolveCategoryId(userId, parsed.type, parsed.categoryId)
-  // Before the write, deliberately: an FxUnavailableError here leaves no row
-  // behind, rather than a row with a missing or invented snapshot.
+  // Before the transaction opens, deliberately, and for two reasons: an
+  // FxUnavailableError here leaves no row behind rather than a row with a
+  // missing or invented snapshot, and a provider HTTP call must never happen
+  // while a row lock is held (see `account-lock.ts`).
   const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
 
-  return prisma.transaction.create({
-    data: {
-      userId,
-      accountId: parsed.accountId,
-      categoryId,
-      type: parsed.type,
-      amount: parsed.amount,
-      currency: account.currency,
-      date: parsed.date,
-      note: parsed.note ?? null,
-      vndPerUsdAtEntry: fx.rate,
-      fxRateTimestamp: fx.fetchedAt,
-      fxRateSource: fx.source,
-    },
+  return prisma.$transaction(async (tx) => {
+    // The lock is what makes the ACTIVE check binding: a concurrent archive
+    // either commits before this and turns the check into an
+    // `ArchivedAccountError`, or waits until this insert has committed.
+    const [account] = await lockAccountsForUpdate(tx, userId, [parsed.accountId])
+    const categoryId = await resolveCategoryId(tx, userId, parsed.type, parsed.categoryId)
+
+    return tx.transaction.create({
+      data: {
+        userId,
+        accountId: parsed.accountId,
+        categoryId,
+        type: parsed.type,
+        amount: parsed.amount,
+        currency: account.currency,
+        date: parsed.date,
+        note: parsed.note ?? null,
+        vndPerUsdAtEntry: fx.rate,
+        fxRateTimestamp: fx.fetchedAt,
+        fxRateSource: fx.source,
+      },
+    })
   })
 }
 
@@ -214,6 +238,12 @@ export async function createTransaction(
  *
  * The one account change that is *not* allowed is a move across currencies:
  * see `CurrencyMismatchError`.
+ *
+ * Concurrency: the row is read once outside the transaction (to decide
+ * `economicChange`, and so the FX call can happen with no lock held), then
+ * re-read `FOR UPDATE` inside it alongside both accounts. A row whose
+ * `updatedAt` moved in between is a `ConcurrentModificationError` — see the
+ * design notes in `account-lock.ts`.
  */
 export async function updateTransaction(
   userId: string,
@@ -222,25 +252,11 @@ export async function updateTransaction(
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ) {
   const parsed = createTransactionSchema.parse(input)
+  // Ownership-scoped and first: another user's transaction id is a P2025 here,
+  // before any FX call or lock is taken for it.
   const existing = await prisma.transaction.findUniqueOrThrow({
     where: { userId_id: { userId, id: transactionId } },
   })
-  // Both ends are checked: an archived account may neither lose activity nor
-  // gain it, so a row can be neither edited out of one nor moved into one.
-  await requireActiveAccount(userId, existing.accountId)
-  const account = await requireActiveAccount(userId, parsed.accountId)
-  // Before any write: `amount` carries no currency of its own, so moving a row
-  // to an account in another currency would re-label the same number as a
-  // different amount of money. Refused outright — see `CurrencyMismatchError`.
-  if (account.currency !== existing.currency) throw new CurrencyMismatchError()
-  // The row's current category is passed so keeping it does not require it to
-  // still be ACTIVE — see `resolveCategoryId`.
-  const categoryId = await resolveCategoryId(
-    userId,
-    parsed.type,
-    parsed.categoryId,
-    existing.categoryId,
-  )
 
   const economicChange =
     parsed.accountId !== existing.accountId ||
@@ -252,24 +268,71 @@ export async function updateTransaction(
 
   const fx = economicChange ? await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride) : null
 
-  return prisma.transaction.update({
-    where: { userId_id: { userId, id: transactionId } },
-    data: {
-      accountId: parsed.accountId,
-      categoryId,
-      type: parsed.type,
-      amount: parsed.amount,
-      currency: account.currency,
-      date: parsed.date,
-      note: parsed.note ?? null,
-      ...(fx
-        ? {
-            vndPerUsdAtEntry: fx.rate,
-            fxRateTimestamp: fx.fetchedAt,
-            fxRateSource: fx.source,
-          }
-        : {}),
-    },
+  return prisma.$transaction(async (tx) => {
+    // Both ends are locked and checked: an archived account may neither lose
+    // activity nor gain it, so a row can be neither edited out of one nor moved
+    // into one. `lockAccountRows` sorts and de-duplicates, so passing the same
+    // id twice (an edit that keeps the account) is one lock, not a self-wait.
+    const accounts = await lockAccountsForUpdate(tx, userId, [existing.accountId, parsed.accountId])
+    const account = accounts.find((row) => row.id === parsed.accountId)
+    // Unreachable: `lockAccountsForUpdate` throws unless every requested id
+    // resolved, and `parsed.accountId` is one of them.
+    if (!account)
+      throw new Prisma.PrismaClientKnownRequestError('Account not found', {
+        code: 'P2025',
+        clientVersion: Prisma.prismaVersion.client,
+      })
+
+    // The transaction row itself is locked and re-read: the accounts' locks say
+    // nothing about this row, and `economicChange` above was computed from a
+    // copy taken before the transaction opened.
+    const [current] = await tx.$queryRaw<Array<{ updatedAt: Date }>>`
+      SELECT "updatedAt" FROM "Transaction"
+      WHERE "userId" = ${userId} AND "id" = ${transactionId}
+      FOR UPDATE`
+    if (!current) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        'An operation failed because it depends on one or more records that were required but not found.',
+        { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
+      )
+    }
+    if (current.updatedAt.getTime() !== existing.updatedAt.getTime()) {
+      throw new ConcurrentModificationError()
+    }
+
+    // `amount` carries no currency of its own, so moving a row to an account in
+    // another currency would re-label the same number as a different amount of
+    // money. Refused outright — see `CurrencyMismatchError`.
+    if (account.currency !== existing.currency) throw new CurrencyMismatchError()
+    // The row's current category is passed so keeping it does not require it to
+    // still be ACTIVE — see `resolveCategoryId`.
+    const categoryId = await resolveCategoryId(
+      tx,
+      userId,
+      parsed.type,
+      parsed.categoryId,
+      existing.categoryId,
+    )
+
+    return tx.transaction.update({
+      where: { userId_id: { userId, id: transactionId } },
+      data: {
+        accountId: parsed.accountId,
+        categoryId,
+        type: parsed.type,
+        amount: parsed.amount,
+        currency: account.currency,
+        date: parsed.date,
+        note: parsed.note ?? null,
+        ...(fx
+          ? {
+              vndPerUsdAtEntry: fx.rate,
+              fxRateTimestamp: fx.fetchedAt,
+              fxRateSource: fx.source,
+            }
+          : {}),
+      },
+    })
   })
 }
 
@@ -277,8 +340,12 @@ export async function deleteTransaction(userId: string, transactionId: string) {
   const existing = await prisma.transaction.findUniqueOrThrow({
     where: { userId_id: { userId, id: transactionId } },
   })
-  // An archived account's balance is zero by construction; removing one of its
-  // transactions would silently change history it can no longer show.
-  await requireActiveAccount(userId, existing.accountId)
-  await prisma.transaction.delete({ where: { userId_id: { userId, id: transactionId } } })
+  await prisma.$transaction(async (tx) => {
+    // An archived account's balance is zero by construction; removing one of
+    // its transactions would silently change history it can no longer show. The
+    // lock is what stops an archive from landing between this check and the
+    // delete.
+    await lockAccountsForUpdate(tx, userId, [existing.accountId])
+    await tx.transaction.delete({ where: { userId_id: { userId, id: transactionId } } })
+  })
 }

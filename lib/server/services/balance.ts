@@ -1,6 +1,16 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
+import type { PrismaClient } from '@prisma/client'
 import { BALANCE_SIGN } from '@/lib/money/transaction-sign'
+
+/**
+ * Either the global client or an interactive transaction's client. Both
+ * functions below take one so a caller that has already locked the accounts
+ * (`archiveFinancialAccount`) can derive the balance *inside* that transaction
+ * — reading committed rows through the bare client would look past its own
+ * locks and defeat the point of taking them.
+ */
+type BalanceDb = Prisma.TransactionClient | PrismaClient
 
 /**
  * Thrown when a requested account id does not resolve to an ACTIVE-or-not,
@@ -42,8 +52,9 @@ export async function getAccountBalance(
   userId: string,
   accountId: string,
   asOfDate?: Date,
+  db: BalanceDb = prisma,
 ): Promise<Prisma.Decimal> {
-  const balances = await getAccountBalances(userId, [accountId], asOfDate)
+  const balances = await getAccountBalances(userId, [accountId], asOfDate, db)
   // getAccountBalances throws AccountNotFoundError before returning if
   // `accountId` doesn't resolve, so this is always present here.
   return balances.get(accountId) as Prisma.Decimal
@@ -70,10 +81,11 @@ export async function getAccountBalances(
   userId: string,
   accountIds: string[],
   asOfDate?: Date,
+  db: BalanceDb = prisma,
 ): Promise<Map<string, Prisma.Decimal>> {
   if (accountIds.length === 0) return new Map()
 
-  const accounts = await prisma.financialAccount.findMany({
+  const accounts = await db.financialAccount.findMany({
     where: { userId, id: { in: accountIds } },
   })
   const accountsById = new Map(accounts.map((account) => [account.id, account]))
@@ -85,17 +97,17 @@ export async function getAccountBalances(
   // `asOfDate` did not happen yet as of that point in time.
   const dateFilter = asOfDate ? { date: { lte: asOfDate } } : {}
   const [transactionSums, transfersInSums, transfersOutSums] = await Promise.all([
-    prisma.transaction.groupBy({
+    db.transaction.groupBy({
       by: ['accountId', 'type'],
       where: { userId, accountId: { in: accountIds }, ...dateFilter },
       _sum: { amount: true },
     }),
-    prisma.transfer.groupBy({
+    db.transfer.groupBy({
       by: ['toAccountId'],
       where: { userId, toAccountId: { in: accountIds }, ...dateFilter },
       _sum: { toAmount: true },
     }),
-    prisma.transfer.groupBy({
+    db.transfer.groupBy({
       by: ['fromAccountId'],
       where: { userId, fromAccountId: { in: accountIds }, ...dateFilter },
       _sum: { fromAmount: true },
