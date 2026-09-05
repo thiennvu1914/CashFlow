@@ -11,9 +11,19 @@ import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 export type Period = 'day' | 'week' | 'month' | 'quarter' | 'year'
 
 /**
- * Confirm the installed date-fns-tz major version exposes `fromZonedTime`/`toZonedTime`
- * (v3 naming). If the installed version is v2, use `zonedTimeToUtc`/`utcToZonedTime` instead —
- * check `node_modules/date-fns-tz/package.json` before assuming either name.
+ * Compute the [start, end) UTC bounds of the period containing `referenceDate`,
+ * evaluated in the given IANA `timezone`.
+ *
+ * - `startUtc` is the instant the period begins, in UTC.
+ * - `endUtc` is exclusive: the instant the *next* period begins, in UTC. Callers
+ *   should filter with `>= startUtc && < endUtc`, never `<= endUtc`.
+ * - `week` periods start on Monday (ISO week start), not Sunday.
+ * - The calculation is timezone-aware, not a fixed UTC offset: `referenceDate`
+ *   is projected into `timezone` before finding period boundaries, and the
+ *   boundaries are converted back to UTC, so DST transitions in `timezone`
+ *   are handled correctly.
+ * - `timezone` must be a valid IANA zone name (e.g. `Asia/Ho_Chi_Minh`); an
+ *   invalid zone throws from `date-fns-tz`, not from this function.
  */
 export function getPeriodBounds(
   timezone: string,
