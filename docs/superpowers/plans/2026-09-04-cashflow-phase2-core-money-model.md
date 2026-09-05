@@ -18,7 +18,7 @@
 - Every financial Prisma model is scoped by `userId`; cross-user relations use tenant-scoped composite foreign keys (`@@unique([userId, id])` on the parent + composite `@relation([userId, xId], [userId, id])` on the child).
 - Money fields are always Prisma `Decimal`, never `Float`.
 - `Transaction.amount` is always ≥ 0; sign is determined solely by `type`.
-- Every Transaction snapshots `vndPerUsdAtEntry`, `fxRateTimestamp`, `fxRateSource` regardless of its own currency — and that snapshot is always a real value obtained through `getUsableCurrentRate`, never a fabricated constant.
+- Every Transaction snapshots `vndPerUsdAtEntry`, `fxRateFetchedAt`, `fxRateEffectiveAt`, `fxRateSource` regardless of its own currency — and that snapshot is always a real value obtained through `getUsableCurrentRate`, never a fabricated constant.
 - `historicalAmountIn()` (built in Phase 3) is the only function permitted to do historical currency conversion; it must never read `User.baseCurrency` or call the live FX provider.
 - `User.baseCurrency` is a display/aggregation preference only — never a stored unit of financial fact.
 - `User.isDemo` must never appear in any client-facing Zod schema.
@@ -1293,11 +1293,12 @@ model Transaction {
   currency         Currency
   date             DateTime
   note             String?
-  vndPerUsdAtEntry Decimal         @db.Decimal(18, 4)
-  fxRateTimestamp  DateTime
-  fxRateSource     String
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  vndPerUsdAtEntry  Decimal        @db.Decimal(18, 6)
+  fxRateFetchedAt   DateTime
+  fxRateEffectiveAt DateTime
+  fxRateSource      String
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   account  FinancialAccount @relation(fields: [userId, accountId], references: [userId, id])
   category Category?        @relation(fields: [userId, categoryId], references: [userId, id])
@@ -1551,7 +1552,8 @@ export async function createTransaction(
       date: parsed.date,
       note: parsed.note,
       vndPerUsdAtEntry: fx.rate,
-      fxRateTimestamp: fx.fetchedAt,
+      fxRateFetchedAt: fx.fetchedAt,
+      fxRateEffectiveAt: fx.effectiveDate,
       fxRateSource: fx.source,
     },
   })
@@ -1562,7 +1564,7 @@ records the usable current rate at the moment the transaction's **economic conte
 recorded, so an edit that changes that content re-snapshots it and an edit that does not leaves
 it exactly as it was. Concretely: if any of `accountId`, `type`, `amount` (compared as `Decimal`)
 or `date` (compared by `getTime()`) differs from the stored row, `updateTransaction` calls
-`getUsableCurrentRate` again and writes all three snapshot fields anew (and re-derives `currency`
+`getUsableCurrentRate` again and writes all four snapshot fields anew (and re-derives `currency`
 from the — possibly new — account). If only `note` and/or `categoryId` change, the snapshot is
 preserved byte for byte. Because the FX call happens before the write, an economic edit while FX
 is unavailable fails with `FxUnavailableError` and leaves the row untouched — a corrected amount
@@ -1612,7 +1614,8 @@ export async function updateTransaction(
       ...(fx
         ? {
             vndPerUsdAtEntry: fx.rate,
-            fxRateTimestamp: fx.fetchedAt,
+            fxRateFetchedAt: fx.fetchedAt,
+            fxRateEffectiveAt: fx.effectiveDate,
             fxRateSource: fx.source,
           }
         : {}),
@@ -1887,7 +1890,7 @@ function makeTx(userId: string, accountId: string, type: string, amount: number,
   return prisma.transaction.create({
     data: {
       userId, accountId, type: type as never, amount, currency: 'VND', date,
-      vndPerUsdAtEntry: 25000, fxRateTimestamp: new Date(), fxRateSource: 'test',
+      vndPerUsdAtEntry: 25000, fxRateFetchedAt: new Date(), fxRateEffectiveAt: new Date(), fxRateSource: 'test',
     },
   })
 }
@@ -2535,7 +2538,7 @@ describe('updateFinancialAccount currency/initialBalance lock', () => {
     await prisma.transaction.create({
       data: {
         userId, accountId: account.id, type: 'INCOME', amount: 50000, currency: 'VND',
-        date: new Date(), vndPerUsdAtEntry: 25000, fxRateTimestamp: new Date(), fxRateSource: 'test',
+        date: new Date(), vndPerUsdAtEntry: 25000, fxRateFetchedAt: new Date(), fxRateEffectiveAt: new Date(), fxRateSource: 'test',
       },
     })
     await expect(updateFinancialAccount(userId, account.id, { currency: 'USD' })).rejects.toThrow(AccountLockedError)
@@ -2566,7 +2569,7 @@ describe('archiveFinancialAccount', () => {
     await prisma.transaction.create({
       data: {
         userId, accountId: account.id, type: 'EXPENSE', amount: 100000, currency: 'VND',
-        date: new Date(), vndPerUsdAtEntry: 25000, fxRateTimestamp: new Date(), fxRateSource: 'test',
+        date: new Date(), vndPerUsdAtEntry: 25000, fxRateFetchedAt: new Date(), fxRateEffectiveAt: new Date(), fxRateSource: 'test',
       },
     })
     const archived = await archiveFinancialAccount(userId, account.id)
@@ -2786,7 +2789,8 @@ describe('tenant isolation at the database level', () => {
           currency: 'VND',
           date: new Date(),
           vndPerUsdAtEntry: 25000,
-          fxRateTimestamp: new Date(),
+          fxRateFetchedAt: new Date(),
+          fxRateEffectiveAt: new Date(),
           fxRateSource: 'test',
         },
       }),

@@ -149,7 +149,7 @@ export const MAX_TRANSACTION_LIST_LIMIT = 500
  * 2. **Projected.** Only the columns the list actually renders are selected.
  *    Everything a `include: { account: true }` would drag along — the joined
  *    account's `userId`, `initialBalance` and `currency`, the row's own
- *    `vndPerUsdAtEntry`/`fxRateTimestamp` — is data the UI never shows and
+ *    `vndPerUsdAtEntry`/`fxRateFetchedAt`/`fxRateEffectiveAt` — is data the UI never shows and
  *    should not be shipped to a client component.
  */
 export async function listTransactions(userId: string, options?: { limit?: number }) {
@@ -211,7 +211,11 @@ export async function createTransaction(
         date: parsed.date,
         note: parsed.note ?? null,
         vndPerUsdAtEntry: fx.rate,
-        fxRateTimestamp: fx.fetchedAt,
+        // Two distinct facts: when we retrieved the rate, and which UTC day
+        // the rate is effective for. On the fallback path both are the
+        // original cached row's own values, never "now".
+        fxRateFetchedAt: fx.fetchedAt,
+        fxRateEffectiveAt: fx.effectiveDate,
         fxRateSource: fx.source,
       },
     })
@@ -225,7 +229,7 @@ export async function createTransaction(
  * The snapshot records the usable current rate at the moment the transaction's
  * economic content was last recorded — not the moment the row was first
  * inserted. So if any of `accountId`, `type`, `amount` or `date` differs from
- * the stored row, all three FX fields are written anew (and `currency` is
+ * the stored row, all four FX fields are written anew (and `currency` is
  * re-derived from the possibly-new account); if only `note` and/or `categoryId`
  * change, the existing snapshot is preserved exactly. As with create, the FX
  * call happens before the write: an economic edit while FX is unavailable fails
@@ -327,7 +331,8 @@ export async function updateTransaction(
         ...(fx
           ? {
               vndPerUsdAtEntry: fx.rate,
-              fxRateTimestamp: fx.fetchedAt,
+              fxRateFetchedAt: fx.fetchedAt,
+              fxRateEffectiveAt: fx.effectiveDate,
               fxRateSource: fx.source,
             }
           : {}),

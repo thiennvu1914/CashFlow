@@ -76,6 +76,15 @@ function toRateResult(cached: {
  * rolls over. That is accepted — the alternative is filing yesterday's rate
  * under today's date, and Task 8's `getUsableCurrentRate` fallback is what
  * covers provider outages during that window.
+ *
+ * A miss returns the provider's rate with its `effectiveDate` normalised to
+ * that day's UTC start — the same value a later cache *hit* on the row returns,
+ * because the day is the row's natural key. Without the normalisation the very
+ * same rate would look like two different facts depending on whether it
+ * happened to be cached, and `Transaction.fxRateEffectiveAt` would be
+ * inconsistent from row to row. The provider publishes one rate per day, so the
+ * day *is* the rate's identity; `fetchedAt` — the moment *we* retrieved it — is
+ * passed through untouched, and nothing here ever substitutes `new Date()`.
  */
 export async function getLatestRate(
   pair: CurrencyPair,
@@ -87,8 +96,9 @@ export async function getLatestRate(
 
   const provider = providerOverride ?? defaultProvider
   const fresh = await provider.getLatestRate(pair)
-  await cacheRate(pair, startOfUtcDay(fresh.effectiveDate), fresh)
-  return fresh
+  const effectiveDate = startOfUtcDay(fresh.effectiveDate)
+  await cacheRate(pair, effectiveDate, fresh)
+  return { ...fresh, effectiveDate }
 }
 
 /**

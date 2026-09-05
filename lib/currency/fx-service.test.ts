@@ -98,11 +98,19 @@ describe('getLatestRate', () => {
     expect(result.effectiveDate.getTime()).toBe(utcDay(new Date()).getTime())
   })
 
-  it("returns the provider's own result on a miss and caches it under its effective UTC day", async () => {
+  it("returns the provider's rate on a miss with its effective day normalised, matching a cache hit", async () => {
     // The provider's `time_last_update_utc` is not necessarily today: shortly
     // after 00:00 UTC it still reports yesterday. The row is keyed by the day
-    // the rate is actually effective for, and the caller gets the provider's
-    // real effectiveDate/fetchedAt back — never a fabricated `new Date()`.
+    // the rate is actually effective for.
+    //
+    // The returned `effectiveDate` is that day's UTC start, not the raw
+    // publication instant, because a cache *hit* can only ever return the
+    // day-start (it is the row's natural key) — returning the raw instant on a
+    // miss would make the same rate look like two different facts depending on
+    // whether it happened to be cached, and `Transaction.fxRateEffectiveAt`
+    // would then be inconsistent across rows. The provider publishes one rate
+    // per day, so the day *is* the rate's identity; the exact moment we
+    // retrieved it is preserved separately and untouched in `fetchedAt`.
     const effectiveDate = new Date('2026-09-04T22:15:30.000Z')
     const fetchedAt = new Date('2026-09-05T00:04:00.000Z')
     const fakeProvider: ExchangeRateProvider = {
@@ -113,7 +121,8 @@ describe('getLatestRate', () => {
     const result = await getLatestRate(PAIR, fakeProvider)
 
     expect(result.rate).toBe(25123.25)
-    expect(result.effectiveDate.getTime()).toBe(effectiveDate.getTime())
+    expect(result.effectiveDate.getTime()).toBe(Date.UTC(2026, 8, 4))
+    // Ours, not the rate's: never normalised, never replaced with "now".
     expect(result.fetchedAt.getTime()).toBe(fetchedAt.getTime())
 
     const rows = await prisma.exchangeRate.findMany({
@@ -121,6 +130,8 @@ describe('getLatestRate', () => {
     })
     expect(rows).toHaveLength(1)
     expect(rows[0].effectiveDate.getTime()).toBe(Date.UTC(2026, 8, 4))
+    // What the caller got is exactly what a later hit on the same row returns.
+    expect(result.effectiveDate.getTime()).toBe(rows[0].effectiveDate.getTime())
   })
 
   it('upserts rather than failing when a second fetch lands on an already cached day', async () => {

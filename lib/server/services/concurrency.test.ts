@@ -226,7 +226,8 @@ describe('archive vs activity concurrency (row locks)', () => {
           currency: 'VND',
           date: new Date(),
           vndPerUsdAtEntry: 25000,
-          fxRateTimestamp: new Date(),
+          fxRateFetchedAt: new Date(),
+          fxRateEffectiveAt: new Date(),
           fxRateSource: 'fixture',
         },
       })

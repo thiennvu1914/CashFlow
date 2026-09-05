@@ -124,7 +124,8 @@ describe('tenant isolation at the database level', () => {
             currency: 'VND',
             date: new Date(),
             vndPerUsdAtEntry: 25000,
-            fxRateTimestamp: new Date(),
+            fxRateFetchedAt: new Date(),
+            fxRateEffectiveAt: new Date(),
             fxRateSource: 'test',
           },
         })
@@ -184,7 +185,8 @@ describe('tenant isolation at the database level', () => {
             currency: 'VND',
             date: new Date(),
             vndPerUsdAtEntry: 25000,
-            fxRateTimestamp: new Date(),
+            fxRateFetchedAt: new Date(),
+            fxRateEffectiveAt: new Date(),
             fxRateSource: 'test',
           },
         })

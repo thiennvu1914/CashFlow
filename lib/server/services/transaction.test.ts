@@ -50,6 +50,15 @@ function fakeProvider(rate = 25000, source = 'fake') {
   return { provider, fetchedAt, effectiveDate, rate, source }
 }
 
+/**
+ * The UTC start of the day containing `date` — the `ExchangeRate` cache key,
+ * and therefore the `fxRateEffectiveAt` a snapshot taken from a live lookup
+ * must carry (the rate is published per day, not per instant).
+ */
+function utcDayStart(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+}
+
 /** Stands in for a live provider outage — the only way into the fallback path. */
 const failingProvider: ExchangeRateProvider = {
   getLatestRate: async () => {
@@ -377,7 +386,13 @@ describe('transaction service', () => {
       // intact instead of being rounded to 4 on the way in.
       expect(stored.vndPerUsdAtEntry.toString()).toBe('26123.456789')
       expect(stored.fxRateSource).toBe('fake-precise')
-      expect(stored.fxRateTimestamp.toISOString()).toBe(f.fetchedAt.toISOString())
+      // When *we* fetched it: the provider's own instant, not "now".
+      expect(stored.fxRateFetchedAt.toISOString()).toBe(f.fetchedAt.toISOString())
+      // Which day the rate applies to: the UTC start of the provider's
+      // effective day, i.e. the cache key the rate is filed under.
+      expect(stored.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(f.effectiveDate).toISOString(),
+      )
     })
 
     it('stores the snapshot at exactly the precision the FX cache holds', async () => {
@@ -405,15 +420,25 @@ describe('transaction service', () => {
 
     it('records the fallback provenance when the live provider is down', async () => {
       const s = await setup()
-      // A cache row that is recent but not filed under today's UTC start-of-day,
-      // so `getLatestRate` misses it and the fallback path is what finds it.
-      const seededFetchedAt = new Date(Date.now() - 2 * 60 * 60 * 1000)
+      // A cache row for *yesterday's* UTC day: inside the 48-hour fallback
+      // window, but not today's cache key, so `getLatestRate` misses it and the
+      // fallback path is what finds it.
+      //
+      // Its `fetchedAt` is deliberately a different instant from its
+      // `effectiveDate` — the two answer different questions, and this is
+      // exactly the case where they diverge. Both must reach the snapshot
+      // unaltered; a service that wrote "now" into either, or copied one into
+      // the other, would fail here.
+      const seededEffectiveDate = new Date(utcDayStart(new Date()).getTime() - 24 * 60 * 60 * 1000)
+      const seededFetchedAt = new Date(
+        seededEffectiveDate.getTime() + 23 * 60 * 60 * 1000 + 30 * 60 * 1000,
+      )
       await prisma.exchangeRate.create({
         data: {
           base: PAIR.base,
           quote: PAIR.quote,
           rate: 24800,
-          effectiveDate: seededFetchedAt,
+          effectiveDate: seededEffectiveDate,
           fetchedAt: seededFetchedAt,
           source: 'seeded',
         },
@@ -427,7 +452,11 @@ describe('transaction service', () => {
 
       expect(tx.vndPerUsdAtEntry.toNumber()).toBe(24800)
       expect(tx.fxRateSource).toBe('cache-fallback:seeded')
-      expect(tx.fxRateTimestamp.toISOString()).toBe(seededFetchedAt.toISOString())
+      expect(tx.fxRateFetchedAt.toISOString()).toBe(seededFetchedAt.toISOString())
+      expect(tx.fxRateEffectiveAt.toISOString()).toBe(seededEffectiveDate.toISOString())
+      // The snapshot says honestly that it used yesterday's rate, retrieved
+      // yesterday — not that either happened today.
+      expect(tx.fxRateEffectiveAt.getTime()).toBeLessThan(tx.fxRateFetchedAt.getTime())
     })
 
     it('refuses to create anything when no rate is available at all', async () => {
@@ -664,7 +693,8 @@ describe('transaction service', () => {
       expect(updated.note).toBe('corrected wording')
       expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
       expect(updated.fxRateSource).toBe('fake')
-      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(tx.fxRateFetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(tx.fxRateEffectiveAt.toISOString())
     })
 
     it('keeps the original snapshot when only the category changes', async () => {
@@ -695,7 +725,8 @@ describe('transaction service', () => {
       expect(updated.categoryId).toBe(otherCategory.id)
       expect(updated.fxRateSource).toBe('fake')
       expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
-      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(tx.fxRateFetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(tx.fxRateEffectiveAt.toISOString())
     })
 
     it('re-snapshots all three FX fields when the amount changes', async () => {
@@ -721,7 +752,10 @@ describe('transaction service', () => {
       expect(updated.amount.toString()).toBe('1500')
       expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
       expect(updated.fxRateSource).toBe('fake-2')
-      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(f2.effectiveDate).toISOString(),
+      )
     })
 
     it('re-snapshots when only the date changes', async () => {
@@ -747,7 +781,10 @@ describe('transaction service', () => {
       expect(updated.date.toISOString()).toBe(new Date('2026-02-05').toISOString())
       expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
       expect(updated.fxRateSource).toBe('fake-2')
-      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(f2.effectiveDate).toISOString(),
+      )
     })
 
     it('re-snapshots and re-derives the currency when the account changes within the same currency', async () => {
@@ -775,7 +812,10 @@ describe('transaction service', () => {
       expect(updated.currency).toBe('VND')
       expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
       expect(updated.fxRateSource).toBe('fake-2')
-      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(f2.effectiveDate).toISOString(),
+      )
     })
 
     it('refuses to move a transaction to an account in another currency, leaving the row untouched', async () => {
@@ -862,7 +902,8 @@ describe('transaction service', () => {
       expect(stored.date.toISOString()).toBe(tx.date.toISOString())
       expect(stored.note).toBe('original')
       expect(stored.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
-      expect(stored.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+      expect(stored.fxRateFetchedAt.toISOString()).toBe(tx.fxRateFetchedAt.toISOString())
+      expect(stored.fxRateEffectiveAt.toISOString()).toBe(tx.fxRateEffectiveAt.toISOString())
       expect(stored.fxRateSource).toBe(tx.fxRateSource)
     })
   })
@@ -912,7 +953,8 @@ describe('transaction service', () => {
       // Non-economic, so the original snapshot survives untouched.
       expect(updated.fxRateSource).toBe('fake')
       expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
-      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(tx.fxRateFetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(tx.fxRateEffectiveAt.toISOString())
     })
 
     it('allows an economic edit that keeps a now-archived category, re-snapshotting FX', async () => {
@@ -937,7 +979,10 @@ describe('transaction service', () => {
 
       expect(updated.amount.toString()).toBe('1200')
       expect(updated.fxRateSource).toBe('fake-2')
-      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateFetchedAt.toISOString()).toBe(f2.fetchedAt.toISOString())
+      expect(updated.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(f2.effectiveDate).toISOString(),
+      )
     })
 
     it('still refuses to move a transaction to a different archived category', async () => {

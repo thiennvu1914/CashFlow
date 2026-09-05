@@ -219,31 +219,37 @@ enum TransactionType {
 /// carried by `type` alone, never by the sign — and `currency` is always a copy
 /// of the owning account's currency, never client-supplied.
 ///
-/// The three `fx*` columns are the immutable FX snapshot: the usable USD/VND
+/// The four `fx*` columns are the immutable FX snapshot: the usable USD/VND
 /// rate at the moment this transaction's economic content was recorded, taken
 /// only from `getUsableCurrentRate`. The pair is always USD/VND regardless of
 /// the account currency, so any later report can restate the row in either
-/// currency using the rate that actually applied. `fxRateTimestamp` is the
-/// provider's real fetch instant (the original one when a cached fallback was
-/// used), never "now", and `fxRateSource` carries the `cache-fallback:` prefix
-/// when the figure came from the fallback path.
+/// currency using the rate that actually applied.
+///
+/// The two timestamps answer two different questions and are both kept:
+/// `fxRateEffectiveAt` is *when the rate applies* — the UTC start of the day
+/// it was published for, which is the `ExchangeRate` cache's natural key — and
+/// `fxRateFetchedAt` is *when we retrieved it*. They can be a day or more
+/// apart: on the fallback path both are the original cached row's own values,
+/// never "now", so a snapshot recorded during an outage still says honestly
+/// which day's rate it used and when that rate was obtained. `fxRateSource`
+/// carries the `cache-fallback:` prefix in exactly that case.
 ///
 /// The `category` relation is optional while still being a composite FK: under
 /// Postgres's default MATCH SIMPLE semantics a NULL in any column of a
 /// composite FK exempts the row from the constraint check, so CASH_IN /
 /// CASH_OUT / ADJUSTMENT_* rows with no category are unaffected.
 model Transaction {
-  id               String          @id @default(cuid())
-  userId           String
-  accountId        String
-  categoryId       String?
-  type             TransactionType
+  id                String          @id @default(cuid())
+  userId            String
+  accountId         String
+  categoryId        String?
+  type              TransactionType
   /// >= 0 is also enforced by a database CHECK constraint
   /// (`Transaction_amount_nonnegative`), written by hand in the
   /// `add_transfer` migration — Prisma's schema language has no CHECK syntax,
   /// so the constraint lives in SQL and this comment is its only trace here.
-  amount           Decimal         @db.Decimal(18, 2)
-  currency         Currency
+  amount            Decimal         @db.Decimal(18, 2)
+  currency          Currency
   /// UTC instant of the user-entered local date and time (converted in the
   /// user's IANA timezone by the action layer); rendered back in that zone.
   /// The user enters both a day and a time of day
@@ -251,17 +257,22 @@ model Transaction {
   /// session user's zone, so only it can pin that wall-clock moment to an
   /// instant. Period math uses `getPeriodBounds` in the same zone, and the
   /// lists render it with `formatInTimeZone(date, timezone, 'yyyy-MM-dd HH:mm')`.
-  date             DateTime
-  note             String?
+  date              DateTime
+  note              String?
   /// Decimal(18, 6) — deliberately the same scale as `ExchangeRate.rate`, so
   /// the snapshot is the cached rate to the digit rather than a value rounded
   /// on the way in. At Decimal(18, 4) a transaction could not be reconciled
   /// against the rate it was actually recorded with.
-  vndPerUsdAtEntry Decimal         @db.Decimal(18, 6)
-  fxRateTimestamp  DateTime
-  fxRateSource     String
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  vndPerUsdAtEntry  Decimal         @db.Decimal(18, 6)
+  /// When we retrieved the rate. On the fallback path this is the ORIGINAL
+  /// fetch instant preserved by `getUsableCurrentRate`, never "now".
+  fxRateFetchedAt   DateTime
+  /// Start of the UTC day the rate is effective for — the `ExchangeRate`
+  /// cache key, so a snapshot can be traced back to the exact cached row.
+  fxRateEffectiveAt DateTime
+  fxRateSource      String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   account  FinancialAccount @relation(fields: [userId, accountId], references: [userId, id])
   category Category?        @relation(fields: [userId, categoryId], references: [userId, id])

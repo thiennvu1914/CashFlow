@@ -65,7 +65,8 @@ describe('financial-account service', () => {
         currency: 'VND',
         date: new Date(),
         vndPerUsdAtEntry: 25000,
-        fxRateTimestamp: new Date(),
+        fxRateFetchedAt: new Date(),
+        fxRateEffectiveAt: new Date(),
         fxRateSource: 'fixture',
       },
     })
@@ -583,7 +584,8 @@ describe('financial-account service', () => {
           currency: 'VND',
           date: new Date(),
           vndPerUsdAtEntry: 25000,
-          fxRateTimestamp: new Date(),
+          fxRateFetchedAt: new Date(),
+          fxRateEffectiveAt: new Date(),
           fxRateSource: 'fixture',
         },
       })

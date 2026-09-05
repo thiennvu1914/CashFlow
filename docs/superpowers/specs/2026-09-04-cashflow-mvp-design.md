@@ -62,12 +62,15 @@ Archiving requires a derived balance of exactly zero, and an `ARCHIVED` account 
 
 ```
 id, userId, accountId, categoryId?, type, amount, currency, date, note?,
-vndPerUsdAtEntry, fxRateTimestamp, fxRateSource, createdAt, updatedAt
+vndPerUsdAtEntry, fxRateFetchedAt, fxRateEffectiveAt, fxRateSource,
+createdAt, updatedAt
 ```
 
 `type: INCOME | EXPENSE | CASH_IN | CASH_OUT | ADJUSTMENT_INCREASE | ADJUSTMENT_DECREASE` (§5.1). `amount` is always ≥ 0 — sign is determined solely by `type`, one exceptionless rule. `categoryId` is nullable; Zod requires it only when `type` is INCOME or EXPENSE (the other four types are never part of a category breakdown). `currency` is a denormalized snapshot of the account's currency at entry — a ledger row's historical meaning shouldn't depend on a join to a (lockable but still technically mutable pre-activity) parent.
 
-`vndPerUsdAtEntry` is captured on **every** transaction regardless of its own currency (§6), via `getLatestRate` at creation time, with the outage-fallback chain in §6.3.
+`vndPerUsdAtEntry` is captured on **every** transaction regardless of its own currency (§6), via `getLatestRate` at creation time, with the outage-fallback chain in §6.3. It is stored at `Decimal(18, 6)` — the same scale as `ExchangeRate.rate` — so the snapshot is the cached rate to the digit and a row can be reconciled against the rate it was actually recorded with.
+
+The snapshot carries **two** timestamps because they answer two different questions and can be a day or more apart: `fxRateEffectiveAt` is the UTC start of the day the rate is effective for (the `ExchangeRate` cache key, so the snapshot traces back to the exact cached row), and `fxRateFetchedAt` is when we retrieved it. On the fallback path both are the original cached row's own values — never "now" — so a snapshot recorded during an outage says honestly which day's rate it used and when that rate was obtained.
 
 ### 4.5 Transfer
 
@@ -252,8 +255,8 @@ All rates — latest or historical — live in the single `ExchangeRate` table (
 Every Transaction requires `vndPerUsdAtEntry`, regardless of its own currency. On creation:
 
 1. Call `getLatestRate` for a fresh rate.
-2. If the live call fails, fall back to the most recent cached row for the pair whose `effectiveDate` is **within the last 48 hours** (`getUsableCurrentRate` / `MAX_FALLBACK_STALENESS_MS`) — persist its *actual* original `fetchedAt` and `source` (labeled `cache-fallback:<original source>`, with `isFallback: true` so the UI can say the figure may be out of date), never "now." The window is measured on `effectiveDate`, not `fetchedAt`: a historical row cached minutes ago for a chart point years back has a recent `fetchedAt` and an ancient rate, and only an `effectiveDate` filter excludes it. Rows dated in the future are excluded too. An outage is measured in hours, not days; beyond that window it is more honest to fail than to snapshot a stale figure as if it were current.
-3. Persist whatever real rate/timestamp/source was actually used.
+2. If the live call fails, fall back to the most recent cached row for the pair whose `effectiveDate` is **within the last 48 hours** (`getUsableCurrentRate` / `MAX_FALLBACK_STALENESS_MS`) — persist its *actual* original `fetchedAt` (as `fxRateFetchedAt`), its original `effectiveDate` (as `fxRateEffectiveAt`) and its `source` (labeled `cache-fallback:<original source>`, with `isFallback: true` so the UI can say the figure may be out of date), never "now." The window is measured on `effectiveDate`, not `fetchedAt`: a historical row cached minutes ago for a chart point years back has a recent `fetchedAt` and an ancient rate, and only an `effectiveDate` filter excludes it. Rows dated in the future are excluded too. An outage is measured in hours, not days; beyond that window it is more honest to fail than to snapshot a stale figure as if it were current.
+3. Persist whatever real rate/effective day/fetch time/source was actually used. On a live lookup, `getLatestRate` normalises the provider's `effectiveDate` to that day's UTC start, so a rate returned on a cache miss and the same rate returned on a later hit are the one fact rather than two.
 4. Never invent a rate, never default to 1, never hardcode a conversion.
 5. If no cached row qualifies *and* the live call fails, the transaction-creation operation fails clearly and recoverably (a retryable error surfaced in the UI) rather than storing a financially incorrect snapshot.
 
