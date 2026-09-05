@@ -42,20 +42,70 @@ const SNAPSHOT_PAIR = { base: 'USD', quote: 'VND' } as const
 export { ArchivedAccountError }
 
 /**
- * Thrown when a transaction was edited by someone else between the read that
- * decided *how* to edit it and the locked write that would apply that decision.
+ * Thrown when a transaction changed underneath a write between the read that
+ * decided what to do and the locked write that would do it.
  *
- * `updateTransaction` derives `economicChange` — and therefore whether the FX
- * snapshot is replaced — from the row as it stood before the transaction
- * opened. If that row has since moved, the decision was made against data that
- * no longer exists, and applying it would silently discard the other edit. The
- * honest answer is to refuse and let the user reload; the action layer maps
- * this to `CONFLICT`.
+ * Both mutating paths read the row *before* opening their transaction — they
+ * have to, because the FX lookup must not happen while a row lock is held — and
+ * both then act on what that copy said. `updateTransaction` derives
+ * `economicChange`, and therefore whether the FX snapshot is replaced, from it;
+ * `deleteTransaction` derives *which account to lock* from it. If the row moved
+ * in between, the decision was made against data that no longer exists:
+ * applying it would silently discard the other edit, or — worse for the delete
+ * — would freeze-check the account the row has just left while removing money
+ * from the one it has just joined. The honest answer is to refuse and let the
+ * user reload; the action layer maps this to `CONFLICT`.
  */
 export class ConcurrentModificationError extends Error {
   constructor() {
-    super('This transaction changed while you were editing it.')
+    super('This transaction changed after it was read.')
     this.name = 'ConcurrentModificationError'
+  }
+}
+
+/** What both mutating paths must still be true about the row they read before
+ *  opening their transaction. */
+interface ExpectedTransactionRow {
+  accountId: string
+  updatedAt: Date
+}
+
+/**
+ * Re-reads the transaction row under an exclusive lock and confirms it is still
+ * the row the caller's pre-transaction copy described.
+ *
+ * Called *after* `lockAccountsForUpdate`, never before: accounts are locked
+ * first and the transaction row second, everywhere, so two writers can never
+ * take the same two locks in opposite orders and deadlock.
+ *
+ * `accountId` is the invariant-critical field — it decides which account's
+ * freeze applies — and `updatedAt` catches every other concurrent edit.
+ * `updatedAt` is Prisma's `@updatedAt` at millisecond precision, so two writes
+ * inside the same millisecond compare equal; that is accepted, because the
+ * account locks already make the write itself safe and this check exists to
+ * protect the *decision*, not to be a cryptographic version tag.
+ */
+async function lockAndVerifyTransactionRow(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  transactionId: string,
+  expected: ExpectedTransactionRow,
+): Promise<void> {
+  const [current] = await tx.$queryRaw<Array<{ accountId: string; updatedAt: Date }>>`
+    SELECT "accountId", "updatedAt" FROM "Transaction"
+    WHERE "userId" = ${userId} AND "id" = ${transactionId}
+    FOR UPDATE`
+  if (!current) {
+    throw new Prisma.PrismaClientKnownRequestError(
+      'An operation failed because it depends on one or more records that were required but not found.',
+      { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
+    )
+  }
+  if (
+    current.accountId !== expected.accountId ||
+    current.updatedAt.getTime() !== expected.updatedAt.getTime()
+  ) {
+    throw new ConcurrentModificationError()
   }
 }
 
@@ -290,19 +340,7 @@ export async function updateTransaction(
     // The transaction row itself is locked and re-read: the accounts' locks say
     // nothing about this row, and `economicChange` above was computed from a
     // copy taken before the transaction opened.
-    const [current] = await tx.$queryRaw<Array<{ updatedAt: Date }>>`
-      SELECT "updatedAt" FROM "Transaction"
-      WHERE "userId" = ${userId} AND "id" = ${transactionId}
-      FOR UPDATE`
-    if (!current) {
-      throw new Prisma.PrismaClientKnownRequestError(
-        'An operation failed because it depends on one or more records that were required but not found.',
-        { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
-      )
-    }
-    if (current.updatedAt.getTime() !== existing.updatedAt.getTime()) {
-      throw new ConcurrentModificationError()
-    }
+    await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
 
     // `amount` carries no currency of its own, so moving a row to an account in
     // another currency would re-label the same number as a different amount of
@@ -341,16 +379,30 @@ export async function updateTransaction(
   })
 }
 
+/**
+ * Removes a transaction.
+ *
+ * An archived account's balance is zero by construction; removing one of its
+ * transactions would silently change history it can no longer show, so the
+ * owning account must be ACTIVE and is locked while that is checked.
+ *
+ * The row is then re-verified under that lock. Which account to lock is read
+ * from a copy taken *before* the transaction opened, and that copy can be
+ * stale: if the row is moved to another account in between, locking the old
+ * account proves nothing about the new one — the delete would check the freeze
+ * on the account the row has just left while removing money from the one it has
+ * just joined, which is precisely how a delete slips past an archived account.
+ * A moved (or otherwise changed) row is a `ConcurrentModificationError`.
+ */
 export async function deleteTransaction(userId: string, transactionId: string) {
   const existing = await prisma.transaction.findUniqueOrThrow({
     where: { userId_id: { userId, id: transactionId } },
   })
   await prisma.$transaction(async (tx) => {
-    // An archived account's balance is zero by construction; removing one of
-    // its transactions would silently change history it can no longer show. The
-    // lock is what stops an archive from landing between this check and the
-    // delete.
+    // Accounts first, then the transaction row — the same order as
+    // `updateTransaction`, so the two can never deadlock against each other.
     await lockAccountsForUpdate(tx, userId, [existing.accountId])
+    await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
     await tx.transaction.delete({ where: { userId_id: { userId, id: transactionId } } })
   })
 }

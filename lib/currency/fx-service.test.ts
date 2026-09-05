@@ -187,6 +187,42 @@ describe('getHistoricalRate', () => {
     expect(cached).toBeNull()
   })
 
+  it('normalises a miss to the requested UTC day, so a hit and a miss return the same effectiveDate', async () => {
+    // Same rule as `getLatestRate`: the cache row is keyed by the UTC day, so a
+    // hit can only ever return the day-start. A provider that answers with its
+    // own publication instant — or with the nearest prior trading day, which is
+    // standard FX behaviour and is cached under the *requested* day (spec §6.2)
+    // — must not make the same rate look like two different facts depending on
+    // whether it happened to be cached. Phase 3's `historicalAmountIn` consumes
+    // this value.
+    const requested = new Date('2020-01-01T13:45:00.000Z')
+    const fakeProvider: ExchangeRateProvider = {
+      getLatestRate: async () => {
+        throw new Error('provider must not be called')
+      },
+      getHistoricalRate: async () => ({
+        rate: 24000,
+        effectiveDate: new Date('2019-12-31T21:30:00.000Z'),
+        fetchedAt: new Date('2026-09-05T10:00:00.000Z'),
+        source: 'fake-historical',
+      }),
+    }
+
+    const miss = await getHistoricalRate(PAIR, requested, fakeProvider)
+    const hit = await getHistoricalRate(PAIR, requested, forbiddenProvider)
+
+    expect(miss?.effectiveDate.getTime()).toBe(Date.UTC(2020, 0, 1))
+    expect(hit?.effectiveDate.getTime()).toBe(Date.UTC(2020, 0, 1))
+    // `fetchedAt` is ours and is never normalised or replaced with "now".
+    expect(miss?.fetchedAt.getTime()).toBe(new Date('2026-09-05T10:00:00.000Z').getTime())
+
+    const rows = await prisma.exchangeRate.findMany({
+      where: { base: PAIR.base, quote: PAIR.quote },
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].effectiveDate.getTime()).toBe(Date.UTC(2020, 0, 1))
+  })
+
   it('caches a historical rate once retrieved and reuses it on the next call', async () => {
     let callCount = 0
     const fakeProvider: ExchangeRateProvider = {

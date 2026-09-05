@@ -268,7 +268,7 @@ For each past chart point, `getHistoricalRate(pair, date)` is called. If it retu
 
 ## 7. Timezone Handling
 
-`User.timezone: String @default("Asia/Ho_Chi_Minh")`. Instants are always stored in UTC (`timestamptz`, Prisma's default `DateTime` mapping) — what changes is how period *boundaries* are computed. One function, used everywhere a period matters:
+`User.timezone: String @default("Asia/Ho_Chi_Minh")`. Instants are always stored in UTC — what changes is how period *boundaries* are computed. Note that Prisma maps `DateTime` to Postgres `timestamp(3)` (**without** time zone), not `timestamptz`: the column stores no offset, and it is the client that treats every value as UTC on the way in and out. Correctness therefore depends on nothing ever writing a local-time value into one of these columns, which is why the conversion happens in exactly one place (the action layer, via `lib/datetime/local-date-time.ts`) and why `TZ=UTC` is set in CI and production. One function, used everywhere a period matters:
 
 ```
 getPeriodBounds(timezone, period, referenceDate) → { startUtc, endUtc }

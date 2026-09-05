@@ -4,7 +4,13 @@ import type { MockInstance } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
-import { ArchivedAccountError, createTransaction, updateTransaction } from './transaction'
+import {
+  ArchivedAccountError,
+  ConcurrentModificationError,
+  createTransaction,
+  deleteTransaction,
+  updateTransaction,
+} from './transaction'
 import { createTransfer } from './transfer'
 import { AccountHasNonZeroBalanceError, archiveFinancialAccount } from './financial-account'
 
@@ -269,6 +275,37 @@ describe('archive vs activity concurrency (row locks)', () => {
     expect(stored.amount.toString()).toBe('1000')
   })
 
+  it('deleteTransaction waits for a concurrent move of the row, then refuses to delete a stale copy', async () => {
+    const s = await setup()
+    const tx = await createTransaction(
+      s.userId,
+      { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+      fakeProvider().provider,
+    )
+    // The row moves to another account while the delete is in flight. The
+    // delete's pre-read still names the ORIGINAL account, so without the
+    // under-lock re-verification it would lock (and clear) the wrong account and
+    // delete a row that no longer lives there — which is exactly how a delete
+    // could slip past an archived account's freeze.
+    const lock = await holdLock(s.userId, s.accountId, async (t) => {
+      await t.transaction.update({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+        data: { accountId: s.targetId },
+      })
+    })
+
+    const pending = deleteTransaction(s.userId, tx.id)
+
+    await assertStillPending(pending)
+    await lock.release()
+
+    await expect(pending).rejects.toThrow(ConcurrentModificationError)
+    const stored = await prisma.transaction.findUniqueOrThrow({
+      where: { userId_id: { userId: s.userId, id: tx.id } },
+    })
+    expect(stored.accountId).toBe(s.targetId)
+  })
+
   it('createTransfer waits for a concurrent archive of the source account, then refuses it', async () => {
     const s = await setup()
     const lock = await holdLock(s.userId, s.fundedId, archiveVia(s.userId, s.fundedId))
@@ -343,6 +380,21 @@ describe('archive vs activity concurrency (row locks)', () => {
 
       await assertSettlesPromptly(pending)
       await expect(pending).resolves.toMatchObject({ accountId: s.targetId })
+    })
+
+    it('deleteTransaction of an untouched row', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+
+      const pending = deleteTransaction(s.userId, tx.id)
+
+      await assertSettlesPromptly(pending)
+      await expect(pending).resolves.toBeUndefined()
+      expect(await prisma.transaction.count({ where: { userId: s.userId, id: tx.id } })).toBe(0)
     })
 
     it('createTransfer', async () => {

@@ -123,6 +123,11 @@ export async function deleteTransfer(userId: string, transferId: string) {
     where: { userId_id: { userId, id: transferId } },
   })
   await prisma.$transaction(async (tx) => {
+    // Unlike `deleteTransaction`, the pre-read here cannot go stale in a way
+    // that matters: a Transfer's two endpoints are immutable — nothing in the
+    // app updates `fromAccountId`/`toAccountId`, there is no edit operation for
+    // a transfer at all — so the accounts locked below are necessarily still
+    // the accounts this row touches. There is nothing to re-verify.
     await lockAccountsForUpdate(tx, userId, [existing.fromAccountId, existing.toAccountId])
     await tx.transfer.delete({ where: { userId_id: { userId, id: transferId } } })
   })

@@ -108,6 +108,15 @@ export async function getLatestRate(
  *
  * `null` is a real answer — callers must render a gap rather than substitute
  * the live rate (spec §6.1/§6.4).
+ *
+ * Same normalisation as `getLatestRate`: the returned `effectiveDate` is always
+ * the requested UTC day, which is also the key the row is cached under, so a
+ * hit and a miss answer identically. A provider may reply with its own
+ * publication instant, or with the nearest prior trading day for a weekend or
+ * holiday (standard FX behaviour, cached under the *requested* day — spec
+ * §6.2); without this, the same rate would look like two different facts
+ * depending on whether it happened to be cached already. `fetchedAt` and
+ * `source` are passed through untouched.
  */
 export async function getHistoricalRate(
   pair: CurrencyPair,
@@ -122,5 +131,5 @@ export async function getHistoricalRate(
   const fetched = await provider.getHistoricalRate(pair, effectiveDate)
   if (!fetched) return null
   await cacheRate(pair, effectiveDate, fetched)
-  return fetched
+  return { ...fetched, effectiveDate }
 }

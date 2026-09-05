@@ -39,7 +39,7 @@ class MockCurrencyMismatchError extends Error {
 
 class MockConcurrentModificationError extends Error {
   constructor() {
-    super('This transaction changed while you were editing it.')
+    super('This transaction changed after it was read.')
     this.name = 'ConcurrentModificationError'
   }
 }
@@ -352,6 +352,15 @@ describe('deleteTransactionAction', () => {
     const result = await deleteTransactionAction('tx_1')
 
     expect(result).toEqual({ ok: false, error: 'ARCHIVED_ACCOUNT' })
+  })
+
+  it('maps ConcurrentModificationError to CONFLICT — a delete can lose the race too', async () => {
+    deleteTransactionMock.mockRejectedValue(new MockConcurrentModificationError())
+
+    const result = await deleteTransactionAction('tx_1')
+
+    expect(result).toEqual({ ok: false, error: 'CONFLICT' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 
   it('rethrows an unmapped error, and never revalidates', async () => {

@@ -67,15 +67,18 @@ import type { Currency, RecordStatus } from '@prisma/client'
  * exists to protect the *decision*, not to be a cryptographic version tag.
  */
 
-/** The columns every locking caller needs: `status` and `currency` for the
- *  invariant checks, the rest so a caller does not have to re-read the row. */
+/**
+ * Exactly the columns the invariant checks need and nothing more: `id` to match
+ * a row back to a requested id, `status` for the archived freeze, `currency`
+ * for the "currency follows the account" rule. A caller that needs the rest of
+ * the row re-reads it through the same transaction client
+ * (`archiveFinancialAccount` does), which keeps this lock a narrow, obviously
+ * safe projection rather than a second source of account data.
+ */
 export interface LockedAccountRow {
   id: string
   status: RecordStatus
   currency: Currency
-  initialBalance: Prisma.Decimal
-  createdAt: Date
-  name: string
 }
 
 /**
@@ -144,7 +147,7 @@ export async function lockAccountRows(
   if (ids.length === 0) return []
 
   const rows = await tx.$queryRaw<LockedAccountRow[]>`
-    SELECT "id", "status", "currency", "initialBalance", "createdAt", "name"
+    SELECT "id", "status", "currency"
     FROM "FinancialAccount"
     WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
     ORDER BY "id"

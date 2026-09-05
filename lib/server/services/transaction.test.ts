@@ -729,7 +729,7 @@ describe('transaction service', () => {
       expect(updated.fxRateEffectiveAt.toISOString()).toBe(tx.fxRateEffectiveAt.toISOString())
     })
 
-    it('re-snapshots all three FX fields when the amount changes', async () => {
+    it('re-snapshots all four FX fields when the amount changes', async () => {
       const s = await setup()
       const tx = await createBase(s)
       await clearFxCache()
