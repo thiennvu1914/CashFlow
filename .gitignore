@@ -45,3 +45,6 @@ next-env.d.ts
 .claude/worktrees/
 .superpowers/
 e2e/.outbox/
+e2e/.results/
+playwright-report/
+test-results/
