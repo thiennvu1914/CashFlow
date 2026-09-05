@@ -26,6 +26,7 @@ export default async function TransactionsPage() {
         <TransactionForm
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
           categories={[...expenseCategories, ...incomeCategories]}
+          timezone={timezone}
         />
       </div>
     </div>

@@ -50,10 +50,8 @@ export async function getAccountBalance(
 }
 
 /**
- * Batched form of `getAccountBalance`: one `groupBy` over all requested
- * accounts' transactions plus one ownership-scoped `findMany` of the accounts
- * themselves, regardless of how many ids are requested — the Accounts page
- * uses this so rendering N accounts costs a constant two queries, not N.
+ * Batched form of `getAccountBalance` — the Accounts page uses this so
+ * rendering N accounts costs a constant number of queries, not N.
  *
  * Every requested id must resolve to an account owned by `userId`; if any
  * does not, the whole call rejects with `AccountNotFoundError` and no map is

@@ -11,6 +11,7 @@ import {
   createTransactionAction,
   type TransactionActionError,
 } from '@/lib/server/actions/transaction-actions'
+import { todayInZone } from '@/lib/datetime/today-in-zone'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -43,20 +44,14 @@ const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
   NOT_FOUND: 'That record no longer exists.',
 }
 
-/** `yyyy-mm-dd`, the format an `<input type="date">` requires — Zod coerces it
- *  back into a `Date` on submit. */
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 const DEFAULT_TYPE: TransactionType = 'EXPENSE'
 
-function defaultValues(accounts: Account[]): FormInput {
+function defaultValues(accounts: Account[], timezone: string): FormInput {
   return {
     accountId: accounts[0]?.id ?? '',
     categoryId: undefined,
     type: DEFAULT_TYPE,
-    date: todayIsoDate(),
+    date: todayInZone(timezone),
     amount: 0,
     note: undefined,
   }
@@ -65,9 +60,17 @@ function defaultValues(accounts: Account[]): FormInput {
 export function TransactionForm({
   accounts,
   categories,
+  timezone,
 }: {
   accounts: Account[]
   categories: Category[]
+  /**
+   * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
+   * from the page) — the default date must land on *their* today, not
+   * whatever calendar day it happens to be in UTC at the moment they open
+   * the form.
+   */
+  timezone: string
 }) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
@@ -80,7 +83,7 @@ export function TransactionForm({
     formState: { errors, isSubmitting },
   } = useForm<FormInput, unknown, CreateTransactionInput>({
     resolver: zodResolver(createTransactionSchema),
-    defaultValues: defaultValues(accounts),
+    defaultValues: defaultValues(accounts, timezone),
   })
 
   const type = useWatch({ control, name: 'type' })
@@ -101,7 +104,7 @@ export function TransactionForm({
         setError(ACTION_ERROR_MESSAGES[result.error])
         return
       }
-      reset(defaultValues(accounts))
+      reset(defaultValues(accounts, timezone))
       router.refresh()
     } catch {
       console.error('TransactionForm: create failed')
@@ -188,7 +191,11 @@ export function TransactionForm({
       <Button type="submit" disabled={isSubmitting}>
         Add transaction
       </Button>
-      {error && <p className="text-sm text-negative">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-negative">
+          {error}
+        </p>
+      )}
     </form>
   )
 }

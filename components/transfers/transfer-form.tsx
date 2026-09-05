@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -11,6 +11,7 @@ import {
   createTransferAction,
   type TransferActionError,
 } from '@/lib/server/actions/transfer-actions'
+import { todayInZone } from '@/lib/datetime/today-in-zone'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -34,24 +35,30 @@ const ACTION_ERROR_MESSAGES: Record<TransferActionError, string> = {
   NOT_FOUND: 'That record no longer exists.',
 }
 
-/** `yyyy-mm-dd`, the format an `<input type="date">` requires — Zod coerces
- *  it back into a `Date` on submit. */
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function defaultValues(accounts: Account[]): FormInput {
+function defaultValues(accounts: Account[], timezone: string): FormInput {
   return {
     fromAccountId: accounts[0]?.id ?? '',
     toAccountId: accounts[1]?.id ?? accounts[0]?.id ?? '',
     fromAmount: 0,
     toAmount: 0,
-    date: todayIsoDate(),
+    date: todayInZone(timezone),
     note: undefined,
   }
 }
 
-export function TransferForm({ accounts }: { accounts: Account[] }) {
+export function TransferForm({
+  accounts,
+  timezone,
+}: {
+  accounts: Account[]
+  /**
+   * The session user's IANA timezone (`resolveProfileDefaults(user).timezone`
+   * from the page) — the default date must land on *their* today, not
+   * whatever calendar day it happens to be in UTC at the moment they open
+   * the form.
+   */
+  timezone: string
+}) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
   const {
@@ -59,11 +66,12 @@ export function TransferForm({ accounts }: { accounts: Account[] }) {
     control,
     handleSubmit,
     reset,
+    resetField,
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormInput, unknown, CreateTransferInput>({
     resolver: zodResolver(createTransferSchema),
-    defaultValues: defaultValues(accounts),
+    defaultValues: defaultValues(accounts, timezone),
   })
 
   const fromAccountId = useWatch({ control, name: 'fromAccountId' })
@@ -77,9 +85,22 @@ export function TransferForm({ accounts }: { accounts: Account[] }) {
   // derives `toAmount` from `fromAmount` regardless of what arrives. The
   // field stays part of the validated shape even while its input is hidden,
   // so it is kept in sync here rather than left at its stale default.
+  //
+  // The reverse transition (currencies used to match and now don't) is
+  // handled in the same effect via a ref rather than another state variable:
+  // resetting `toAmount` back to its own default means the revealed "Amount
+  // received" field starts over instead of pre-filled with the sent amount —
+  // which would otherwise read as an accidental same-numbers cross-currency
+  // transfer the user never entered.
+  const wasSameCurrencyRef = useRef(sameCurrency)
   useEffect(() => {
-    if (sameCurrency) setValue('toAmount', fromAmount)
-  }, [sameCurrency, fromAmount, setValue])
+    if (sameCurrency) {
+      setValue('toAmount', fromAmount)
+    } else if (wasSameCurrencyRef.current) {
+      resetField('toAmount')
+    }
+    wasSameCurrencyRef.current = sameCurrency
+  }, [sameCurrency, fromAmount, setValue, resetField])
 
   async function onSubmit(values: CreateTransferInput) {
     setError(null)
@@ -93,7 +114,7 @@ export function TransferForm({ accounts }: { accounts: Account[] }) {
         setError(ACTION_ERROR_MESSAGES[result.error])
         return
       }
-      reset(defaultValues(accounts))
+      reset(defaultValues(accounts, timezone))
       router.refresh()
     } catch {
       console.error('TransferForm: create failed')
@@ -151,20 +172,20 @@ export function TransferForm({ accounts }: { accounts: Account[] }) {
         {errors.fromAmount && <p className="text-sm text-negative">{errors.fromAmount.message}</p>}
       </div>
       {!sameCurrency && (
-        <div>
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              step="0.01"
-              aria-label="Amount received"
-              placeholder="Amount received"
-              {...register('toAmount', { valueAsNumber: true })}
-            />
-            <span className="text-sm text-foreground/60">{toAccount?.currency ?? ''}</span>
-          </div>
-          {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            step="0.01"
+            aria-label="Amount received"
+            placeholder="Amount received"
+            {...register('toAmount', { valueAsNumber: true })}
+          />
+          <span className="text-sm text-foreground/60">{toAccount?.currency ?? ''}</span>
         </div>
       )}
+      {/* Rendered regardless of `sameCurrency` so a validation error on this
+         field is never silently hidden by the field itself being hidden. */}
+      {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
       <div>
         <Input type="date" aria-label="Date" {...register('date')} />
         {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
@@ -176,7 +197,11 @@ export function TransferForm({ accounts }: { accounts: Account[] }) {
       <Button type="submit" disabled={isSubmitting}>
         Transfer
       </Button>
-      {error && <p className="text-sm text-negative">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-negative">
+          {error}
+        </p>
+      )}
     </form>
   )
 }

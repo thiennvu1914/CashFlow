@@ -35,6 +35,7 @@ export default async function TransfersPage() {
         <h2 className="mb-3 text-lg font-semibold">New transfer</h2>
         <TransferForm
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
+          timezone={timezone}
         />
       </div>
     </div>
