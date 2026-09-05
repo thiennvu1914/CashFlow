@@ -18,8 +18,13 @@ datasource db {
 // against the installed better-auth 1.7.2's own table definitions
 // (`getAuthTables` in @better-auth/core/db). The published CLI is 1.4.21 and
 // lags the library, so its output was missing `Account.issuer` and the
-// `(issuer, accountId)` unique index, and it emitted the five CashFlow user
-// fields as nullable even though better-auth marks them required.
+// `(issuer, accountId)` unique index.
+//
+// better-auth leaves an additional field's `required` unset, so the CLI emitted
+// the five CashFlow user fields as nullable. CashFlow deliberately makes those
+// five columns NOT NULL with database defaults instead: the app treats them as
+// always-present settings, and a database default keeps that true for every
+// writer, not just Better Auth's own create path.
 // ---------------------------------------------------------------------------
 
 model User {

@@ -7,16 +7,6 @@ export interface CreateAuthOptions {
    */
   database: NonNullable<BetterAuthOptions['database']>
   /**
-   * NOT WIRED YET — accepted so Task 6 has a seam to fill, but `createAuth`
-   * deliberately ignores it until then: `emailAndPassword.sendResetPassword` is
-   * added in Task 6, once Task 5's EmailSender abstraction exists for real,
-   * rather than being stubbed here and replaced later. Passing it today sends
-   * no email. Forgot Password is simply not wired up between now and Task 6;
-   * every other auth flow (register / login / logout / change password) works
-   * fully from this commit onward.
-   */
-  sendResetPasswordEmail?: (to: string, url: string) => Promise<void>
-  /**
    * Overrides Better Auth's `BETTER_AUTH_URL` / request-derived base URL. Only
    * set by tests, which must not depend on the developer's local `.env`.
    */
@@ -45,8 +35,11 @@ export function createAuth(options: CreateAuthOptions) {
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
-      // `sendResetPassword` is intentionally absent — see
-      // `CreateAuthOptions.sendResetPasswordEmail`.
+      // `sendResetPassword` is added in Task 6, once Task 5's EmailSender
+      // abstraction exists for real — not stubbed here and replaced later.
+      // Forgot Password simply isn't wired up between now and Task 6; every
+      // other auth flow (register / login / logout / change password) works
+      // fully from this commit onward.
     },
     user: {
       // `input: false` on every additional field means none of them can be set

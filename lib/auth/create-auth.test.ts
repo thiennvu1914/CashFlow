@@ -91,4 +91,44 @@ describe('createAuth', () => {
     expect(db.user).toHaveLength(1)
     expect(db.user[0]).toMatchObject({ isDemo: false, baseCurrency: 'VND' })
   })
+
+  it('rejects an update-user request that tries to set isDemo', async () => {
+    const { auth, db } = makeAuth()
+
+    const signUp = await auth.handler(
+      new Request(`${BASE_URL}/api/auth/sign-up/email`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: BASE_URL },
+        body: JSON.stringify({
+          name: 'Le Van C',
+          email: 'le@example.com',
+          password: 'correct-horse-battery-staple',
+        }),
+      }),
+    )
+    expect(signUp.status).toBe(200)
+    const cookie = signUp.headers.get('set-cookie')
+    expect(cookie).toBeTruthy()
+
+    const response = await auth.handler(
+      new Request(`${BASE_URL}/api/auth/update-user`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: BASE_URL,
+          cookie: cookie as string,
+        },
+        body: JSON.stringify({ isDemo: true }),
+      }),
+    )
+
+    // Better Auth rejects the request outright rather than silently dropping
+    // the field, because `isDemo` is `input: false`. Asserting the code as well
+    // as the status pins the rejection to that reason and not, say, a failed
+    // session or origin check — an update of an ordinary field such as `name`
+    // succeeds with 200 through this exact request shape.
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ code: 'FIELD_NOT_ALLOWED' })
+    expect(db.user[0]).toMatchObject({ isDemo: false })
+  })
 })
