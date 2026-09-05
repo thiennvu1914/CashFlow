@@ -7,6 +7,11 @@ import {
 } from '@/lib/validation/financial-account'
 import type { Prisma } from '@prisma/client'
 import { getAccountBalance, AccountNotFoundError } from './balance'
+// `transaction.ts` owns `ArchivedAccountError` and imports nothing from this
+// module, so reusing it here introduces no cycle. One error type for "this
+// account is archived" keeps the code the UI sees identical whether the frozen
+// thing was a transaction, a transfer, or the account row itself.
+import { ArchivedAccountError } from './transaction'
 
 /**
  * Thrown when a create/update targets an `accountTypeId` that either does not
@@ -119,6 +124,19 @@ export class AccountHasNonZeroBalanceError extends Error {
  * The ownership-scoped lookup happens first and on its own: another user's
  * account id must fail here as `AccountNotFoundError`, before any balance is
  * computed for it.
+ *
+ * **The balance check and the write are not atomic**, and that is accepted for
+ * Phase 2. Under READ COMMITTED the balance is derived from rows committed at
+ * the moment of the `groupBy`, so a transaction inserted between the check and
+ * the `UPDATE` could in principle leave an archived account holding money.
+ * Two things bound the risk: every query here is scoped to a single `userId`,
+ * so the only way to lose the race is for one person to archive an account in
+ * the same instant they are writing to it from another tab; and the `UPDATE`
+ * below is a compare-and-set (`status: 'ACTIVE'` in the `where`), so two
+ * concurrent archives cannot both succeed — the loser gets a P2025 rather than
+ * a second write over a row whose state has already moved. Closing the
+ * remaining window needs `SELECT … FOR UPDATE` on the account row inside an
+ * explicit transaction, which is deferred (see the Phase 2 final review).
  */
 export async function archiveFinancialAccount(userId: string, accountId: string) {
   const account = await prisma.financialAccount.findUnique({
@@ -130,8 +148,12 @@ export async function archiveFinancialAccount(userId: string, accountId: string)
   const balance = await getAccountBalance(userId, accountId)
   if (!balance.isZero()) throw new AccountHasNonZeroBalanceError()
 
+  // Compare-and-set: the row must still be ACTIVE when the write lands.
+  // Prisma allows non-unique filters alongside a unique selector in
+  // `update`'s `where`; when nothing matches it raises P2025, which the action
+  // layer already maps to NOT_FOUND.
   return prisma.financialAccount.update({
-    where: { userId_id: { userId, id: accountId } },
+    where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
     data: { status: 'ARCHIVED' },
   })
 }
@@ -178,12 +200,32 @@ export async function createFinancialAccount(userId: string, input: CreateFinanc
   })
 }
 
+/**
+ * Edits an existing FinancialAccount.
+ *
+ * An ARCHIVED account is frozen outright — not merely locked on its money
+ * fields. Archiving is only permitted at a zero balance, and the transaction
+ * and transfer services refuse every kind of new activity against an archived
+ * account; allowing `initialBalance` or `currency` to be edited afterwards
+ * would put money back into an account the rest of the app has already
+ * stopped tracking. The freeze covers `name` and `description` too: reopening
+ * an account is not in Phase 2's scope, so there is no state in which an
+ * archived row is meant to change at all.
+ */
 export async function updateFinancialAccount(
   userId: string,
   accountId: string,
   input: UpdateFinancialAccountInput,
 ) {
   const parsed = updateFinancialAccountSchema.parse(input)
+
+  // Ownership-scoped and first: another user's id is a P2025 here, before any
+  // status or activity is read for it.
+  const existing = await prisma.financialAccount.findUniqueOrThrow({
+    where: { userId_id: { userId, id: accountId } },
+  })
+  if (existing.status !== 'ACTIVE') throw new ArchivedAccountError()
+
   if (parsed.accountTypeId !== undefined) {
     await assertActiveAccountType(userId, parsed.accountTypeId)
   }
@@ -210,8 +252,11 @@ export async function updateFinancialAccount(
   if (parsed.currency !== undefined) data.currency = parsed.currency
   if (parsed.description !== undefined) data.description = parsed.description
 
+  // Compare-and-set on the same `status: 'ACTIVE'` the guard above read: if
+  // the account was archived between that read and this write, nothing
+  // matches and Prisma raises P2025 instead of editing a frozen row.
   return prisma.financialAccount.update({
-    where: { userId_id: { userId, id: accountId } },
+    where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },
     data,
   })
 }

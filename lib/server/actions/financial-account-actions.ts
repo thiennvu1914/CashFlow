@@ -6,6 +6,7 @@ import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
 import * as accountService from '@/lib/server/services/financial-account'
 import { AccountNotFoundError } from '@/lib/server/services/balance'
+import { ArchivedAccountError } from '@/lib/server/services/transaction'
 import type {
   CreateFinancialAccountInput,
   UpdateFinancialAccountInput,
@@ -22,7 +23,12 @@ import type {
  * every call into the service below is `(user.id, ...)` from `requireUser()`.
  */
 export type FinancialAccountActionError =
-  'NON_ZERO_BALANCE' | 'ACCOUNT_LOCKED' | 'INVALID_ACCOUNT_TYPE' | 'INVALID_INPUT' | 'NOT_FOUND'
+  | 'NON_ZERO_BALANCE'
+  | 'ACCOUNT_LOCKED'
+  | 'ARCHIVED_ACCOUNT'
+  | 'INVALID_ACCOUNT_TYPE'
+  | 'INVALID_INPUT'
+  | 'NOT_FOUND'
 
 export type FinancialAccountActionResult =
   { ok: true } | { ok: false; error: FinancialAccountActionError }
@@ -34,6 +40,7 @@ function mapError(e: unknown): FinancialAccountActionResult {
   if (e instanceof accountService.AccountLockedError) {
     return { ok: false, error: 'ACCOUNT_LOCKED' }
   }
+  if (e instanceof ArchivedAccountError) return { ok: false, error: 'ARCHIVED_ACCOUNT' }
   if (e instanceof accountService.InvalidAccountTypeError) {
     return { ok: false, error: 'INVALID_ACCOUNT_TYPE' }
   }

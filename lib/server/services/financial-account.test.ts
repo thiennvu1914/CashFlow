@@ -466,6 +466,49 @@ describe('financial-account service', () => {
       expect(updated.initialBalance.toString()).toBe('55.5')
     })
 
+    it('refuses to change the initialBalance of an ARCHIVED account, leaving the row unchanged', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Archived',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      await archiveFinancialAccount(userId, created.id)
+
+      await expect(
+        updateFinancialAccount(userId, created.id, { initialBalance: 1000 }),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.initialBalance.toString()).toBe('0')
+      expect(stored.status).toBe('ARCHIVED')
+    })
+
+    it('refuses even a name-only edit of an ARCHIVED account — an archived account is frozen', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Archived',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      await archiveFinancialAccount(userId, created.id)
+
+      await expect(updateFinancialAccount(userId, created.id, { name: 'x' })).rejects.toThrow(
+        ArchivedAccountError,
+      )
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.name).toBe('Archived')
+    })
+
     it('a partial update changing only name leaves every other field unchanged', async () => {
       const userId = await createUser()
       const accountType = await createAccountType(userId)

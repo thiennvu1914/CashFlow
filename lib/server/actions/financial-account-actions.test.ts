@@ -46,6 +46,15 @@ class MockAccountNotFoundError extends Error {
   }
 }
 
+/** The account service throws `transaction.ts`'s `ArchivedAccountError` for an
+ *  edit against an archived account, so that module is mocked here too. */
+class MockArchivedAccountError extends Error {
+  constructor() {
+    super('This account is archived and cannot receive new activity.')
+    this.name = 'ArchivedAccountError'
+  }
+}
+
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
 }))
@@ -61,6 +70,10 @@ vi.mock('@/lib/server/services/financial-account', () => ({
 
 vi.mock('@/lib/server/services/balance', () => ({
   AccountNotFoundError: MockAccountNotFoundError,
+}))
+
+vi.mock('@/lib/server/services/transaction', () => ({
+  ArchivedAccountError: MockArchivedAccountError,
 }))
 
 vi.mock('next/cache', () => ({
@@ -185,6 +198,15 @@ describe('updateFinancialAccountAction', () => {
     const result = await updateFinancialAccountAction('account_1', validUpdateInput)
 
     expect(result).toEqual({ ok: false, error: 'ACCOUNT_LOCKED' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps ArchivedAccountError to ARCHIVED_ACCOUNT and does not revalidate', async () => {
+    updateFinancialAccountMock.mockRejectedValue(new MockArchivedAccountError())
+
+    const result = await updateFinancialAccountAction('account_1', validUpdateInput)
+
+    expect(result).toEqual({ ok: false, error: 'ARCHIVED_ACCOUNT' })
     expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 

@@ -23,6 +23,7 @@ const ACTION_ERROR_MESSAGES: Record<FinancialAccountActionError, string> = {
   NON_ZERO_BALANCE:
     'This account must have a zero balance before it can be archived. Transfer or adjust the balance first.',
   ACCOUNT_LOCKED: 'Currency and opening balance cannot be changed once the account has activity.',
+  ARCHIVED_ACCOUNT: 'This account is archived and can no longer be edited.',
   INVALID_ACCOUNT_TYPE: 'Choose a valid account type.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That account no longer exists.',
