@@ -252,10 +252,10 @@ All rates — latest or historical — live in the single `ExchangeRate` table (
 Every Transaction requires `vndPerUsdAtEntry`, regardless of its own currency. On creation:
 
 1. Call `getLatestRate` for a fresh rate.
-2. If the live call fails, fall back to the most recent cached row for the pair, **regardless of age** — persist its *actual* original `fetchedAt` and `source` (labeled `cache-fallback:<original source>`), never "now."
+2. If the live call fails, fall back to the most recent cached row for the pair whose `effectiveDate` is **within the last 48 hours** (`getUsableCurrentRate` / `MAX_FALLBACK_STALENESS_MS`) — persist its *actual* original `fetchedAt` and `source` (labeled `cache-fallback:<original source>`, with `isFallback: true` so the UI can say the figure may be out of date), never "now." The window is measured on `effectiveDate`, not `fetchedAt`: a historical row cached minutes ago for a chart point years back has a recent `fetchedAt` and an ancient rate, and only an `effectiveDate` filter excludes it. Rows dated in the future are excluded too. An outage is measured in hours, not days; beyond that window it is more honest to fail than to snapshot a stale figure as if it were current.
 3. Persist whatever real rate/timestamp/source was actually used.
 4. Never invent a rate, never default to 1, never hardcode a conversion.
-5. If no cached row exists at all *and* the live call fails, the transaction-creation operation fails clearly and recoverably (a retryable error surfaced in the UI) rather than storing a financially incorrect snapshot.
+5. If no cached row qualifies *and* the live call fails, the transaction-creation operation fails clearly and recoverably (a retryable error surfaced in the UI) rather than storing a financially incorrect snapshot.
 
 In practice, step 5 should be rare: dashboard and other read paths also call `getLatestRate`, so by the time a user creates their first transaction a cached rate almost always already exists.
 
