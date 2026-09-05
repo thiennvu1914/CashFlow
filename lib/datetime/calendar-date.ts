@@ -33,6 +33,20 @@ import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
 export const CALENDAR_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * True only for a `yyyy-MM-dd` string that names a day that exists.
+ *
+ * Timezone-independent (the check is done in UTC), so Zod form schemas can use
+ * it before any timezone is known: `2026-02-30` and `2026-13-40` match the
+ * regex but are rejected here, which keeps a crafted request from reaching
+ * `calendarDateToInstant` and surfacing as an unmapped server error.
+ */
+export function isRealCalendarDate(date: string): boolean {
+  if (!CALENDAR_DATE_RE.test(date)) return false
+  const parsed = new Date(`${date}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date
+}
+
+/**
  * The instant that is local midnight of `date` in `timezone`.
  *
  * Rejects anything that is not a real calendar day. The regex alone is not

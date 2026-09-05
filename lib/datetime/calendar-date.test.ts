@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { CALENDAR_DATE_RE, calendarDateToInstant, instantToCalendarDate } from './calendar-date'
+import {
+  CALENDAR_DATE_RE,
+  calendarDateToInstant,
+  instantToCalendarDate,
+  isRealCalendarDate,
+} from './calendar-date'
+import { createTransactionFormSchema } from '@/lib/validation/transaction'
+import { createTransferFormSchema } from '@/lib/validation/transfer'
 
 describe('CALENDAR_DATE_RE', () => {
   it('matches a yyyy-MM-dd string only', () => {
@@ -8,6 +15,48 @@ describe('CALENDAR_DATE_RE', () => {
     expect(CALENDAR_DATE_RE.test('05/09/2026')).toBe(false)
     expect(CALENDAR_DATE_RE.test('2026-09-05T00:00:00Z')).toBe(false)
     expect(CALENDAR_DATE_RE.test('')).toBe(false)
+  })
+})
+
+describe('isRealCalendarDate', () => {
+  it('accepts days that exist, including leap day', () => {
+    expect(isRealCalendarDate('2026-09-05')).toBe(true)
+    expect(isRealCalendarDate('2028-02-29')).toBe(true)
+    expect(isRealCalendarDate('2026-12-31')).toBe(true)
+  })
+
+  it('rejects well-formed strings that name no real day, and malformed strings', () => {
+    expect(isRealCalendarDate('2026-02-30')).toBe(false)
+    expect(isRealCalendarDate('2026-13-40')).toBe(false)
+    expect(isRealCalendarDate('2027-02-29')).toBe(false)
+    expect(isRealCalendarDate('2026-9-5')).toBe(false)
+    expect(isRealCalendarDate('')).toBe(false)
+  })
+
+  it('is enforced by the form schemas, so a non-existent date never reaches the action conversion', () => {
+    const tx = createTransactionFormSchema.safeParse({
+      accountId: 'a',
+      type: 'CASH_IN',
+      amount: 10,
+      date: '2026-02-30',
+    })
+    expect(tx.success).toBe(false)
+    const transfer = createTransferFormSchema.safeParse({
+      fromAccountId: 'a',
+      toAccountId: 'b',
+      fromAmount: 10,
+      toAmount: 10,
+      date: '2026-13-40',
+    })
+    expect(transfer.success).toBe(false)
+    expect(
+      createTransactionFormSchema.safeParse({
+        accountId: 'a',
+        type: 'CASH_IN',
+        amount: 10,
+        date: '2026-09-05',
+      }).success,
+    ).toBe(true)
   })
 })
 

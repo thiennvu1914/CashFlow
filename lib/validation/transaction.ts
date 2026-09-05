@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { moneyAmountSchema } from '@/lib/validation/money'
-import { CALENDAR_DATE_RE } from '@/lib/datetime/calendar-date'
+import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-date'
 
 export const transactionTypeSchema = z.enum([
   'INCOME',
@@ -71,7 +71,10 @@ export const createTransactionSchema = z
 export const createTransactionFormSchema = z
   .object({
     ...transactionFields,
-    date: z.string().regex(CALENDAR_DATE_RE, 'Enter a valid date'),
+    date: z
+      .string()
+      .regex(CALENDAR_DATE_RE, 'Enter a valid date')
+      .refine(isRealCalendarDate, 'Enter a valid date'),
   })
   .refine(categoryRequirement.check, categoryRequirement.options)
 
