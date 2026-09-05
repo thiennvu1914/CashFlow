@@ -21,6 +21,31 @@ export class InvalidAccountTypeError extends Error {
   }
 }
 
+/**
+ * Thrown when an update tries to change `currency` or `initialBalance` on an
+ * account that already has activity. Both are inputs to every derived balance
+ * this app computes, and there is no stored balance to correct afterwards:
+ * changing either would silently rewrite the meaning of history the user has
+ * already recorded. Name, description and account type stay editable.
+ */
+export class AccountLockedError extends Error {
+  constructor() {
+    super('Currency and opening balance cannot be changed once the account has activity.')
+    this.name = 'AccountLockedError'
+  }
+}
+
+/**
+ * True once anything has been recorded against the account.
+ *
+ * Transactions are the only activity that exists today; Task 12 adds Transfer
+ * and must extend this check to count transfers on either leg as well.
+ */
+export async function accountHasActivity(userId: string, accountId: string): Promise<boolean> {
+  const transactionCount = await prisma.transaction.count({ where: { userId, accountId } })
+  return transactionCount > 0
+}
+
 async function assertActiveAccountType(userId: string, accountTypeId: string) {
   const accountType = await prisma.accountType.findUnique({
     where: { userId_id: { userId, id: accountTypeId } },
@@ -73,6 +98,15 @@ export async function updateFinancialAccount(
     await assertActiveAccountType(userId, parsed.accountTypeId)
   }
 
+  // The lock is on the *attempt*, not on a difference in value: an update that
+  // carries either field at all is refused once activity exists, so no caller
+  // can rely on "it happened to be the same" and no balance is ever recomputed
+  // against a changed foundation. The count query only runs when one of the two
+  // locked fields is actually present.
+  if (parsed.currency !== undefined || parsed.initialBalance !== undefined) {
+    if (await accountHasActivity(userId, accountId)) throw new AccountLockedError()
+  }
+
   // Rebuilt field-by-field (never `data: parsed`) so an undefined key is
   // omitted from the update rather than explicitly writing `undefined` over
   // an existing value — Zod's `.optional()` fields are absent-or-present, not
@@ -86,9 +120,6 @@ export async function updateFinancialAccount(
   if (parsed.currency !== undefined) data.currency = parsed.currency
   if (parsed.description !== undefined) data.description = parsed.description
 
-  // No currency/initialBalance lock yet — Task 15 adds it once the
-  // Transaction model exists and "has this account had activity" can be
-  // checked for real instead of stubbed.
   return prisma.financialAccount.update({
     where: { userId_id: { userId, id: accountId } },
     data,

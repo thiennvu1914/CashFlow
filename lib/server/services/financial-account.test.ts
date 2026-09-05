@@ -6,6 +6,7 @@ import {
   listAllFinancialAccounts,
   createFinancialAccount,
   updateFinancialAccount,
+  AccountLockedError,
   InvalidAccountTypeError,
 } from './financial-account'
 import { createFinancialAccountSchema } from '@/lib/validation/financial-account'
@@ -40,10 +41,33 @@ describe('financial-account service', () => {
     })
   }
 
+  /**
+   * Inserts a transaction directly, bypassing the transaction service: this
+   * file is only interested in "activity exists", and going through the real
+   * service would drag the FX policy into an account test. The `fx*` values
+   * here are fixture data, not something the app produced.
+   */
+  async function recordActivity(userId: string, accountId: string) {
+    return prisma.transaction.create({
+      data: {
+        userId,
+        accountId,
+        type: 'CASH_IN',
+        amount: 100,
+        currency: 'VND',
+        date: new Date(),
+        vndPerUsdAtEntry: 25000,
+        fxRateTimestamp: new Date(),
+        fxRateSource: 'fixture',
+      },
+    })
+  }
+
   afterEach(async () => {
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
     try {
+      await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
     } finally {
@@ -225,6 +249,100 @@ describe('financial-account service', () => {
         where: { userId_id: { userId, id: created.id } },
       })
       expect(stored.accountTypeId).toBe(accountType.id)
+    })
+
+    it('refuses to change the currency once the account has activity, leaving the row unchanged', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Has Activity',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordActivity(userId, created.id)
+
+      await expect(updateFinancialAccount(userId, created.id, { currency: 'USD' })).rejects.toThrow(
+        AccountLockedError,
+      )
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.currency).toBe('VND')
+      expect(stored.initialBalance.toString()).toBe('10')
+    })
+
+    it('refuses to change the initialBalance once the account has activity, leaving the row unchanged', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Has Activity',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordActivity(userId, created.id)
+
+      await expect(
+        updateFinancialAccount(userId, created.id, { initialBalance: 999.99 }),
+      ).rejects.toThrow(AccountLockedError)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.initialBalance.toString()).toBe('10')
+    })
+
+    it('still allows renaming and re-describing an account that has activity', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const otherAccountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Has Activity',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordActivity(userId, created.id)
+
+      const updated = await updateFinancialAccount(userId, created.id, {
+        name: 'Renamed With Activity',
+        description: 'Still editable',
+        accountTypeId: otherAccountType.id,
+      })
+
+      expect(updated.name).toBe('Renamed With Activity')
+      expect(updated.description).toBe('Still editable')
+      expect(updated.accountTypeId).toBe(otherAccountType.id)
+      expect(updated.currency).toBe('VND')
+      expect(updated.initialBalance.toString()).toBe('10')
+    })
+
+    it('does not lock an account because a different account of the same user has activity', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const busy = await createFinancialAccount(userId, {
+        name: 'Busy',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const untouched = await createFinancialAccount(userId, {
+        name: 'Untouched',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordActivity(userId, busy.id)
+
+      const updated = await updateFinancialAccount(userId, untouched.id, {
+        currency: 'USD',
+        initialBalance: 55.5,
+      })
+
+      expect(updated.currency).toBe('USD')
+      expect(updated.initialBalance.toString()).toBe('55.5')
     })
 
     it('a partial update changing only name leaves every other field unchanged', async () => {
