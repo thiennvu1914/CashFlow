@@ -1,0 +1,773 @@
+import { randomUUID } from 'node:crypto'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
+import { prisma } from '@/lib/prisma'
+import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
+import { createTransactionSchema } from '@/lib/validation/transaction'
+import {
+  ArchivedAccountError,
+  InvalidCategoryError,
+  createTransaction,
+  deleteTransaction,
+  listTransactions,
+  updateTransaction,
+} from './transaction'
+
+/**
+ * Hits the real database — `vitest.setup.ts` points `DATABASE_URL` at the
+ * dedicated `cashflow_test` database.
+ *
+ * Every call passes an injected fake provider, and `beforeEach` replaces
+ * `fetch` with a throwing spy, so no test here can reach the network: an
+ * accidental live lookup fails the test that caused it rather than passing
+ * quietly. The USD/VND `ExchangeRate` rows are global (not user-scoped), so
+ * `afterEach` clears them along with the user's own rows.
+ */
+
+const PAIR = { base: 'USD' as const, quote: 'VND' as const }
+
+/** Every `source` string this file can write into the shared FX cache. */
+const FAKE_SOURCES = ['fake', 'fake-2', 'fake-precise', 'seeded']
+
+/**
+ * A deterministic provider plus the exact timestamps it returns, so a test can
+ * assert that the stored snapshot carries the provider's own `fetchedAt` rather
+ * than a wall-clock "now" invented at write time.
+ */
+function fakeProvider(rate = 25000, source = 'fake') {
+  // Deliberately in the past: a service that substituted `new Date()` for the
+  // FX timestamp would still be "about now" and could slip past an equality
+  // check made against a value captured in the same millisecond.
+  const fetchedAt = new Date(Date.now() - 5 * 60 * 1000)
+  const effectiveDate = new Date()
+  const provider: ExchangeRateProvider = {
+    getLatestRate: async () => ({ rate, effectiveDate, fetchedAt, source }),
+    getHistoricalRate: async () => null,
+  }
+  return { provider, fetchedAt, effectiveDate, rate, source }
+}
+
+/** Stands in for a live provider outage — the only way into the fallback path. */
+const failingProvider: ExchangeRateProvider = {
+  getLatestRate: async () => {
+    throw new Error('provider down')
+  },
+  getHistoricalRate: async () => null,
+}
+
+/**
+ * `getLatestRate` serves today's UTC day from the cache, so the first FX call
+ * of a test pins the rate for every later call that day. Tests that need a
+ * *second*, different snapshot clear the cache first — the same thing the
+ * calendar does in production when the day rolls over.
+ */
+async function clearFxCache() {
+  await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+}
+
+describe('transaction service', () => {
+  const createdUserIds: string[] = []
+  let fetchSpy: MockInstance
+
+  async function setup() {
+    const user = await prisma.user.create({
+      data: {
+        id: randomUUID(),
+        email: `test-${randomUUID()}@example.com`,
+        name: 'Test',
+        emailVerified: false,
+      },
+    })
+    createdUserIds.push(user.id)
+    const accountType = await prisma.accountType.create({
+      data: { userId: user.id, name: 'Cash' },
+    })
+    const account = await prisma.financialAccount.create({
+      data: {
+        userId: user.id,
+        name: 'Test',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      },
+    })
+    const usdAccount = await prisma.financialAccount.create({
+      data: {
+        userId: user.id,
+        name: 'Test USD',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'USD',
+      },
+    })
+    const expenseCategory = await prisma.category.create({
+      data: { userId: user.id, name: 'Food', type: 'EXPENSE' },
+    })
+    const incomeCategory = await prisma.category.create({
+      data: { userId: user.id, name: 'Salary', type: 'INCOME' },
+    })
+    return {
+      userId: user.id,
+      accountId: account.id,
+      usdAccountId: usdAccount.id,
+      accountTypeId: accountType.id,
+      expenseCategoryId: expenseCategory.id,
+      incomeCategoryId: incomeCategory.id,
+    }
+  }
+
+  async function archiveAccount(userId: string, accountId: string) {
+    // Task 15 adds the archive service; setting the status directly here proves
+    // the transaction service itself refuses an archived account.
+    await prisma.financialAccount.update({
+      where: { userId_id: { userId, id: accountId } },
+      data: { status: 'ARCHIVED' },
+    })
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('network access in test')
+    })
+    // The fallback path warns by design; silenced to keep the output pristine.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(async () => {
+    expect(fetchSpy).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+    const userIds = createdUserIds.splice(0)
+    try {
+      await prisma.exchangeRate.deleteMany({ where: { source: { in: FAKE_SOURCES } } })
+      await clearFxCache()
+      if (userIds.length === 0) return
+      await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
+      await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
+      await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+      await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    }
+  })
+
+  describe('createTransaction', () => {
+    it('rejects an EXPENSE transaction with no category', async () => {
+      const s = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: s.accountId, type: 'EXPENSE', amount: 1000, date: new Date() },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow()
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('allows a CASH_IN transaction with no category and snapshots the FX rate through getUsableCurrentRate', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 5000, date: new Date() },
+        fakeProvider().provider,
+      )
+      expect(tx.categoryId).toBeNull()
+      expect(tx.vndPerUsdAtEntry.toNumber()).toBe(25000)
+      expect(tx.fxRateSource).toBe('fake')
+    })
+
+    it('rejects EXPENSE with an INCOME category', async () => {
+      const s = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: s.incomeCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date(),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
+    })
+
+    it('rejects INCOME with an EXPENSE category', async () => {
+      const s = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'INCOME',
+            amount: 1000,
+            date: new Date(),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
+    })
+
+    it('rejects an archived category for a new transaction', async () => {
+      const s = await setup()
+      await prisma.category.update({
+        where: { userId_id: { userId: s.userId, id: s.expenseCategoryId } },
+        data: { status: 'ARCHIVED' },
+      })
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date(),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
+    })
+
+    it('rejects any new activity on an archived account, even via a crafted request', async () => {
+      const s = await setup()
+      await archiveAccount(s.userId, s.accountId)
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date() },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('deletes cleanly without affecting other rows', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 20000,
+          date: new Date(),
+        },
+        fakeProvider().provider,
+      )
+      await deleteTransaction(s.userId, tx.id)
+      expect(await prisma.transaction.findMany({ where: { userId: s.userId } })).toHaveLength(0)
+    })
+
+    it('creates every transaction type and always stores the account currency', async () => {
+      const s = await setup()
+      const cases = [
+        { type: 'INCOME' as const, categoryId: s.incomeCategoryId },
+        { type: 'EXPENSE' as const, categoryId: s.expenseCategoryId },
+        { type: 'CASH_IN' as const, categoryId: undefined },
+        { type: 'CASH_OUT' as const, categoryId: undefined },
+        { type: 'ADJUSTMENT_INCREASE' as const, categoryId: undefined },
+        { type: 'ADJUSTMENT_DECREASE' as const, categoryId: undefined },
+      ]
+
+      for (const c of cases) {
+        const tx = await createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: c.categoryId,
+            type: c.type,
+            amount: 100,
+            date: new Date(),
+          },
+          fakeProvider().provider,
+        )
+        expect(tx.type).toBe(c.type)
+        expect(tx.currency).toBe('VND')
+        // The amount column is a magnitude for every type; direction lives in `type`.
+        expect(tx.amount.toString()).toBe('100')
+        expect(tx.categoryId).toBe(c.categoryId ?? null)
+      }
+
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(cases.length)
+    })
+
+    it('stores currency USD for a USD account and still snapshots the USD/VND rate', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.usdAccountId, type: 'CASH_IN', amount: 40, date: new Date() },
+        fakeProvider().provider,
+      )
+      expect(tx.currency).toBe('USD')
+      // The snapshot pair is always USD/VND — it does not follow the account.
+      expect(tx.vndPerUsdAtEntry.toNumber()).toBe(25000)
+      expect(tx.fxRateSource).toBe('fake')
+    })
+
+    it("rejects another user's accountId and writes nothing", async () => {
+      const s = await setup()
+      const other = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: other.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow()
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await prisma.transaction.count({ where: { userId: other.userId } })).toBe(0)
+    })
+
+    it("rejects another user's categoryId and writes nothing", async () => {
+      const s = await setup()
+      const other = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: other.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 100,
+            date: new Date(),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow()
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('stores the provider rate, source and real fetch instant as the snapshot', async () => {
+      const s = await setup()
+      const f = fakeProvider(26123.456789, 'fake-precise')
+
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
+        f.provider,
+      )
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      // vndPerUsdAtEntry is Decimal(18, 4): the provider's 6 decimal places are
+      // rounded (half-up, by Postgres) to 4 on the way in.
+      expect(stored.vndPerUsdAtEntry.toString()).toBe('26123.4568')
+      expect(stored.fxRateSource).toBe('fake-precise')
+      expect(stored.fxRateTimestamp.toISOString()).toBe(f.fetchedAt.toISOString())
+    })
+
+    it('records the fallback provenance when the live provider is down', async () => {
+      const s = await setup()
+      // A cache row that is recent but not filed under today's UTC start-of-day,
+      // so `getLatestRate` misses it and the fallback path is what finds it.
+      const seededFetchedAt = new Date(Date.now() - 2 * 60 * 60 * 1000)
+      await prisma.exchangeRate.create({
+        data: {
+          base: PAIR.base,
+          quote: PAIR.quote,
+          rate: 24800,
+          effectiveDate: seededFetchedAt,
+          fetchedAt: seededFetchedAt,
+          source: 'seeded',
+        },
+      })
+
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
+        failingProvider,
+      )
+
+      expect(tx.vndPerUsdAtEntry.toNumber()).toBe(24800)
+      expect(tx.fxRateSource).toBe('cache-fallback:seeded')
+      expect(tx.fxRateTimestamp.toISOString()).toBe(seededFetchedAt.toISOString())
+    })
+
+    it('refuses to create anything when no rate is available at all', async () => {
+      const s = await setup()
+      await clearFxCache()
+
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
+          failingProvider,
+        ),
+      ).rejects.toThrow(FxUnavailableError)
+
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('rejects a negative amount and writes nothing', async () => {
+      const s = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: s.accountId, type: 'CASH_OUT', amount: -100, date: new Date() },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow()
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+  })
+
+  describe('listTransactions', () => {
+    it('returns only the calling user rows, newest first', async () => {
+      const s = await setup()
+      const other = await setup()
+      const older = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date('2026-01-01') },
+        fakeProvider().provider,
+      )
+      const newer = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_OUT', amount: 200, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await createTransaction(
+        other.userId,
+        { accountId: other.accountId, type: 'CASH_IN', amount: 999, date: new Date('2026-03-01') },
+        fakeProvider().provider,
+      )
+
+      const rows = await listTransactions(s.userId)
+
+      expect(rows.map((r) => r.id)).toEqual([newer.id, older.id])
+    })
+  })
+
+  describe('updateTransaction — FX re-snapshot on economic edits (R-6)', () => {
+    async function createBase(s: Awaited<ReturnType<typeof setup>>) {
+      return createTransaction(
+        s.userId,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+          note: 'original',
+        },
+        fakeProvider().provider,
+      )
+    }
+
+    it('keeps the original snapshot when only the note changes', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      // Cleared so a re-snapshot would have to call the (different) provider —
+      // if the snapshot still says 'fake' afterwards, no FX call happened.
+      await clearFxCache()
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+          note: 'corrected wording',
+        },
+        fakeProvider(25500, 'fake-2').provider,
+      )
+
+      expect(updated.note).toBe('corrected wording')
+      expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
+      expect(updated.fxRateSource).toBe('fake')
+      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+    })
+
+    it('keeps the original snapshot when only the category changes', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await clearFxCache()
+      const otherCategory = await prisma.category.create({
+        data: { userId: s.userId, name: 'Gifts', type: 'INCOME' },
+      })
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: otherCategory.id,
+          type: 'CASH_IN',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+        },
+        fakeProvider(25500, 'fake-2').provider,
+      )
+
+      expect(updated.categoryId).toBe(otherCategory.id)
+      expect(updated.fxRateSource).toBe('fake')
+      expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
+      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+    })
+
+    it('re-snapshots all three FX fields when the amount changes', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      await clearFxCache()
+      const f2 = fakeProvider(25500, 'fake-2')
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1500,
+          date: new Date('2026-02-01'),
+          note: 'original',
+        },
+        f2.provider,
+      )
+
+      expect(updated.amount.toString()).toBe('1500')
+      expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
+      expect(updated.fxRateSource).toBe('fake-2')
+      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+    })
+
+    it('re-snapshots when only the date changes', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      await clearFxCache()
+      const f2 = fakeProvider(25500, 'fake-2')
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-05'),
+          note: 'original',
+        },
+        f2.provider,
+      )
+
+      expect(updated.date.toISOString()).toBe(new Date('2026-02-05').toISOString())
+      expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
+      expect(updated.fxRateSource).toBe('fake-2')
+      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+    })
+
+    it('re-snapshots and re-derives the currency when the account changes', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      expect(tx.currency).toBe('VND')
+      await clearFxCache()
+      const f2 = fakeProvider(25500, 'fake-2')
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.usdAccountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+          note: 'original',
+        },
+        f2.provider,
+      )
+
+      expect(updated.accountId).toBe(s.usdAccountId)
+      expect(updated.currency).toBe('USD')
+      expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
+      expect(updated.fxRateSource).toBe('fake-2')
+      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+    })
+
+    it('re-snapshots when only the type changes', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await clearFxCache()
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        { accountId: s.accountId, type: 'CASH_OUT', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider(25500, 'fake-2').provider,
+      )
+
+      expect(updated.type).toBe('CASH_OUT')
+      expect(updated.fxRateSource).toBe('fake-2')
+    })
+
+    it('leaves the row completely unchanged when FX is unavailable during an economic edit', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      await clearFxCache()
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 9999,
+            date: new Date('2026-03-03'),
+            note: 'should not land',
+          },
+          failingProvider,
+        ),
+      ).rejects.toThrow(FxUnavailableError)
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.accountId).toBe(tx.accountId)
+      expect(stored.categoryId).toBe(tx.categoryId)
+      expect(stored.type).toBe(tx.type)
+      expect(stored.amount.toString()).toBe(tx.amount.toString())
+      expect(stored.currency).toBe(tx.currency)
+      expect(stored.date.toISOString()).toBe(tx.date.toISOString())
+      expect(stored.note).toBe('original')
+      expect(stored.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
+      expect(stored.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+      expect(stored.fxRateSource).toBe(tx.fxRateSource)
+    })
+  })
+
+  describe('updateTransaction / deleteTransaction — archived accounts are frozen (R-7)', () => {
+    it('refuses to edit a transaction whose account has been archived', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await archiveAccount(s.userId, s.accountId)
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          { accountId: s.accountId, type: 'CASH_IN', amount: 2000, date: new Date('2026-02-01') },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.amount.toString()).toBe('1000')
+    })
+
+    it('refuses to delete a transaction whose account has been archived', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await archiveAccount(s.userId, s.accountId)
+
+      await expect(deleteTransaction(s.userId, tx.id)).rejects.toThrow(ArchivedAccountError)
+
+      expect(await prisma.transaction.count({ where: { userId: s.userId, id: tx.id } })).toBe(1)
+    })
+
+    it('refuses to move a transaction into an archived account', async () => {
+      const s = await setup()
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 1000, date: new Date('2026-02-01') },
+        fakeProvider().provider,
+      )
+      await archiveAccount(s.userId, s.usdAccountId)
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.usdAccountId,
+            type: 'CASH_IN',
+            amount: 1000,
+            date: new Date('2026-02-01'),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.accountId).toBe(s.accountId)
+      expect(stored.currency).toBe('VND')
+    })
+  })
+
+  describe('createTransactionSchema', () => {
+    function parseWithAmount(amount: number) {
+      return createTransactionSchema.safeParse({
+        accountId: 'abc',
+        type: 'CASH_IN',
+        amount,
+        date: new Date(),
+      }).success
+    }
+
+    it('rejects an amount of zero', () => {
+      expect(parseWithAmount(0)).toBe(false)
+    })
+
+    it('rejects a negative amount', () => {
+      expect(parseWithAmount(-1)).toBe(false)
+    })
+
+    it('rejects an amount with more than 2 decimal places', () => {
+      expect(parseWithAmount(12.345)).toBe(false)
+    })
+
+    it('accepts an amount with exactly 2 decimal places', () => {
+      expect(parseWithAmount(12.34)).toBe(true)
+    })
+
+    it('rejects an unparseable date', () => {
+      expect(
+        createTransactionSchema.safeParse({
+          accountId: 'abc',
+          type: 'CASH_IN',
+          amount: 10,
+          date: 'not-a-date',
+        }).success,
+      ).toBe(false)
+    })
+
+    it('rejects an unknown transaction type', () => {
+      expect(
+        createTransactionSchema.safeParse({
+          accountId: 'abc',
+          type: 'TRANSFER',
+          amount: 10,
+          date: new Date(),
+        }).success,
+      ).toBe(false)
+    })
+  })
+})

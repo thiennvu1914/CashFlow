@@ -109,11 +109,10 @@ model Verification {
 // ---------------------------------------------------------------------------
 // CashFlow domain tables.
 //
-// Neither model below declares a back-relation array yet (no
-// `accounts FinancialAccount[]` on AccountType, no `transactions Transaction[]`
-// on Category): the models those would point at do not exist. The phase's later
-// tasks add the one-line back-relation in the same commit that introduces the
-// referencing model, which keeps every migration valid on its own.
+// A back-relation array is added to a model only in the same commit that
+// introduces the model referencing it, which keeps every migration valid on its
+// own. `AccountType.accounts` arrived with `FinancialAccount`, and
+// `Category.transactions` / `FinancialAccount.transactions` with `Transaction`.
 //
 // The `@@unique([userId, id])` on each is what lets later models carry a
 // composite `(userId, <fk>)` foreign key, so a row can never reference another
@@ -155,6 +154,8 @@ model Category {
   status    RecordStatus @default(ACTIVE)
   createdAt DateTime     @default(now())
 
+  transactions Transaction[]
+
   @@unique([userId, id])
   @@index([userId])
 }
@@ -175,7 +176,8 @@ model FinancialAccount {
   status         RecordStatus @default(ACTIVE)
   createdAt      DateTime     @default(now())
 
-  accountType AccountType @relation(fields: [userId, accountTypeId], references: [userId, id])
+  accountType  AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
+  transactions Transaction[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -200,4 +202,55 @@ model ExchangeRate {
 
   @@unique([base, quote, effectiveDate])
   @@index([base, quote, effectiveDate(sort: Desc)])
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  CASH_IN
+  CASH_OUT
+  ADJUSTMENT_INCREASE
+  ADJUSTMENT_DECREASE
+}
+
+/// A single money movement (§4.4). `amount` is always >= 0 — the direction is
+/// carried by `type` alone, never by the sign — and `currency` is always a copy
+/// of the owning account's currency, never client-supplied.
+///
+/// The three `fx*` columns are the immutable FX snapshot: the usable USD/VND
+/// rate at the moment this transaction's economic content was recorded, taken
+/// only from `getUsableCurrentRate`. The pair is always USD/VND regardless of
+/// the account currency, so any later report can restate the row in either
+/// currency using the rate that actually applied. `fxRateTimestamp` is the
+/// provider's real fetch instant (the original one when a cached fallback was
+/// used), never "now", and `fxRateSource` carries the `cache-fallback:` prefix
+/// when the figure came from the fallback path.
+///
+/// The `category` relation is optional while still being a composite FK: under
+/// Postgres's default MATCH SIMPLE semantics a NULL in any column of a
+/// composite FK exempts the row from the constraint check, so CASH_IN /
+/// CASH_OUT / ADJUSTMENT_* rows with no category are unaffected.
+model Transaction {
+  id               String          @id @default(cuid())
+  userId           String
+  accountId        String
+  categoryId       String?
+  type             TransactionType
+  amount           Decimal         @db.Decimal(18, 2)
+  currency         Currency
+  date             DateTime
+  note             String?
+  vndPerUsdAtEntry Decimal         @db.Decimal(18, 4)
+  fxRateTimestamp  DateTime
+  fxRateSource     String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  account  FinancialAccount @relation(fields: [userId, accountId], references: [userId, id])
+  category Category?        @relation(fields: [userId, categoryId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, date])
+  @@index([userId, accountId, date])
+  @@index([userId, categoryId, date])
 }
