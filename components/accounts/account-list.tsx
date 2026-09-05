@@ -1,7 +1,9 @@
+import type { Currency } from '@prisma/client'
+
 export function AccountList({
   accounts,
 }: {
-  accounts: { id: string; name: string; currency: string; accountType: { name: string } }[]
+  accounts: { id: string; name: string; currency: Currency; accountType: { name: string } }[]
 }) {
   if (accounts.length === 0) {
     return <p className="text-sm text-foreground/60">No accounts yet — add one below.</p>

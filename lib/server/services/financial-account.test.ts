@@ -183,6 +183,69 @@ describe('financial-account service', () => {
       })
       expect(stored.name).toBe('Not Yours')
     })
+
+    it('rejects updating accountTypeId to one belonging to another user and leaves the row unchanged', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const accountType = await createAccountType(userId)
+      const otherAccountType = await createAccountType(otherUserId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Mine',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+
+      await expect(
+        updateFinancialAccount(userId, created.id, { accountTypeId: otherAccountType.id }),
+      ).rejects.toThrow(InvalidAccountTypeError)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.accountTypeId).toBe(accountType.id)
+    })
+
+    it('rejects updating accountTypeId to an ARCHIVED account type', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const archivedAccountType = await createAccountType(userId, { status: 'ARCHIVED' })
+      const created = await createFinancialAccount(userId, {
+        name: 'Mine',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+
+      await expect(
+        updateFinancialAccount(userId, created.id, { accountTypeId: archivedAccountType.id }),
+      ).rejects.toThrow(InvalidAccountTypeError)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.accountTypeId).toBe(accountType.id)
+    })
+
+    it('a partial update changing only name leaves every other field unchanged', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Original Name',
+        accountTypeId: accountType.id,
+        initialBalance: 42.42,
+        currency: 'USD',
+        description: 'Original description',
+      })
+
+      const updated = await updateFinancialAccount(userId, created.id, { name: 'Renamed' })
+
+      expect(updated.name).toBe('Renamed')
+      expect(updated.accountTypeId).toBe(accountType.id)
+      expect(updated.initialBalance.toString()).toBe('42.42')
+      expect(updated.currency).toBe('USD')
+      expect(updated.description).toBe('Original description')
+    })
   })
 
   describe('createFinancialAccountSchema', () => {
@@ -228,6 +291,35 @@ describe('financial-account service', () => {
           currency: 'VND',
         }).success,
       ).toBe(true)
+    })
+
+    function parseWithBalance(initialBalance: number) {
+      return createFinancialAccountSchema.safeParse({
+        name: 'Valid',
+        accountTypeId: 'abc',
+        initialBalance,
+        currency: 'VND',
+      }).success
+    }
+
+    it('rejects a balance with more than 2 decimal places', () => {
+      expect(parseWithBalance(12.345)).toBe(false)
+    })
+
+    it('accepts a balance with exactly 2 decimal places', () => {
+      expect(parseWithBalance(12.34)).toBe(true)
+    })
+
+    it('accepts a balance with 1 decimal place', () => {
+      expect(parseWithBalance(0.1)).toBe(true)
+    })
+
+    it('accepts a negative opening balance', () => {
+      expect(parseWithBalance(-5.5)).toBe(true)
+    })
+
+    it('rejects a balance at the magnitude cap', () => {
+      expect(parseWithBalance(1e15)).toBe(false)
     })
   })
 })
