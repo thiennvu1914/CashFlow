@@ -36,7 +36,7 @@ before every commit.
 ## Deployment requirements
 
 Required environment variables — the app throws at startup without the first
-two, and cannot send email without the last group:
+three, and cannot send email without the SMTP group:
 
 - `BETTER_AUTH_URL` — the public origin. Without it Better Auth derives its base
   URL from the request, so a forged `Host` header can end up inside an emailed
