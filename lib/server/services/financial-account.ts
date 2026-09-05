@@ -6,6 +6,7 @@ import {
   type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import type { Prisma } from '@prisma/client'
+import { getAccountBalance, AccountNotFoundError } from './balance'
 
 /**
  * Thrown when a create/update targets an `accountTypeId` that either does not
@@ -52,6 +53,87 @@ export async function accountHasActivity(userId: string, accountId: string): Pro
     }),
   ])
   return transactionCount > 0 || transferCount > 0
+}
+
+/**
+ * Batched form of `accountHasActivity` for a page rendering many accounts at
+ * once — one query over Transaction plus two over Transfer (one per leg),
+ * rather than N round trips through `accountHasActivity`. Returns the subset
+ * of `accountIds` that have any activity at all.
+ */
+export async function accountsWithActivity(
+  userId: string,
+  accountIds: string[],
+): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set()
+
+  const [transactions, transfersOut, transfersIn] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId, accountId: { in: accountIds } },
+      select: { accountId: true },
+      distinct: ['accountId'],
+    }),
+    prisma.transfer.findMany({
+      where: { userId, fromAccountId: { in: accountIds } },
+      select: { fromAccountId: true },
+      distinct: ['fromAccountId'],
+    }),
+    prisma.transfer.findMany({
+      where: { userId, toAccountId: { in: accountIds } },
+      select: { toAccountId: true },
+      distinct: ['toAccountId'],
+    }),
+  ])
+
+  const result = new Set<string>()
+  for (const row of transactions) result.add(row.accountId)
+  for (const row of transfersOut) result.add(row.fromAccountId)
+  for (const row of transfersIn) result.add(row.toAccountId)
+  return result
+}
+
+/**
+ * Thrown by `archiveFinancialAccount` when the account's derived balance
+ * (Task 13's `getAccountBalance`) is not exactly zero. An account frozen
+ * mid-balance would either strand money with no owner-visible location or
+ * silently vanish from every report — archiving is only ever a no-op on the
+ * ledger, never a way to make a balance disappear.
+ */
+export class AccountHasNonZeroBalanceError extends Error {
+  constructor() {
+    super(
+      'This account must have a zero balance before it can be archived. Transfer or adjust the balance first.',
+    )
+    this.name = 'AccountHasNonZeroBalanceError'
+  }
+}
+
+/**
+ * Archives a FinancialAccount once its derived balance is exactly zero (spec
+ * §4.3). Idempotent: archiving an already-ARCHIVED account returns it
+ * unchanged rather than re-deriving a balance that is frozen by construction
+ * — the transaction/transfer services (Tasks 9/12) already refuse any new
+ * activity against an archived account, so its balance cannot have moved
+ * since it was archived.
+ *
+ * The ownership-scoped lookup happens first and on its own: another user's
+ * account id must fail here as `AccountNotFoundError`, before any balance is
+ * computed for it.
+ */
+export async function archiveFinancialAccount(userId: string, accountId: string) {
+  const account = await prisma.financialAccount.findUnique({
+    where: { userId_id: { userId, id: accountId } },
+  })
+  if (!account) throw new AccountNotFoundError(accountId)
+  if (account.status === 'ARCHIVED') return account
+
+  const balance = await getAccountBalance(userId, accountId)
+  if (!balance.isZero()) throw new AccountHasNonZeroBalanceError()
+
+  return prisma.financialAccount.update({
+    where: { userId_id: { userId, id: accountId } },
+    data: { status: 'ARCHIVED' },
+  })
 }
 
 async function assertActiveAccountType(userId: string, accountTypeId: string) {

@@ -4,12 +4,13 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import type { Currency } from '@prisma/client'
 import {
-  createFinancialAccountSchema,
-  type CreateFinancialAccountInput,
+  updateFinancialAccountSchema,
+  type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import {
-  createFinancialAccountAction,
+  updateFinancialAccountAction,
   type FinancialAccountActionError,
 } from '@/lib/server/actions/financial-account-actions'
 import { Button } from '@/components/ui/button'
@@ -28,40 +29,77 @@ const ACTION_ERROR_MESSAGES: Record<FinancialAccountActionError, string> = {
   NOT_FOUND: 'That account no longer exists.',
 }
 
-export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
+/**
+ * Edits an existing FinancialAccount. Kept as its own (small) component
+ * rather than a mode-switched `AccountForm`, since create and edit submit
+ * different action shapes (`createFinancialAccountAction` takes no id; this
+ * always has one) and only edit ever needs the `locked` behaviour.
+ *
+ * `locked` is computed server-side (`accountsWithActivity`, in
+ * `app/(app)/accounts/page.tsx`) and passed in as a prop — this component
+ * has no business logic of its own, it only reacts to the flag. When locked,
+ * currency and initialBalance are both disabled AND stripped from the
+ * submitted payload: `updateFinancialAccount` rejects an update that even
+ * *carries* either field once the account has activity, regardless of
+ * whether the value actually changed, so the locked fields must never be
+ * sent at all, not merely sent unchanged.
+ */
+export function AccountEditForm({
+  accountId,
+  accountTypes,
+  locked,
+  initialValues,
+  onDone,
+}: {
+  accountId: string
+  accountTypes: AccountType[]
+  locked: boolean
+  initialValues: {
+    name: string
+    accountTypeId: string
+    description?: string | null
+    currency: Currency
+    initialBalance: number
+  }
+  onDone?: () => void
+}) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
-    reset,
     formState: { errors, isSubmitting },
-  } = useForm<CreateFinancialAccountInput>({
-    resolver: zodResolver(createFinancialAccountSchema),
-    // `accountTypeId` defaults to the first option so the <select>'s visible
-    // selection and the form's actual value always agree — without this, the
-    // browser renders the first <option> while the form field stays `''`
-    // until the user touches the control, so a submit before any interaction
-    // would silently send an empty accountTypeId.
+  } = useForm<UpdateFinancialAccountInput>({
+    resolver: zodResolver(updateFinancialAccountSchema),
     defaultValues: {
-      currency: 'VND',
-      initialBalance: 0,
-      accountTypeId: accountTypes[0]?.id ?? '',
+      name: initialValues.name,
+      accountTypeId: initialValues.accountTypeId,
+      description: initialValues.description ?? undefined,
+      currency: initialValues.currency,
+      initialBalance: initialValues.initialBalance,
     },
   })
 
-  async function onSubmit(values: CreateFinancialAccountInput) {
+  async function onSubmit(values: UpdateFinancialAccountInput) {
     setError(null)
+    const payload: UpdateFinancialAccountInput = locked
+      ? {
+          name: values.name,
+          accountTypeId: values.accountTypeId,
+          description: values.description,
+        }
+      : values
+
     try {
-      const result = await createFinancialAccountAction(values)
+      const result = await updateFinancialAccountAction(accountId, payload)
       if (!result.ok) {
         setError(ACTION_ERROR_MESSAGES[result.error])
         return
       }
-      reset()
       router.refresh()
+      onDone?.()
     } catch {
-      console.error('AccountForm: create failed')
+      console.error('AccountEditForm: update failed')
       setError(GENERIC_ERROR)
     }
   }
@@ -93,6 +131,8 @@ export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
           type="number"
           step="0.01"
           placeholder="Initial balance"
+          disabled={locked}
+          aria-label="Initial balance"
           {...register('initialBalance', { valueAsNumber: true })}
         />
         {errors.initialBalance && (
@@ -100,21 +140,38 @@ export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
         )}
       </div>
       <div>
-        <select {...register('currency')} aria-label="Currency" className="rounded-md border p-2">
+        <select
+          {...register('currency')}
+          aria-label="Currency"
+          disabled={locked}
+          className="rounded-md border p-2"
+        >
           <option value="VND">VND</option>
           <option value="USD">USD</option>
         </select>
         {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
       </div>
+      {locked && (
+        <p className="text-sm text-warning">
+          Currency and initial balance are locked because this account already has activity.
+        </p>
+      )}
       <div>
         <Input placeholder="Description (optional)" {...register('description')} />
         {errors.description && (
           <p className="text-sm text-negative">{errors.description.message}</p>
         )}
       </div>
-      <Button type="submit" disabled={isSubmitting}>
-        Create account
-      </Button>
+      <div className="flex gap-2">
+        <Button type="submit" disabled={isSubmitting}>
+          Save
+        </Button>
+        {onDone && (
+          <Button type="button" variant="outline" onClick={onDone}>
+            Cancel
+          </Button>
+        )}
+      </div>
       {error && <p className="text-sm text-negative">{error}</p>}
     </form>
   )

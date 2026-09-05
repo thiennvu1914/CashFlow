@@ -1,15 +1,23 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
 import { prisma } from '@/lib/prisma'
 import {
   listActiveFinancialAccounts,
   listAllFinancialAccounts,
   createFinancialAccount,
   updateFinancialAccount,
+  archiveFinancialAccount,
+  accountsWithActivity,
   AccountLockedError,
+  AccountHasNonZeroBalanceError,
   InvalidAccountTypeError,
 } from './financial-account'
+import { AccountNotFoundError } from './balance'
 import { createFinancialAccountSchema } from '@/lib/validation/financial-account'
+import { ArchivedAccountError, createTransaction } from './transaction'
+import { createTransfer } from './transfer'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
 
 /**
  * Hits the real database — `vitest.setup.ts` points `DATABASE_URL` at the
@@ -72,14 +80,15 @@ describe('financial-account service', () => {
     userId: string,
     fromAccountId: string,
     toAccountId: string,
+    amount = 100,
   ) {
     return prisma.transfer.create({
       data: {
         userId,
         fromAccountId,
         toAccountId,
-        fromAmount: 100,
-        toAmount: 100,
+        fromAmount: amount,
+        toAmount: amount,
         date: new Date(),
       },
     })
@@ -475,6 +484,242 @@ describe('financial-account service', () => {
       expect(updated.initialBalance.toString()).toBe('42.42')
       expect(updated.currency).toBe('USD')
       expect(updated.description).toBe('Original description')
+    })
+  })
+
+  describe('archiveFinancialAccount', () => {
+    it('rejects archiving an account whose non-zero balance comes only from an incoming transfer', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const target = await createFinancialAccount(userId, {
+        name: 'Target',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      const other = await createFinancialAccount(userId, {
+        name: 'Other',
+        accountTypeId: accountType.id,
+        initialBalance: 500,
+        currency: 'VND',
+      })
+      await recordTransferActivity(userId, other.id, target.id, 500)
+
+      await expect(archiveFinancialAccount(userId, target.id)).rejects.toThrow(
+        AccountHasNonZeroBalanceError,
+      )
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: target.id } },
+      })
+      expect(stored.status).toBe('ACTIVE')
+    })
+
+    it('allows archiving once a mix of transactions and a transfer brings the balance to exactly zero', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const source = await createFinancialAccount(userId, {
+        name: 'Source',
+        accountTypeId: accountType.id,
+        initialBalance: 1000,
+        currency: 'VND',
+      })
+      const destination = await createFinancialAccount(userId, {
+        name: 'Destination',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      // 1000 initial - 400 (transfer out) - 600 (expense) = 0
+      await recordTransferActivity(userId, source.id, destination.id, 400)
+      await prisma.transaction.create({
+        data: {
+          userId,
+          accountId: source.id,
+          type: 'EXPENSE',
+          amount: 600,
+          currency: 'VND',
+          date: new Date(),
+          vndPerUsdAtEntry: 25000,
+          fxRateTimestamp: new Date(),
+          fxRateSource: 'fixture',
+        },
+      })
+
+      const archived = await archiveFinancialAccount(userId, source.id)
+
+      expect(archived.status).toBe('ARCHIVED')
+    })
+
+    it('is idempotent: archiving an already-ARCHIVED account returns it unchanged', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'To Archive',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      const firstArchive = await archiveFinancialAccount(userId, created.id)
+      expect(firstArchive.status).toBe('ARCHIVED')
+
+      const secondArchive = await archiveFinancialAccount(userId, created.id)
+
+      expect(secondArchive.status).toBe('ARCHIVED')
+      expect(secondArchive.id).toBe(created.id)
+    })
+
+    it("rejects archiving another user's account (as AccountNotFoundError) and leaves it ACTIVE", async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const otherAccountType = await createAccountType(otherUserId)
+      const otherAccount = await createFinancialAccount(otherUserId, {
+        name: 'Not Yours',
+        accountTypeId: otherAccountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+
+      await expect(archiveFinancialAccount(userId, otherAccount.id)).rejects.toThrow(
+        AccountNotFoundError,
+      )
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId: otherUserId, id: otherAccount.id } },
+      })
+      expect(stored.status).toBe('ACTIVE')
+    })
+
+    describe('cross-service acceptance (spec §4.3): an archived account is frozen everywhere', () => {
+      let fetchSpy: MockInstance
+
+      function fakeProvider(): ExchangeRateProvider {
+        return {
+          getLatestRate: async () => ({
+            rate: 25000,
+            effectiveDate: new Date(),
+            fetchedAt: new Date(Date.now() - 5 * 60 * 1000),
+            source: 'fake',
+          }),
+          getHistoricalRate: async () => null,
+        }
+      }
+
+      beforeEach(() => {
+        fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+          throw new Error('network access in test')
+        })
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+      })
+
+      afterEach(() => {
+        const fetchCalls = fetchSpy.mock.calls.length
+        vi.restoreAllMocks()
+        expect(fetchCalls).toBe(0)
+      })
+
+      it('rejects a new transaction against an archived account via createTransaction', async () => {
+        const userId = await createUser()
+        const accountType = await createAccountType(userId)
+        const account = await createFinancialAccount(userId, {
+          name: 'To Archive',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        })
+        await archiveFinancialAccount(userId, account.id)
+
+        await expect(
+          createTransaction(
+            userId,
+            { accountId: account.id, type: 'CASH_IN', amount: 100, date: new Date() },
+            fakeProvider(),
+          ),
+        ).rejects.toThrow(ArchivedAccountError)
+      })
+
+      it('rejects a new transfer touching an archived account via createTransfer', async () => {
+        const userId = await createUser()
+        const accountType = await createAccountType(userId)
+        const archived = await createFinancialAccount(userId, {
+          name: 'To Archive',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        })
+        const other = await createFinancialAccount(userId, {
+          name: 'Other',
+          accountTypeId: accountType.id,
+          initialBalance: 100,
+          currency: 'VND',
+        })
+        await archiveFinancialAccount(userId, archived.id)
+
+        await expect(
+          createTransfer(userId, {
+            fromAccountId: other.id,
+            toAccountId: archived.id,
+            fromAmount: 50,
+            toAmount: 50,
+            date: new Date(),
+          }),
+        ).rejects.toThrow(ArchivedAccountError)
+      })
+    })
+  })
+
+  describe('accountsWithActivity', () => {
+    it('returns only the ids that have a transaction or a transfer leg, for this user only', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const accountType = await createAccountType(userId)
+      const otherAccountType = await createAccountType(otherUserId)
+      const withTransaction = await createFinancialAccount(userId, {
+        name: 'Has Transaction',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const withTransferOut = await createFinancialAccount(userId, {
+        name: 'Transfer Source',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const withTransferIn = await createFinancialAccount(userId, {
+        name: 'Transfer Destination',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const untouched = await createFinancialAccount(userId, {
+        name: 'Untouched',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const otherUserAccount = await createFinancialAccount(otherUserId, {
+        name: "Other User's",
+        accountTypeId: otherAccountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordActivity(userId, withTransaction.id)
+      await recordTransferActivity(userId, withTransferOut.id, withTransferIn.id)
+      await recordActivity(otherUserId, otherUserAccount.id)
+
+      const result = await accountsWithActivity(userId, [
+        withTransaction.id,
+        withTransferOut.id,
+        withTransferIn.id,
+        untouched.id,
+      ])
+
+      expect(result).toEqual(new Set([withTransaction.id, withTransferOut.id, withTransferIn.id]))
+    })
+
+    it('returns an empty set for an empty input', async () => {
+      const userId = await createUser()
+      expect(await accountsWithActivity(userId, [])).toEqual(new Set())
     })
   })
 
