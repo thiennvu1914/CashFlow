@@ -38,12 +38,20 @@ export class AccountLockedError extends Error {
 /**
  * True once anything has been recorded against the account.
  *
- * Transactions are the only activity that exists today; Task 12 adds Transfer
- * and must extend this check to count transfers on either leg as well.
+ * Both kinds of activity count: a transaction filed against the account, and a
+ * transfer touching it at *either* end. A transfer that only arrives is just as
+ * much history as one that departs — re-basing the opening balance or the
+ * currency underneath it would change the meaning of money that has already
+ * moved.
  */
 export async function accountHasActivity(userId: string, accountId: string): Promise<boolean> {
-  const transactionCount = await prisma.transaction.count({ where: { userId, accountId } })
-  return transactionCount > 0
+  const [transactionCount, transferCount] = await Promise.all([
+    prisma.transaction.count({ where: { userId, accountId } }),
+    prisma.transfer.count({
+      where: { userId, OR: [{ fromAccountId: accountId }, { toAccountId: accountId }] },
+    }),
+  ])
+  return transactionCount > 0 || transferCount > 0
 }
 
 async function assertActiveAccountType(userId: string, accountTypeId: string) {

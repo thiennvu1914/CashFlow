@@ -63,10 +63,33 @@ describe('financial-account service', () => {
     })
   }
 
+  /**
+   * Inserts a transfer directly, bypassing the transfer service, for the same
+   * reason as `recordActivity` above: this file only cares that activity
+   * exists on one of the two legs.
+   */
+  async function recordTransferActivity(
+    userId: string,
+    fromAccountId: string,
+    toAccountId: string,
+  ) {
+    return prisma.transfer.create({
+      data: {
+        userId,
+        fromAccountId,
+        toAccountId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date(),
+      },
+    })
+  }
+
   afterEach(async () => {
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
     try {
+      await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
@@ -292,6 +315,95 @@ describe('financial-account service', () => {
         where: { userId_id: { userId, id: created.id } },
       })
       expect(stored.initialBalance.toString()).toBe('10')
+    })
+
+    it('refuses to change the currency once a transfer has left the account', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const source = await createFinancialAccount(userId, {
+        name: 'Source',
+        accountTypeId: accountType.id,
+        initialBalance: 1000,
+        currency: 'VND',
+      })
+      const destination = await createFinancialAccount(userId, {
+        name: 'Destination',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      await recordTransferActivity(userId, source.id, destination.id)
+
+      await expect(updateFinancialAccount(userId, source.id, { currency: 'USD' })).rejects.toThrow(
+        AccountLockedError,
+      )
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: source.id } },
+      })
+      expect(stored.currency).toBe('VND')
+    })
+
+    it('refuses to change the initialBalance once a transfer has arrived in the account', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const source = await createFinancialAccount(userId, {
+        name: 'Source',
+        accountTypeId: accountType.id,
+        initialBalance: 1000,
+        currency: 'VND',
+      })
+      const destination = await createFinancialAccount(userId, {
+        name: 'Destination',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      await recordTransferActivity(userId, source.id, destination.id)
+
+      // The receiving leg counts too: an arriving transfer is as much activity
+      // as a departing one, and re-basing the opening balance underneath it
+      // would silently rewrite the account's history.
+      await expect(
+        updateFinancialAccount(userId, destination.id, { initialBalance: 999.99 }),
+      ).rejects.toThrow(AccountLockedError)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: destination.id } },
+      })
+      expect(stored.initialBalance.toString()).toBe('0')
+    })
+
+    it('does not lock a third account because a transfer moved between two others', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const source = await createFinancialAccount(userId, {
+        name: 'Source',
+        accountTypeId: accountType.id,
+        initialBalance: 1000,
+        currency: 'VND',
+      })
+      const destination = await createFinancialAccount(userId, {
+        name: 'Destination',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      const untouched = await createFinancialAccount(userId, {
+        name: 'Untouched',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await recordTransferActivity(userId, source.id, destination.id)
+
+      const updated = await updateFinancialAccount(userId, untouched.id, {
+        currency: 'USD',
+        initialBalance: 55.5,
+      })
+
+      expect(updated.currency).toBe('USD')
+      expect(updated.initialBalance.toString()).toBe('55.5')
     })
 
     it('still allows renaming and re-describing an account that has activity', async () => {
