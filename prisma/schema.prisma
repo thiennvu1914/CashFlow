@@ -10,3 +10,91 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// ---------------------------------------------------------------------------
+// Better Auth tables.
+//
+// Started from `npx @better-auth/cli@latest generate`, then reconciled by hand
+// against the installed better-auth 1.7.2's own table definitions
+// (`getAuthTables` in @better-auth/core/db). The published CLI is 1.4.21 and
+// lags the library, so its output was missing `Account.issuer` and the
+// `(issuer, accountId)` unique index, and it emitted the five CashFlow user
+// fields as nullable even though better-auth marks them required.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  // CashFlow's additional user fields. Better Auth applies these same defaults
+  // when it creates the row; the database defaults cover every other writer.
+  // All five are `input: false` in `lib/auth/create-auth.ts`, so no client
+  // request body can set them.
+  baseCurrency  String    @default("VND")
+  locale        String    @default("vi")
+  theme         String    @default("light")
+  timezone      String    @default("Asia/Ho_Chi_Minh")
+  isDemo        Boolean   @default(false)
+  sessions      Session[]
+  accounts      Account[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+/// Better Auth's own OAuth / credential-linking table — NOT the financial
+/// account concept. Phase 2 introduces `FinancialAccount` precisely to avoid
+/// colliding with this name (§3, §4.3 of the spec). Do not rename this model.
+model Account {
+  id                    String    @id
+  issuer                String
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
