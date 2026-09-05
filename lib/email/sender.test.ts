@@ -46,22 +46,65 @@ describe('getEmailSender', () => {
       'Email is not configured: set SMTP_HOST (and related SMTP_* variables) in production',
     )
   })
+
+  it('throws when SMTP_HOST is set but SMTP_PORT is missing or invalid', async () => {
+    vi.stubEnv('SMTP_HOST', 'smtp.example.com')
+    vi.stubEnv('SMTP_PORT', '')
+    vi.stubEnv('SMTP_USER', 'user')
+    vi.stubEnv('SMTP_PASSWORD', 'super-secret-password')
+    const { getEmailSender } = await import('./get-sender')
+
+    let error: unknown
+    try {
+      getEmailSender()
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(
+      'SMTP_PORT must be a positive integer when SMTP_HOST is set',
+    )
+    expect((error as Error).message).not.toContain('super-secret-password')
+  })
 })
 
 describe('ConsoleEmailSender', () => {
-  it('writes to, subject, and html via console.log and nothing else', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  let logSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it('writes exactly the expected block via console.log and nothing else', async () => {
     const { ConsoleEmailSender } = await import('./console-sender')
     const sender = new ConsoleEmailSender()
 
     await sender.send({ to: 'a@example.com', subject: 'Hello', html: '<p>Hi</p>' })
 
-    const loggedText = logSpy.mock.calls.map((call) => call.join(' ')).join('\n')
-    expect(loggedText).toContain('a@example.com')
-    expect(loggedText).toContain('Hello')
-    expect(loggedText).toContain('<p>Hi</p>')
+    expect(logSpy).toHaveBeenCalledTimes(5)
+    expect(logSpy.mock.calls).toEqual([
+      ['--- DEV EMAIL ---'],
+      ['To: a@example.com'],
+      ['Subject: Hello'],
+      ['<p>Hi</p>'],
+      ['-----------------'],
+    ])
 
-    logSpy.mockRestore()
+    const loggedText = logSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n')
+    expect(loggedText).toBe(
+      [
+        '--- DEV EMAIL ---',
+        'To: a@example.com',
+        'Subject: Hello',
+        '<p>Hi</p>',
+        '-----------------',
+      ].join('\n'),
+    )
   })
 })
 
@@ -73,6 +116,7 @@ describe('FileEmailSender', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -93,8 +137,6 @@ describe('FileEmailSender', () => {
     expect(parsed.subject).toBe('Reset')
     expect(parsed.html).toBe('<p>Link</p>')
     expect(typeof parsed.sentAt).toBe('string')
-
-    vi.unstubAllEnvs()
   })
 })
 

@@ -9,6 +9,10 @@ function isSet(value: string | undefined): value is string {
 
 export function getEmailSender(): EmailSender {
   if (isSet(process.env.SMTP_HOST)) {
+    const port = Number.parseInt(process.env.SMTP_PORT ?? '', 10)
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new Error('SMTP_PORT must be a positive integer when SMTP_HOST is set')
+    }
     return new SmtpEmailSender()
   }
   if (isSet(process.env.EMAIL_OUTBOX_FILE)) {
