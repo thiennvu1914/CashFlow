@@ -32,7 +32,6 @@ export function ForgotPasswordForm() {
     } catch {
       console.error('Password reset request failed')
       setError('root', { message: 'Something went wrong. Please try again.' })
-      return
     }
   }
 
@@ -56,7 +55,7 @@ export function ForgotPasswordForm() {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
       <div>
-        <Input type="email" placeholder="Email" {...register('email')} />
+        <Input type="email" placeholder="Email" autoComplete="email" {...register('email')} />
         {errors.email && <p className="text-sm text-negative">{errors.email.message}</p>}
       </div>
       {errors.root && <p className="text-sm text-negative">{errors.root.message}</p>}

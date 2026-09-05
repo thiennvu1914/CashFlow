@@ -41,7 +41,12 @@ export function ResetPasswordForm({ token }: { token: string }) {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
       <div>
-        <Input type="password" placeholder="New password" {...register('password')} />
+        <Input
+          type="password"
+          placeholder="New password"
+          autoComplete="new-password"
+          {...register('password')}
+        />
         {errors.password && <p className="text-sm text-negative">{errors.password.message}</p>}
       </div>
       {errors.root && <p className="text-sm text-negative">{errors.root.message}</p>}

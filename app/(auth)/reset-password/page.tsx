@@ -11,11 +11,16 @@ import { ResetPasswordForm } from '@/components/auth/reset-password-form'
 export default async function ResetPasswordPage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; error?: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const { token, error } = await searchParams
+  const params = await searchParams
+  // A repeated `?token=` arrives as an array; treat anything that is not a
+  // single non-empty string as no token at all rather than guessing which one
+  // was meant.
+  const token = typeof params.token === 'string' && params.token !== '' ? params.token : null
+  const error = params.error
 
-  if (error || !token) {
+  if (error !== undefined || token === null) {
     return (
       <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-4">
         <h1 className="text-xl font-semibold">Reset link is invalid or expired</h1>

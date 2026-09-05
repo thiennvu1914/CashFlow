@@ -86,6 +86,25 @@ function signIn(auth: Auth, email: string, password: string) {
   )
 }
 
+function getSessionRequest(cookie: string) {
+  return new Request(`${BASE_URL}/api/auth/get-session`, {
+    method: 'GET',
+    headers: { origin: BASE_URL, cookie },
+  })
+}
+
+/**
+ * `get-session` answers 200 with an empty/`null` body once the session is gone,
+ * so "no user" is what has to be asserted, not a status code.
+ */
+async function sessionUser(auth: Auth, cookie: string) {
+  const response = await auth.handler(getSessionRequest(cookie))
+  expect(response.status).toBe(200)
+  const body = await response.text()
+  const parsed = body === '' || body === 'null' ? null : (JSON.parse(body) as { user?: unknown })
+  return parsed?.user ?? null
+}
+
 /**
  * Follows the emailed link exactly as a browser would: Better Auth's
  * `GET /api/auth/reset-password/:token?callbackURL=…` verifies the token and
@@ -109,7 +128,15 @@ describe('forgot / reset password HTTP surface', () => {
     expect(response.status).toBe(200)
     expect(sent).toHaveLength(1)
     expect(sent[0].to).toBe(TEST_EMAIL)
-    expect(new URL(sent[0].url).origin).toBe(BASE_URL)
+
+    // The link points at Better Auth's own verify-and-redirect endpoint,
+    // `/api/auth/reset-password/<token>?callbackURL=/reset-password` — it is
+    // not a direct link to the app route.
+    const url = new URL(sent[0].url)
+    expect(url.origin).toBe(BASE_URL)
+    expect(url.pathname.startsWith('/api/auth/reset-password/')).toBe(true)
+    expect(url.pathname.slice('/api/auth/reset-password/'.length)).toBeTruthy()
+    expect(url.searchParams.get('callbackURL')).toBe(REDIRECT_TO)
   })
 
   it('answers an unregistered email identically and sends nothing (no account enumeration)', async () => {
@@ -157,6 +184,25 @@ describe('forgot / reset password HTTP surface', () => {
     const withNewPassword = await signIn(auth, TEST_EMAIL, NEW_PASSWORD)
     expect(withNewPassword.status).toBe(200)
     expect(withNewPassword.headers.get('set-cookie')).toBeTruthy()
+  })
+
+  it('revokes sessions that existed before the reset', async () => {
+    const { auth, sent } = makeAuth()
+    await signUpTestUser(auth)
+
+    // A session held from before the reset — this is the one an attacker who
+    // already knew the old password would be sitting on.
+    const signInResponse = await signIn(auth, TEST_EMAIL, OLD_PASSWORD)
+    expect(signInResponse.status).toBe(200)
+    const staleCookie = signInResponse.headers.get('set-cookie') as string
+    expect(staleCookie).toBeTruthy()
+    expect(await sessionUser(auth, staleCookie)).toBeTruthy()
+
+    await requestPasswordReset(auth, TEST_EMAIL)
+    const token = (await followResetLink(auth, sent[0].url)).searchParams.get('token') as string
+    expect((await resetPassword(auth, token, NEW_PASSWORD)).status).toBe(200)
+
+    expect(await sessionUser(auth, staleCookie)).toBeNull()
   })
 
   it('rejects a token that has already been used (single use)', async () => {

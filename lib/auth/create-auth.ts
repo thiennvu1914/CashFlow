@@ -57,6 +57,11 @@ export function createAuth(options: CreateAuthOptions) {
       sendResetPassword: async ({ user, url }) => {
         await options.sendResetPasswordEmail(user.email, url)
       },
+      // Defaults to false. A reset is how someone recovers an account they may
+      // have lost control of, so every pre-existing session must die with the
+      // old password — otherwise an attacker who is already signed in keeps
+      // their session after the real owner resets.
+      revokeSessionsOnPasswordReset: true,
     },
     user: {
       // `input: false` on every additional field means none of them can be set
