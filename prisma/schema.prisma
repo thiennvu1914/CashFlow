@@ -139,6 +139,8 @@ model AccountType {
   status    RecordStatus @default(ACTIVE)
   createdAt DateTime     @default(now())
 
+  accounts FinancialAccount[]
+
   @@unique([userId, id])
   @@index([userId])
 }
@@ -152,6 +154,28 @@ model Category {
   isDefault Boolean      @default(false)
   status    RecordStatus @default(ACTIVE)
   createdAt DateTime     @default(now())
+
+  @@unique([userId, id])
+  @@index([userId])
+}
+
+enum Currency {
+  VND
+  USD
+}
+
+model FinancialAccount {
+  id             String       @id @default(cuid())
+  userId         String
+  name           String
+  accountTypeId  String
+  initialBalance Decimal      @db.Decimal(18, 2)
+  currency       Currency
+  description    String?
+  status         RecordStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+
+  accountType AccountType @relation(fields: [userId, accountTypeId], references: [userId, id])
 
   @@unique([userId, id])
   @@index([userId])

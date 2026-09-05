@@ -1,0 +1,233 @@
+import { randomUUID } from 'node:crypto'
+import { afterEach, describe, expect, it } from 'vitest'
+import { prisma } from '@/lib/prisma'
+import {
+  listActiveFinancialAccounts,
+  listAllFinancialAccounts,
+  createFinancialAccount,
+  updateFinancialAccount,
+  InvalidAccountTypeError,
+} from './financial-account'
+import { createFinancialAccountSchema } from '@/lib/validation/financial-account'
+
+/**
+ * Hits the real database — `vitest.setup.ts` points `DATABASE_URL` at the
+ * dedicated `cashflow_test` database. Every user is created with a fresh id
+ * and deleted again in `afterEach`, so repeated runs stay identical.
+ */
+describe('financial-account service', () => {
+  const createdUserIds: string[] = []
+
+  async function createUser(): Promise<string> {
+    const user = await prisma.user.create({
+      data: {
+        id: randomUUID(),
+        email: `test-${randomUUID()}@example.com`,
+        name: 'Test',
+        emailVerified: false,
+      },
+    })
+    createdUserIds.push(user.id)
+    return user.id
+  }
+
+  async function createAccountType(
+    userId: string,
+    overrides: { status?: 'ACTIVE' | 'ARCHIVED' } = {},
+  ) {
+    return prisma.accountType.create({
+      data: { userId, name: 'Cash', status: overrides.status ?? 'ACTIVE' },
+    })
+  }
+
+  afterEach(async () => {
+    const userIds = createdUserIds.splice(0)
+    if (userIds.length === 0) return
+    try {
+      await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
+      await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    }
+  })
+
+  describe('createFinancialAccount', () => {
+    it('stores the Decimal initialBalance exactly, the given currency, ACTIVE status, and the owner userId', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+
+      const created = await createFinancialAccount(userId, {
+        name: 'Main Cash',
+        accountTypeId: accountType.id,
+        initialBalance: 100.5,
+        currency: 'VND',
+      })
+
+      expect(created.initialBalance.toString()).toBe('100.5')
+      expect(created.currency).toBe('VND')
+      expect(created.status).toBe('ACTIVE')
+      expect(created.userId).toBe(userId)
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.initialBalance.toString()).toBe('100.5')
+    })
+
+    it('rejects an accountTypeId belonging to another user and creates nothing', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const otherAccountType = await createAccountType(otherUserId)
+
+      await expect(
+        createFinancialAccount(userId, {
+          name: 'Should Not Exist',
+          accountTypeId: otherAccountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        }),
+      ).rejects.toThrow(InvalidAccountTypeError)
+
+      expect(await listAllFinancialAccounts(userId)).toHaveLength(0)
+    })
+
+    it('rejects an ARCHIVED account type and creates nothing', async () => {
+      const userId = await createUser()
+      const archivedAccountType = await createAccountType(userId, { status: 'ARCHIVED' })
+
+      await expect(
+        createFinancialAccount(userId, {
+          name: 'Should Not Exist',
+          accountTypeId: archivedAccountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        }),
+      ).rejects.toThrow(InvalidAccountTypeError)
+
+      expect(await listAllFinancialAccounts(userId)).toHaveLength(0)
+    })
+  })
+
+  describe('listActiveFinancialAccounts / listAllFinancialAccounts', () => {
+    it('listActiveFinancialAccounts excludes an ARCHIVED row while listAllFinancialAccounts includes it', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const active = await createFinancialAccount(userId, {
+        name: 'Active Account',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      const toArchive = await createFinancialAccount(userId, {
+        name: 'Archived Account',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      // Set the ARCHIVED status directly via Prisma — the service does not
+      // yet expose an archive function (Task 15).
+      await prisma.financialAccount.update({
+        where: { userId_id: { userId, id: toArchive.id } },
+        data: { status: 'ARCHIVED' },
+      })
+
+      const activeOnly = await listActiveFinancialAccounts(userId)
+      const all = await listAllFinancialAccounts(userId)
+
+      expect(activeOnly.map((a) => a.id)).toEqual([active.id])
+      expect(all.map((a) => a.id).sort()).toEqual([active.id, toArchive.id].sort())
+    })
+  })
+
+  describe('updateFinancialAccount', () => {
+    it('may freely change name, description, currency, and initialBalance before any activity exists', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Original Name',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+
+      const updated = await updateFinancialAccount(userId, created.id, {
+        name: 'New Name',
+        description: 'New description',
+        currency: 'USD',
+        initialBalance: 250.25,
+      })
+
+      expect(updated.name).toBe('New Name')
+      expect(updated.description).toBe('New description')
+      expect(updated.currency).toBe('USD')
+      expect(updated.initialBalance.toString()).toBe('250.25')
+    })
+
+    it('rejects updating another user account (composite key NotFound) and leaves the row unchanged', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const otherAccountType = await createAccountType(otherUserId)
+      const otherAccount = await createFinancialAccount(otherUserId, {
+        name: 'Not Yours',
+        accountTypeId: otherAccountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+
+      await expect(
+        updateFinancialAccount(userId, otherAccount.id, { name: 'Hijacked' }),
+      ).rejects.toThrow()
+
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId: otherUserId, id: otherAccount.id } },
+      })
+      expect(stored.name).toBe('Not Yours')
+    })
+  })
+
+  describe('createFinancialAccountSchema', () => {
+    it('rejects an empty name', () => {
+      expect(
+        createFinancialAccountSchema.safeParse({
+          name: '',
+          accountTypeId: 'abc',
+          initialBalance: 0,
+          currency: 'VND',
+        }).success,
+      ).toBe(false)
+    })
+
+    it('rejects an unknown currency', () => {
+      expect(
+        createFinancialAccountSchema.safeParse({
+          name: 'Valid',
+          accountTypeId: 'abc',
+          initialBalance: 0,
+          currency: 'EUR',
+        }).success,
+      ).toBe(false)
+    })
+
+    it('rejects a non-finite balance', () => {
+      expect(
+        createFinancialAccountSchema.safeParse({
+          name: 'Valid',
+          accountTypeId: 'abc',
+          initialBalance: Number.POSITIVE_INFINITY,
+          currency: 'VND',
+        }).success,
+      ).toBe(false)
+    })
+
+    it('accepts a valid input', () => {
+      expect(
+        createFinancialAccountSchema.safeParse({
+          name: 'Valid',
+          accountTypeId: 'abc',
+          initialBalance: 100.5,
+          currency: 'VND',
+        }).success,
+      ).toBe(true)
+    })
+  })
+})
