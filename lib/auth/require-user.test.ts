@@ -21,6 +21,23 @@ vi.mock('next/headers', () => ({
   headers: headersMock,
 }))
 
+/**
+ * `redirect()` works by throwing a control-flow error Next catches while
+ * rendering; outside a render there is nothing to catch it. The stand-in throws
+ * a recognisable marker so a test can assert both that the redirect happened
+ * and that it targeted `/login`, and so `requireUserOrRedirect()` never falls
+ * through to returning `undefined`.
+ */
+const redirectMock = vi.hoisted(() =>
+  vi.fn((url: string) => {
+    throw new Error(`NEXT_REDIRECT:${url}`)
+  }),
+)
+
+vi.mock('next/navigation', () => ({
+  redirect: redirectMock,
+}))
+
 vi.mock('@/lib/auth/auth', async () => {
   // Dynamic imports here (rather than referencing top-level imports of this
   // file) are required by Vitest's mock hoisting: this factory runs before
@@ -38,7 +55,8 @@ vi.mock('@/lib/auth/auth', async () => {
 })
 
 const { auth } = await import('@/lib/auth/auth')
-const { requireUser, getOptionalSession, UnauthorizedError } = await import('./require-user')
+const { requireUser, requireUserOrRedirect, getOptionalSession, UnauthorizedError } =
+  await import('./require-user')
 
 describe('getOptionalSession', () => {
   it('returns null when there is no cookie', async () => {
@@ -82,5 +100,47 @@ describe('requireUser', () => {
     // The identity comes from the session, never from any input we pass here.
     expect(user.id).toBe(response.user.id)
     expect(user.email).toBe('pham@example.com')
+  })
+})
+
+describe('requireUserOrRedirect', () => {
+  it('redirects to /login when there is no cookie instead of throwing UnauthorizedError', async () => {
+    headersMock.mockResolvedValue(new Headers())
+    redirectMock.mockClear()
+
+    let error: unknown
+    try {
+      await requireUserOrRedirect()
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(redirectMock).toHaveBeenCalledWith('/login')
+    expect((error as Error).message).toBe('NEXT_REDIRECT:/login')
+    // A page must not produce an UnauthorizedError stack for an ordinary
+    // logged-out visit — that is what this function exists to avoid.
+    expect(error).not.toBeInstanceOf(UnauthorizedError)
+  })
+
+  it('resolves to the signed-up user identified by their session cookie', async () => {
+    const { headers: signUpHeaders, response } = await auth.api.signUpEmail({
+      body: {
+        name: 'Hoang Van E',
+        email: 'hoang@example.com',
+        password: 'correct-horse-battery-staple',
+      },
+      returnHeaders: true,
+    })
+    const setCookie = signUpHeaders.get('set-cookie')
+    expect(setCookie).toBeTruthy()
+
+    headersMock.mockResolvedValue(new Headers({ cookie: setCookie as string }))
+    redirectMock.mockClear()
+
+    const user = await requireUserOrRedirect()
+
+    expect(redirectMock).not.toHaveBeenCalled()
+    expect(user.id).toBe(response.user.id)
+    expect(user.email).toBe('hoang@example.com')
   })
 })
