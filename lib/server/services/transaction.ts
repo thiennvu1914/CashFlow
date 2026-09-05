@@ -55,11 +55,23 @@ export async function requireActiveAccount(userId: string, accountId: string) {
   return account
 }
 
-/** Returns the categoryId to store (null for P&L-neutral types with no category supplied). */
+/**
+ * Returns the categoryId to store (null for P&L-neutral types with no category
+ * supplied).
+ *
+ * `keptCategoryId` is the categoryId the row already carries, passed only from
+ * `updateTransaction`. Archiving a category must not freeze the transactions
+ * filed under it: an edit that leaves the category exactly as it was skips the
+ * ACTIVE check, so a note can still be corrected on an old expense. Everything
+ * else still applies — moving a row to a *different* archived category is
+ * refused, and the type-compatibility rule is checked either way, so an EXPENSE
+ * row cannot become INCOME while keeping its (archived) EXPENSE category.
+ */
 async function resolveCategoryId(
   userId: string,
   type: TransactionType,
   categoryId?: string,
+  keptCategoryId?: string | null,
 ): Promise<string | null> {
   if (!categoryId) {
     if (P_AND_L_TYPES.has(type)) throw new InvalidCategoryError(`${type} requires a category`)
@@ -70,7 +82,10 @@ async function resolveCategoryId(
   const category = await prisma.category.findUniqueOrThrow({
     where: { userId_id: { userId, id: categoryId } },
   })
-  if (category.status !== 'ACTIVE') throw new InvalidCategoryError('category is archived')
+  const isUnchanged = keptCategoryId !== undefined && categoryId === keptCategoryId
+  if (!isUnchanged && category.status !== 'ACTIVE') {
+    throw new InvalidCategoryError('category is archived')
+  }
   if (P_AND_L_TYPES.has(type) && category.type !== type) {
     throw new InvalidCategoryError(
       `${type} requires a category of type ${type}, got ${category.type}`,
@@ -83,7 +98,11 @@ export async function listTransactions(userId: string) {
   return prisma.transaction.findMany({
     where: { userId },
     include: { account: true, category: true },
-    orderBy: { date: 'desc' },
+    // `date` alone is not a total order — several transactions a day is the
+    // normal case, and a paged or re-rendered list must not shuffle. `createdAt`
+    // breaks the tie by entry order, and `id` breaks a same-millisecond tie so
+    // the sort is fully deterministic.
+    orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
   })
 }
 
@@ -129,6 +148,10 @@ export async function createTransaction(
  * call happens before the write: an economic edit while FX is unavailable fails
  * and leaves the row untouched, so a corrected amount is never paired with a
  * borrowed or fabricated rate.
+ *
+ * An edit that keeps the row's existing category is allowed even when that
+ * category has since been archived — archiving hides a category from new
+ * entries, it does not freeze the history already filed under it.
  */
 export async function updateTransaction(
   userId: string,
@@ -144,7 +167,14 @@ export async function updateTransaction(
   // gain it, so a row can be neither edited out of one nor moved into one.
   await requireActiveAccount(userId, existing.accountId)
   const account = await requireActiveAccount(userId, parsed.accountId)
-  const categoryId = await resolveCategoryId(userId, parsed.type, parsed.categoryId)
+  // The row's current category is passed so keeping it does not require it to
+  // still be ACTIVE — see `resolveCategoryId`.
+  const categoryId = await resolveCategoryId(
+    userId,
+    parsed.type,
+    parsed.categoryId,
+    existing.categoryId,
+  )
 
   const economicChange =
     parsed.accountId !== existing.accountId ||

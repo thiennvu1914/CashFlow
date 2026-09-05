@@ -443,6 +443,72 @@ describe('transaction service', () => {
 
       expect(rows.map((r) => r.id)).toEqual([newer.id, older.id])
     })
+
+    it('orders same-date rows by entry order, newest first, and returns the same order every call', async () => {
+      const s = await setup()
+      const sameDate = new Date('2026-02-01')
+      const created = []
+      for (const amount of [100, 200, 300]) {
+        created.push(
+          await createTransaction(
+            s.userId,
+            { accountId: s.accountId, type: 'CASH_IN', amount, date: sameDate },
+            fakeProvider().provider,
+          ),
+        )
+      }
+      // `createdAt` is TIMESTAMP(3): three inserts can land in the same
+      // millisecond and leave the tie-break to chance. Pinning three distinct
+      // values makes the assertion about the ordering rule rather than about
+      // how fast the database happened to be.
+      for (const [index, tx] of created.entries()) {
+        await prisma.transaction.update({
+          where: { userId_id: { userId: s.userId, id: tx.id } },
+          data: { createdAt: new Date(Date.UTC(2026, 1, 1, 12, 0, index)) },
+        })
+      }
+
+      const first = await listTransactions(s.userId)
+      const second = await listTransactions(s.userId)
+
+      const newestFirst = created.map((tx) => tx.id).reverse()
+      expect(first.map((r) => r.id)).toEqual(newestFirst)
+      // Stable: the ordering is total, so a re-render cannot shuffle the list.
+      expect(second.map((r) => r.id)).toEqual(newestFirst)
+    })
+
+    it('falls back to a deterministic id order when date and createdAt both tie', async () => {
+      const s = await setup()
+      const sameDate = new Date('2026-02-01')
+      const created = []
+      for (const amount of [100, 200, 300]) {
+        created.push(
+          await createTransaction(
+            s.userId,
+            { accountId: s.accountId, type: 'CASH_IN', amount, date: sameDate },
+            fakeProvider().provider,
+          ),
+        )
+      }
+      const sameCreatedAt = new Date(Date.UTC(2026, 1, 1, 12, 0, 0))
+      await prisma.transaction.updateMany({
+        where: { userId: s.userId },
+        data: { createdAt: sameCreatedAt },
+      })
+
+      const rows = await listTransactions(s.userId)
+
+      // The expected order comes from the database's own `id DESC` (its
+      // collation, not JavaScript's), so this asserts the tie-break clause is
+      // applied rather than re-implementing string comparison here.
+      const byIdDesc = await prisma.transaction.findMany({
+        where: { userId: s.userId },
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      })
+      expect(rows.map((r) => r.id)).toEqual(byIdDesc.map((r) => r.id))
+      expect(rows).toHaveLength(created.length)
+    })
   })
 
   describe('updateTransaction — FX re-snapshot on economic edits (R-6)', () => {
@@ -653,6 +719,154 @@ describe('transaction service', () => {
       expect(stored.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
       expect(stored.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
       expect(stored.fxRateSource).toBe(tx.fxRateSource)
+    })
+  })
+
+  describe('updateTransaction — an archived category does not freeze its history', () => {
+    async function createExpense(s: Awaited<ReturnType<typeof setup>>) {
+      const tx = await createTransaction(
+        s.userId,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+          note: 'original',
+        },
+        fakeProvider().provider,
+      )
+      await prisma.category.update({
+        where: { userId_id: { userId: s.userId, id: s.expenseCategoryId } },
+        data: { status: 'ARCHIVED' },
+      })
+      return tx
+    }
+
+    it('allows a note-only edit that keeps a now-archived category, preserving the snapshot', async () => {
+      const s = await setup()
+      const tx = await createExpense(s)
+      await clearFxCache()
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1000,
+          date: new Date('2026-02-01'),
+          note: 'corrected wording',
+        },
+        fakeProvider(25500, 'fake-2').provider,
+      )
+
+      expect(updated.note).toBe('corrected wording')
+      expect(updated.categoryId).toBe(s.expenseCategoryId)
+      // Non-economic, so the original snapshot survives untouched.
+      expect(updated.fxRateSource).toBe('fake')
+      expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
+      expect(updated.fxRateTimestamp.toISOString()).toBe(tx.fxRateTimestamp.toISOString())
+    })
+
+    it('allows an economic edit that keeps a now-archived category, re-snapshotting FX', async () => {
+      const s = await setup()
+      const tx = await createExpense(s)
+      await clearFxCache()
+      const f2 = fakeProvider(25500, 'fake-2')
+
+      const updated = await updateTransaction(
+        s.userId,
+        tx.id,
+        {
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE',
+          amount: 1200,
+          date: new Date('2026-02-01'),
+          note: 'original',
+        },
+        f2.provider,
+      )
+
+      expect(updated.amount.toString()).toBe('1200')
+      expect(updated.fxRateSource).toBe('fake-2')
+      expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+    })
+
+    it('still refuses to move a transaction to a different archived category', async () => {
+      const s = await setup()
+      const tx = await createExpense(s)
+      const otherArchived = await prisma.category.create({
+        data: { userId: s.userId, name: 'Old Food', type: 'EXPENSE', status: 'ARCHIVED' },
+      })
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.accountId,
+            categoryId: otherArchived.id,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date('2026-02-01'),
+            note: 'original',
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.categoryId).toBe(s.expenseCategoryId)
+    })
+
+    it('still refuses a type change that contradicts the kept archived category', async () => {
+      const s = await setup()
+      const tx = await createExpense(s)
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'INCOME',
+            amount: 1000,
+            date: new Date('2026-02-01'),
+            note: 'original',
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
+
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.type).toBe('EXPENSE')
+    })
+
+    it('still refuses a new transaction filed under an archived category', async () => {
+      const s = await setup()
+      await createExpense(s)
+
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 500,
+            date: new Date('2026-02-02'),
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(InvalidCategoryError)
     })
   })
 

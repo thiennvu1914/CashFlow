@@ -44,4 +44,13 @@ export const createTransactionSchema = z
     path: ['categoryId'],
   })
 
+/** The parsed shape services work with (`date` is a real `Date`). */
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>
+
+/**
+ * The shape a form may submit, before coercion — `date` here is still whatever
+ * `z.coerce.date()` accepts (an `<input type="date">` string, typically). The
+ * UI layer can type its resolver against this instead of pre-converting; the
+ * service always works with the parsed `CreateTransactionInput`.
+ */
+export type CreateTransactionFormInput = z.input<typeof createTransactionSchema>
