@@ -31,8 +31,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (local secrets; keep .env.example committed)
-.env
-.env*.local
+.env*
 !.env.example
 
 # vercel

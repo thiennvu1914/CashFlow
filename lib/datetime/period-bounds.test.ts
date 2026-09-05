@@ -37,13 +37,13 @@ describe('getPeriodBounds', () => {
     const ref = new Date('2026-08-01T00:00:00Z') // Q3
     const { startUtc, endUtc } = getPeriodBounds('Asia/Ho_Chi_Minh', 'quarter', ref)
     expect(startUtc.toISOString()).toBe('2026-06-30T17:00:00.000Z') // Jul 1 00:00 +07
-    expect(endUtc.toISOString()).toBe('2026-09-30T17:00:00.000Z')   // Oct 1 00:00 +07
+    expect(endUtc.toISOString()).toBe('2026-09-30T17:00:00.000Z') // Oct 1 00:00 +07
   })
 
   it('computes year bounds', () => {
     const ref = new Date('2026-08-01T00:00:00Z')
     const { startUtc, endUtc } = getPeriodBounds('Asia/Ho_Chi_Minh', 'year', ref)
     expect(startUtc.toISOString()).toBe('2025-12-31T17:00:00.000Z') // Jan 1 2026 00:00 +07
-    expect(endUtc.toISOString()).toBe('2026-12-31T17:00:00.000Z')   // Jan 1 2027 00:00 +07
+    expect(endUtc.toISOString()).toBe('2026-12-31T17:00:00.000Z') // Jan 1 2027 00:00 +07
   })
 })
