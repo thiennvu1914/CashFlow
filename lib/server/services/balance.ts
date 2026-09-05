@@ -29,11 +29,11 @@ export class AccountNotFoundError extends Error {
  * `asOfDate` did not exist yet at that point in time, so its balance as of
  * that date is zero, not its (not-yet-true) initialBalance.
  *
- * This is a genuinely complete implementation for what data can exist right
- * now: Transfer does not exist yet (Task 12), so there are no transfer terms
- * to include. Task 13 extends the formula to
- * `initialBalance + Σ sign(type) × amount + Σ transfers in − Σ transfers out`
- * without changing this function's signature.
+ * This is the phase's final, complete formula:
+ * `initialBalance + Σ sign(type) × amount + Σ transfers in − Σ transfers out`.
+ * A transfer never touches income/expense — its two legs are added and
+ * subtracted directly, in each account's own currency, with no FX conversion
+ * happening here.
  *
  * All arithmetic is done on `Prisma.Decimal` — `Number()` never touches a
  * value that feeds the calculation.
@@ -58,6 +58,15 @@ export async function getAccountBalance(
  * Every requested id must resolve to an account owned by `userId`; if any
  * does not, the whole call rejects with `AccountNotFoundError` and no map is
  * returned — never a partial result covering only the ids that resolved.
+ *
+ * Constant query count regardless of how many ids are requested: one
+ * ownership `findMany`, one `groupBy` over Transaction, and two `groupBy`s
+ * over Transfer (one per direction — `toAccountId`/`toAmount` for money
+ * arriving, `fromAccountId`/`fromAmount` for money leaving). A transfer's two
+ * legs are applied to their own account only, in that account's own
+ * currency — there is no FX conversion in this function; `Transfer` already
+ * carries whatever `exchangeRateUsed` was recorded for the audit trail, and
+ * that never feeds this arithmetic.
  */
 export async function getAccountBalances(
   userId: string,
@@ -74,18 +83,41 @@ export async function getAccountBalances(
     if (!accountsById.has(id)) throw new AccountNotFoundError(id)
   }
 
+  // Same `date <= asOfDate` cutoff as transactions: a transfer dated after
+  // `asOfDate` did not happen yet as of that point in time.
   const dateFilter = asOfDate ? { date: { lte: asOfDate } } : {}
-  const transactionSums = await prisma.transaction.groupBy({
-    by: ['accountId', 'type'],
-    where: { userId, accountId: { in: accountIds }, ...dateFilter },
-    _sum: { amount: true },
-  })
+  const [transactionSums, transfersInSums, transfersOutSums] = await Promise.all([
+    prisma.transaction.groupBy({
+      by: ['accountId', 'type'],
+      where: { userId, accountId: { in: accountIds }, ...dateFilter },
+      _sum: { amount: true },
+    }),
+    prisma.transfer.groupBy({
+      by: ['toAccountId'],
+      where: { userId, toAccountId: { in: accountIds }, ...dateFilter },
+      _sum: { toAmount: true },
+    }),
+    prisma.transfer.groupBy({
+      by: ['fromAccountId'],
+      where: { userId, fromAccountId: { in: accountIds }, ...dateFilter },
+      _sum: { fromAmount: true },
+    }),
+  ])
 
   const sumsByAccount = new Map<string, Prisma.Decimal>()
   for (const row of transactionSums) {
     const signed = (row._sum.amount ?? new Prisma.Decimal(0)).mul(BALANCE_SIGN[row.type])
     const running = sumsByAccount.get(row.accountId) ?? new Prisma.Decimal(0)
     sumsByAccount.set(row.accountId, running.add(signed))
+  }
+
+  const transfersInByAccount = new Map<string, Prisma.Decimal>()
+  for (const row of transfersInSums) {
+    transfersInByAccount.set(row.toAccountId, row._sum.toAmount ?? new Prisma.Decimal(0))
+  }
+  const transfersOutByAccount = new Map<string, Prisma.Decimal>()
+  for (const row of transfersOutSums) {
+    transfersOutByAccount.set(row.fromAccountId, row._sum.fromAmount ?? new Prisma.Decimal(0))
   }
 
   const result = new Map<string, Prisma.Decimal>()
@@ -97,7 +129,9 @@ export async function getAccountBalances(
       continue
     }
     const activity = sumsByAccount.get(id) ?? new Prisma.Decimal(0)
-    result.set(id, account.initialBalance.add(activity))
+    const transfersIn = transfersInByAccount.get(id) ?? new Prisma.Decimal(0)
+    const transfersOut = transfersOutByAccount.get(id) ?? new Prisma.Decimal(0)
+    result.set(id, account.initialBalance.add(activity).add(transfersIn).sub(transfersOut))
   }
   return result
 }

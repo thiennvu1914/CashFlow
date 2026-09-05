@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@prisma/client'
 import type { TransactionType } from '@prisma/client'
 import { getAccountBalance, getAccountBalances, AccountNotFoundError } from './balance'
 
@@ -72,6 +73,7 @@ describe('balance service', () => {
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
     try {
+      await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
@@ -208,6 +210,151 @@ describe('balance service', () => {
       await expect(
         getAccountBalances(intruder.userId, [ownAccount.id, owner.accountId]),
       ).rejects.toThrow(AccountNotFoundError)
+    })
+  })
+
+  describe('transfer terms (Task 13)', () => {
+    it('applies transfers in and out without affecting income/expense', async () => {
+      const setupA = await setupUserAccount(1000)
+      const userId = setupA.userId
+      const accountType = await prisma.accountType.create({ data: { userId, name: 'Bank' } })
+      const accountB = await prisma.financialAccount.create({
+        data: {
+          userId,
+          name: 'B',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        },
+      })
+      await prisma.transfer.create({
+        data: {
+          userId,
+          fromAccountId: setupA.accountId,
+          toAccountId: accountB.id,
+          fromAmount: 300,
+          toAmount: 300,
+          date: new Date(),
+        },
+      })
+      expect((await getAccountBalance(userId, setupA.accountId)).toNumber()).toBe(700)
+      expect((await getAccountBalance(userId, accountB.id)).toNumber()).toBe(300)
+    })
+
+    it('matches the batched result for two accounts after a transfer, and conserves total money', async () => {
+      const s = await setupUserAccount(1000) // account A, initialBalance 1000
+      const accountType = await prisma.accountType.create({
+        data: { userId: s.userId, name: 'Bank' },
+      })
+      const accountB = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          name: 'B',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+        },
+      })
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: accountB.id,
+          fromAmount: 300,
+          toAmount: 300,
+          date: new Date(),
+        },
+      })
+
+      const singleA = await getAccountBalance(s.userId, s.accountId)
+      const singleB = await getAccountBalance(s.userId, accountB.id)
+      const batched = await getAccountBalances(s.userId, [s.accountId, accountB.id])
+
+      expect(batched.get(s.accountId)?.toNumber()).toBe(singleA.toNumber())
+      expect(batched.get(accountB.id)?.toNumber()).toBe(singleB.toNumber())
+      // 1000 (A) + 0 (B) before the transfer, and still 1000 total after: a
+      // transfer moves money between the caller's own accounts, it never
+      // creates or destroys it.
+      const total = (batched.get(s.accountId) as Prisma.Decimal).add(
+        batched.get(accountB.id) as Prisma.Decimal,
+      )
+      expect(total.toNumber()).toBe(1000)
+    })
+
+    it('excludes a transfer dated after asOfDate', async () => {
+      const s = await setupUserAccount(1000, 'VND', new Date('2025-12-01T00:00:00Z'))
+      const accountType = await prisma.accountType.create({
+        data: { userId: s.userId, name: 'Bank' },
+      })
+      const accountB = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          name: 'B',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'VND',
+          createdAt: new Date('2025-12-01T00:00:00Z'),
+        },
+      })
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: accountB.id,
+          fromAmount: 300,
+          toAmount: 300,
+          date: new Date('2026-06-01T00:00:00Z'),
+        },
+      })
+
+      const asOfDate = new Date('2026-03-01T00:00:00Z')
+      expect((await getAccountBalance(s.userId, s.accountId, asOfDate)).toNumber()).toBe(1000)
+      expect((await getAccountBalance(s.userId, accountB.id, asOfDate)).toNumber()).toBe(0)
+    })
+
+    it('applies each leg of a cross-currency transfer to its own account only, with no FX conversion in the balance math', async () => {
+      const s = await setupUserAccount(500_000, 'VND') // account A, VND
+      const accountType = await prisma.accountType.create({
+        data: { userId: s.userId, name: 'Bank' },
+      })
+      const accountB = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          name: 'B',
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: 'USD',
+        },
+      })
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: accountB.id,
+          fromAmount: 250_000,
+          toAmount: 10,
+          exchangeRateUsed: 0.00004,
+          date: new Date(),
+        },
+      })
+
+      expect((await getAccountBalance(s.userId, s.accountId)).toNumber()).toBe(250_000)
+      expect((await getAccountBalance(s.userId, accountB.id)).toNumber()).toBe(10)
+    })
+
+    it('is inclusive of asOfDate exactly at the account createdAt, and zero one millisecond before', async () => {
+      const createdAt = new Date('2026-06-01T00:00:00.000Z')
+      const s = await setupUserAccount(1000, 'VND', createdAt)
+
+      const atCreation = await getAccountBalance(s.userId, s.accountId, createdAt)
+      expect(atCreation.toNumber()).toBe(1000)
+
+      const justBefore = await getAccountBalance(
+        s.userId,
+        s.accountId,
+        new Date(createdAt.getTime() - 1),
+      )
+      expect(justBefore.toNumber()).toBe(0)
     })
   })
 })
