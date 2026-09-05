@@ -1,0 +1,182 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useForm, useWatch } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import type { Currency } from '@prisma/client'
+import type { z } from 'zod'
+import { createTransferSchema, type CreateTransferInput } from '@/lib/validation/transfer'
+import {
+  createTransferAction,
+  type TransferActionError,
+} from '@/lib/server/actions/transfer-actions'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
+/**
+ * Same input/output split as `TransactionForm`: `createTransferSchema`'s
+ * `date` is `z.coerce.date()` — its *input* type (what an
+ * `<input type="date">` produces, and what `defaultValues` must supply) is a
+ * plain string, while its *output* type (what `onSubmit` receives) is a real
+ * `Date` matching `CreateTransferInput`.
+ */
+type FormInput = z.input<typeof createTransferSchema>
+
+type Account = { id: string; name: string; currency: Currency }
+
+const GENERIC_ERROR = 'Something went wrong. Please try again.'
+
+const ACTION_ERROR_MESSAGES: Record<TransferActionError, string> = {
+  SAME_ACCOUNT: 'Choose two different accounts.',
+  ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That record no longer exists.',
+}
+
+/** `yyyy-mm-dd`, the format an `<input type="date">` requires — Zod coerces
+ *  it back into a `Date` on submit. */
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function defaultValues(accounts: Account[]): FormInput {
+  return {
+    fromAccountId: accounts[0]?.id ?? '',
+    toAccountId: accounts[1]?.id ?? accounts[0]?.id ?? '',
+    fromAmount: 0,
+    toAmount: 0,
+    date: todayIsoDate(),
+    note: undefined,
+  }
+}
+
+export function TransferForm({ accounts }: { accounts: Account[] }) {
+  const router = useRouter()
+  const [error, setError] = useState<string | null>(null)
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    setValue,
+    formState: { errors, isSubmitting },
+  } = useForm<FormInput, unknown, CreateTransferInput>({
+    resolver: zodResolver(createTransferSchema),
+    defaultValues: defaultValues(accounts),
+  })
+
+  const fromAccountId = useWatch({ control, name: 'fromAccountId' })
+  const toAccountId = useWatch({ control, name: 'toAccountId' })
+  const fromAmount = useWatch({ control, name: 'fromAmount' })
+  const fromAccount = accounts.find((a) => a.id === fromAccountId)
+  const toAccount = accounts.find((a) => a.id === toAccountId)
+  const sameCurrency = Boolean(fromAccount) && fromAccount?.currency === toAccount?.currency
+
+  // A same-currency transfer conserves money by construction — the server
+  // derives `toAmount` from `fromAmount` regardless of what arrives. The
+  // field stays part of the validated shape even while its input is hidden,
+  // so it is kept in sync here rather than left at its stale default.
+  useEffect(() => {
+    if (sameCurrency) setValue('toAmount', fromAmount)
+  }, [sameCurrency, fromAmount, setValue])
+
+  async function onSubmit(values: CreateTransferInput) {
+    setError(null)
+    try {
+      // Belt and suspenders with the effect above: the client never trusts a
+      // same-currency `toAmount` it might have raced past submitting — the
+      // server re-derives it anyway, but this keeps the two paths agreeing.
+      const payload = sameCurrency ? { ...values, toAmount: values.fromAmount } : values
+      const result = await createTransferAction(payload)
+      if (!result.ok) {
+        setError(ACTION_ERROR_MESSAGES[result.error])
+        return
+      }
+      reset(defaultValues(accounts))
+      router.refresh()
+    } catch {
+      console.error('TransferForm: create failed')
+      setError(GENERIC_ERROR)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
+      <div>
+        <select
+          {...register('fromAccountId')}
+          aria-label="From account"
+          className="rounded-md border p-2"
+        >
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.currency})
+            </option>
+          ))}
+        </select>
+        {errors.fromAccountId && (
+          <p className="text-sm text-negative">{errors.fromAccountId.message}</p>
+        )}
+      </div>
+      <div>
+        <select
+          {...register('toAccountId')}
+          aria-label="To account"
+          className="rounded-md border p-2"
+        >
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.currency})
+            </option>
+          ))}
+        </select>
+        {errors.toAccountId && (
+          <p className="text-sm text-negative">{errors.toAccountId.message}</p>
+        )}
+      </div>
+      <div>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            step="0.01"
+            aria-label="Amount sent"
+            placeholder="Amount sent"
+            {...register('fromAmount', { valueAsNumber: true })}
+          />
+          {/* Read-only: currency always follows the selected account, so the
+             client never sends it — this is display only. */}
+          <span className="text-sm text-foreground/60">{fromAccount?.currency ?? ''}</span>
+        </div>
+        {errors.fromAmount && <p className="text-sm text-negative">{errors.fromAmount.message}</p>}
+      </div>
+      {!sameCurrency && (
+        <div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              step="0.01"
+              aria-label="Amount received"
+              placeholder="Amount received"
+              {...register('toAmount', { valueAsNumber: true })}
+            />
+            <span className="text-sm text-foreground/60">{toAccount?.currency ?? ''}</span>
+          </div>
+          {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
+        </div>
+      )}
+      <div>
+        <Input type="date" aria-label="Date" {...register('date')} />
+        {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
+      </div>
+      <div>
+        <Input placeholder="Note (optional)" aria-label="Note" {...register('note')} />
+        {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
+      </div>
+      <Button type="submit" disabled={isSubmitting}>
+        Transfer
+      </Button>
+      {error && <p className="text-sm text-negative">{error}</p>}
+    </form>
+  )
+}

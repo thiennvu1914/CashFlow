@@ -28,6 +28,9 @@ export default async function DashboardPage() {
       >
         Transactions
       </Link>
+      <Link href="/transfers" className="text-sm text-primary underline-offset-4 hover:underline">
+        Transfers
+      </Link>
       <LogoutButton />
     </div>
   )
