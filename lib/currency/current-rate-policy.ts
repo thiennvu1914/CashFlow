@@ -11,9 +11,10 @@ import type { CurrencyPair, ExchangeRateProvider, RateResult } from './provider'
  */
 
 export class FxUnavailableError extends Error {
-  constructor() {
+  constructor(options?: { cause?: unknown }) {
     super(
       'Unable to retrieve an exchange rate and no sufficiently recent cached rate is available. Please try again shortly.',
+      options,
     )
     this.name = 'FxUnavailableError'
   }
@@ -24,6 +25,10 @@ export class FxUnavailableError extends Error {
  * UI boundaries can distinguish "FX is temporarily unavailable, tell the user
  * to retry" from a genuine bug, without importing the class into a `catch`
  * type test.
+ *
+ * Callers must map this to an i18n message key of their own — never render
+ * `e.message`. That string is English and exists for logs and developers;
+ * Phase 7 localises what the user sees.
  */
 export function isFxUnavailableError(e: unknown): e is FxUnavailableError {
   return e instanceof FxUnavailableError
@@ -96,11 +101,14 @@ export async function getUsableCurrentRate(
   let fresh: RateResult
   try {
     fresh = await getLatestRate(pair, providerOverride)
-  } catch {
+  } catch (cause) {
     // Only the lookup failure is swallowed. Anything the fallback query itself
     // throws (a database error) is a real fault and propagates untouched.
     const fallback = await getLastKnownGoodCurrentRate(pair)
-    if (!fallback) throw new FxUnavailableError()
+    if (!fallback) throw new FxUnavailableError({ cause })
+    // A fixed string: never the provider error payload, a rate, or a URL —
+    // logs must stay free of financial data and provider credentials.
+    console.warn('FX live rate lookup failed; using cached fallback rate')
     return { ...fallback, source: `cache-fallback:${fallback.source}`, isFallback: true }
   }
   return { ...fresh, isFallback: false }

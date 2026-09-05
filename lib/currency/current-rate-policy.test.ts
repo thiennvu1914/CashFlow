@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
 import { prisma } from '@/lib/prisma'
 import {
   FxUnavailableError,
@@ -53,6 +54,19 @@ async function cleanupRatesFor(pair: typeof PAIR) {
 }
 
 describe('getUsableCurrentRate', () => {
+  let fetchSpy: MockInstance
+  let warnSpy: MockInstance
+
+  beforeEach(() => {
+    // Enforcing, not merely observing: any accidental network access inside the
+    // policy or the provider fails the test that caused it.
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('network access in test')
+    })
+    // Silenced so the fallback cases keep the suite's output pristine.
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
   afterEach(async () => {
     vi.restoreAllMocks()
     await cleanupRatesFor(PAIR)
@@ -149,28 +163,53 @@ describe('getUsableCurrentRate', () => {
     await expect(getUsableCurrentRate(PAIR, failingProvider)).rejects.toThrow(FxUnavailableError)
   })
 
-  it('prefers a recent current row over a freshly fetched historical row', async () => {
-    const recent = new Date(Date.now() - 3 * 60 * 60 * 1000) // 3 hours ago
+  it('picks the newest qualifying row by effectiveDate, ignoring a freshly fetched historical row', async () => {
+    const older = new Date(Date.now() - 30 * 60 * 60 * 1000) // 30 hours ago, still inside 48h
+    const newer = new Date(Date.now() - 3 * 60 * 60 * 1000) // 3 hours ago
+    // Freshest fetchedAt of the three, but years out of date: excluded by the
+    // effectiveDate window, not by the ordering.
     await seedRate({
       rate: 23000,
       effectiveDate: new Date('2020-01-01'),
       fetchedAt: new Date(),
       source: 'historical-fake',
     })
-    await seedRate({
-      rate: 25100,
-      effectiveDate: recent,
-      fetchedAt: recent,
-      source: 'recent-fake',
-    })
+    await seedRate({ rate: 24000, effectiveDate: older, fetchedAt: older, source: 'older' })
+    await seedRate({ rate: 25000, effectiveDate: newer, fetchedAt: newer, source: 'newer' })
 
     const result = await getUsableCurrentRate(PAIR, failingProvider)
 
-    // The 2020 row has the newer fetchedAt; ordering by effectiveDate is what
-    // makes the genuinely current row win.
-    expect(result.rate).toBe(25100)
-    expect(result.source).toBe('cache-fallback:recent-fake')
+    // Two rows qualify; `orderBy effectiveDate desc` is what makes the more
+    // recent one win.
+    expect(result.rate).toBe(25000)
+    expect(result.source).toBe('cache-fallback:newer')
+    expect(result.effectiveDate.toISOString()).toBe(newer.toISOString())
     expect(result.isFallback).toBe(true)
+  })
+
+  it('warns exactly once when a fallback is used, and never on the live path', async () => {
+    const recent = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await seedRate({ rate: 25000, effectiveDate: recent, fetchedAt: recent, source: 'fresh-fake' })
+
+    await getUsableCurrentRate(PAIR, workingProvider())
+    expect(warnSpy).not.toHaveBeenCalled()
+
+    await cleanupRatesFor(PAIR)
+    await seedRate({ rate: 25000, effectiveDate: recent, fetchedAt: recent, source: 'fresh-fake' })
+
+    await getUsableCurrentRate(PAIR, failingProvider)
+
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    // A fixed string — no error payload, rate or URL ever reaches the log.
+    expect(warnSpy).toHaveBeenCalledWith('FX live rate lookup failed; using cached fallback rate')
+  })
+
+  it('attaches the underlying failure as the error cause when nothing is usable', async () => {
+    const thrown = await getUsableCurrentRate(PAIR, failingProvider).catch((e: unknown) => e)
+
+    expect(isFxUnavailableError(thrown)).toBe(true)
+    expect((thrown as FxUnavailableError).cause).toBeInstanceOf(Error)
+    expect(((thrown as FxUnavailableError).cause as Error).message).toBe('provider down')
   })
 
   it('ignores a cached row whose effectiveDate is in the future', async () => {
@@ -205,8 +244,6 @@ describe('getUsableCurrentRate', () => {
   })
 
   it('never reaches the network: every path runs off the injected provider and the cache', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-
     await getUsableCurrentRate(PAIR, workingProvider())
     await cleanupRatesFor(PAIR)
 
