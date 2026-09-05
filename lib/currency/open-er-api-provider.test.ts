@@ -31,6 +31,12 @@ function stubFetch(response: { ok: boolean; status?: number; json: () => Promise
   return fetchMock
 }
 
+function stubFetchRejection(error: unknown) {
+  const fetchMock = vi.fn().mockRejectedValue(error)
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -45,7 +51,7 @@ describe('OpenErApiProvider.getLatestRate', () => {
     const after = new Date()
 
     expect(result.rate).toBe(26025.122751)
-    expect(result.effectiveDate).toEqual(new Date(TIME_LAST_UPDATE_UTC))
+    expect(result.effectiveDate).toEqual(new Date('2026-09-05T00:02:32.000Z'))
     expect(result.source).toBe('open.er-api.com')
     expect(result.source).toBe(OPEN_ER_API_SOURCE)
     expect(result.fetchedAt.getTime()).toBeGreaterThanOrEqual(before.getTime())
@@ -123,6 +129,35 @@ describe('OpenErApiProvider.getLatestRate', () => {
     const provider = new OpenErApiProvider(BASE_URL)
 
     await expect(provider.getLatestRate({ base: 'USD', quote: 'VND' })).rejects.toThrow()
+  })
+
+  it('rejects with a body-free message when the response body is not valid JSON', async () => {
+    const fakeBodyText = 'fake-body-text-that-must-never-leak'
+    stubFetch({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError(`Unexpected token < in JSON at position 0: ${fakeBodyText}`)
+      },
+    })
+    const provider = new OpenErApiProvider(BASE_URL)
+
+    const promise = provider.getLatestRate({ base: 'USD', quote: 'VND' })
+    await expect(promise).rejects.toThrow('non-JSON')
+    await expect(promise).rejects.not.toThrow(fakeBodyText)
+  })
+
+  it('rejects with a transport-failure message when fetch itself rejects', async () => {
+    const timeoutError = new DOMException(
+      'The operation was aborted due to timeout',
+      'TimeoutError',
+    )
+    stubFetchRejection(timeoutError)
+    const provider = new OpenErApiProvider(BASE_URL)
+
+    await expect(provider.getLatestRate({ base: 'USD', quote: 'VND' })).rejects.toThrow(
+      'FX provider request timed out or failed to connect',
+    )
   })
 })
 

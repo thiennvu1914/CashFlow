@@ -31,16 +31,33 @@ export class OpenErApiProvider implements ExchangeRateProvider {
   }
 
   async getLatestRate(pair: CurrencyPair): Promise<RateResult> {
-    const response = await fetch(`${this.baseUrl}/latest/${pair.base}`, {
-      signal: AbortSignal.timeout(10_000),
-      headers: { accept: 'application/json' },
-      cache: 'no-store',
-    })
+    let response: Response
+    try {
+      response = await fetch(`${this.baseUrl}/latest/${pair.base}`, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      })
+    } catch (error) {
+      // Network failure, or AbortSignal.timeout firing (TimeoutError/AbortError
+      // DOMException) — never surface the raw error message, only that the
+      // request didn't complete. The original error is preserved via `cause`.
+      throw new Error('FX provider request timed out or failed to connect', { cause: error })
+    }
+
     if (!response.ok) {
       throw new Error(`FX provider request failed with status ${response.status}`)
     }
 
-    const data = (await response.json()) as OpenErApiLatestResponse
+    let data: OpenErApiLatestResponse
+    try {
+      data = (await response.json()) as OpenErApiLatestResponse
+    } catch {
+      // A JSON parse failure's message can echo fragments of the response
+      // body (V8's SyntaxError text includes surrounding characters), so
+      // never forward it — only the HTTP status is safe to expose.
+      throw new Error(`FX provider returned a non-JSON response (status ${response.status})`)
+    }
 
     if (data.result !== 'success') {
       throw new Error(`FX provider returned a non-success result for ${pair.base}/${pair.quote}`)
