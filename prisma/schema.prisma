@@ -285,7 +285,13 @@ model Transfer {
   toAccountId      String
   fromAmount       Decimal  @db.Decimal(18, 2)
   toAmount         Decimal  @db.Decimal(18, 2)
-  exchangeRateUsed Decimal? @db.Decimal(18, 6)
+  /// Widened from Decimal(18,6) to Decimal(24,12) (ruling R-19): a
+  /// cross-currency rate can need more than 6 fractional digits to round-trip
+  /// exactly (e.g. a very small or very large effective rate), and 6 was
+  /// already tight for VND, whose unit amounts are large. 12 fractional
+  /// digits plus 12 integer digits comfortably covers every rate this app can
+  /// produce from two Decimal(18,2) amounts.
+  exchangeRateUsed Decimal? @db.Decimal(24, 12)
   date             DateTime
   note             String?
   createdAt        DateTime @default(now())
