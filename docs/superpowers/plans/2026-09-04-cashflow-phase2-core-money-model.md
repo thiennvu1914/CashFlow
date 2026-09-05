@@ -1557,12 +1557,48 @@ export async function createTransaction(
   })
 }
 
-export async function updateTransaction(userId: string, transactionId: string, input: CreateTransactionInput) {
+**Edit semantics (ruling R-6).** The FX snapshot is *not* frozen for the life of the row. It
+records the usable current rate at the moment the transaction's **economic content** was last
+recorded, so an edit that changes that content re-snapshots it and an edit that does not leaves
+it exactly as it was. Concretely: if any of `accountId`, `type`, `amount` (compared as `Decimal`)
+or `date` (compared by `getTime()`) differs from the stored row, `updateTransaction` calls
+`getUsableCurrentRate` again and writes all three snapshot fields anew (and re-derives `currency`
+from the — possibly new — account). If only `note` and/or `categoryId` change, the snapshot is
+preserved byte for byte. Because the FX call happens before the write, an economic edit while FX
+is unavailable fails with `FxUnavailableError` and leaves the row untouched — a corrected amount
+never gets paired with a fabricated or borrowed rate. Both the transaction's current account and
+the new target account must be `ACTIVE` (ruling R-7), so a row can neither leave nor enter an
+archived account.
+
+```ts
+export async function updateTransaction(
+  userId: string,
+  transactionId: string,
+  input: CreateTransactionInput,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+) {
   const parsed = createTransactionSchema.parse(input)
+  const existing = await prisma.transaction.findUniqueOrThrow({
+    where: { userId_id: { userId, id: transactionId } },
+  })
+  // Both ends are checked: an archived account may neither lose nor gain activity.
+  await requireActiveAccount(userId, existing.accountId)
   const account = await requireActiveAccount(userId, parsed.accountId)
   const categoryId = await resolveCategoryId(userId, parsed.type, parsed.categoryId)
-  // FX snapshot fields are intentionally left untouched on edit — the transaction's economic
-  // event happened at its original entry time, regardless of which fields are later corrected.
+
+  const economicChange =
+    parsed.accountId !== existing.accountId ||
+    parsed.type !== existing.type ||
+    !new Prisma.Decimal(parsed.amount).equals(existing.amount) ||
+    parsed.date.getTime() !== existing.date.getTime()
+
+  // Re-snapshotted only for an economic change; a note/category correction keeps the
+  // original snapshot. The FX call runs before the write, so an unavailable rate aborts
+  // the edit rather than storing a corrected amount against a borrowed rate.
+  const fx = economicChange
+    ? await getUsableCurrentRate({ base: 'USD', quote: 'VND' }, providerOverride)
+    : null
+
   return prisma.transaction.update({
     where: { userId_id: { userId, id: transactionId } },
     data: {
@@ -1572,7 +1608,14 @@ export async function updateTransaction(userId: string, transactionId: string, i
       amount: parsed.amount,
       currency: account.currency,
       date: parsed.date,
-      note: parsed.note,
+      note: parsed.note ?? null,
+      ...(fx
+        ? {
+            vndPerUsdAtEntry: fx.rate,
+            fxRateTimestamp: fx.fetchedAt,
+            fxRateSource: fx.source,
+          }
+        : {}),
     },
   })
 }
