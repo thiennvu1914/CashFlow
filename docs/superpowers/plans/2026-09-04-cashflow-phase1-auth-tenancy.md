@@ -79,16 +79,28 @@ export const auth = betterAuth({
 ```
 `input: false` on every additional field means none of them can be set through Better Auth's own sign-up/update-user request bodies — changes go only through our own profile-update server action (Task 7), which never accepts `isDemo` at all. This is the first of two independent layers blocking client-set `isDemo` (§4.1, §13 of the spec); Task 7 adds the second.
 
-`lib/prisma.ts` (if not already created in Phase 0 — check first):
+`lib/prisma.ts` — **Prisma 7 amendment (verified during Phase 0's final review against the installed `prisma`/`@prisma/client` 7.10.0):** the Prisma 7 client is WASM-based and throws `PrismaClientInitializationError: A driver adapter is required` when constructed without one; the datasource URL lives only in `prisma7.config.ts`, which is CLI-only and never reaches the runtime client. So this file MUST pass a driver adapter. Install first:
+```bash
+npm install @prisma/adapter-pg pg
+npm install --save-dev @types/pg
+```
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient()
+function createPrismaClient() {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+  return new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
+}
+
+export const prisma = globalForPrisma.prisma ?? createPrismaClient()
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 ```
+Do NOT add a `url` back into `prisma/schema.prisma` — `prisma migrate dev` reads the URL from `prisma7.config.ts` and works as-is. `Prisma.Decimal` is available via `import { Prisma } from '@prisma/client'`; the `@prisma/client/runtime/library` path used in later plan text must be verified against 7.10 (use the `Prisma` namespace form if it doesn't resolve). If `next build` fails to trace the client's `.wasm` asset, add `serverExternalPackages: ['@prisma/client']` to `next.config.ts` — only if it actually breaks.
 
 - [ ] **Step 3: Generate Better Auth's Prisma schema**
 

@@ -1,0 +1,188 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  /* CashFlow-specific tokens (spec §11), exposed as Tailwind utilities
+     (bg-surface, bg-brand, text-positive, text-negative, text-warning, ...) */
+  --color-surface: var(--surface);
+  --color-brand: var(--brand);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-DEFAULT: var(--radius);
+}
+
+/*
+ * CashFlow design tokens (spec §11 — Calm Premium Fintech).
+ * Raw HSL triplets from the brief, converted to OKLCH (the format shadcn v4
+ * generates for this project) via the standard sRGB -> linear -> LMS ->
+ * OKLab -> OKLCH pipeline. Conversions, with source HSL cited alongside:
+ *
+ *   light --background  hsl(100 8% 96%)   -> oklch(0.971 0.002 134.839)  #F6F7F5
+ *   light --surface     hsl(0 0% 100%)    -> oklch(1 0 0)                #FFFFFF
+ *   light --foreground  hsl(155 10% 11%)  -> oklch(0.232 0.009 168.472)  #19211E
+ *   light --brand       hsl(165 55% 27%)  -> oklch(0.476 0.079 172.703)  #206B58
+ *   light --accent      hsl(215 30% 49%)  -> oklch(0.562 0.077 256.88)   #5576A3
+ *   light --positive    hsl(152 43% 33%)  -> oklch(0.518 0.091 160.408)  #307856
+ *   light --warning     hsl(38 51% 46%)   -> oklch(0.646 0.107 78.406)   #B1853A
+ *   dark  --background  hsl(160 8% 10%)   -> oklch(0.22 0.007 173.672)   #171C1A
+ *   dark  --surface     hsl(150 6% 15%)   -> oklch(0.274 0.008 164.376)  #242926
+ *   dark  --foreground  hsl(100 8% 96%)   -> oklch(0.971 0.002 134.839)
+ *   dark  --brand       hsl(165 45% 40%)  -> oklch(0.605 0.094 173.622)
+ *   dark  --accent      hsl(215 30% 60%)  -> oklch(0.66 0.061 256.836)
+ *   dark  --positive    hsl(152 38% 45%)  -> oklch(0.635 0.105 160.924)
+ *   dark  --negative    hsl(3 47% 65%)    -> oklch(0.683 0.1 23.252)
+ *   dark  --warning     hsl(38 51% 58%)   -> oklch(0.736 0.1 79.908)
+ *
+ * Light --negative and --warning deviate from the HSL brief above: the
+ * literal HSL conversions (#C95C5C / #B98532) fail WCAG AA (< 4.5:1) against
+ * --background and --surface at normal text size. Per controller ruling,
+ * accessibility outranks the exact hex, so both were darkened/desaturated
+ * while keeping the same hue family:
+ *   light --negative    oklch(0.55 0.14 25)  #B54A46  (4.80:1 on background, 5.21:1 on surface)
+ *   light --warning     oklch(0.55 0.11 78)  #94680F  (4.56:1 on background)
+ * (a straight L=0.56 for --warning, as first proposed, measured 4.37:1 and
+ * was rejected; L=0.55 is the smallest darkening that clears 4.5:1)
+ */
+
+:root {
+  /* CashFlow base tokens */
+  --background: oklch(0.971 0.002 134.839);
+  --surface: oklch(1 0 0);
+  --foreground: oklch(0.232 0.009 168.472);
+  --brand: oklch(0.476 0.079 172.703);
+  --accent: oklch(0.562 0.077 256.88);
+  --positive: oklch(0.518 0.091 160.408);
+  --negative: oklch(0.55 0.14 25);
+  --warning: oklch(0.55 0.11 78);
+  --radius: 0.5rem;
+
+  /* shadcn primitives, remapped onto the CashFlow tokens above (no stock
+     zinc/neutral values remain) */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+  --primary: var(--brand);
+  --primary-foreground: var(--surface);
+  --muted: color-mix(in oklch, var(--foreground) 5%, var(--background));
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: color-mix(in oklch, var(--foreground) 65%, var(--background));
+  --accent-foreground: var(--surface);
+  --destructive: var(--negative);
+  --border: color-mix(in oklch, var(--foreground) 12%, transparent);
+  --input: color-mix(in oklch, var(--foreground) 18%, transparent);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
+  --chart-2: var(--accent);
+  --chart-3: var(--positive);
+  --chart-4: var(--negative);
+  --chart-5: var(--warning);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--surface);
+  --sidebar-accent: var(--background);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand);
+}
+
+.dark {
+  /* CashFlow base tokens (warm charcoal, never pure black) */
+  --background: oklch(0.22 0.007 173.672);
+  --surface: oklch(0.274 0.008 164.376);
+  --foreground: oklch(0.971 0.002 134.839);
+  --brand: oklch(0.605 0.094 173.622);
+  --accent: oklch(0.66 0.061 256.836);
+  --positive: oklch(0.635 0.105 160.924);
+  --negative: oklch(0.683 0.1 23.252);
+  --warning: oklch(0.736 0.1 79.908);
+
+  /* shadcn primitives, remapped onto the CashFlow tokens above */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+  --primary: var(--brand);
+  --primary-foreground: var(--background);
+  --muted: color-mix(in oklch, var(--foreground) 8%, var(--background));
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: color-mix(in oklch, var(--foreground) 55%, var(--background));
+  --accent-foreground: var(--background);
+  --destructive: var(--negative);
+  --border: color-mix(in oklch, var(--foreground) 12%, transparent);
+  --input: color-mix(in oklch, var(--foreground) 18%, transparent);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
+  --chart-2: var(--accent);
+  --chart-3: var(--positive);
+  --chart-4: var(--negative);
+  --chart-5: var(--warning);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--background);
+  --sidebar-accent: var(--background);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

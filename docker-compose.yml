@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cashflow
+      POSTGRES_PASSWORD: cashflow_dev_password
+      POSTGRES_DB: cashflow
+    ports:
+      - '127.0.0.1:5439:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cashflow -d cashflow']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - cashflow_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  cashflow_postgres_data:
