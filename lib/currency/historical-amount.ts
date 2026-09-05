@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 import { applyVndPerUsdRate } from './apply-rate'
 import type { Currency } from './provider'
 

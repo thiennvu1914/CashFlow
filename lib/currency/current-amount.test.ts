@@ -131,6 +131,27 @@ describe('convertToCurrentAmount', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
+  it("converts at the fallback row's exact Decimal, to the last digit a double would drop", async () => {
+    // 18 significant digits — the full width of `Decimal(18, 6)`. Through a
+    // double the rate would already read 123456789012.12346, and the answer
+    // would be 12345678901212.346 instead of 12345678901212.3456.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await prisma.exchangeRate.create({
+      data: {
+        base: PAIR.base,
+        quote: PAIR.quote,
+        rate: new Prisma.Decimal('123456789012.123456'),
+        effectiveDate: twoHoursAgo,
+        fetchedAt: twoHoursAgo,
+        source: 'fallback-fake',
+      },
+    })
+
+    const result = await convertToCurrentAmount(100, 'USD', 'VND', failingProvider)
+
+    expect(result.toString()).toBe('12345678901212.3456')
+  })
+
   it('throws FxUnavailableError when the provider is down and no recent rate exists', async () => {
     await expect(convertToCurrentAmount(100, 'USD', 'VND', failingProvider)).rejects.toThrow(
       FxUnavailableError,

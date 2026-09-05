@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getLatestRate } from './fx-service'
 import type { CachedRateResult } from './fx-service'

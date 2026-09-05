@@ -260,7 +260,10 @@ export async function createTransaction(
         currency: account.currency,
         date: parsed.date,
         note: parsed.note ?? null,
-        vndPerUsdAtEntry: fx.rate,
+        // `rateDecimal`, not `rate`: the snapshot is written straight from the
+        // cache row's `Decimal(18, 6)`, so it never passes through a
+        // JavaScript number on the cache-hit or fallback paths.
+        vndPerUsdAtEntry: fx.rateDecimal,
         // Two distinct facts: when we retrieved the rate, and which UTC day
         // the rate is effective for. On the fallback path both are the
         // original cached row's own values, never "now".
@@ -368,7 +371,9 @@ export async function updateTransaction(
         note: parsed.note ?? null,
         ...(fx
           ? {
-              vndPerUsdAtEntry: fx.rate,
+              // Same rule as the create path: the row's own Decimal, not the
+              // provider-boundary number.
+              vndPerUsdAtEntry: fx.rateDecimal,
               fxRateFetchedAt: fx.fetchedAt,
               fxRateEffectiveAt: fx.effectiveDate,
               fxRateSource: fx.source,
