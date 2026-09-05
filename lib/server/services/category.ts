@@ -11,7 +11,17 @@ export async function listCategories(userId: string, type?: CategoryType) {
 
 export async function createCategory(userId: string, input: CreateCategoryInput) {
   const parsed = createCategorySchema.parse(input)
-  return prisma.category.create({ data: { userId, ...parsed, isDefault: false } })
+  // Fields are listed explicitly (not spread) so the authenticated `userId`
+  // can never be overridden, regardless of Zod's stripping behaviour.
+  return prisma.category.create({
+    data: {
+      userId,
+      name: parsed.name,
+      type: parsed.type,
+      icon: parsed.icon,
+      isDefault: false,
+    },
+  })
 }
 
 export async function archiveCategory(userId: string, categoryId: string) {

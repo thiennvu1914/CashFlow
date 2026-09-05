@@ -147,6 +147,19 @@ describe('category service', () => {
       })
       expect(stored.status).toBe('ACTIVE')
     })
+
+    it('is idempotent: archiving an already-ARCHIVED category is a no-op that does not throw', async () => {
+      const userId = await createUser()
+      const created = await createCategory(userId, { name: 'Temp', type: 'EXPENSE' })
+
+      await archiveCategory(userId, created.id)
+      await expect(archiveCategory(userId, created.id)).resolves.not.toThrow()
+
+      const stored = await prisma.category.findUniqueOrThrow({
+        where: { userId_id: { userId, id: created.id } },
+      })
+      expect(stored.status).toBe('ARCHIVED')
+    })
   })
 
   describe('createCategorySchema', () => {
