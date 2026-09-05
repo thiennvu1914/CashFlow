@@ -180,3 +180,24 @@ model FinancialAccount {
   @@unique([userId, id])
   @@index([userId])
 }
+
+/// FX rate cache (§6.2). Global, not per-user: a USD/VND rate for a given day
+/// is the same fact for everyone, so this table carries no `userId` and is the
+/// one CashFlow table not scoped by `requireUser()`.
+///
+/// `effectiveDate` is always the UTC start-of-day the rate applies to, which is
+/// what makes `(base, quote, effectiveDate)` a natural key: one cached row per
+/// pair per day, upserted when a fresher fetch for the same day arrives.
+/// Historical rows are kept permanently — a past day's rate never changes.
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  base          Currency
+  quote         Currency
+  rate          Decimal  @db.Decimal(18, 6)
+  effectiveDate DateTime
+  fetchedAt     DateTime
+  source        String
+
+  @@unique([base, quote, effectiveDate])
+  @@index([base, quote, effectiveDate(sort: Desc)])
+}
