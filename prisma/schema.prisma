@@ -105,3 +105,54 @@ model Verification {
   @@index([identifier])
   @@map("verification")
 }
+
+// ---------------------------------------------------------------------------
+// CashFlow domain tables.
+//
+// Neither model below declares a back-relation array yet (no
+// `accounts FinancialAccount[]` on AccountType, no `transactions Transaction[]`
+// on Category): the models those would point at do not exist. The phase's later
+// tasks add the one-line back-relation in the same commit that introduces the
+// referencing model, which keeps every migration valid on its own.
+//
+// The `@@unique([userId, id])` on each is what lets later models carry a
+// composite `(userId, <fk>)` foreign key, so a row can never reference another
+// user's AccountType or Category (§4.3 of the spec).
+// ---------------------------------------------------------------------------
+
+enum RecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+model AccountType {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String
+  icon      String?
+  isDefault Boolean      @default(false)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, id])
+  @@index([userId])
+}
+
+model Category {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String
+  type      CategoryType
+  icon      String?
+  isDefault Boolean      @default(false)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, id])
+  @@index([userId])
+}

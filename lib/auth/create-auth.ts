@@ -45,6 +45,17 @@ export interface CreateAuthOptions {
    * Better Auth keeps its single-value-header behaviour.
    */
   trustedProxies?: string[]
+  /**
+   * Called once, after Better Auth has written a new user row, with that row's
+   * id. `lib/auth/auth.ts` passes `seedDefaultsForUser`, which creates the
+   * user's default account types and categories; tests pass a recorder, or
+   * nothing at all when registration side effects are not what they exercise.
+   *
+   * Injected rather than imported here so that `createAuth` itself stays free
+   * of a `lib/prisma.ts` dependency — that is what lets the whole auth suite
+   * run on the in-memory adapter with no database.
+   */
+  onUserCreated?: (user: { id: string }) => Promise<void>
 }
 
 /**
@@ -156,9 +167,15 @@ export function createAuth(options: CreateAuthOptions) {
     databaseHooks: {
       user: {
         create: {
-          after: async () => {
-            // Phase 2 Task 1 seeds DEFAULT_ACCOUNT_TYPES and DEFAULT_CATEGORIES
-            // for `user.id` here.
+          // Better Auth 1.7.2 types this as
+          // `(user: User & Record<string, unknown>, context: GenericEndpointContext | null) => Promise<void>`
+          // (`databaseHooks` in
+          // `node_modules/@better-auth/core/dist/types/init-options.d.mts`).
+          // Deliberately not wrapped in try/catch: if seeding a new user's
+          // defaults fails, the registration must fail loudly rather than hand
+          // back an account with no account types or categories.
+          after: async (user) => {
+            await options.onUserCreated?.(user)
           },
         },
       },
