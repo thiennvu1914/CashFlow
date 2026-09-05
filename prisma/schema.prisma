@@ -253,7 +253,11 @@ model Transaction {
   /// lists render it with `formatInTimeZone(date, timezone, 'yyyy-MM-dd HH:mm')`.
   date             DateTime
   note             String?
-  vndPerUsdAtEntry Decimal         @db.Decimal(18, 4)
+  /// Decimal(18, 6) — deliberately the same scale as `ExchangeRate.rate`, so
+  /// the snapshot is the cached rate to the digit rather than a value rounded
+  /// on the way in. At Decimal(18, 4) a transaction could not be reconciled
+  /// against the rate it was actually recorded with.
+  vndPerUsdAtEntry Decimal         @db.Decimal(18, 6)
   fxRateTimestamp  DateTime
   fxRateSource     String
   createdAt        DateTime        @default(now())

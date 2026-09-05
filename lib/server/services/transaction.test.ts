@@ -372,11 +372,35 @@ describe('transaction service', () => {
       const stored = await prisma.transaction.findUniqueOrThrow({
         where: { userId_id: { userId: s.userId, id: tx.id } },
       })
-      // vndPerUsdAtEntry is Decimal(18, 4): the provider's 6 decimal places are
-      // rounded (half-up, by Postgres) to 4 on the way in.
-      expect(stored.vndPerUsdAtEntry.toString()).toBe('26123.4568')
+      // vndPerUsdAtEntry is Decimal(18, 6) — the same scale as
+      // `ExchangeRate.rate` — so the provider's 6 decimal places survive
+      // intact instead of being rounded to 4 on the way in.
+      expect(stored.vndPerUsdAtEntry.toString()).toBe('26123.456789')
       expect(stored.fxRateSource).toBe('fake-precise')
       expect(stored.fxRateTimestamp.toISOString()).toBe(f.fetchedAt.toISOString())
+    })
+
+    it('stores the snapshot at exactly the precision the FX cache holds', async () => {
+      const s = await setup()
+      const f = fakeProvider(26123.456789, 'fake-precise')
+
+      const tx = await createTransaction(
+        s.userId,
+        { accountId: s.accountId, type: 'CASH_IN', amount: 100, date: new Date() },
+        f.provider,
+      )
+
+      // The snapshot and the cache row it came from are the same number, to the
+      // digit. When `vndPerUsdAtEntry` was Decimal(18, 4) they silently
+      // disagreed, so a transaction could never be reconciled against the rate
+      // that was actually used to record it.
+      const cached = await prisma.exchangeRate.findFirstOrThrow({
+        where: { base: PAIR.base, quote: PAIR.quote, source: 'fake-precise' },
+      })
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.vndPerUsdAtEntry.equals(cached.rate)).toBe(true)
     })
 
     it('records the fallback provenance when the live provider is down', async () => {
