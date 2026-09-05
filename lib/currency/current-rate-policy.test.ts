@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   FxUnavailableError,
@@ -78,6 +79,32 @@ describe('getUsableCurrentRate', () => {
     expect(result.rate).toBe(25000)
     expect(result.source).toBe('fake')
     expect(result.isFallback).toBe(false)
+    // Every consumer doing money arithmetic reads `rateDecimal`, so it must be
+    // present and equal to the boundary number on the fresh path too.
+    expect(result.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
+  })
+
+  it('serves rateDecimal from the cached row on a cache hit, at the stored scale', async () => {
+    // A rate with more precision than a "nice" number: the point of carrying a
+    // Decimal is that these digits survive.
+    const today = new Date()
+    await seedRate({
+      rate: 25123.456789,
+      effectiveDate: new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+      ),
+      fetchedAt: today,
+      source: 'cached-fake',
+    })
+
+    const result = await getUsableCurrentRate(PAIR, failingProvider)
+
+    // Today's cache is a *hit*, not a fallback: the provider is never reached.
+    expect(result.isFallback).toBe(false)
+    expect(result.source).toBe('cached-fake')
+    expect(result.rateDecimal.equals(new Prisma.Decimal('25123.456789'))).toBe(true)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
   })
 
   it('falls back to a recent last-known-good current rate (within 48h) with isFallback=true, preserving its original fetchedAt', async () => {
@@ -98,6 +125,10 @@ describe('getUsableCurrentRate', () => {
     expect(result.effectiveDate.toISOString()).toBe(recentFetchedAt.toISOString())
     expect(result.source).toBe('cache-fallback:fresh-fake')
     expect(result.isFallback).toBe(true)
+    // The fallback's Decimal is the row's own `Decimal(18, 6)`, not a value
+    // reconstructed from the widened number.
+    expect(result.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
   })
 
   it('rejects a stale cached fallback older than the freshness window', async () => {

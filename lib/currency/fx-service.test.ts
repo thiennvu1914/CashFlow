@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getLatestRate, getHistoricalRate } from './fx-service'
 import type { ExchangeRateProvider, RateResult } from './provider'
@@ -51,6 +52,10 @@ describe('getLatestRate', () => {
     const result = await getLatestRate(PAIR, fakeProvider)
 
     expect(result.rate).toBe(25000)
+    // The Decimal companion of the boundary number: every financial
+    // computation downstream (Phase 3's conversions) reads this, never `rate`.
+    expect(result.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
     const cached = await prisma.exchangeRate.findFirst({
       where: { base: PAIR.base, quote: PAIR.quote },
     })
@@ -93,6 +98,9 @@ describe('getLatestRate', () => {
     const result = await getLatestRate(PAIR, forbiddenProvider)
 
     expect(result.rate).toBe(24750.5)
+    // On a hit the Decimal comes straight off the stored `Decimal(18, 6)` — it
+    // is never rebuilt from the widened number.
+    expect(result.rateDecimal.equals(new Prisma.Decimal('24750.5'))).toBe(true)
     expect(result.fetchedAt.getTime()).toBe(fetchedAt.getTime())
     expect(result.source).toBe('cached-source')
     expect(result.effectiveDate.getTime()).toBe(utcDay(new Date()).getTime())

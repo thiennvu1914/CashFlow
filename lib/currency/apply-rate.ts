@@ -47,7 +47,7 @@ export function applyVndPerUsdRate(
   to: Currency,
   vndPerUsd: Prisma.Decimal,
 ): Prisma.Decimal {
-  if (!isSupported(from) || !isSupported(to)) throw new UnsupportedCurrencyPairError(from, to)
+  assertSupportedPair(from, to)
   if (!vndPerUsd.isFinite() || vndPerUsd.lessThanOrEqualTo(0)) {
     throw new RangeError(`Exchange rate must be a positive finite number, received: ${vndPerUsd}`)
   }
@@ -55,6 +55,15 @@ export function applyVndPerUsdRate(
   if (from === to) return amount
   if (from === 'USD') return amount.mul(vndPerUsd)
   return amount.div(vndPerUsd)
+}
+
+/**
+ * Rejects a pair this module cannot convert, before a caller goes looking for a
+ * rate. Exported so `convertToCurrentAmount` can fail on `EUR` without first
+ * making a provider call it would then throw away.
+ */
+export function assertSupportedPair(from: Currency, to: Currency): void {
+  if (!isSupported(from) || !isSupported(to)) throw new UnsupportedCurrencyPairError(from, to)
 }
 
 function isSupported(currency: Currency): boolean {

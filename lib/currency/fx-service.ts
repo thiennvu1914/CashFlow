@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import type { CurrencyPair, ExchangeRateProvider, RateResult } from './provider'
 import { OpenErApiProvider } from './open-er-api-provider'
@@ -49,16 +50,31 @@ async function cacheRate(pair: CurrencyPair, effectiveDate: Date, result: RateRe
   })
 }
 
+/**
+ * A rate result that also carries the value as a `Decimal`.
+ *
+ * `RateResult.rate` is the provider boundary's plain `number` and stays exactly
+ * that — existing callers and the `ExchangeRateProvider` contract are
+ * unchanged. `rateDecimal` is the same rate as money arithmetic needs it: on a
+ * cache hit it is the stored `Decimal(18, 6)` itself, never a value rebuilt
+ * from the widened number, so no digit can be lost on the way to a conversion.
+ */
+export interface CachedRateResult extends RateResult {
+  rateDecimal: Prisma.Decimal
+}
+
 function toRateResult(cached: {
-  rate: unknown
+  rate: Prisma.Decimal
   effectiveDate: Date
   fetchedAt: Date
   source: string
-}): RateResult {
+}): CachedRateResult {
   // `cached.rate` is a Prisma `Decimal`; `RateResult.rate` is the provider
-  // boundary's plain number, so the stored decimal is widened back here.
+  // boundary's plain number, so the stored decimal is widened back here — and
+  // the untouched Decimal travels alongside it for anything doing arithmetic.
   return {
     rate: Number(cached.rate),
+    rateDecimal: cached.rate,
     effectiveDate: cached.effectiveDate,
     fetchedAt: cached.fetchedAt,
     source: cached.source,
@@ -89,7 +105,7 @@ function toRateResult(cached: {
 export async function getLatestRate(
   pair: CurrencyPair,
   providerOverride?: ExchangeRateProvider,
-): Promise<RateResult> {
+): Promise<CachedRateResult> {
   const today = startOfUtcDay(new Date())
   const cached = await findCached(pair, today)
   if (cached) return toRateResult(cached)
@@ -98,7 +114,9 @@ export async function getLatestRate(
   const fresh = await provider.getLatestRate(pair)
   const effectiveDate = startOfUtcDay(fresh.effectiveDate)
   await cacheRate(pair, effectiveDate, fresh)
-  return { ...fresh, effectiveDate }
+  // decimal.js parses the number's shortest decimal representation — the same
+  // digits the provider sent, and the same ones just written to the cache.
+  return { ...fresh, effectiveDate, rateDecimal: new Prisma.Decimal(fresh.rate) }
 }
 
 /**
