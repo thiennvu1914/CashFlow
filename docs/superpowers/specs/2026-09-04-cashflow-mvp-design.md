@@ -56,6 +56,8 @@ Both are **archived, not hard-deleted**, when referenced by existing activity (m
 
 `currency` and `initialBalance` are freely editable **only** while the account has zero `Transaction`s and zero `Transfer`s referencing it (checked via a cheap `EXISTS` query; the edit form disables both fields once activity exists). Once activity exists, both are locked — a currency change would invalidate every FX snapshot recorded against that account, and an `initialBalance` change would silently rewrite historical net worth. The correction path after activity exists is an explicit `ADJUSTMENT_INCREASE`/`ADJUSTMENT_DECREASE` transaction (§5.1) — not a field edit.
 
+Archiving requires a derived balance of exactly zero, and an `ARCHIVED` account can never receive new activity: Transaction creation/update and both ends of a Transfer verify every referenced account is `ACTIVE` server-side. Together these guarantee an archived account cannot hide money or silently regain a balance.
+
 ### 4.4 Transaction
 
 ```
@@ -70,6 +72,8 @@ vndPerUsdAtEntry, fxRateTimestamp, fxRateSource, createdAt, updatedAt
 ### 4.5 Transfer
 
 `id, userId, fromAccountId, toAccountId, fromAmount, toAmount, exchangeRateUsed?, date, note?, createdAt`. Its own entity — never two Transaction rows — so it is structurally impossible for a transfer to be counted as income/expense. Does not carry the `vndPerUsdAtEntry` snapshot: transfers never enter Income/Expense/Net Income aggregation, so there is no cross-currency summing need to solve for them.
+
+When both accounts share a currency the server derives `toAmount = fromAmount` and ignores any client-supplied `toAmount`, so a same-currency transfer conserves money by construction. Only cross-currency transfers accept an explicit `toAmount` (the amount actually received), with `exchangeRateUsed` recorded for audit.
 
 ### 4.6 Budget
 
@@ -183,9 +187,9 @@ This distinction is used throughout the architecture, not just for Transactions:
 |---|---|---|
 | **Current position** | latest live rate (`getLatestRate`) | Total Account Balance, Net Worth "now", Account Balance Distribution |
 | **Historical activity** | each transaction's own FX snapshot, never today's rate | Monthly Income/Expense KPIs (including the current in-progress month — a recorded transaction is a fixed fact the moment it's entered), Net Income + its trend, Expense by Category, Income vs Expense, Reports (all periods), Budget progress (any month, open or closed) |
-| **Historical position trend** | the rate that was actually in effect on that past date (`getHistoricalRate`), never today's rate | Net Worth Over Time |
+| **Historical position trend** | the rate that was actually in effect on that past date (`getHistoricalRate`), never today's rate | Account Balance Over Time |
 
-**Why this matters** (the specific bug being prevented): a January transaction of 2,500,000 VND recorded at 25,000 VND/USD has a fixed historical value — 100 USD, or 2,500,000 VND. If today's rate later becomes 27,000 VND/USD, the January report must still show 2,500,000 VND / 100 USD, never a re-derived 2,700,000 VND. Today's rate must never change the value of a historical Income/Expense report, and the same reasoning extends to historical points on the Net Worth Over Time chart — computing a past net-worth point with today's rate would reproduce the identical bug in a different widget.
+**Why this matters** (the specific bug being prevented): a January transaction of 2,500,000 VND recorded at 25,000 VND/USD has a fixed historical value — 100 USD, or 2,500,000 VND. If today's rate later becomes 27,000 VND/USD, the January report must still show 2,500,000 VND / 100 USD, never a re-derived 2,700,000 VND. Today's rate must never change the value of a historical Income/Expense report, and the same reasoning extends to historical points on the Account Balance Over Time chart — computing a past net-worth point with today's rate would reproduce the identical bug in a different widget.
 
 ### 5.3 Historical conversion — `historicalAmountIn`
 
@@ -235,7 +239,7 @@ interface ExchangeRateProvider {
 
 The two methods are deliberately distinct rather than one `getRateAsOf(date)`: an append-only cache can only ever answer "the latest rate we happen to have fetched," which is not the same as "the rate that was genuinely in effect on an arbitrary past date." `getHistoricalRate` may legitimately return `null` if the concrete provider has no historical data for that date — callers must never substitute the live rate in that case (§6.4).
 
-Default concrete provider candidate: `open.er-api.com` for `getLatestRate` (free, no key, includes VND). **Whether it — or any candidate — supports date-based historical lookups for VND/USD is unverified and must be confirmed during Phase 3 implementation against the live API.** If it doesn't, swap to a provider that does (e.g. Frankfurter, exchangerate.host) behind this same interface, with no change to any calling code. If no free provider is found to support historical VND rates at all, that limitation is documented and `getHistoricalRate` simply returns `null` for all dates — Net Worth Over Time then shows gaps rather than fabricated history, which is the correct degraded behavior, not a blocker to shipping.
+Default concrete provider candidate: `open.er-api.com` for `getLatestRate` (free, no key, includes VND). **Whether it — or any candidate — supports date-based historical lookups for VND/USD is unverified and must be confirmed during Phase 3 implementation against the live API.** If it doesn't, swap to a provider that does (e.g. Frankfurter, exchangerate.host) behind this same interface, with no change to any calling code. If no free provider is found to support historical VND rates at all, that limitation is documented and `getHistoricalRate` simply returns `null` for all dates — Account Balance Over Time then shows gaps rather than fabricated history, which is the correct degraded behavior, not a blocker to shipping.
 
 ### 6.2 Cache
 
@@ -255,7 +259,7 @@ Every Transaction requires `vndPerUsdAtEntry`, regardless of its own currency. O
 
 In practice, step 5 should be rare: dashboard and other read paths also call `getLatestRate`, so by the time a user creates their first transaction a cached rate almost always already exists.
 
-### 6.4 Historical rate unavailability — Net Worth Over Time
+### 6.4 Historical rate unavailability — Account Balance Over Time
 
 For each past chart point, `getHistoricalRate(pair, date)` is called. If it returns a rate, that point is plotted normally. If it returns `null`, that point is rendered as a **gap** in the chart — the UI never substitutes today's rate to fill it in.
 
@@ -355,7 +359,7 @@ The workbook builder is an extensible registry of per-sheet builder functions, p
 - Categories/AccountTypes: default + custom, per-user isolated, archivable rather than hard-deletable.
 - Changing `User.baseCurrency` does not rewrite any Transaction row (verified: `updatedAt`/content unchanged before vs. after); the underlying historical economic value is unchanged (`historicalAmountIn` returns the same figures regardless of when called or what today's rate is); the *displayed* number correctly changes denomination.
 - Budgets show correct 50/80/100/exceeded states; a closed month's budget percentage does not change when today's FX rate changes.
-- Net Worth Over Time never substitutes today's rate for an unavailable historical point — it shows a gap instead.
+- Account Balance Over Time never substitutes today's rate for an unavailable historical point — it shows a gap instead.
 - Reminders/Bills surface when due and can be acknowledged/dismissed without ever creating a transaction; occurrences are never duplicated and never resurface after being actioned.
 - Savings goals track manually; they never move money.
 - Debts/Loans track outstanding amounts (always derived from payment history, never stored/drifting) and payment history without touching account balances.
@@ -370,10 +374,11 @@ The workbook builder is an extensible registry of per-sheet builder functions, p
 
 ## 17. Risks, Assumptions & Deferred Items
 
-- **FX provider historical-date support is unverified** until it's checked against a live API in Phase 3. If unsupported, `getHistoricalRate` returns `null` universally and Net Worth Over Time shows gaps for all past points — a documented degradation, not a launch blocker.
+- **FX provider historical-date support is unverified** until it's checked against a live API in Phase 3. If unsupported, `getHistoricalRate` returns `null` universally and Account Balance Over Time shows gaps for all past points — a documented degradation, not a launch blocker.
 - Free-tier FX APIs can have uptime hiccups; mitigated by the cache + fallback chain in §6.3, which hard-fails only on true cold-start-plus-outage (expected to be rare).
 - `historicalAmountIn` aggregation is done in application code (fetch + reduce), not raw SQL — acceptable at the assumed personal-use data scale (thousands, not millions, of transactions per user); a documented future optimization if that assumption breaks.
-- No cron/background jobs anywhere in MVP by design — reminders and Net Worth Over Time are both computed lazily on read.
+- No cron/background jobs anywhere in MVP by design — reminders and Account Balance Over Time are both computed lazily on read.
+- **True historical Net Worth is deferred.** The historical chart is deliberately named "Account Balance Over Time" and reconstructs *account balances only* as of each past point. The Net Worth KPI additionally includes active receivables, payables and outstanding loan principal, whose *past* state is not modeled (Debt/Loan have no temporal status history). Labeling the chart "Net Worth Over Time" would silently use a different formula from the KPI; approximating past liabilities with today's outstanding values would fabricate history. Both are rejected — a genuine historical Net Worth chart requires modeling liability state as-of every point and is out of MVP scope.
 - Single-instance in-memory rate limiting won't scale to a multi-instance deployment; a follow-up concern if horizontally scaled later.
 - Unifying Recurring Reminders and Bill Reminders into one engine (§4.7) is a considered design call, not a literal spec transcription — flagged as reversible if it proves wrong in practice.
 - DebtPayment/LoanPayment always inherit their parent's currency; no cross-currency payment support in MVP.
