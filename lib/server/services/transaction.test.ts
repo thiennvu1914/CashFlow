@@ -135,20 +135,24 @@ describe('transaction service', () => {
   })
 
   afterEach(async () => {
-    expect(fetchSpy).not.toHaveBeenCalled()
+    const fetchCalls = fetchSpy.mock.calls.length
     vi.restoreAllMocks()
     const userIds = createdUserIds.splice(0)
     try {
       await prisma.exchangeRate.deleteMany({ where: { source: { in: FAKE_SOURCES } } })
       await clearFxCache()
-      if (userIds.length === 0) return
-      await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
-      await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
-      await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
-      await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
+      if (userIds.length > 0) {
+        await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
+      }
     } finally {
       await prisma.user.deleteMany({ where: { id: { in: userIds } } })
     }
+    // Asserted after cleanup so a network leak fails the run without also
+    // leaving rows behind for the next test.
+    expect(fetchCalls).toBe(0)
   })
 
   describe('createTransaction', () => {
