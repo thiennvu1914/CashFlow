@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { USER_FIELD_DEFAULTS } from '@/lib/auth/user-defaults'
 
 /**
  * True only for a string `Intl.DateTimeFormat` accepts as an IANA time zone
@@ -47,12 +48,11 @@ export const changePasswordSchema = z.object({
 
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
 
-const PROFILE_DEFAULTS = {
-  baseCurrency: 'VND',
-  locale: 'vi',
-  theme: 'light',
-  timezone: 'Asia/Ho_Chi_Minh',
-} as const satisfies Omit<ProfileInput, 'name'>
+// `USER_FIELD_DEFAULTS` (`lib/auth/user-defaults.ts`) is the single source; the
+// `satisfies` here is what proves those values are still members of this file's
+// Zod enums, so a change over there that this schema cannot accept fails to
+// compile rather than silently becoming an unreachable fallback.
+const PROFILE_DEFAULTS = USER_FIELD_DEFAULTS satisfies Omit<ProfileInput, 'name'>
 
 /**
  * Better Auth's additional-fields type inference exposes `baseCurrency` /

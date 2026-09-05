@@ -38,7 +38,9 @@ model User {
   // CashFlow's additional user fields. Better Auth applies these same defaults
   // when it creates the row; the database defaults cover every other writer.
   // All five are `input: false` in `lib/auth/create-auth.ts`, so no client
-  // request body can set them.
+  // request body can set them. The four profile values below are the DB-level
+  // copy of `USER_FIELD_DEFAULTS` in `lib/auth/user-defaults.ts` — the single
+  // source the application code shares; keep them in step.
   baseCurrency  String    @default("VND")
   locale        String    @default("vi")
   theme         String    @default("light")

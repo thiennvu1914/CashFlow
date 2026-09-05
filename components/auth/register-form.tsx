@@ -9,6 +9,37 @@ import { registerSchema, type RegisterInput } from '@/lib/validation/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
+const GENERIC_ERROR = 'Something went wrong. Please try again.'
+const EMAIL_TAKEN_ERROR = 'An account with that email already exists.'
+
+/**
+ * Maps a Better Auth error onto one of two fixed strings. The server's own
+ * `error.message` is never rendered: it is library text we do not control, it
+ * can change between versions, and it can carry detail (a database or provider
+ * message) that has no business on a public sign-up form.
+ *
+ * `POST /sign-up/email` answers a duplicate address with
+ * `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` — verified in
+ * `node_modules/better-auth/dist/api/routes/sign-up.mjs`, which throws
+ * `APIError.from('UNPROCESSABLE_ENTITY',
+ * BASE_ERROR_CODES.USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL)`. The shorter
+ * `USER_ALREADY_EXISTS` is a sibling code in
+ * `node_modules/@better-auth/core/dist/error/codes.mjs` used elsewhere in the
+ * library, so both are accepted here rather than betting on one spelling.
+ *
+ * Telling a visitor their email is already registered is a deliberate
+ * trade-off: a sign-up form leaks that fact anyway (it cannot create the
+ * account), and a useless generic error here just sends people in circles. The
+ * endpoints where enumeration actually matters — sign-in and
+ * request-password-reset — stay uniform.
+ */
+function registerErrorMessage(code: string | undefined): string {
+  if (code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' || code === 'USER_ALREADY_EXISTS') {
+    return EMAIL_TAKEN_ERROR
+  }
+  return GENERIC_ERROR
+}
+
 export function RegisterForm() {
   const router = useRouter()
   const {
@@ -26,12 +57,12 @@ export function RegisterForm() {
         name: values.name,
       })
       if (error) {
-        setError('root', { message: error.message ?? 'Registration failed' })
+        setError('root', { message: registerErrorMessage(error.code) })
         return
       }
     } catch {
       console.error('Registration request failed')
-      setError('root', { message: 'Something went wrong. Please try again.' })
+      setError('root', { message: GENERIC_ERROR })
       return
     }
     router.push('/dashboard')

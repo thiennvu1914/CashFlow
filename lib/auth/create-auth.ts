@@ -1,4 +1,5 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth'
+import { USER_FIELD_DEFAULTS } from './user-defaults'
 
 export interface CreateAuthOptions {
   /**
@@ -137,13 +138,18 @@ export function createAuth(options: CreateAuthOptions) {
       // spec); Task 7 adds the second.
       //
       // `defaultValue` is applied by Better Auth when it creates the record.
-      // The matching `@default(...)` in `prisma/schema.prisma` is what covers
-      // rows written by anything else.
+      // The values come from `lib/auth/user-defaults.ts`, the single source
+      // shared with `lib/validation/profile.ts`. The matching `@default(...)`
+      // in `prisma/schema.prisma` is what covers rows written by anything else.
       additionalFields: {
-        baseCurrency: { type: 'string', defaultValue: 'VND', input: false },
-        locale: { type: 'string', defaultValue: 'vi', input: false },
-        theme: { type: 'string', defaultValue: 'light', input: false },
-        timezone: { type: 'string', defaultValue: 'Asia/Ho_Chi_Minh', input: false },
+        baseCurrency: {
+          type: 'string',
+          defaultValue: USER_FIELD_DEFAULTS.baseCurrency,
+          input: false,
+        },
+        locale: { type: 'string', defaultValue: USER_FIELD_DEFAULTS.locale, input: false },
+        theme: { type: 'string', defaultValue: USER_FIELD_DEFAULTS.theme, input: false },
+        timezone: { type: 'string', defaultValue: USER_FIELD_DEFAULTS.timezone, input: false },
         isDemo: { type: 'boolean', defaultValue: false, input: false },
       },
     },
