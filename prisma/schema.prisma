@@ -105,3 +105,226 @@ model Verification {
   @@index([identifier])
   @@map("verification")
 }
+
+// ---------------------------------------------------------------------------
+// CashFlow domain tables.
+//
+// A back-relation array is added to a model only in the same commit that
+// introduces the model referencing it, which keeps every migration valid on its
+// own. `AccountType.accounts` arrived with `FinancialAccount`, and
+// `Category.transactions` / `FinancialAccount.transactions` with `Transaction`.
+//
+// The `@@unique([userId, id])` on each is what lets later models carry a
+// composite `(userId, <fk>)` foreign key, so a row can never reference another
+// user's AccountType or Category (§4.12 of the spec).
+// ---------------------------------------------------------------------------
+
+enum RecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+model AccountType {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String
+  icon      String?
+  isDefault Boolean      @default(false)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+
+  accounts FinancialAccount[]
+
+  @@unique([userId, id])
+  @@index([userId])
+}
+
+model Category {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String
+  type      CategoryType
+  icon      String?
+  isDefault Boolean      @default(false)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+
+  transactions Transaction[]
+
+  @@unique([userId, id])
+  @@index([userId])
+}
+
+enum Currency {
+  VND
+  USD
+}
+
+model FinancialAccount {
+  id             String       @id @default(cuid())
+  userId         String
+  name           String
+  accountTypeId  String
+  initialBalance Decimal      @db.Decimal(18, 2)
+  currency       Currency
+  description    String?
+  status         RecordStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+
+  accountType   AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
+  transactions  Transaction[]
+  transfersFrom Transfer[]    @relation("TransferFromAccount")
+  transfersTo   Transfer[]    @relation("TransferToAccount")
+
+  @@unique([userId, id])
+  @@index([userId])
+}
+
+/// FX rate cache (§6.2). Global, not per-user: a USD/VND rate for a given day
+/// is the same fact for everyone, so this table carries no `userId` and is the
+/// one CashFlow table not scoped by `requireUser()`.
+///
+/// `effectiveDate` is always the UTC start-of-day the rate applies to, which is
+/// what makes `(base, quote, effectiveDate)` a natural key: one cached row per
+/// pair per day, upserted when a fresher fetch for the same day arrives.
+/// Historical rows are kept permanently — a past day's rate never changes.
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  base          Currency
+  quote         Currency
+  rate          Decimal  @db.Decimal(18, 6)
+  effectiveDate DateTime
+  fetchedAt     DateTime
+  source        String
+
+  @@unique([base, quote, effectiveDate])
+  @@index([base, quote, effectiveDate(sort: Desc)])
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  CASH_IN
+  CASH_OUT
+  ADJUSTMENT_INCREASE
+  ADJUSTMENT_DECREASE
+}
+
+/// A single money movement (§4.4). `amount` is always >= 0 — the direction is
+/// carried by `type` alone, never by the sign — and `currency` is always a copy
+/// of the owning account's currency, never client-supplied.
+///
+/// The four `fx*` columns are the immutable FX snapshot: the usable USD/VND
+/// rate at the moment this transaction's economic content was recorded, taken
+/// only from `getUsableCurrentRate`. The pair is always USD/VND regardless of
+/// the account currency, so any later report can restate the row in either
+/// currency using the rate that actually applied.
+///
+/// The two timestamps answer two different questions and are both kept:
+/// `fxRateEffectiveAt` is *when the rate applies* — the UTC start of the day
+/// it was published for, which is the `ExchangeRate` cache's natural key — and
+/// `fxRateFetchedAt` is *when we retrieved it*. They can be a day or more
+/// apart: on the fallback path both are the original cached row's own values,
+/// never "now", so a snapshot recorded during an outage still says honestly
+/// which day's rate it used and when that rate was obtained. `fxRateSource`
+/// carries the `cache-fallback:` prefix in exactly that case.
+///
+/// The `category` relation is optional while still being a composite FK: under
+/// Postgres's default MATCH SIMPLE semantics a NULL in any column of a
+/// composite FK exempts the row from the constraint check, so CASH_IN /
+/// CASH_OUT / ADJUSTMENT_* rows with no category are unaffected.
+model Transaction {
+  id                String          @id @default(cuid())
+  userId            String
+  accountId         String
+  categoryId        String?
+  type              TransactionType
+  /// >= 0 is also enforced by a database CHECK constraint
+  /// (`Transaction_amount_nonnegative`), written by hand in the
+  /// `add_transfer` migration — Prisma's schema language has no CHECK syntax,
+  /// so the constraint lives in SQL and this comment is its only trace here.
+  amount            Decimal         @db.Decimal(18, 2)
+  currency          Currency
+  /// UTC instant of the user-entered local date and time (converted in the
+  /// user's IANA timezone by the action layer); rendered back in that zone.
+  /// The user enters both a day and a time of day
+  /// (`lib/datetime/local-date-time.ts`), and only the action layer knows the
+  /// session user's zone, so only it can pin that wall-clock moment to an
+  /// instant. Period math uses `getPeriodBounds` in the same zone, and the
+  /// lists render it with `formatInTimeZone(date, timezone, 'yyyy-MM-dd HH:mm')`.
+  date              DateTime
+  note              String?
+  /// Decimal(18, 6) — deliberately the same scale as `ExchangeRate.rate`, so
+  /// the snapshot is the cached rate to the digit rather than a value rounded
+  /// on the way in. At Decimal(18, 4) a transaction could not be reconciled
+  /// against the rate it was actually recorded with.
+  vndPerUsdAtEntry  Decimal         @db.Decimal(18, 6)
+  /// When we retrieved the rate. On the fallback path this is the ORIGINAL
+  /// fetch instant preserved by `getUsableCurrentRate`, never "now".
+  fxRateFetchedAt   DateTime
+  /// Start of the UTC day the rate is effective for — the `ExchangeRate`
+  /// cache key, so a snapshot can be traced back to the exact cached row.
+  fxRateEffectiveAt DateTime
+  fxRateSource      String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  account  FinancialAccount @relation(fields: [userId, accountId], references: [userId, id])
+  category Category?        @relation(fields: [userId, categoryId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, date])
+  @@index([userId, accountId, date])
+  @@index([userId, categoryId, date])
+}
+
+/// An internal move of money between two of the user's own accounts (§4.5).
+///
+/// A transfer is its own entity, never a pair of transactions: it has no
+/// category, never appears as income or expense in any report, and carries no
+/// FX snapshot — the only rate that matters here is the one actually applied
+/// between the two accounts, stored as `exchangeRateUsed`.
+///
+/// `exchangeRateUsed` is NULL for a same-currency transfer, where `toAmount`
+/// is derived from `fromAmount` server-side and money is conserved by
+/// construction. For a cross-currency transfer it is `toAmount / fromAmount`,
+/// the effective rate the user actually got, kept for the audit trail.
+///
+/// Both legs are composite `(userId, accountId)` foreign keys, so neither end
+/// of a transfer can ever point at another user's account. Positivity of both
+/// amounts is enforced by database CHECK constraints
+/// (`Transfer_fromAmount_positive`, `Transfer_toAmount_positive`) added by
+/// hand in this model's migration, since Prisma has no CHECK syntax.
+model Transfer {
+  id               String   @id @default(cuid())
+  userId           String
+  fromAccountId    String
+  toAccountId      String
+  fromAmount       Decimal  @db.Decimal(18, 2)
+  toAmount         Decimal  @db.Decimal(18, 2)
+  /// Widened from Decimal(18,6) to Decimal(24,12) (ruling R-19): a
+  /// cross-currency rate can need more than 6 fractional digits to round-trip
+  /// exactly (e.g. a very small or very large effective rate), and 6 was
+  /// already tight for VND, whose unit amounts are large. 12 fractional
+  /// digits plus 12 integer digits comfortably covers every rate this app can
+  /// produce from two Decimal(18,2) amounts.
+  exchangeRateUsed Decimal? @db.Decimal(24, 12)
+  /// Same convention as `Transaction.date`: the UTC instant of the
+  /// user-entered local date and time (converted in the user's IANA timezone
+  /// by the action layer); rendered back in that zone. Period math uses
+  /// `getPeriodBounds` in the same zone.
+  date             DateTime
+  note             String?
+  createdAt        DateTime @default(now())
+
+  fromAccount FinancialAccount @relation("TransferFromAccount", fields: [userId, fromAccountId], references: [userId, id])
+  toAccount   FinancialAccount @relation("TransferToAccount", fields: [userId, toAccountId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, date])
+}

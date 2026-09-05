@@ -16,6 +16,21 @@ export default async function DashboardPage() {
       <Link href="/settings" className="text-sm text-primary underline-offset-4 hover:underline">
         Settings
       </Link>
+      <Link href="/categories" className="text-sm text-primary underline-offset-4 hover:underline">
+        Categories &amp; account types
+      </Link>
+      <Link href="/accounts" className="text-sm text-primary underline-offset-4 hover:underline">
+        Accounts
+      </Link>
+      <Link
+        href="/transactions"
+        className="text-sm text-primary underline-offset-4 hover:underline"
+      >
+        Transactions
+      </Link>
+      <Link href="/transfers" className="text-sm text-primary underline-offset-4 hover:underline">
+        Transfers
+      </Link>
       <LogoutButton />
     </div>
   )

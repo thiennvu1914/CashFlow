@@ -1,6 +1,7 @@
 import { prismaAdapter } from 'better-auth/adapters/prisma'
 import { prisma } from '@/lib/prisma'
 import { sendResetPasswordEmail } from '@/lib/email/send-reset-password-email'
+import { seedDefaultsForUser } from '@/lib/server/defaults'
 import { createAuth } from './create-auth'
 import { assertProductionAuthConfig } from './production-config'
 import { parseTrustedProxies } from './trusted-proxies'
@@ -20,4 +21,7 @@ export const auth = createAuth({
   database: prismaAdapter(prisma, { provider: 'postgresql' }),
   sendResetPasswordEmail,
   trustedProxies: parseTrustedProxies(process.env.TRUSTED_PROXY_CIDRS),
+  // Every new account starts with its own default account types and categories
+  // (§4.2 of the spec), created in the same request that creates the user.
+  onUserCreated: (user) => seedDefaultsForUser(user.id),
 })

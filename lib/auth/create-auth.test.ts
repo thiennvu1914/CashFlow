@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { makeTestAuth, nextTestIp, post } from './__testing__/auth-harness'
+import { makeTestAuth, nextTestIp, post, signUp } from './__testing__/auth-harness'
 
 /**
  * These tests exercise the real Better Auth instance against an in-memory
@@ -110,5 +110,26 @@ describe('createAuth', () => {
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ code: 'FIELD_NOT_ALLOWED' })
     expect(db.user[0]).toMatchObject({ isDemo: false })
+  })
+
+  it('calls onUserCreated exactly once with the new user id after sign-up', async () => {
+    const seeded: string[] = []
+    const { auth, db } = makeTestAuth({
+      onUserCreated: async (user) => {
+        seeded.push(user.id)
+      },
+    })
+
+    await signUp(
+      auth,
+      { name: 'Pham Thi D', email: 'pham@example.com', password: 'correct-horse-battery-staple' },
+      { ip: nextTestIp() },
+    )
+
+    // The app singleton passes `seedDefaultsForUser` here, so this is what
+    // guarantees a freshly registered user gets their default account types and
+    // categories — and gets exactly one set of them.
+    expect(db.user).toHaveLength(1)
+    expect(seeded).toEqual([db.user[0].id])
   })
 })
