@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import type { Currency } from '@prisma/client'
-import type { z } from 'zod'
-import { createTransactionSchema, type CreateTransactionInput } from '@/lib/validation/transaction'
+import {
+  createTransactionFormSchema,
+  type CreateTransactionFormInput,
+  type CreateTransactionInput,
+} from '@/lib/validation/transaction'
 import {
   createTransactionAction,
   type TransactionActionError,
@@ -18,14 +21,16 @@ import { Input } from '@/components/ui/input'
 type TransactionType = CreateTransactionInput['type']
 
 /**
- * `createTransactionSchema`'s `date` field is `z.coerce.date()`: its *input*
- * type (what the `<input type="date">` DOM element actually produces, and
- * what `defaultValues` must supply) is a plain string, while its *output*
- * type (what a submit handler receives after Zod coerces it) is a `Date` —
- * matching `CreateTransactionInput`. `useForm`'s three generics keep the two
- * sides straight instead of casting a string through `Date`.
+ * The form validates and submits `createTransactionFormSchema`, whose `date`
+ * is the raw `yyyy-MM-dd` string the `<input type="date">` produced — input
+ * and output types are the same here, so no `Date` ever exists client-side.
+ *
+ * That is deliberate (ruling R-21b): a calendar day only becomes an instant
+ * once a timezone is chosen, and the browser's zone is not necessarily the
+ * user's configured zone. `createTransactionAction` does the conversion in
+ * the session user's IANA zone; see `lib/datetime/calendar-date.ts`.
  */
-type FormInput = z.input<typeof createTransactionSchema>
+type FormInput = CreateTransactionFormInput
 
 type Account = { id: string; name: string; currency: Currency }
 type Category = { id: string; name: string; type: 'INCOME' | 'EXPENSE' }
@@ -81,8 +86,8 @@ export function TransactionForm({
     reset,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<FormInput, unknown, CreateTransactionInput>({
-    resolver: zodResolver(createTransactionSchema),
+  } = useForm<FormInput>({
+    resolver: zodResolver(createTransactionFormSchema),
     defaultValues: defaultValues(accounts, timezone),
   })
 
@@ -96,7 +101,7 @@ export function TransactionForm({
     if (!needsCategory) setValue('categoryId', undefined)
   }, [needsCategory, setValue])
 
-  async function onSubmit(values: CreateTransactionInput) {
+  async function onSubmit(values: FormInput) {
     setError(null)
     try {
       const result = await createTransactionAction(values)

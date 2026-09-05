@@ -244,6 +244,12 @@ model Transaction {
   /// so the constraint lives in SQL and this comment is its only trace here.
   amount           Decimal         @db.Decimal(18, 2)
   currency         Currency
+  /// An instant = local midnight of the user's calendar day in their IANA
+  /// timezone at entry (`lib/datetime/calendar-date.ts`, ruling R-21b). The
+  /// user picks a day, never a time; the action layer pins that day to an
+  /// instant because only it knows the session user's zone. Period math uses
+  /// `getPeriodBounds` in the same zone, and the lists render it back with
+  /// `formatInTimeZone(date, timezone, 'yyyy-MM-dd')`.
   date             DateTime
   note             String?
   vndPerUsdAtEntry Decimal         @db.Decimal(18, 4)
@@ -292,6 +298,10 @@ model Transfer {
   /// digits plus 12 integer digits comfortably covers every rate this app can
   /// produce from two Decimal(18,2) amounts.
   exchangeRateUsed Decimal? @db.Decimal(24, 12)
+  /// Same convention as `Transaction.date`: an instant = local midnight of the
+  /// user's calendar day in their IANA timezone at entry
+  /// (`lib/datetime/calendar-date.ts`, ruling R-21b). Period math uses
+  /// `getPeriodBounds` in the same zone.
   date             DateTime
   note             String?
   createdAt        DateTime @default(now())

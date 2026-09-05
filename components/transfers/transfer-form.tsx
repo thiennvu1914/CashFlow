@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import type { Currency } from '@prisma/client'
-import type { z } from 'zod'
-import { createTransferSchema, type CreateTransferInput } from '@/lib/validation/transfer'
+import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 import {
   createTransferAction,
   type TransferActionError,
@@ -16,13 +15,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Same input/output split as `TransactionForm`: `createTransferSchema`'s
- * `date` is `z.coerce.date()` — its *input* type (what an
- * `<input type="date">` produces, and what `defaultValues` must supply) is a
- * plain string, while its *output* type (what `onSubmit` receives) is a real
- * `Date` matching `CreateTransferInput`.
+ * Same convention as `TransactionForm`: the form validates and submits
+ * `createTransferFormSchema`, whose `date` stays the raw `yyyy-MM-dd` string
+ * the `<input type="date">` produced. `createTransferAction` converts that
+ * calendar day to an instant in the session user's IANA zone (ruling R-21b);
+ * see `lib/datetime/calendar-date.ts`.
  */
-type FormInput = z.input<typeof createTransferSchema>
+type FormInput = CreateTransferFormInput
 
 type Account = { id: string; name: string; currency: Currency }
 
@@ -69,8 +68,8 @@ export function TransferForm({
     resetField,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<FormInput, unknown, CreateTransferInput>({
-    resolver: zodResolver(createTransferSchema),
+  } = useForm<FormInput>({
+    resolver: zodResolver(createTransferFormSchema),
     defaultValues: defaultValues(accounts, timezone),
   })
 
@@ -102,7 +101,7 @@ export function TransferForm({
     wasSameCurrencyRef.current = sameCurrency
   }, [sameCurrency, fromAmount, setValue, resetField])
 
-  async function onSubmit(values: CreateTransferInput) {
+  async function onSubmit(values: FormInput) {
     setError(null)
     try {
       // Belt and suspenders with the effect above: the client never trusts a

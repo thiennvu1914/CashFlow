@@ -6,7 +6,9 @@ import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
 import { createTransfer, SameAccountTransferError } from '@/lib/server/services/transfer'
 import { ArchivedAccountError } from '@/lib/server/services/transaction'
-import type { CreateTransferInput } from '@/lib/validation/transfer'
+import { resolveProfileDefaults } from '@/lib/validation/profile'
+import { calendarDateToInstant } from '@/lib/datetime/calendar-date'
+import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 
 /**
  * Same shape as `transaction-actions.ts`: a server action never throws a
@@ -15,6 +17,10 @@ import type { CreateTransferInput } from '@/lib/validation/transfer'
  *
  * `input` always comes from the client; `userId` never does — the only call
  * into the service below is `(user.id, input)` from `requireUser()`.
+ *
+ * As in `transaction-actions.ts`, this layer owns the calendar-date → instant
+ * conversion (ruling R-21b): the form submits the plain `yyyy-MM-dd` the user
+ * picked, and only here is the session user's IANA timezone known.
  */
 export type TransferActionError =
   'ARCHIVED_ACCOUNT' | 'SAME_ACCOUNT' | 'INVALID_INPUT' | 'NOT_FOUND'
@@ -32,11 +38,18 @@ function mapError(e: unknown): TransferActionResult {
 }
 
 export async function createTransferAction(
-  input: CreateTransferInput,
+  input: CreateTransferFormInput,
 ): Promise<TransferActionResult> {
   const user = await requireUser()
+  const { timezone } = resolveProfileDefaults(user)
   try {
-    await createTransfer(user.id, input)
+    // Re-validated server-side so a malformed `date` is a ZodError
+    // (INVALID_INPUT) rather than an unmapped throw out of the conversion.
+    const parsed = createTransferFormSchema.parse(input)
+    await createTransfer(user.id, {
+      ...parsed,
+      date: calendarDateToInstant(parsed.date, timezone),
+    })
   } catch (e) {
     return mapError(e)
   }

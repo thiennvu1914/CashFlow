@@ -6,7 +6,13 @@ import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
 import * as transactionService from '@/lib/server/services/transaction'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
-import type { CreateTransactionInput } from '@/lib/validation/transaction'
+import { resolveProfileDefaults } from '@/lib/validation/profile'
+import { calendarDateToInstant } from '@/lib/datetime/calendar-date'
+import {
+  createTransactionFormSchema,
+  type CreateTransactionFormInput,
+  type CreateTransactionInput,
+} from '@/lib/validation/transaction'
 
 /**
  * Server actions never throw a domain error to the client: every mapped
@@ -18,6 +24,11 @@ import type { CreateTransactionInput } from '@/lib/validation/transaction'
  * `input`/`id` always come from the client; `userId` never does — every call
  * into the service below is `(user.id, ...)` from `requireUser()`, and the
  * real FX policy runs (no `providerOverride` is ever passed here).
+ *
+ * This layer also owns the calendar-date → instant conversion (ruling R-21b):
+ * the form submits the plain `yyyy-MM-dd` the user picked, and only here is
+ * the session user's IANA timezone known, so only here can that day be pinned
+ * to the right instant. See `lib/datetime/calendar-date.ts`.
  */
 export type TransactionActionError =
   'FX_UNAVAILABLE' | 'ARCHIVED_ACCOUNT' | 'INVALID_CATEGORY' | 'INVALID_INPUT' | 'NOT_FOUND'
@@ -39,12 +50,26 @@ function mapError(e: unknown): TransactionActionResult {
   throw e
 }
 
+/**
+ * Re-validates the form shape server-side (a malformed `date` is a ZodError,
+ * i.e. INVALID_INPUT, never an unmapped throw out of `calendarDateToInstant`)
+ * and resolves the calendar day against the caller's own timezone.
+ */
+function toServiceInput(
+  input: CreateTransactionFormInput,
+  timezone: string,
+): CreateTransactionInput {
+  const parsed = createTransactionFormSchema.parse(input)
+  return { ...parsed, date: calendarDateToInstant(parsed.date, timezone) }
+}
+
 export async function createTransactionAction(
-  input: CreateTransactionInput,
+  input: CreateTransactionFormInput,
 ): Promise<TransactionActionResult> {
   const user = await requireUser()
+  const { timezone } = resolveProfileDefaults(user)
   try {
-    await transactionService.createTransaction(user.id, input)
+    await transactionService.createTransaction(user.id, toServiceInput(input, timezone))
   } catch (e) {
     return mapError(e)
   }
@@ -55,11 +80,12 @@ export async function createTransactionAction(
 
 export async function updateTransactionAction(
   id: string,
-  input: CreateTransactionInput,
+  input: CreateTransactionFormInput,
 ): Promise<TransactionActionResult> {
   const user = await requireUser()
+  const { timezone } = resolveProfileDefaults(user)
   try {
-    await transactionService.updateTransaction(user.id, id, input)
+    await transactionService.updateTransaction(user.id, id, toServiceInput(input, timezone))
   } catch (e) {
     return mapError(e)
   }
