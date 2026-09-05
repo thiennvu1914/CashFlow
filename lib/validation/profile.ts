@@ -1,0 +1,69 @@
+import { z } from 'zod'
+
+// Deliberately excludes `isDemo`: this is the second of the two independent
+// layers blocking a client-set `isDemo` (§4.1, §13 of the spec). The first is
+// `additionalFields.isDemo.input: false` in `lib/auth/create-auth.ts`. Zod
+// strips unknown keys by default, so an `isDemo`/`userId` present in the raw
+// input simply has no path into `ProfileInput`.
+export const profileSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(100),
+  baseCurrency: z.enum(['VND', 'USD']),
+  locale: z.enum(['vi', 'en']),
+  theme: z.enum(['light', 'dark']),
+  timezone: z.string().min(1, 'Timezone is required'),
+})
+
+export type ProfileInput = z.infer<typeof profileSchema>
+
+// Same bounds and messages as `registerSchema.password` in
+// `lib/validation/auth.ts`, which are also the `minPasswordLength` /
+// `maxPasswordLength` Better Auth enforces server-side (see
+// `lib/auth/create-auth.ts`) — changing a password must never accept weaker
+// input than creating one.
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(8, 'Password must be at least 8 characters').max(128),
+})
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
+
+const PROFILE_DEFAULTS = {
+  baseCurrency: 'VND',
+  locale: 'vi',
+  theme: 'light',
+  timezone: 'Asia/Ho_Chi_Minh',
+} as const satisfies Omit<ProfileInput, 'name'>
+
+/**
+ * Better Auth's additional-fields type inference exposes `baseCurrency` /
+ * `locale` / `theme` / `timezone` on the session user object, but only as
+ * plain `string` (confirmed with a scratch `tsc` check against
+ * `requireUser()`'s return type) — not narrowed to the Zod enums declared
+ * here. A stored value can therefore only ever be one of the enum's members
+ * in practice (Better Auth's `additionalFields` config and the matching
+ * Prisma `@default(...)` are the only writers, and Task 7's `updateProfile`
+ * server action is the only client-reachable writer, itself validated by
+ * `profileSchema`) — but this helper still falls back to CashFlow's defaults
+ * defensively rather than ever passing an out-of-enum value to the form or
+ * throwing while rendering the settings page.
+ */
+export function resolveProfileDefaults(user: {
+  name: string
+  baseCurrency: string
+  locale: string
+  theme: string
+  timezone: string
+}): ProfileInput {
+  const baseCurrency = profileSchema.shape.baseCurrency.safeParse(user.baseCurrency)
+  const locale = profileSchema.shape.locale.safeParse(user.locale)
+  const theme = profileSchema.shape.theme.safeParse(user.theme)
+  const timezone = profileSchema.shape.timezone.safeParse(user.timezone)
+
+  return {
+    name: user.name,
+    baseCurrency: baseCurrency.success ? baseCurrency.data : PROFILE_DEFAULTS.baseCurrency,
+    locale: locale.success ? locale.data : PROFILE_DEFAULTS.locale,
+    theme: theme.success ? theme.data : PROFILE_DEFAULTS.theme,
+    timezone: timezone.success ? timezone.data : PROFILE_DEFAULTS.timezone,
+  }
+}
