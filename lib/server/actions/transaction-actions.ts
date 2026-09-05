@@ -31,7 +31,12 @@ import {
  * to the right instant. See `lib/datetime/calendar-date.ts`.
  */
 export type TransactionActionError =
-  'FX_UNAVAILABLE' | 'ARCHIVED_ACCOUNT' | 'INVALID_CATEGORY' | 'INVALID_INPUT' | 'NOT_FOUND'
+  | 'FX_UNAVAILABLE'
+  | 'ARCHIVED_ACCOUNT'
+  | 'CURRENCY_MISMATCH'
+  | 'INVALID_CATEGORY'
+  | 'INVALID_INPUT'
+  | 'NOT_FOUND'
 
 export type TransactionActionResult = { ok: true } | { ok: false; error: TransactionActionError }
 
@@ -39,6 +44,9 @@ function mapError(e: unknown): TransactionActionResult {
   if (isFxUnavailableError(e)) return { ok: false, error: 'FX_UNAVAILABLE' }
   if (e instanceof transactionService.ArchivedAccountError) {
     return { ok: false, error: 'ARCHIVED_ACCOUNT' }
+  }
+  if (e instanceof transactionService.CurrencyMismatchError) {
+    return { ok: false, error: 'CURRENCY_MISMATCH' }
   }
   if (e instanceof transactionService.InvalidCategoryError) {
     return { ok: false, error: 'INVALID_CATEGORY' }

@@ -34,6 +34,8 @@ const GENERIC_ERROR = 'Something went wrong. Please try again.'
 const ACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
   FX_UNAVAILABLE: 'Exchange rate is temporarily unavailable. Please try again in a moment.',
   ARCHIVED_ACCOUNT: 'This account is archived.',
+  CURRENCY_MISMATCH:
+    'Move the transaction to an account in the same currency, or delete and re-enter it.',
   INVALID_CATEGORY: 'Choose a valid category for this type.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That record no longer exists.',

@@ -7,6 +7,7 @@ import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { createTransactionSchema } from '@/lib/validation/transaction'
 import {
   ArchivedAccountError,
+  CurrencyMismatchError,
   InvalidCategoryError,
   createTransaction,
   deleteTransaction,
@@ -92,6 +93,18 @@ describe('transaction service', () => {
         currency: 'VND',
       },
     })
+    // A second account in the SAME currency: moving a row between two of
+    // these is the legitimate account change, as opposed to a move across
+    // currencies (which `updateTransaction` refuses).
+    const secondAccount = await prisma.financialAccount.create({
+      data: {
+        userId: user.id,
+        name: 'Test 2',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      },
+    })
     const usdAccount = await prisma.financialAccount.create({
       data: {
         userId: user.id,
@@ -110,6 +123,7 @@ describe('transaction service', () => {
     return {
       userId: user.id,
       accountId: account.id,
+      secondAccountId: secondAccount.id,
       usdAccountId: usdAccount.id,
       accountTypeId: accountType.id,
       expenseCategoryId: expenseCategory.id,
@@ -711,7 +725,7 @@ describe('transaction service', () => {
       expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
     })
 
-    it('re-snapshots and re-derives the currency when the account changes', async () => {
+    it('re-snapshots and re-derives the currency when the account changes within the same currency', async () => {
       const s = await setup()
       const tx = await createBase(s)
       expect(tx.currency).toBe('VND')
@@ -722,7 +736,7 @@ describe('transaction service', () => {
         s.userId,
         tx.id,
         {
-          accountId: s.usdAccountId,
+          accountId: s.secondAccountId,
           categoryId: s.expenseCategoryId,
           type: 'EXPENSE',
           amount: 1000,
@@ -732,11 +746,43 @@ describe('transaction service', () => {
         f2.provider,
       )
 
-      expect(updated.accountId).toBe(s.usdAccountId)
-      expect(updated.currency).toBe('USD')
+      expect(updated.accountId).toBe(s.secondAccountId)
+      expect(updated.currency).toBe('VND')
       expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
       expect(updated.fxRateSource).toBe('fake-2')
       expect(updated.fxRateTimestamp.toISOString()).toBe(f2.fetchedAt.toISOString())
+    })
+
+    it('refuses to move a transaction to an account in another currency, leaving the row untouched', async () => {
+      const s = await setup()
+      const tx = await createBase(s)
+      expect(tx.currency).toBe('VND')
+
+      await expect(
+        updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.usdAccountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date('2026-02-01'),
+            note: 'original',
+          },
+          fakeProvider(25500, 'fake-2').provider,
+        ),
+      ).rejects.toThrow(CurrencyMismatchError)
+
+      // 1000 VND is not 1000 USD: silently re-labelling the amount would
+      // multiply this row's real value by ~25000.
+      const stored = await prisma.transaction.findUniqueOrThrow({
+        where: { userId_id: { userId: s.userId, id: tx.id } },
+      })
+      expect(stored.accountId).toBe(s.accountId)
+      expect(stored.currency).toBe('VND')
+      expect(stored.amount.toString()).toBe('1000')
+      expect(stored.fxRateSource).toBe('fake')
     })
 
     it('re-snapshots when only the type changes', async () => {

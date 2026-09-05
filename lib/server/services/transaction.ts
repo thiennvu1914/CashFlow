@@ -36,6 +36,25 @@ export class ArchivedAccountError extends Error {
   }
 }
 
+/**
+ * Thrown when an edit tries to move a transaction to an account in a
+ * different currency.
+ *
+ * `currency` follows the account, and `amount` is a bare magnitude with no
+ * currency of its own — so silently re-deriving the currency on a move would
+ * turn "1000 VND" into "1000 USD" and multiply the row's real value by about
+ * twenty-five thousand. There is no honest conversion to do either: the
+ * amount the user actually spent in the new currency is information only they
+ * have. So the move is refused, and the correct path is to delete the row and
+ * re-enter it against the new account.
+ */
+export class CurrencyMismatchError extends Error {
+  constructor() {
+    super('Move the transaction to an account in the same currency, or delete and re-enter it.')
+    this.name = 'CurrencyMismatchError'
+  }
+}
+
 export class InvalidCategoryError extends Error {
   constructor(reason: string) {
     super(`Invalid category: ${reason}`)
@@ -192,6 +211,9 @@ export async function createTransaction(
  * An edit that keeps the row's existing category is allowed even when that
  * category has since been archived — archiving hides a category from new
  * entries, it does not freeze the history already filed under it.
+ *
+ * The one account change that is *not* allowed is a move across currencies:
+ * see `CurrencyMismatchError`.
  */
 export async function updateTransaction(
   userId: string,
@@ -207,6 +229,10 @@ export async function updateTransaction(
   // gain it, so a row can be neither edited out of one nor moved into one.
   await requireActiveAccount(userId, existing.accountId)
   const account = await requireActiveAccount(userId, parsed.accountId)
+  // Before any write: `amount` carries no currency of its own, so moving a row
+  // to an account in another currency would re-label the same number as a
+  // different amount of money. Refused outright — see `CurrencyMismatchError`.
+  if (account.currency !== existing.currency) throw new CurrencyMismatchError()
   // The row's current category is passed so keeping it does not require it to
   // still be ACTIVE — see `resolveCategoryId`.
   const categoryId = await resolveCategoryId(

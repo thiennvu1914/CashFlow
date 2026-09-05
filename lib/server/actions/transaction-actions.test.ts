@@ -30,6 +30,13 @@ class MockInvalidCategoryError extends Error {
   }
 }
 
+class MockCurrencyMismatchError extends Error {
+  constructor() {
+    super('Move the transaction to an account in the same currency, or delete and re-enter it.')
+    this.name = 'CurrencyMismatchError'
+  }
+}
+
 class MockFxUnavailableError extends Error {
   constructor() {
     super('Unable to retrieve an exchange rate.')
@@ -46,6 +53,7 @@ vi.mock('@/lib/server/services/transaction', () => ({
   updateTransaction: updateTransactionMock,
   deleteTransaction: deleteTransactionMock,
   ArchivedAccountError: MockArchivedAccountError,
+  CurrencyMismatchError: MockCurrencyMismatchError,
   InvalidCategoryError: MockInvalidCategoryError,
 }))
 
@@ -242,6 +250,15 @@ describe('updateTransactionAction', () => {
     const result = await updateTransactionAction('tx_1', validInput)
 
     expect(result).toEqual({ ok: false, error: 'ARCHIVED_ACCOUNT' })
+  })
+
+  it('maps CurrencyMismatchError to CURRENCY_MISMATCH and does not revalidate', async () => {
+    updateTransactionMock.mockRejectedValue(new MockCurrencyMismatchError())
+
+    const result = await updateTransactionAction('tx_1', validInput)
+
+    expect(result).toEqual({ ok: false, error: 'CURRENCY_MISMATCH' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 
   it('maps InvalidCategoryError to INVALID_CATEGORY', async () => {
