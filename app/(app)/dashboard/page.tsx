@@ -19,6 +19,9 @@ export default async function DashboardPage() {
       <Link href="/categories" className="text-sm text-primary underline-offset-4 hover:underline">
         Categories &amp; account types
       </Link>
+      <Link href="/accounts" className="text-sm text-primary underline-offset-4 hover:underline">
+        Accounts
+      </Link>
       <LogoutButton />
     </div>
   )
