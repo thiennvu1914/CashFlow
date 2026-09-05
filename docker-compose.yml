@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cashflow
+      POSTGRES_PASSWORD: cashflow_dev_password
+      POSTGRES_DB: cashflow
+    ports:
+      - '5439:5432'
+    volumes:
+      - cashflow_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  cashflow_postgres_data:
