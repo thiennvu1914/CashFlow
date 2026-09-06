@@ -1,0 +1,153 @@
+import { Prisma } from '@prisma/client'
+import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
+import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
+import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
+import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
+import { getAccountBalances } from './balance'
+import { listActiveFinancialAccounts } from './financial-account'
+
+/**
+ * The user's current position: what they hold right now, restated in one
+ * display currency (spec §5.4).
+ *
+ * Everything the dashboard's Total Balance card, Net Worth card and Account
+ * Balance Distribution chart need comes out of a single `getCurrentPosition`
+ * call, so the three figures can never disagree with each other: they are
+ * three views of one set of balances converted at one rate.
+ *
+ * Cost is constant, not per-account: one `listActiveFinancialAccounts`, one
+ * batched `getAccountBalances` for every id at once, and — only when at least
+ * one account is held in a currency other than `displayCurrency` — one call to
+ * `getUsableCurrentRate`. A single-currency user therefore never touches FX at
+ * all and their dashboard renders unchanged through a provider outage.
+ *
+ * Arithmetic is `Prisma.Decimal` end to end and nothing is rounded here:
+ * rounding is a presentation decision, and the pages convert to chart numbers
+ * themselves.
+ */
+
+/** One active account's balance, in its own currency and in the display currency. */
+export interface PositionAccount {
+  id: string
+  name: string
+  currency: Currency
+  /** The derived balance in the account's own currency — never converted. */
+  nativeBalance: Prisma.Decimal
+  /**
+   * The same balance restated in `displayCurrency`. This — never
+   * `nativeBalance` — is the only currency-correct input to a distribution
+   * chart: charting "100" for a USD account beside "1,000,000" for a VND one
+   * says nothing about their true relative size.
+   */
+  displayBalance: Prisma.Decimal
+}
+
+export interface CurrentPosition {
+  /** Σ of every active account's `displayBalance`. */
+  totalBalance: Prisma.Decimal
+  /** See `getNetWorth` — identical to `totalBalance` in Phase 4. */
+  netWorth: Prisma.Decimal
+  accounts: PositionAccount[]
+  /**
+   * The rate every conversion in this result used, or `null` when no account
+   * needed converting. Carries `isFallback` and `source`, so a caller can show
+   * "rate may be out of date" without asking the policy a second question.
+   */
+  fx: UsableRateResult | null
+}
+
+export async function getCurrentPosition(
+  userId: string,
+  displayCurrency: Currency,
+  providerOverride?: ExchangeRateProvider,
+): Promise<CurrentPosition> {
+  // Active only: an account can only be archived at a zero balance (Phase 2),
+  // so an archived one would contribute nothing but a zero slice of noise.
+  const accounts = await listActiveFinancialAccounts(userId)
+  const balances = await getAccountBalances(
+    userId,
+    accounts.map((account) => account.id),
+  )
+
+  // The rate is fetched once, up front, and only if it is actually needed —
+  // never inside the per-account loop, and never for a user whose accounts are
+  // all in the display currency already.
+  const needsConversion = accounts.some((account) => account.currency !== displayCurrency)
+  const fx = needsConversion
+    ? // Deliberately not caught: when a conversion is genuinely required there
+      // is no honest number to show, so `FxUnavailableError` propagates and the
+      // caller degrades (spec §6.3) rather than this function inventing a rate.
+      await getUsableCurrentRate({ base: 'USD', quote: 'VND' }, providerOverride)
+    : null
+
+  let totalBalance = new Prisma.Decimal(0)
+  const positionAccounts: PositionAccount[] = accounts.map((account) => {
+    const nativeBalance = balances.get(account.id) ?? new Prisma.Decimal(0)
+    let displayBalance = nativeBalance
+    if (account.currency !== displayCurrency) {
+      // Unreachable: `needsConversion` is true whenever this branch is, so `fx`
+      // is non-null here. The throw exists so a future edit that decouples the
+      // two fails loudly instead of silently charting native numbers.
+      if (!fx) throw new Error('Missing exchange rate for a conversion that is required')
+      displayBalance = applyVndPerUsdRate(
+        nativeBalance,
+        account.currency,
+        displayCurrency,
+        fx.rateDecimal,
+      )
+    }
+    totalBalance = totalBalance.add(displayBalance)
+    return {
+      id: account.id,
+      name: account.name,
+      currency: account.currency,
+      nativeBalance,
+      displayBalance,
+    }
+  })
+
+  return { totalBalance, netWorth: totalBalance, accounts: positionAccounts, fx }
+}
+
+/** Σ of every active account's balance, restated in `displayCurrency`. */
+export async function getTotalAccountBalance(
+  userId: string,
+  displayCurrency: Currency,
+  providerOverride?: ExchangeRateProvider,
+): Promise<Prisma.Decimal> {
+  const { totalBalance } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  return totalBalance
+}
+
+/**
+ * Phase 4: Net Worth = Total Account Balance only.
+ *
+ * Phase 6 extends this to `+ receivables outstanding − payables outstanding −
+ * outstanding loan principal` (spec §5.4), each converted the same way (own
+ * currency → `displayCurrency` at the current rate). The signature does not
+ * change — only `getCurrentPosition`'s body grows — so every caller written
+ * now keeps working when the definition widens.
+ */
+export async function getNetWorth(
+  userId: string,
+  displayCurrency: Currency,
+  providerOverride?: ExchangeRateProvider,
+): Promise<Prisma.Decimal> {
+  const { netWorth } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  return netWorth
+}
+
+/**
+ * Per-account balances for the Account Balance Distribution chart, every one of
+ * them already converted to `displayCurrency`. Decimals, not numbers: the page
+ * maps them to chart values with whatever scale it chooses, and no digit is
+ * dropped before it gets there.
+ */
+export async function getAccountDistribution(
+  userId: string,
+  displayCurrency: Currency,
+  providerOverride?: ExchangeRateProvider,
+): Promise<PositionAccount[]> {
+  const { accounts } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  return accounts
+}
