@@ -37,7 +37,9 @@ export default async function TransactionsPage() {
         }))}
         timezone={timezone}
       />
-      <div>
+      {/* `id="new"` is the target of the shell's "Add transaction" action
+          (`/transactions#new`), on both the desktop rail and the mobile bar. */}
+      <div id="new" className="scroll-mt-6">
         <h2 className="mb-3 text-lg font-semibold">Add transaction</h2>
         <TransactionForm
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}

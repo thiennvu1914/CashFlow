@@ -1,37 +1,18 @@
-import Link from 'next/link'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
-import { LogoutButton } from '@/components/auth/logout-button'
 
+/**
+ * Placeholder between the shell landing and the real dashboard: the Phase 1
+ * link list has served its purpose now that the shell navigates, and the KPIs,
+ * FX status and widgets arrive in the next commit.
+ */
 export default async function DashboardPage() {
-  // See the note in `app/(app)/settings/page.tsx`: the layout redirect is UX,
-  // the page is the auth boundary.
-  const user = await requireUserOrRedirect()
+  // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
+  // so this page redirects on its own.
+  await requireUserOrRedirect()
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <p>
-        Signed in as {user.name} ({user.email})
-      </p>
-      <p>Dashboard placeholder — Phase 1 protected route check</p>
-      <Link href="/settings" className="text-sm text-primary underline-offset-4 hover:underline">
-        Settings
-      </Link>
-      <Link href="/categories" className="text-sm text-primary underline-offset-4 hover:underline">
-        Categories &amp; account types
-      </Link>
-      <Link href="/accounts" className="text-sm text-primary underline-offset-4 hover:underline">
-        Accounts
-      </Link>
-      <Link
-        href="/transactions"
-        className="text-sm text-primary underline-offset-4 hover:underline"
-      >
-        Transactions
-      </Link>
-      <Link href="/transfers" className="text-sm text-primary underline-offset-4 hover:underline">
-        Transfers
-      </Link>
-      <LogoutButton />
+    <div className="p-6">
+      <h1 className="text-xl font-semibold">Dashboard</h1>
     </div>
   )
 }
