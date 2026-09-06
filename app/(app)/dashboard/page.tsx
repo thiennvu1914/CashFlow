@@ -182,10 +182,15 @@ export default async function DashboardPage() {
         >
           {vm.budgets.length === 0 ? (
             <DashboardEmpty>
-              No budgets for this month —{' '}
-              <Link href="/budgets" className="text-brand underline-offset-4 hover:underline">
-                set one up
-              </Link>
+              {/* One `span`, as in `RecentTransactions`: `DashboardEmpty`'s `p` is
+                  a flex container, so bare text and a link would be two flex
+                  items and the space between them would be dropped. */}
+              <span>
+                No budgets for this month —{' '}
+                <Link href="/budgets" className="text-brand underline-offset-4 hover:underline">
+                  set one up
+                </Link>
+              </span>
             </DashboardEmpty>
           ) : (
             <BudgetProgressList budgets={vm.budgets} compact />

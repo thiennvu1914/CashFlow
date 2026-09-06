@@ -2,7 +2,15 @@ import type ExcelJS from 'exceljs'
 import { getBudgetProgressForMonth, listAllBudgets } from '@/lib/server/services/budget'
 import type { BudgetProgress } from '@/lib/server/services/budget'
 import { BUDGET_STATUS_LABELS } from '@/lib/ui/budget-view-model'
-import { DATE_FMT, localDateCell, moneyCell, moneyFmt, writeHeader } from './cells'
+import {
+  DATE_FMT,
+  PERCENT_FMT,
+  localDateCell,
+  moneyCell,
+  moneyFmt,
+  percentCell,
+  writeHeader,
+} from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -106,12 +114,9 @@ export async function buildBudgetsSheet(
       budget.currency,
       progress === undefined ? null : moneyCell(progress.spent),
       progress === undefined ? null : moneyCell(progress.remaining),
-      // The one widening on this sheet that is not `moneyCell`: an Excel
-      // percentage cell is a fraction plus a `0%` format, so the unrounded
-      // `ratio` becomes a double here and the spreadsheet does the rounding for
-      // display. Nothing recomputes from it — `Status` comes from the band the
-      // service classified on the `Decimal` itself, not from this number.
-      progress === undefined ? null : progress.ratio.toNumber(),
+      // `Status` comes from the band the service classified on the `Decimal`
+      // itself, never from this widened number.
+      progress === undefined ? null : percentCell(progress.ratio),
       progress === undefined ? '' : BUDGET_STATUS_LABELS[progress.status],
       localDateCell(budget.createdAt, ctx.timezone),
     ])
@@ -119,7 +124,7 @@ export async function buildBudgetsSheet(
     written.getCell(5).numFmt = moneyFormat
     written.getCell(7).numFmt = moneyFormat
     written.getCell(8).numFmt = moneyFormat
-    written.getCell(9).numFmt = '0%'
+    written.getCell(9).numFmt = PERCENT_FMT
     written.getCell(11).numFmt = DATE_FMT
   }
 }
