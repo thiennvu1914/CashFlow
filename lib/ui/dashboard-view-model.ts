@@ -4,8 +4,10 @@ import type { Currency } from '@/lib/currency/provider'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
+import type { BudgetProgress } from '@/lib/server/services/budget'
 import type { CurrentPosition } from '@/lib/server/services/position'
 import type { listTransactions } from '@/lib/server/services/transaction'
+import { type BudgetProgressDto, toBudgetProgressDto } from './budget-view-model'
 import { formatMoney, formatRate } from './format-money'
 
 /**
@@ -56,6 +58,15 @@ export interface DashboardInput {
   cashFlowTrend: CashFlowPoint[]
   balanceOverTime: AccountBalancePoint[]
   recentTransactions: RecentTransactionRow[]
+  /**
+   * Progress for the budgets the user set for the **current local month**, from
+   * `getBudgetProgressForMonth` — i.e. summed from each contributing row's own
+   * FX snapshot. `position.fx` is nowhere near it, so the widget reads the same
+   * during an FX outage as it does with a live rate, and each budget stays in
+   * its own currency rather than being restated in `displayCurrency`
+   * (ruling R5-3).
+   */
+  budgets: BudgetProgress[]
 }
 
 export interface KpiDto {
@@ -141,6 +152,10 @@ export interface DashboardViewModel {
   /** `null` when the position is unavailable — a distribution of nothing is not a chart. */
   distribution: NamedAmountDto[] | null
   recentTransactions: RecentTransactionDto[]
+  /** This month's budgets, each already formatted in its OWN currency — the
+   *  widget shows a USD budget in USD under a VND dashboard. Empty when the
+   *  user set none for the month. */
+  budgets: BudgetProgressDto[]
 }
 
 /** Shown instead of a figure that would need a rate we do not have. */
@@ -156,6 +171,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     cashFlowTrend,
     balanceOverTime,
     recentTransactions,
+    budgets,
   } = input
 
   const monthLabel = formatInTimeZone(now, timezone, 'LLLL yyyy')
@@ -253,6 +269,13 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
         positive,
       }
     }),
+    // Delegated to the budgets page's own DTO mapper rather than re-derived
+    // here: the dashboard's compact rows and the Budgets page's full rows are
+    // the same `BudgetProgressList` fed by the same function, so a percentage
+    // or a status label cannot read one way on one page and another way on the
+    // other. `displayCurrency` is deliberately not passed — a budget is shown
+    // in its own currency.
+    budgets: budgets.map(toBudgetProgressDto),
   }
 }
 

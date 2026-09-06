@@ -115,6 +115,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Expense by Category',
       'Account Balance Distribution',
       'Recent Transactions',
+      'Budget Progress',
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     }
