@@ -19,8 +19,10 @@ import { moneyAmountSchema } from '@/lib/validation/money'
  * meaningless, and the database says so too (`Budget_amount_positive`).
  *
  * `year`/`month` are plain integers with no timezone — see
- * `lib/datetime/calendar-month.ts`. The bounds mirror the database's own
- * `Budget_month_range` CHECK.
+ * `lib/datetime/calendar-month.ts`. The `month` bound mirrors the database's
+ * own `Budget_month_range` CHECK; the `year` bound is application-level only
+ * (there is no `Budget_year_range`), shared with `isBudgetableMonth` through
+ * `MIN_BUDGET_YEAR`/`MAX_BUDGET_YEAR`.
  */
 export const budgetScopeSchema = z.enum(['OVERALL', 'CATEGORY'])
 export const budgetCurrencySchema = z.enum(['VND', 'USD'])
@@ -39,13 +41,42 @@ const budgetFields = {
  * not) is enforced in the service, which writes `categoryId: null` for OVERALL
  * regardless of what arrived, and by the database's
  * `Budget_scope_category_consistent` CHECK.
+ *
+ * Written once and applied to both schemas below, so the form and the server
+ * cannot disagree about when a category is required.
  */
+function hasCategoryWhenScoped(d: { scope: 'OVERALL' | 'CATEGORY'; categoryId?: string }): boolean {
+  return d.scope === 'OVERALL' || !!d.categoryId
+}
+
+const CATEGORY_REQUIRED_ISSUE = {
+  message: 'Category is required for a category budget',
+  path: ['categoryId'],
+}
+
+/**
+ * What the create form itself collects — the four fields the user actually
+ * types. `year`/`month` are deliberately absent: they are the page's selected
+ * month (props), not form state, and keeping them out of `useForm` is what
+ * stops a mounted form from submitting a month the user has since navigated
+ * away from (react-hook-form snapshots `defaultValues` at mount, and Next's
+ * App Router preserves client state across a search-param-only navigation).
+ * `components/budgets/budget-form.tsx` merges the current month in at submit.
+ */
+export const budgetFormSchema = z
+  .object({
+    scope: budgetFields.scope,
+    categoryId: budgetFields.categoryId,
+    amount: budgetFields.amount,
+    currency: budgetFields.currency,
+  })
+  .refine(hasCategoryWhenScoped, CATEGORY_REQUIRED_ISSUE)
+
+/** The full shape a create actually needs — the form's fields plus the month
+ *  the page is showing. This is what the server action and the service parse. */
 export const createBudgetSchema = z
   .object(budgetFields)
-  .refine((d) => d.scope === 'OVERALL' || !!d.categoryId, {
-    message: 'Category is required for a category budget',
-    path: ['categoryId'],
-  })
+  .refine(hasCategoryWhenScoped, CATEGORY_REQUIRED_ISSUE)
 
 /**
  * An edit changes only the target. `year`, `month`, `scope` and `categoryId`
@@ -58,5 +89,6 @@ export const updateBudgetSchema = z.object({
   currency: budgetCurrencySchema,
 })
 
+export type BudgetFormInput = z.infer<typeof budgetFormSchema>
 export type CreateBudgetInput = z.infer<typeof createBudgetSchema>
 export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>

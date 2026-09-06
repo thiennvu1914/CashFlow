@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
-import type ExcelJS from 'exceljs'
+// A value import, not `import type`: the scan-count case below builds a bare
+// workbook to run `buildBudgetsSheet` on its own.
+import ExcelJS from 'exceljs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
+import { buildBudgetsSheet } from './build-budgets-sheet'
 import { FULL_EXPORT_SHEET_BUILDERS, buildFullWorkbook } from './sheet-registry'
 import {
   cleanupExportUsers,
@@ -424,6 +427,49 @@ describe('full export workbook', () => {
     expect(labelledRow(summary, 'Transactions').getCell(2).value).toBe(3)
     expect(labelledRow(summary, 'Transfers').getCell(2).value).toBe(0)
     expect(labelledRow(summary, 'Active accounts').getCell(2).value).toBe(2)
+  })
+
+  it('scans the ledger once per distinct budgeted month, never once per budget', async () => {
+    const s = await setup()
+    // Three budgets across TWO months — the shape that tells a per-month scan
+    // apart from a per-budget one.
+    for (const budget of [
+      { year: 2026, month: 3, scope: 'OVERALL' as const, categoryId: null },
+      { year: 2026, month: 3, scope: 'CATEGORY' as const, categoryId: s.expenseCategoryId },
+      { year: 2026, month: 4, scope: 'OVERALL' as const, categoryId: null },
+    ]) {
+      await prisma.budget.create({
+        data: {
+          userId: s.userId,
+          ...budget,
+          amount: new Prisma.Decimal(1_000_000),
+          currency: 'VND',
+        },
+      })
+    }
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      categoryId: s.expenseCategoryId,
+      amount: 100_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+
+    // The spy is scoped to `buildBudgetsSheet` alone rather than to
+    // `buildFullWorkbook`: the Summary, Accounts and Transactions sheets run
+    // `transaction.findMany` calls of their own, which would drown the number
+    // this case is about.
+    const workbook = new ExcelJS.Workbook()
+    const findMany = vi.spyOn(prisma.transaction, 'findMany')
+    await buildBudgetsSheet(workbook, ctx)
+    const scans = findMany.mock.calls.length
+    findMany.mockRestore()
+
+    // Two months, so two scans — `getBudgetProgressForMonth` answers for every
+    // budget in the month it scans. A regression to one call per budget reads 3.
+    expect(scans).toBe(2)
+    // And all three budgets are still on the sheet (header plus three rows).
+    expect(sheet(workbook, 'Budgets').actualRowCount).toBe(4)
   })
 
   it('keeps a budget filed under an archived category, and marks it as archived', async () => {

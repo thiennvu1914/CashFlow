@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { createBudgetSchema, type CreateBudgetInput } from '@/lib/validation/budget'
+import { budgetFormSchema, type BudgetFormInput } from '@/lib/validation/budget'
 import { createBudgetAction } from '@/lib/server/actions/budget-actions'
 import { BUDGET_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
 import { Button } from '@/components/ui/button'
@@ -17,11 +17,11 @@ type Category = { id: string; name: string }
  * user could pick either way: an OVERALL budget already on this month means a
  * second one would only ever fail as `DUPLICATE_BUDGET`, so the friendlier
  * default is CATEGORY.
+ *
+ * `year`/`month` are absent on purpose — see the note on `BudgetForm` below.
  */
-function defaultValues(year: number, month: number, overallExists: boolean): CreateBudgetInput {
+function defaultValues(overallExists: boolean): BudgetFormInput {
   return {
-    year,
-    month,
     scope: overallExists ? 'CATEGORY' : 'OVERALL',
     categoryId: undefined,
     amount: 0,
@@ -29,6 +29,19 @@ function defaultValues(year: number, month: number, overallExists: boolean): Cre
   }
 }
 
+/**
+ * The create form for the month the page is currently showing.
+ *
+ * `year`/`month` are never form state. `useForm` snapshots `defaultValues` at
+ * mount and never re-reads them, and Next's App Router deliberately preserves
+ * client state across a search-param-only navigation — so a month held in the
+ * form would keep submitting the month that was on screen when the component
+ * mounted, even after `MonthNav` moved the page elsewhere. Instead the form
+ * resolves against `budgetFormSchema` (the four fields the user types) and the
+ * *current* props are merged in at submit, which no reconciliation behaviour
+ * can make stale. The page additionally keys this component on the selected
+ * month, so the other per-month defaults (scope, category) reset too.
+ */
 export function BudgetForm({
   year,
   month,
@@ -49,9 +62,9 @@ export function BudgetForm({
     reset,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<CreateBudgetInput>({
-    resolver: zodResolver(createBudgetSchema),
-    defaultValues: defaultValues(year, month, overallExists),
+  } = useForm<BudgetFormInput>({
+    resolver: zodResolver(budgetFormSchema),
+    defaultValues: defaultValues(overallExists),
   })
 
   const scope = useWatch({ control, name: 'scope' })
@@ -60,18 +73,19 @@ export function BudgetForm({
     if (scope !== 'CATEGORY') setValue('categoryId', undefined)
   }, [scope, setValue])
 
-  async function onSubmit(values: CreateBudgetInput) {
+  async function onSubmit(values: BudgetFormInput) {
     setError(null)
     try {
-      const result = await createBudgetAction(values)
+      // `year`/`month` are read here, from the props this render was given —
+      // the month the user is looking at — never from form state.
+      const result = await createBudgetAction({ ...values, year, month })
       if (!result.ok) {
         setError(BUDGET_ERROR_MESSAGES[result.error])
         return
       }
-      // Keeps year/month (the page's selected month, not the user's to edit)
-      // rather than a bare `reset()`, so a second budget for the same month
-      // does not require re-navigating.
-      reset(defaultValues(year, month, overallExists))
+      // A reset back to the same month's defaults rather than a bare `reset()`,
+      // so a second budget for the same month does not require re-navigating.
+      reset(defaultValues(overallExists))
       router.refresh()
     } catch {
       console.error('BudgetForm: create failed')
@@ -81,10 +95,6 @@ export function BudgetForm({
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
-      {/* Year/month come from the page's selected month, not the user — hidden
-          fields rather than editable inputs. */}
-      <input type="hidden" {...register('year', { valueAsNumber: true })} />
-      <input type="hidden" {...register('month', { valueAsNumber: true })} />
       <div>
         <select {...register('scope')} aria-label="Budget scope" className="rounded-md border p-2">
           <option value="OVERALL">Overall</option>

@@ -26,14 +26,22 @@ import { MonthNav } from '@/components/budgets/month-nav'
  * actually hold (`isBudgetableMonth`, `lib/datetime/calendar-month.ts`),
  * silently falls back rather than erroring: this is navigation, not a data
  * request the user typed by hand for its figures. Falling back matters for
- * more than cosmetics here — an out-of-range year would otherwise render a
- * create form whose hidden `year` field `createBudgetSchema` always rejects,
- * so "Add budget" would submit and silently do nothing.
+ * more than cosmetics here — `BudgetForm` merges this month into every submit,
+ * so an out-of-range year would render a create form whose every submission
+ * `createBudgetSchema` rejects as `INVALID_INPUT`.
  */
 
-/** True when `month` is strictly earlier than `now` — a closed month, whose
- *  figures are final because nothing can still post into it retroactively
- *  from the UI (spec's "closed month" framing). */
+/**
+ * True when `month` is strictly earlier than `now`.
+ *
+ * What a past month gets is a note about its FX treatment, not a claim of
+ * immutability: spec §5.5's "a closed month's percentage is permanently fixed"
+ * is about the RATE — every contributing expense is summed at its own
+ * `vndPerUsdAtEntry` (`lib/server/services/budget.ts`), so today's rate can
+ * never move it. The row set is not fixed at all: the transaction form's date
+ * field is unbounded, so a back-dated expense entered today still lands in
+ * this month and changes its spend.
+ */
 function isPastMonth(month: CalendarMonth, now: CalendarMonth): boolean {
   return month.year < now.year || (month.year === now.year && month.month < now.month)
 }
@@ -95,7 +103,10 @@ export default async function BudgetsPage({
         </div>
 
         {isPastMonth(selected, current) && (
-          <p className="text-sm text-muted-foreground">Closed month — figures are final.</p>
+          <p className="text-sm text-muted-foreground">
+            Past month — spending is summed at each transaction&rsquo;s own recorded rate; entering
+            a back-dated expense still counts here.
+          </p>
         )}
 
         {dtos.length === 0 ? (
@@ -118,7 +129,13 @@ export default async function BudgetsPage({
 
       <div id="new" className="scroll-mt-6">
         <h2 className="mb-3 text-lg font-semibold">Add budget</h2>
+        {/* Keyed on the selected month so every per-month default — the scope
+            `overallExists` picks, a category already chosen — is rebuilt when
+            the month changes. `BudgetForm` no longer holds the month itself
+            (it merges the current props in at submit), so this is about
+            field state, not about which month a create lands in. */}
         <BudgetForm
+          key={`${selected.year}-${selected.month}`}
           year={selected.year}
           month={selected.month}
           categories={categories.map((category) => ({ id: category.id, name: category.name }))}

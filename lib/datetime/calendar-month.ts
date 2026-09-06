@@ -107,9 +107,12 @@ export function addCalendarMonths(m: CalendarMonth, delta: number): CalendarMont
 }
 
 /**
- * The inclusive year range a Budget can actually be created for — mirrors
- * `createBudgetSchema`'s `year` bounds (`lib/validation/budget.ts`) and the
- * database's `Budget_month_range` CHECK. Defined here, once, and imported by
+ * The inclusive year range a Budget can actually be created for.
+ *
+ * This bound is application-level: `createBudgetSchema` (`lib/validation/budget.ts`)
+ * and `isBudgetableMonth` below are the only things enforcing it — the database
+ * has no year CHECK (`Budget_month_range` constrains `month` alone, so a direct
+ * insert with `year = 99999` is accepted). Defined here, once, and imported by
  * the validation schema rather than restated as a second literal `2000`/`2100`
  * pair, so the two cannot drift apart.
  */

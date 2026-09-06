@@ -35,7 +35,7 @@ export const NAV_ITEMS: NavItem[] = [
 ]
 
 /**
- * The four the mobile tab bar shows. A phone bar with seven targets is a bar
+ * The four the mobile tab bar shows. A phone bar with eight targets is a bar
  * with no targets: the rest live behind "More", which is a deliberate
  * prioritisation rather than a truncation of `NAV_ITEMS`.
  */

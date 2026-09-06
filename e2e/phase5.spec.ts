@@ -228,7 +228,7 @@ test.describe.serial('Phase 5 — budgets', () => {
 
     await expect(page).toHaveURL(/[?&]month=/)
     await expect(page.getByText(/No budgets for/)).toBeVisible()
-    await expect(page.getByText(/Closed month/)).toBeVisible()
+    await expect(page.getByText(/^Past month —/)).toBeVisible()
 
     await page.getByRole('link', { name: 'This month' }).click()
     await expect(budgetRow(page, page, 'Overall')).toBeVisible()
@@ -236,6 +236,53 @@ test.describe.serial('Phase 5 — budgets', () => {
     await page.goto('/budgets?month=garbage')
     await expect(page.getByRole('heading', { name: 'Budgets', level: 1 })).toBeVisible()
     await expect(budgetRow(page, page, 'Overall')).toBeVisible()
+  })
+
+  test('create after navigating months lands in the viewed month', async ({ page }) => {
+    await page.goto('/budgets')
+    // Clicking the link (rather than `goto`-ing the URL) is the whole point:
+    // "‹ Previous" changes only `?month=`, and the App Router deliberately
+    // preserves client state across a search-param-only navigation — so the
+    // create form is not remounted, and a form holding its own year/month
+    // would go on submitting the month it mounted on.
+    await page.getByRole('link', { name: 'Previous' }).click()
+    await expect(page).toHaveURL(/[?&]month=/)
+    const previousMonthUrl = page.url()
+    await expect(page.getByText(/No budgets for/)).toBeVisible()
+
+    await createBudgetViaUi(page, {
+      scope: 'OVERALL',
+      amount: 777_000,
+      currency: 'VND',
+      stayOnPage: true,
+    })
+
+    // The budget landed in the month on screen: 777,000 with nothing spent
+    // against it (all this user's expenses are in the current month).
+    const previousOverall = budgetRow(page, page, 'Overall')
+    await expect(previousOverall.getByText('Healthy', { exact: true })).toBeVisible()
+    const previousText =
+      (await previousOverall.locator('span.tabular-nums').first().textContent()) ?? ''
+    expect(digitsOnly(previousText)).toContain('777000')
+    await expect(page).toHaveURL(previousMonthUrl)
+
+    // And the current month is untouched — still exactly one Overall budget,
+    // the 300,000 target the edit test left, not a second one and not 777,000.
+    await page.getByRole('link', { name: 'This month' }).click()
+    const currentOverall = budgetRow(page, page, 'Overall')
+    await expect(currentOverall).toHaveCount(1)
+    await expect(currentOverall.getByText('Over half used', { exact: true })).toBeVisible()
+    const currentText =
+      (await currentOverall.locator('span.tabular-nums').first().textContent()) ?? ''
+    expect(digitsOnly(currentText)).toContain('300000')
+    expect(digitsOnly(currentText)).not.toContain('777000')
+
+    // Cleaned up here, so the dashboard and export cases below still see the
+    // single current-month budget this serial flow built up.
+    await page.goto(previousMonthUrl)
+    page.once('dialog', (dialog) => dialog.accept())
+    await budgetRow(page, page, 'Overall').getByRole('button', { name: 'Delete' }).click()
+    await expect(page.getByText(/No budgets for/)).toBeVisible()
   })
 
   test('dashboard widget (desktop)', async ({ page }) => {

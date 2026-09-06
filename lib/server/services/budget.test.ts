@@ -35,7 +35,9 @@ import {
  *    reads or writes the global `ExchangeRate` table; see the "imports nothing
  *    that could reach a live rate" case for why.
  * 3. **The month is the user's.** The boundary cases use 17:00Z / 17:30Z, the
- *    instants that fall either side of local midnight in `Asia/Ho_Chi_Minh`.
+ *    instants that fall either side of local midnight in `Asia/Ho_Chi_Minh`,
+ *    and again 05:00Z / 08:00Z either side of it in `America/Los_Angeles` — two
+ *    zones on opposite sides of UTC, so no single wrong offset satisfies both.
  * 4. **Every read is tenant-scoped.** A second user with their own March budget
  *    and March spending is present in the progress cases, so dropping `userId`
  *    from any list or progress query fails a test.
@@ -848,6 +850,47 @@ describe('budget service', () => {
 
       expect(march.spent.toString()).toBe('111000')
       expect(april.spent.toString()).toBe('222000')
+    })
+
+    it('assigns a transaction to the local month in a zone WEST of UTC too', async () => {
+      // The mirror image of the case above, in `America/Los_Angeles` (UTC-7 in
+      // April 2026, DST already in force): there the local month ENDS after the
+      // UTC one, where in +07 it ends before. A zone threaded through the
+      // service wrongly — the server's own, or a hard-coded offset — would
+      // agree with one of these two cases and fail the other.
+      const WEST = 'America/Los_Angeles'
+      await createBudget(fx.userId, {
+        ...MARCH,
+        scope: 'OVERALL',
+        amount: 5_000_000,
+        currency: 'VND',
+      })
+      await createBudget(fx.userId, {
+        year: 2026,
+        month: 4,
+        scope: 'OVERALL',
+        amount: 5_000_000,
+        currency: 'VND',
+      })
+
+      // 2026-03-31 22:00 local — still March in Los Angeles, already April in UTC.
+      await seedTransaction(fx.userId, {
+        accountId: fx.vndAccountId,
+        amount: 333_000,
+        date: new Date('2026-04-01T05:00:00.000Z'),
+      })
+      // 2026-04-01 01:00 local — April, three hours later.
+      await seedTransaction(fx.userId, {
+        accountId: fx.vndAccountId,
+        amount: 444_000,
+        date: new Date('2026-04-01T08:00:00.000Z'),
+      })
+
+      const [march] = await getBudgetProgressForMonth(fx.userId, WEST, 2026, 3)
+      const [april] = await getBudgetProgressForMonth(fx.userId, WEST, 2026, 4)
+
+      expect(march.spent.toString()).toBe('333000')
+      expect(april.spent.toString()).toBe('444000')
     })
 
     it("converts a USD expense at the row's own snapshot rate, not today's", async () => {

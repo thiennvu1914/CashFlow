@@ -134,9 +134,14 @@ async function fillAndVerify(locator: Locator, value: string): Promise<void> {
 /**
  * Creates one budget through the `/budgets` page's "Add budget" form.
  *
- * Always navigates to `/budgets` first (the page's *current* local month —
- * no `?month=` is ever passed, matching every seed in `phase5.spec.ts`) and
- * always selects `scope` explicitly rather than relying on the form's default
+ * Navigates to `/budgets` first by default (the page's *current* local month —
+ * no `?month=` is ever passed, matching every seed in `phase5.spec.ts`).
+ * `stayOnPage` suppresses that navigation for the one case that must submit
+ * the form exactly as the caller left it: a client-side month change keeps the
+ * mounted form alive, and a fresh `goto` would remount it and hide the very
+ * staleness that case exists to catch.
+ *
+ * Always selects `scope` explicitly rather than relying on the form's default
  * (which flips between `OVERALL`/`CATEGORY` depending on whether an overall
  * budget already exists for the month) — a caller creating a second Overall
  * budget on purpose, to exercise the duplicate rejection, needs the field
@@ -153,9 +158,10 @@ export async function createBudgetViaUi(
     categoryName?: string
     amount: number
     currency?: 'VND' | 'USD'
+    stayOnPage?: boolean
   },
 ): Promise<void> {
-  await page.goto('/budgets')
+  if (!opts.stayOnPage) await page.goto('/budgets')
   await selectAndVerify(page.getByLabel('Budget scope'), opts.scope)
   if (opts.scope === 'CATEGORY') {
     if (!opts.categoryName) {
