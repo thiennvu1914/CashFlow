@@ -297,6 +297,61 @@ describe('getAccountBalanceOverTime', () => {
     )
   })
 
+  it('leaves earlier points exact when a foreign account was opened this month', async () => {
+    const s = await setup()
+    await makeAccount({ ...s, name: 'Wallet', currency: 'VND', initialBalance: '1000000' })
+    // Opened on 2026-09-05 — before that instant its balance is zero, and zero
+    // converts to zero at any rate, so July and August need no rate at all.
+    // Neither day is in the cache and the provider throws on contact: if either
+    // point asked for a rate, this test would fail rather than quietly gap.
+    await makeAccount({
+      ...s,
+      name: 'Dollars',
+      currency: 'USD',
+      initialBalance: '100',
+      createdAt: new Date('2026-09-05T00:00:00.000Z'),
+    })
+    await seedRate(SEPTEMBER_RATE_DAY, '25000')
+    const { provider, calls } = makeForbiddenProvider()
+
+    const points = await getAccountBalanceOverTime(s.userId, HCMC, 'VND', 3, provider, NOW)
+
+    expect(points.map((point) => point.month)).toEqual(['2026-07', '2026-08', '2026-09'])
+    expect(points.map((point) => point.balance?.toString())).toEqual([
+      '1000000',
+      '1000000',
+      // 1,000,000 VND + (100 USD x 25,000).
+      '3500000',
+    ])
+    expect(calls).toEqual({ latest: 0, historical: 0 })
+  })
+
+  it('consults FX only for the points whose foreign balance is non-zero', async () => {
+    const s = await setup()
+    await makeAccount({ ...s, name: 'Wallet', currency: 'VND', initialBalance: '1000000' })
+    await makeAccount({
+      ...s,
+      name: 'Dollars',
+      currency: 'USD',
+      initialBalance: '100',
+      createdAt: new Date('2026-09-05T00:00:00.000Z'),
+    })
+    // Nothing cached and no history anywhere: only the month in which the USD
+    // account actually holds money can become a gap.
+    const { provider, calls } = makeNoHistoryProvider()
+
+    const points = await getAccountBalanceOverTime(s.userId, HCMC, 'VND', 3, provider, NOW)
+
+    expect(points.map((point) => point.balance?.toString())).toEqual([
+      '1000000',
+      '1000000',
+      undefined,
+    ])
+    expect(points[2].balance).toBeNull()
+    // Exactly one of the three points asked for a rate.
+    expect(calls).toEqual({ latest: 0, historical: 1 })
+  })
+
   it("excludes a transaction dated after a point's asOf", async () => {
     const s = await setup()
     const account = await makeAccount({

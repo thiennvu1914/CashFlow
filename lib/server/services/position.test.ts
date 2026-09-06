@@ -138,7 +138,13 @@ describe('current position service', () => {
           currency: 'VND',
         },
       })
-      const { provider, callCount } = countingProvider()
+      // A source string unique to this run, so the "nothing was cached"
+      // assertion below can name exactly the rows *this* call could have
+      // written. `ExchangeRate` is a global table shared with every other
+      // suite; counting all of its rows would fail whenever another test
+      // happened to leave one behind.
+      const uniqueSource = `vnd-only-${randomUUID()}`
+      const { provider, callCount } = countingProvider(25_000, uniqueSource)
 
       const position = await getCurrentPosition(s.userId, 'VND', provider)
 
@@ -148,7 +154,9 @@ describe('current position service', () => {
       expect(position.fx).toBeNull()
       expect(callCount()).toBe(0)
       expect(position.accounts.map((a) => a.id).sort()).toEqual([s.vndAccountId, second.id].sort())
-      expect(await prisma.exchangeRate.count()).toBe(0)
+      // The provider is the only thing that can populate the cache, so an
+      // uncalled provider must leave no row of its own behind.
+      expect(await prisma.exchangeRate.count({ where: { source: uniqueSource } })).toBe(0)
     })
 
     it('converts every foreign-currency balance before summing (the raw-native regression)', async () => {

@@ -47,6 +47,12 @@ export interface AccountBalancePoint {
  * the month in progress, which is sampled at `now`: a point must never claim a
  * balance for an instant that has not happened yet.
  *
+ * For a zone *behind* UTC that month-end instant falls on the following UTC
+ * day, so the point is converted at that day's rate — for `America/New_York`,
+ * the end of local August is 04:00Z on 1 September and the September rate is
+ * the one in effect at that instant. That is intentional: the rate belongs to
+ * the moment the balance is sampled, not to the label the month carries.
+ *
  * Every account is included, archived ones too. An archived account's earlier
  * months are real history, and dropping them would make the chart's past change
  * whenever a user tidies up. An account that did not exist yet at a given point
@@ -54,10 +60,16 @@ export interface AccountBalancePoint {
  * lives in `getAccountBalances`, which is also what keeps this function from
  * needing to know about `createdAt` at all.
  *
+ * A rate is consulted only when it can actually change the answer: the balances
+ * come first, and a point whose foreign-currency accounts all sit at zero is
+ * exact without one. That is what keeps an account opened this month from
+ * turning every earlier point into a gap — before it existed its balance was
+ * zero, and zero converts to zero at any rate, so there is nothing to look up.
+ *
  * Cost is one batched `getAccountBalances` per point (never one per account),
- * plus at most one `getHistoricalRate` per point — and none at all for a user
- * whose accounts are all held in `displayCurrency`, whose chart therefore
- * renders unchanged through a provider outage.
+ * plus at most one `getHistoricalRate` per point. The points are computed
+ * concurrently — each resolves a different UTC day, so two of them can never
+ * race to cache the same row.
  *
  * Arithmetic is `Prisma.Decimal` end to end and nothing is rounded: rounding is
  * a presentation decision the page or the export makes later.
@@ -75,48 +87,56 @@ export async function getAccountBalanceOverTime(
 
   const accounts = await listAllFinancialAccounts(userId)
   const accountIds = accounts.map((account) => account.id)
-  // Decided once from the account list, not per point: a single-currency user
-  // must never reach the FX cache, whatever the balances happen to be.
-  const needsConversion = accounts.some((account) => account.currency !== displayCurrency)
 
-  const points: AccountBalancePoint[] = []
-  for (const window of windows) {
-    const monthEnd = new Date(window.endUtc.getTime() - 1)
-    // The month in progress ends in the future; sample it at `now` instead.
-    const asOf = monthEnd.getTime() > now.getTime() ? now : monthEnd
+  // Concurrent, and safe to be: the points share no state, and each one caches
+  // (at most) its own distinct UTC day, so no two can collide on the FX cache's
+  // natural key. `Promise.all` preserves input order, so the result stays
+  // oldest → newest.
+  return Promise.all(
+    windows.map(async (window): Promise<AccountBalancePoint> => {
+      const monthEnd = new Date(window.endUtc.getTime() - 1)
+      // The month in progress ends in the future; sample it at `now` instead.
+      const asOf = monthEnd.getTime() > now.getTime() ? now : monthEnd
 
-    const balances = await getAccountBalances(userId, accountIds, asOf)
+      // Balances first: whether a rate is *needed* is a fact about this point's
+      // numbers, not about the account list.
+      const balances = await getAccountBalances(userId, accountIds, asOf)
+      const balanceOf = (accountId: string) => balances.get(accountId) ?? new Prisma.Decimal(0)
 
-    // One lookup for the whole point — the rate is a property of the day, not
-    // of an account — and only when some account actually needs converting.
-    const rate = needsConversion
-      ? await getHistoricalRate({ base: 'USD', quote: 'VND' }, asOf, providerOverride)
-      : null
-    if (needsConversion && !rate) {
-      // A real answer, not an error: the day's rate is unknown, so this point
-      // is a gap. The neighbouring points keep their own days' rates.
-      points.push({ month: window.month, asOf, balance: null })
-      continue
-    }
-
-    let total = new Prisma.Decimal(0)
-    for (const account of accounts) {
-      const balance = balances.get(account.id) ?? new Prisma.Decimal(0)
-      if (account.currency === displayCurrency) {
-        total = total.add(balance)
-        continue
-      }
-      // Unreachable: `needsConversion` is true whenever this branch is, and a
-      // null rate already returned above. The throw exists so a future edit
-      // that decouples the two fails loudly instead of charting native numbers.
-      if (!rate) throw new Error('Missing exchange rate for a conversion that is required')
-      total = total.add(
-        applyVndPerUsdRate(balance, account.currency, displayCurrency, rate.rateDecimal),
+      // Zero converts to zero at every rate, so a foreign account sitting at
+      // zero — including one that did not exist yet at `asOf` — cannot make the
+      // answer depend on FX.
+      const needsRate = accounts.some(
+        (account) => account.currency !== displayCurrency && !balanceOf(account.id).isZero(),
       )
-    }
+      // One lookup for the whole point: the rate is a property of the day, not
+      // of an account.
+      const rate = needsRate
+        ? await getHistoricalRate({ base: 'USD', quote: 'VND' }, asOf, providerOverride)
+        : null
+      if (needsRate && !rate) {
+        // A real answer, not an error: the day's rate is unknown, so this point
+        // is a gap. The neighbouring points keep their own days' rates.
+        return { month: window.month, asOf, balance: null }
+      }
 
-    points.push({ month: window.month, asOf, balance: total })
-  }
+      let total = new Prisma.Decimal(0)
+      for (const account of accounts) {
+        const balance = balanceOf(account.id)
+        if (account.currency === displayCurrency || balance.isZero()) {
+          total = total.add(balance)
+          continue
+        }
+        // Unreachable: `needsRate` is true whenever this branch is, and a null
+        // rate already returned above. The throw exists so a future edit that
+        // decouples the two fails loudly instead of charting native numbers.
+        if (!rate) throw new Error('Missing exchange rate for a conversion that is required')
+        total = total.add(
+          applyVndPerUsdRate(balance, account.currency, displayCurrency, rate.rateDecimal),
+        )
+      }
 
-  return points
+      return { month: window.month, asOf, balance: total }
+    }),
+  )
 }
