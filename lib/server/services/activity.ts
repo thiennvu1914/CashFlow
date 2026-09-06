@@ -197,7 +197,12 @@ export async function getMonthlyIncomeExpense(
   return { income, expense, netIncome, startUtc, endUtc }
 }
 
-/** The month's spending per category, largest first — the pie chart's input. */
+/**
+ * The month's spending per category, largest first. Convenience wrapper over
+ * `getActivitySummary(...).byCategory`; the dashboard reads the summary directly
+ * (one scan feeds the KPIs and Expense by Category), so this is for callers that
+ * only need the breakdown.
+ */
 export async function getExpenseByCategory(
   userId: string,
   timezone: string,

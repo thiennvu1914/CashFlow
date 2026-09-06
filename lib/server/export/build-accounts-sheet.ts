@@ -36,9 +36,13 @@ export async function buildAccountsSheet(
   ctx: ExportContext,
 ): Promise<void> {
   const accounts = await listAllFinancialAccounts(ctx.userId)
+  // As of `ctx.now`, the same instant the Summary sheet's totals use, so the
+  // per-account "Current balance" column sums to the Summary's total inside one
+  // workbook (a future-dated transaction is excluded from both).
   const balances = await getAccountBalances(
     ctx.userId,
     accounts.map((account) => account.id),
+    ctx.now,
   )
   const sheet = workbook.addWorksheet('Accounts')
   const displayFmt = moneyFmt(ctx.displayCurrency)

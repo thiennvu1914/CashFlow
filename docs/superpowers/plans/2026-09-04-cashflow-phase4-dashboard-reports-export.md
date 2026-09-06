@@ -926,7 +926,7 @@ export default async function DashboardPage() {
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <KpiTile label="Total Balance" value={totalBalance?.toNumber() ?? null} currency={displayCurrency} />
+        <KpiTile label="Total Account Balance" value={totalBalance?.toNumber() ?? null} currency={displayCurrency} />
         <KpiTile label="Net Worth" value={netWorth?.toNumber() ?? null} currency={displayCurrency} />
         <KpiTile label="Monthly Income" value={monthly.income.toNumber()} currency={displayCurrency} />
         <KpiTile label="Monthly Expense" value={monthly.expense.toNumber()} currency={displayCurrency} />
@@ -1662,7 +1662,7 @@ git commit -m "feat: add Excel export with range-driven filtered workbook and ex
 ## Phase 4 Acceptance Check
 
 - [ ] The real `AppShell` (sidebar desktop, bottom-tab mobile with a raised Add-Transaction action) replaces every placeholder layout from Phases 1–2.
-- [ ] Dashboard renders Total Balance, Net Worth, Monthly Income, Monthly Expense, Net Income (correctly labeled, not "Net Cash Flow"), Cash Flow Trend, Account Balance Over Time (with gap rendering verified against Task 4's test), Expense by Category, Account Balance Distribution, and Recent Transactions.
+- [ ] Dashboard renders Total Account Balance (spec §5.2 name), Net Worth, Monthly Income, Monthly Expense, Net Income (correctly labeled, not "Net Cash Flow"), Cash Flow Trend, Account Balance Over Time (with gap rendering verified against Task 4's test), Expense by Category, Account Balance Distribution, and Recent Transactions.
 - [ ] Reports page filters by day/week/month/quarter/year/custom using timezone-correct boundaries; custom `from`/`to` are validated (shape, real dates, `from <= to`), interpreted in `User.timezone` with an inclusive end date, kept in the URL, and unknown `period` values are rejected — proven by `report-range.test.ts`.
 - [ ] "By Account" reports income, expense and net income per account, never a single unsigned total — proven by the activity test.
 - [ ] Filtered export receives the exact same resolved range as the page (proven by `filtered-export.test.ts`); full export produces Summary, Accounts, Transactions, Transfers — via the extensible registry Phase 5/6 will append to.
