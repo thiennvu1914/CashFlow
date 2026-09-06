@@ -231,6 +231,60 @@ export async function listTransactions(userId: string, options?: { limit?: numbe
   })
 }
 
+/**
+ * Every transaction an export or report needs — export/report data source;
+ * unbounded by design; `listTransactions` is the bounded UI list.
+ *
+ * The two differ on purpose and must not be merged. A page renders a screenful
+ * and is capped at `MAX_TRANSACTION_LIST_LIMIT` so a decade-old ledger cannot
+ * be pulled into a React tree; a spreadsheet is the user's own complete data
+ * and a cap there is not a safeguard but silent data loss — a workbook that
+ * stops at row 200 looks exactly like a workbook of a user with 200
+ * transactions. So there is deliberately no `take` here, and no option to add
+ * one.
+ *
+ * The projection is wider than the UI list's for the same reason: an export
+ * shows the FX snapshot (`vndPerUsdAtEntry` and the two timestamps that say
+ * which day's rate it was and when it was fetched) so a converted column can be
+ * reconciled against the rate that actually applied, and it carries the
+ * account's own `currency` so a native amount can be formatted correctly.
+ *
+ * `range` is the same half-open `[startUtc, endUtc)` window every other query
+ * in the app uses — `endUtc` is the first instant of the *next* period and is
+ * therefore excluded. Omit it for the whole history.
+ *
+ * Ordered oldest first: a spreadsheet is read forwards through time. The
+ * `createdAt`/`id` tie-breaks make that order total, so two exports of
+ * unchanged data are byte-comparable.
+ */
+export async function listTransactionsForExport(
+  userId: string,
+  range?: { startUtc: Date; endUtc: Date },
+) {
+  return prisma.transaction.findMany({
+    where: {
+      userId,
+      // `lt`, never `lte`: `endUtc` belongs to the next period.
+      ...(range ? { date: { gte: range.startUtc, lt: range.endUtc } } : {}),
+    },
+    select: {
+      id: true,
+      date: true,
+      type: true,
+      amount: true,
+      currency: true,
+      note: true,
+      vndPerUsdAtEntry: true,
+      fxRateFetchedAt: true,
+      fxRateEffectiveAt: true,
+      fxRateSource: true,
+      account: { select: { name: true, currency: true } },
+      category: { select: { name: true } },
+    },
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+  })
+}
+
 export async function createTransaction(
   userId: string,
   input: CreateTransactionInput,

@@ -56,6 +56,34 @@ export async function listTransfers(userId: string) {
   })
 }
 
+/**
+ * Every transfer the full export writes — export/report data source; unbounded
+ * by design, the way `listTransactionsForExport` is, and for the same reason: a
+ * workbook that quietly stops short is indistinguishable from a workbook of a
+ * user who made that many transfers.
+ *
+ * Both accounts are projected down to the two facts a sheet shows — the name
+ * that identifies the leg and the currency its amount is denominated in — so
+ * the joined rows carry no `userId`, no opening balance and no status. Ordered
+ * oldest first, with the same total tie-break as everywhere else.
+ */
+export async function listTransfersForExport(userId: string) {
+  return prisma.transfer.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      date: true,
+      fromAmount: true,
+      toAmount: true,
+      exchangeRateUsed: true,
+      note: true,
+      fromAccount: { select: { name: true, currency: true } },
+      toAccount: { select: { name: true, currency: true } },
+    },
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+  })
+}
+
 export async function createTransfer(userId: string, input: CreateTransferInput) {
   const parsed = createTransferSchema.parse(input)
 
