@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 
 /**
@@ -77,6 +77,97 @@ export async function createTransactionViaUi(
   // A successful submit resets the form to its defaults, which sets the
   // amount field back to `0`.
   await expect(amountInput).toHaveValue('0')
+}
+
+/**
+ * `locator.selectOption()`, made robust against `BudgetForm`'s own
+ * `react-hook-form` default: the field's `ref` callback applies
+ * `useForm`'s `defaultValues` to the DOM `<select>` once React finishes
+ * hydrating, which can land *after* an interaction made in the brief window
+ * between the page's `load` event and that hydration completing — silently
+ * reverting a selection back to the form's default. That is invisible
+ * whenever the wanted option already matches the default (an Overall budget
+ * on an otherwise-empty month, whose default *is* Overall), which is exactly
+ * why this only surfaces once a different default has taken over (Overall
+ * again, once a Category default already exists for the month) — the same
+ * `<select>`, the same call, a different silent outcome. Retrying the whole
+ * select-then-verify cycle (rather than the select alone) means a revert
+ * landing mid-verification is simply tried again, until the value actually
+ * sticks.
+ */
+async function selectAndVerify(
+  locator: Locator,
+  option: string | { label: string },
+): Promise<void> {
+  const page = locator.page()
+  await expect(async () => {
+    await locator.selectOption(option)
+    // A value that "took" immediately after `selectOption` can still be
+    // reverted a moment later — by the same `react-hook-form` mount-time
+    // default landing just *after* this select fired, on a slow/cold dev
+    // bundle. Checking only right away would race exactly that delayed
+    // revert; pausing before reading back, then retrying the whole cycle on
+    // a mismatch, is what actually catches it.
+    await page.waitForTimeout(250)
+    if (typeof option === 'string') {
+      await expect(locator).toHaveValue(option)
+    } else {
+      await expect(locator.locator('option:checked')).toHaveText(option.label)
+    }
+  }).toPass({ timeout: 15_000 })
+}
+
+/** The same mount-time-default race `selectAndVerify` guards against, for a
+ *  plain `<input>` — `react-hook-form`'s ref callback applies `defaultValues`
+ *  to an uncontrolled input's DOM value on mount exactly as it does for a
+ *  `<select>`, so a `.fill()` in that same window can just as easily be
+ *  reverted to `0`. */
+async function fillAndVerify(locator: Locator, value: string): Promise<void> {
+  const page = locator.page()
+  await expect(async () => {
+    await locator.fill(value)
+    await page.waitForTimeout(250)
+    await expect(locator).toHaveValue(value)
+  }).toPass({ timeout: 15_000 })
+}
+
+/**
+ * Creates one budget through the `/budgets` page's "Add budget" form.
+ *
+ * Always navigates to `/budgets` first (the page's *current* local month —
+ * no `?month=` is ever passed, matching every seed in `phase5.spec.ts`) and
+ * always selects `scope` explicitly rather than relying on the form's default
+ * (which flips between `OVERALL`/`CATEGORY` depending on whether an overall
+ * budget already exists for the month) — a caller creating a second Overall
+ * budget on purpose, to exercise the duplicate rejection, needs the field
+ * selected regardless of that default.
+ *
+ * Does not assert success: a duplicate submission is expected to fail with an
+ * inline error rather than resetting the form, so the caller — not this
+ * helper — asserts whichever outcome the scenario expects.
+ */
+export async function createBudgetViaUi(
+  page: Page,
+  opts: {
+    scope: 'OVERALL' | 'CATEGORY'
+    categoryName?: string
+    amount: number
+    currency?: 'VND' | 'USD'
+  },
+): Promise<void> {
+  await page.goto('/budgets')
+  await selectAndVerify(page.getByLabel('Budget scope'), opts.scope)
+  if (opts.scope === 'CATEGORY') {
+    if (!opts.categoryName) {
+      throw new Error('createBudgetViaUi: categoryName is required when scope is CATEGORY')
+    }
+    await selectAndVerify(page.getByLabel('Budget category'), { label: opts.categoryName })
+  }
+  await fillAndVerify(page.getByLabel('Budget amount'), String(opts.amount))
+  if (opts.currency && opts.currency !== 'VND') {
+    await selectAndVerify(page.getByLabel('Budget currency'), opts.currency)
+  }
+  await page.getByRole('button', { name: 'Add budget' }).click()
 }
 
 /** "Today" as `yyyy-MM-dd` in the given IANA timezone (no `Date` library needed). */
