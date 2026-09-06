@@ -1,6 +1,8 @@
+import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getLatestRate } from './fx-service'
-import type { CurrencyPair, ExchangeRateProvider, RateResult } from './provider'
+import type { CachedRateResult } from './fx-service'
+import type { CurrencyPair, ExchangeRateProvider } from './provider'
 
 /**
  * The one current-rate policy for the whole application (spec §6.3, generalised
@@ -34,7 +36,7 @@ export function isFxUnavailableError(e: unknown): e is FxUnavailableError {
   return e instanceof FxUnavailableError
 }
 
-export interface UsableRateResult extends RateResult {
+export interface UsableRateResult extends CachedRateResult {
   /**
    * When the rate itself applies — for a fallback this is the original row's
    * `effectiveDate`, never "now". (Inherited from `RateResult`, restated here
@@ -47,6 +49,13 @@ export interface UsableRateResult extends RateResult {
    * ours.
    */
   fetchedAt: Date
+  /**
+   * The rate as a `Decimal` — the only form any money computation may use.
+   * `rate` (a `number`) exists for the provider boundary and for logging.
+   * (Inherited from `CachedRateResult`, restated here because every current
+   * conversion depends on it.)
+   */
+  rateDecimal: Prisma.Decimal
   /** true when a stale-but-accepted last-known-good current rate was used because the live
    *  provider was unavailable — surfaced to the UI as "rate may be out of date". */
   isFallback: boolean
@@ -66,7 +75,7 @@ export const MAX_FALLBACK_STALENESS_MS = 48 * 60 * 60 * 1000
  * excludes it. Rows dated in the future are excluded too — a clock skew or a
  * bad provider timestamp must not out-rank a real recent rate.
  */
-async function getLastKnownGoodCurrentRate(pair: CurrencyPair): Promise<RateResult | null> {
+async function getLastKnownGoodCurrentRate(pair: CurrencyPair): Promise<CachedRateResult | null> {
   const now = new Date()
   const cutoff = new Date(now.getTime() - MAX_FALLBACK_STALENESS_MS)
   const candidate = await prisma.exchangeRate.findFirst({
@@ -76,8 +85,10 @@ async function getLastKnownGoodCurrentRate(pair: CurrencyPair): Promise<RateResu
   if (!candidate) return null
   return {
     // `candidate.rate` is a Prisma `Decimal`; `RateResult.rate` is the provider
-    // boundary's plain number, so the stored decimal is widened back here.
+    // boundary's plain number, so the stored decimal is widened back here — and
+    // the untouched Decimal is what any conversion actually multiplies by.
     rate: Number(candidate.rate),
+    rateDecimal: candidate.rate,
     effectiveDate: candidate.effectiveDate,
     fetchedAt: candidate.fetchedAt,
     source: candidate.source,
@@ -98,7 +109,7 @@ export async function getUsableCurrentRate(
   pair: CurrencyPair,
   providerOverride?: ExchangeRateProvider,
 ): Promise<UsableRateResult> {
-  let fresh: RateResult
+  let fresh: CachedRateResult
   try {
     fresh = await getLatestRate(pair, providerOverride)
   } catch (cause) {

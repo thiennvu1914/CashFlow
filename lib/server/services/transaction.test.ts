@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
@@ -433,11 +434,14 @@ describe('transaction service', () => {
       const seededFetchedAt = new Date(
         seededEffectiveDate.getTime() + 23 * 60 * 60 * 1000 + 30 * 60 * 1000,
       )
+      // A high-scale rate, seeded as a literal: the snapshot must be the row's
+      // own Decimal, never a value that has been through a JavaScript number.
+      const seededRate = new Prisma.Decimal('26025.123457')
       await prisma.exchangeRate.create({
         data: {
           base: PAIR.base,
           quote: PAIR.quote,
-          rate: 24800,
+          rate: seededRate,
           effectiveDate: seededEffectiveDate,
           fetchedAt: seededFetchedAt,
           source: 'seeded',
@@ -450,7 +454,10 @@ describe('transaction service', () => {
         failingProvider,
       )
 
-      expect(tx.vndPerUsdAtEntry.toNumber()).toBe(24800)
+      // Equal to the seeded row's Decimal to the digit — the fallback rate
+      // reaches the immutable snapshot without a float in between.
+      expect(tx.vndPerUsdAtEntry.equals(seededRate)).toBe(true)
+      expect(tx.vndPerUsdAtEntry.toString()).toBe('26025.123457')
       expect(tx.fxRateSource).toBe('cache-fallback:seeded')
       expect(tx.fxRateFetchedAt.toISOString()).toBe(seededFetchedAt.toISOString())
       expect(tx.fxRateEffectiveAt.toISOString()).toBe(seededEffectiveDate.toISOString())

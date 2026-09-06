@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   FxUnavailableError,
@@ -39,7 +40,9 @@ function workingProvider(rate = 25000, source = 'fake'): ExchangeRateProvider {
 }
 
 async function seedRate(fields: {
-  rate: number
+  // A string or `Decimal` seeds a rate at the column's full `Decimal(18, 6)`
+  // scale — digits a double could not have carried in the first place.
+  rate: number | string | Prisma.Decimal
   effectiveDate: Date
   fetchedAt: Date
   source: string
@@ -78,6 +81,32 @@ describe('getUsableCurrentRate', () => {
     expect(result.rate).toBe(25000)
     expect(result.source).toBe('fake')
     expect(result.isFallback).toBe(false)
+    // Every consumer doing money arithmetic reads `rateDecimal`, so it must be
+    // present and equal to the boundary number on the fresh path too.
+    expect(result.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
+  })
+
+  it('serves rateDecimal from the cached row on a cache hit, at the stored scale', async () => {
+    // A rate with more precision than a "nice" number: the point of carrying a
+    // Decimal is that these digits survive.
+    const today = new Date()
+    await seedRate({
+      rate: 25123.456789,
+      effectiveDate: new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+      ),
+      fetchedAt: today,
+      source: 'cached-fake',
+    })
+
+    const result = await getUsableCurrentRate(PAIR, failingProvider)
+
+    // Today's cache is a *hit*, not a fallback: the provider is never reached.
+    expect(result.isFallback).toBe(false)
+    expect(result.source).toBe('cached-fake')
+    expect(result.rateDecimal.equals(new Prisma.Decimal('25123.456789'))).toBe(true)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
   })
 
   it('falls back to a recent last-known-good current rate (within 48h) with isFallback=true, preserving its original fetchedAt', async () => {
@@ -98,6 +127,33 @@ describe('getUsableCurrentRate', () => {
     expect(result.effectiveDate.toISOString()).toBe(recentFetchedAt.toISOString())
     expect(result.source).toBe('cache-fallback:fresh-fake')
     expect(result.isFallback).toBe(true)
+    // The fallback's Decimal is the row's own `Decimal(18, 6)`, not a value
+    // reconstructed from the widened number.
+    expect(result.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result.rateDecimal.equals(new Prisma.Decimal(result.rate))).toBe(true)
+  })
+
+  it("takes the fallback's Decimal off the row itself, at a scale no double can hold", async () => {
+    // 18 significant digits — the full width of `Decimal(18, 6)`. A double
+    // keeps 17, so `Number(row.rate)` is already 123456789012.12346 by the time
+    // anyone looks at it: this value can only survive if `rateDecimal` is the
+    // row's own Decimal and was never round-tripped through a number.
+    const exact = '123456789012.123456'
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await seedRate({
+      rate: exact,
+      effectiveDate: twoHoursAgo,
+      fetchedAt: twoHoursAgo,
+      source: 'precise-fake',
+    })
+
+    const result = await getUsableCurrentRate(PAIR, failingProvider)
+
+    expect(result.isFallback).toBe(true)
+    expect(result.rateDecimal.toString()).toBe(exact)
+    // The boundary number really has lost a digit — which is exactly why no
+    // conversion may use it.
+    expect(new Prisma.Decimal(result.rate).toString()).toBe('123456789012.12346')
   })
 
   it('rejects a stale cached fallback older than the freshness window', async () => {
