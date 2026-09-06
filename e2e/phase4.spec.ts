@@ -289,6 +289,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     expect(fullResp.status()).toBe(200)
     expect(fullResp.headers()['content-type']).toContain('spreadsheetml')
     expect(fullResp.headers()['content-disposition']).toMatch(/cashflow-full-\d{8}\.xlsx/)
+    expect(fullResp.headers()['x-content-type-options']).toBe('nosniff')
     const fullBody = await fullResp.body()
     expect(fullBody.length).toBeGreaterThan(1000)
 
@@ -304,9 +305,13 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
 
     const bogusModeResp = await page.request.get('/api/reports/export?mode=bogus')
     expect(bogusModeResp.status()).toBe(400)
+    // Every response, refusals included: a plain-text refusal must never be
+    // sniffed into HTML and rendered in the download's origin.
+    expect(bogusModeResp.headers()['x-content-type-options']).toBe('nosniff')
 
     const badRangeResp = await page.request.get('/api/reports/export?mode=filtered&period=weekly')
     expect(badRangeResp.status()).toBe(400)
+    expect(badRangeResp.headers()['x-content-type-options']).toBe('nosniff')
 
     // A fresh, unauthenticated context — no cookies at all — must be refused.
     // `storageState: undefined` explicitly overrides the file-level
@@ -321,6 +326,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     try {
       const anonResp = await anonContext.get('/api/reports/export?mode=full')
       expect(anonResp.status()).toBe(401)
+      expect(anonResp.headers()['x-content-type-options']).toBe('nosniff')
     } finally {
       await anonContext.dispose()
     }

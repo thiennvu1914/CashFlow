@@ -212,6 +212,16 @@ function ReportsHeader({
       <div>
         <h1 className="text-xl font-semibold">Reports</h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
+        {/* Always shown, though it only bites for a user with accounts in more
+            than one currency: every figure on this page is history, restated at
+            the rate each row snapshotted when it was entered — never at today's
+            rate. Someone comparing a report against a bank statement, or
+            against the same report run last month, needs to know that up front,
+            and a caption that appeared only sometimes would be missed exactly
+            when it mattered. */}
+        <p className="text-xs text-muted-foreground">
+          Converted at each transaction&rsquo;s exchange rate at entry
+        </p>
       </div>
       <div className="flex flex-wrap gap-2">
         {exportQuery !== null && (

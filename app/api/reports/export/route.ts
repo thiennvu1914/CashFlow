@@ -42,6 +42,17 @@ export const dynamic = 'force-dynamic'
 
 const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
+/**
+ * On every response from this route, refusals included.
+ *
+ * `nosniff` tells the browser to believe the `Content-Type` rather than
+ * inspecting the bytes. Both directions matter here: a plain-text refusal must
+ * never be sniffed into HTML and rendered in the download's origin, and the
+ * workbook — an attacker-influenceable payload, since a transaction note is
+ * whatever the user typed — must never be sniffed into anything executable.
+ */
+const NOSNIFF = { 'X-Content-Type-Options': 'nosniff' } as const
+
 const MODES = ['full', 'filtered'] as const
 type ExportMode = (typeof MODES)[number]
 
@@ -53,7 +64,11 @@ function isMode(value: string | null): value is ExportMode {
 function refuse(message: string, status: number): Response {
   return new Response(message, {
     status,
-    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...NOSNIFF,
+    },
   })
 }
 
@@ -133,6 +148,7 @@ export async function GET(request: Request): Promise<Response> {
       'Content-Disposition': `attachment; filename="cashflow-${mode}-${stamp}.xlsx"`,
       // A financial export must never sit in a shared or browser cache.
       'Cache-Control': 'no-store',
+      ...NOSNIFF,
     },
   })
 }

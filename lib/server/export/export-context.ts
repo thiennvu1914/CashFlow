@@ -60,30 +60,3 @@ export async function resolveExportFx(
     return null
   }
 }
-
-export interface BuildExportContextOptions {
-  /** The instant the export was requested. Injectable for tests. */
-  now?: Date
-  /**
-   * Whether this workbook needs a current rate at all. `false` for the filtered
-   * export, which is historical end to end and reads `ctx.fx` nowhere — see the
-   * warning on `ExportContext.fx`.
-   */
-  withFx?: boolean
-  /** tests only; production callers omit it. */
-  providerOverride?: ExchangeRateProvider
-}
-
-/** Profile and (optionally) rate together — the whole context in one call. */
-export async function buildExportContext(
-  userId: string,
-  options: BuildExportContextOptions = {},
-): Promise<ExportContext> {
-  const { now = new Date(), withFx = true, providerOverride } = options
-  const profile = await loadExportProfile(userId)
-  return {
-    ...profile,
-    fx: withFx ? await resolveExportFx(providerOverride) : null,
-    now,
-  }
-}

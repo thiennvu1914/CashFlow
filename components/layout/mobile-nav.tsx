@@ -93,10 +93,9 @@ export function MobileTopBar() {
           className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           More
-          <ChevronDown
-            aria-hidden="true"
-            className={cn('size-4 transition-transform', open && 'rotate-180')}
-          />
+          {/* Flipped, not animated: the design system does not animate, so the
+              chevron simply *is* the other way up while the panel is open. */}
+          <ChevronDown aria-hidden="true" className={cn('size-4', open && 'rotate-180')} />
         </button>
       </div>
       {open && (

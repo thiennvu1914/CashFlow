@@ -37,8 +37,8 @@ export async function buildSummarySheet(
   ctx: ExportContext,
 ): Promise<void> {
   const [position, monthly, accountsByStatus, transactionCount, transferCount] = await Promise.all([
-    // Wrapped exactly like `buildExportContext`: a missing rate blanks two
-    // cells, it does not fail the download. Anything else is a real fault.
+    // Narrowed exactly like `resolveExportFx`: a missing rate blanks two cells,
+    // it does not fail the download. Anything else is a real fault.
     currentPositionOrNull(ctx),
     // Historical by construction — `getMonthlyIncomeExpense` restates each row
     // at the rate that row snapshotted, so no current rate is involved.

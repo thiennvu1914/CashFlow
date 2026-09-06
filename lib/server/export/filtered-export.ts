@@ -24,6 +24,11 @@ import type { ExportContext } from './sheet-registry'
  * The Transactions sheet is written by `writeTransactionsSheet` — the same
  * function the full export uses — so the two workbooks' ledgers cannot drift
  * apart in columns, formats or conversion rule.
+ *
+ * There is deliberately no Transfers sheet: a transfer is neither income nor
+ * expense and moves money between the user's own accounts, so it has no place
+ * in an activity report. The Summary says so on its own row rather than leaving
+ * the omission to be discovered.
  */
 export async function buildFilteredWorkbook(
   ctx: ExportContext,
@@ -45,6 +50,19 @@ type ActivitySummary = Awaited<ReturnType<typeof getActivitySummary>>
 /** Why the three headline totals do not add up to the Transactions sheet. */
 const ACTIVITY_SCOPE_NOTE =
   'Income and Expense count INCOME/EXPENSE rows only; the Transactions sheet lists all types.'
+
+/**
+ * Said out loud on the sheet, because the omission is otherwise invisible.
+ *
+ * A filtered workbook has no Transfers sheet at all: a transfer is neither
+ * income nor expense (spec §4.5) and moves money *between* the user's own
+ * accounts, so it belongs to no activity total. Someone reconciling this
+ * workbook against their accounts would look for the missing movements and find
+ * no hint that they were never here — so the sheet names the export that does
+ * carry them.
+ */
+const TRANSFERS_EXCLUDED_NOTE =
+  'Transfers are not included in a filtered export — use Export all data.'
 
 /**
  * The cover sheet: which window, then the totals, then the same two breakdowns
@@ -94,6 +112,10 @@ function writeSummarySheet(
     const row = sheet.addRow([label, moneyCell(value), ACTIVITY_SCOPE_NOTE])
     row.getCell(2).numFmt = displayFmt
   }
+
+  // Its own row, not a note beside a figure: it is a statement about what the
+  // whole workbook does *not* contain, not a caveat on any one total.
+  sheet.addRow([TRANSFERS_EXCLUDED_NOTE])
 
   sheet.addRow([])
   heading(sheet, 'By category')

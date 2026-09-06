@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
+import { loadExportProfile, resolveExportFx } from './export-context'
+import type { ExportContext } from './sheet-registry'
 
 /**
  * Fixtures shared by the two export test suites.
@@ -25,11 +27,11 @@ export const EXPORT_TEST_FX_SOURCES = ['export-fake', 'export-seeded']
 export const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
 
 /**
- * A provider that always answers, so `buildExportContext` gets a real
+ * A provider that always answers, so `resolveExportFx` yields a real
  * `UsableRateResult` without touching the network.
  *
- * It is consulted exactly once per export, by the context builder. Every sheet
- * is then handed that resolved rate, so nothing downstream reaches for a
+ * It is consulted exactly once per export, when the context is assembled. Every
+ * sheet is then handed that resolved rate, so nothing downstream reaches for a
  * provider — or a cache row — of its own, and a suite can assert an exact rate
  * without depending on what the shared `ExchangeRate` table happens to hold.
  */
@@ -52,6 +54,38 @@ export const failingFxProvider: ExchangeRateProvider = {
     throw new Error('provider down')
   },
   getHistoricalRate: async () => null,
+}
+
+export interface MakeExportContextOptions {
+  /** The instant the export was requested. */
+  now?: Date
+  /**
+   * Whether to resolve a current rate at all. `false` mirrors the filtered
+   * export, which is historical end to end and reads `ctx.fx` nowhere.
+   */
+  withFx?: boolean
+  providerOverride?: ExchangeRateProvider
+}
+
+/**
+ * An `ExportContext` for a suite that wants to build a workbook — the route's
+ * own two steps, `loadExportProfile` then (optionally) `resolveExportFx`, in
+ * that order.
+ *
+ * A **test** helper on purpose. Production deliberately has no such function:
+ * the route interleaves range validation between the two steps, so a malformed
+ * URL costs no provider round trip and the filtered export costs none at all. A
+ * shared "give me the whole context" convenience would invite a caller to fetch
+ * a rate before knowing whether the request is even valid, which is exactly the
+ * ordering the route exists to get right.
+ */
+export async function makeExportContext(
+  userId: string,
+  options: MakeExportContextOptions = {},
+): Promise<ExportContext> {
+  const { now = new Date(), withFx = true, providerOverride } = options
+  const profile = await loadExportProfile(userId)
+  return { ...profile, fx: withFx ? await resolveExportFx(providerOverride) : null, now }
 }
 
 export interface ExportFixture {

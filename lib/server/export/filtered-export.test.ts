@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type ExcelJS from 'exceljs'
+import { prisma } from '@/lib/prisma'
 import { resolveReportRange } from '@/lib/reports/report-range'
-import { buildExportContext } from './export-context'
 import { buildFilteredWorkbook } from './filtered-export'
 import {
   TEST_TIMEZONE,
   cleanupExportUsers,
   createExportUser,
   fakeFxProvider,
+  makeExportContext,
   seedTransaction,
 } from './test-fixtures'
 
@@ -88,7 +89,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
 
     const transactions = workbook.getWorksheet('Transactions')
@@ -117,7 +118,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
     const transactions = workbook.getWorksheet('Transactions')
     if (!transactions) throw new Error('no Transactions sheet')
@@ -134,7 +135,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const summary = (await buildFilteredWorkbook(ctx, range)).getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')
 
@@ -168,7 +169,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const summary = (await buildFilteredWorkbook(ctx, range)).getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')
 
@@ -197,7 +198,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
     const summary = workbook.getWorksheet('Summary')
     const transactions = workbook.getWorksheet('Transactions')
@@ -213,5 +214,50 @@ describe('buildFilteredWorkbook', () => {
     )
     expect(labelledRow(summary, 'Expense').getCell(3).value).toBe(note)
     expect(labelledRow(summary, 'Net Income').getCell(3).value).toBe(note)
+  })
+
+  it('says on the sheet that transfers are not in a filtered export', async () => {
+    const s = await setup()
+    // A real transfer inside the window. It is neither income nor expense, and
+    // this workbook has no Transfers sheet — so the only way a reader learns it
+    // exists is the note.
+    const secondVnd = await prisma.financialAccount.create({
+      data: {
+        userId: s.userId,
+        name: 'Savings',
+        accountTypeId: s.accountTypeId,
+        initialBalance: 0,
+        currency: 'VND',
+      },
+    })
+    await prisma.transfer.create({
+      data: {
+        userId: s.userId,
+        fromAccountId: s.vndAccountId,
+        toAccountId: secondVnd.id,
+        fromAmount: 50_000,
+        toAmount: 50_000,
+        date: new Date('2026-03-12T05:00:00Z'),
+      },
+    })
+
+    const range = resolveReportRange(
+      { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
+      TEST_TIMEZONE,
+    )
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const workbook = await buildFilteredWorkbook(ctx, range)
+
+    // No Transfers sheet, by design.
+    expect(workbook.worksheets.map((w) => w.name)).toEqual(['Summary', 'Transactions'])
+
+    const summary = workbook.getWorksheet('Summary')
+    if (!summary) throw new Error('no Summary sheet')
+    expect(
+      labelledRow(
+        summary,
+        'Transfers are not included in a filtered export — use Export all data.',
+      ).getCell(1).value,
+    ).toBe('Transfers are not included in a filtered export — use Export all data.')
   })
 })

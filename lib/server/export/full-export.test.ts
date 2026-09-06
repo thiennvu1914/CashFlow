@@ -3,13 +3,14 @@ import type { MockInstance } from 'vitest'
 import type ExcelJS from 'exceljs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { buildExportContext } from './export-context'
+
 import { FULL_EXPORT_SHEET_BUILDERS, buildFullWorkbook } from './sheet-registry'
 import {
   cleanupExportUsers,
   createExportUser,
   failingFxProvider,
   fakeFxProvider,
+  makeExportContext,
   seedTransaction,
   utcDayStart,
 } from './test-fixtures'
@@ -112,7 +113,7 @@ describe('full export workbook', () => {
 
   it('produces Summary, Accounts, Transactions and Transfers in registry order', async () => {
     const s = await setup()
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
@@ -129,7 +130,7 @@ describe('full export workbook', () => {
   it('includes archived accounts, their status, and their history', async () => {
     const s = await setup()
     const archived = await archivedAccountWithHistory(s)
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
@@ -169,7 +170,7 @@ describe('full export workbook', () => {
         fxRateSource: 'export-seeded',
       })),
     })
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
@@ -194,7 +195,7 @@ describe('full export workbook', () => {
         note: 'to savings',
       },
     })
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const transfers = sheet(await buildFullWorkbook(ctx), 'Transfers')
 
@@ -221,7 +222,7 @@ describe('full export workbook', () => {
       date: new Date('2026-03-10T05:00:00Z'),
       vndPerUsdAtEntry: 25_500,
     })
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider(26_000) })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider(26_000) })
     expect(ctx.fx?.rateDecimal.toNumber()).toBe(26_000)
 
     const transactions = sheet(await buildFullWorkbook(ctx), 'Transactions')
@@ -253,7 +254,7 @@ describe('full export workbook', () => {
     })
 
     // A provider that refuses, so the context resolves no rate at all.
-    const ctx = await buildExportContext(s.userId, { providerOverride: failingFxProvider })
+    const ctx = await makeExportContext(s.userId, { providerOverride: failingFxProvider })
     expect(ctx.fx).toBeNull()
 
     const workbook = await buildFullWorkbook(ctx)
@@ -298,7 +299,7 @@ describe('full export workbook', () => {
     })
     // A rate with a fractional part, so the total can only come out right if
     // this exact number reached the arithmetic.
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider(26_000.5) })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider(26_000.5) })
 
     const summary = sheet(await buildFullWorkbook(ctx), 'Summary')
 
@@ -327,7 +328,7 @@ describe('full export workbook', () => {
       amount: 1_000,
       date: new Date('2026-03-10T05:00:00Z'),
     })
-    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 

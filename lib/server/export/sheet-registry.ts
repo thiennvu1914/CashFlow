@@ -11,9 +11,10 @@ import { buildTransfersSheet } from './build-transfers-sheet'
  *
  * Everything a sheet builder is allowed to know about the request, gathered
  * once and passed to every builder. In particular `fx` is resolved a single
- * time by `buildExportContext`, so a workbook cannot restate one sheet's
- * balances at one rate and another sheet's at a rate fetched a second later —
- * and a builder has no way to ask for a rate of its own.
+ * time by the route (`resolveExportFx`, once, before any builder runs), so a
+ * workbook cannot restate one sheet's balances at one rate and another sheet's
+ * at a rate fetched a second later — and a builder has no way to ask for a rate
+ * of its own.
  */
 export interface ExportContext {
   /** Always from `requireUser()`; every query in every builder is scoped by it. */
@@ -27,8 +28,8 @@ export interface ExportContext {
    *
    * `null` means converted columns are left blank and said to be unavailable —
    * never filled with a fabricated number. It carries two causes that a builder
-   * cannot tell apart: no usable rate existed, or the workbook declared it
-   * needs none (`withFx: false`, which the filtered export passes because it is
+   * cannot tell apart: no usable rate existed, or the caller never asked for
+   * one (the route skips `resolveExportFx` for the filtered export, which is
    * historical end to end). A builder that genuinely needs a current rate must
    * therefore not be added to the filtered workbook without turning FX back on
    * — it would silently render blanks rather than fail.
