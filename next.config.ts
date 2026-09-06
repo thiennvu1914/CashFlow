@@ -2,11 +2,14 @@ import type { NextConfig } from 'next'
 import createNextIntlPlugin from 'next-intl/plugin'
 
 const nextConfig: NextConfig = {
-  // The dev tools indicator defaults to bottom-left, which overlaps
-  // AppShell's logout control (also bottom-left of the desktop rail) and can
-  // swallow clicks meant for it; bottom-right is clear in both the desktop
-  // rail and the mobile bar (whose raised Add action is bottom-centre).
-  devIndicators: { position: 'bottom-right' },
+  // Off, not repositioned. AppShell occupies the bottom edge at *every*
+  // breakpoint, so no corner is free: the desktop rail's logout control sits
+  // bottom-left, and below `md` the tab bar spans the full width — bottom-right
+  // is the Reports tab. Wherever the floating indicator lands it overlays a
+  // control and swallows clicks meant for it (it is a `<nextjs-portal>` fixed
+  // above the page). It is a dev-only affordance and this is a dev-only
+  // setting; the production build never renders it either way.
+  devIndicators: false,
 }
 
 const withNextIntl = createNextIntlPlugin()

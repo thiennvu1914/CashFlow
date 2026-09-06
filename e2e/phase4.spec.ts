@@ -186,6 +186,13 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await expect(page).toHaveURL(/\/accounts/)
     await expect(morePanel).toBeHidden()
 
+    // The rightmost tab specifically: the bottom-right corner is where a
+    // floating dev overlay would land, and it would swallow this tap rather
+    // than navigate. Reports is the tab that occupies it.
+    await bar.getByRole('link', { name: 'Reports' }).click()
+    await expect(page).toHaveURL(/\/reports/)
+    await expect(page.getByRole('heading', { name: 'Reports', level: 1 })).toBeVisible()
+
     await bar.getByRole('link', { name: 'Dashboard' }).click()
     await expect(page).toHaveURL(/\/dashboard/)
     await expect(morePanel).toBeHidden()
