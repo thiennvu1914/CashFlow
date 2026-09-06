@@ -155,6 +155,7 @@ model Category {
   createdAt DateTime     @default(now())
 
   transactions Transaction[]
+  budgets      Budget[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -327,4 +328,42 @@ model Transfer {
 
   @@unique([userId, id])
   @@index([userId, date])
+}
+
+enum BudgetScope {
+  OVERALL
+  CATEGORY
+}
+
+/// A monthly spending target (spec §4.6). Tracking only: it never moves money.
+/// `year`/`month` are plain integers — a budget's identity ("March 2026") needs
+/// no timezone; only the query that sums that month's EXPENSE rows does
+/// (`getCalendarMonthBounds`). `amount` is denominated in `currency`, and
+/// progress is summed into that same currency via `historicalAmountIn`.
+/// Uniqueness ("one OVERALL per month", "one per category per month") lives in
+/// two PARTIAL unique indexes written by hand in this model's migration —
+/// a plain @@unique cannot express it because NULL categoryId values are
+/// distinct from each other in Postgres.
+///
+/// Three further invariants are database CHECK constraints in that same
+/// migration, since Prisma's schema language has no CHECK syntax:
+/// `Budget_month_range` (1–12), `Budget_amount_positive` (> 0) and
+/// `Budget_scope_category_consistent` (a CATEGORY budget names a category, an
+/// OVERALL budget does not).
+model Budget {
+  id         String      @id @default(cuid())
+  userId     String
+  year       Int
+  month      Int
+  scope      BudgetScope
+  categoryId String?
+  amount     Decimal     @db.Decimal(18, 2)
+  currency   Currency
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  category Category? @relation(fields: [userId, categoryId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, year, month])
 }
