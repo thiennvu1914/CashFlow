@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_BUDGET_YEAR,
+  MIN_BUDGET_YEAR,
   addCalendarMonths,
   formatCalendarMonth,
   getCalendarMonth,
   getCalendarMonthBounds,
+  isBudgetableMonth,
   parseCalendarMonth,
 } from './calendar-month'
 
@@ -102,6 +105,20 @@ describe('formatCalendarMonth / parseCalendarMonth', () => {
     for (const value of ['', '2026', '2026-3', '2026-00', '2026-13', '26-03', '2026-03-01', 'x']) {
       expect(parseCalendarMonth(value)).toBeNull()
     }
+  })
+})
+
+describe('isBudgetableMonth', () => {
+  it('accepts the two boundary years', () => {
+    expect(isBudgetableMonth({ year: MIN_BUDGET_YEAR, month: 1 })).toBe(true)
+    expect(isBudgetableMonth({ year: MIN_BUDGET_YEAR, month: 12 })).toBe(true)
+    expect(isBudgetableMonth({ year: MAX_BUDGET_YEAR, month: 1 })).toBe(true)
+    expect(isBudgetableMonth({ year: MAX_BUDGET_YEAR, month: 12 })).toBe(true)
+  })
+
+  it('rejects a year one step outside either boundary', () => {
+    expect(isBudgetableMonth({ year: MIN_BUDGET_YEAR - 1, month: 12 })).toBe(false)
+    expect(isBudgetableMonth({ year: MAX_BUDGET_YEAR + 1, month: 1 })).toBe(false)
   })
 })
 

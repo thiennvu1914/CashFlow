@@ -105,3 +105,25 @@ export function addCalendarMonths(m: CalendarMonth, delta: number): CalendarMont
   const zeroBased = m.year * 12 + (m.month - 1) + delta
   return { year: Math.floor(zeroBased / 12), month: (((zeroBased % 12) + 12) % 12) + 1 }
 }
+
+/**
+ * The inclusive year range a Budget can actually be created for — mirrors
+ * `createBudgetSchema`'s `year` bounds (`lib/validation/budget.ts`) and the
+ * database's `Budget_month_range` CHECK. Defined here, once, and imported by
+ * the validation schema rather than restated as a second literal `2000`/`2100`
+ * pair, so the two cannot drift apart.
+ */
+export const MIN_BUDGET_YEAR = 2000
+export const MAX_BUDGET_YEAR = 2100
+
+/**
+ * Whether `month` falls inside the year range a Budget can be created for.
+ * `parseCalendarMonth` accepts any 4-digit year — it only knows "well-formed
+ * `yyyy-MM`", not "budgetable" — so a page that lets the user navigate to an
+ * arbitrary month must apply this on top before trusting the result, exactly
+ * as it already treats a regex failure: an out-of-range year is as malformed
+ * as `?month=banana`, not a legitimate month whose form simply cannot submit.
+ */
+export function isBudgetableMonth(month: CalendarMonth): boolean {
+  return month.year >= MIN_BUDGET_YEAR && month.year <= MAX_BUDGET_YEAR
+}

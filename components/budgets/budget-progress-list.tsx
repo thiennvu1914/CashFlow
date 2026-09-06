@@ -74,6 +74,10 @@ export function BudgetProgressList({
             aria-valuenow={budget.percent}
             aria-valuemin={0}
             aria-valuemax={100}
+            // `aria-valuenow` is the clamped bar width (never over 100); an
+            // exceeded budget's true figure — "120 %" — still needs to be
+            // announced, which is exactly what `percentLabel` carries.
+            aria-valuetext={budget.percentLabel}
             aria-label={`${budget.label} budget`}
             className="mt-2 h-1.5 overflow-hidden rounded-sm bg-muted"
           >

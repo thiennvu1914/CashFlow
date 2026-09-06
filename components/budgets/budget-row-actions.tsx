@@ -97,7 +97,7 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
         <Input
           type="number"
           step="0.01"
-          aria-label="Edit budget amount"
+          aria-label={`Edit ${budget.label} budget amount`}
           {...register('amount', { valueAsNumber: true })}
         />
         {errors.amount && <p className="text-sm text-negative">{errors.amount.message}</p>}
@@ -105,7 +105,7 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
       <div>
         <select
           {...register('currency')}
-          aria-label="Edit budget currency"
+          aria-label={`Edit ${budget.label} budget currency`}
           className="rounded-md border p-2"
         >
           <option value="VND">VND</option>

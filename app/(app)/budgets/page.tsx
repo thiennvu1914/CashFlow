@@ -2,6 +2,8 @@ import { formatInTimeZone } from 'date-fns-tz'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import {
   getCalendarMonth,
+  getCalendarMonthBounds,
+  isBudgetableMonth,
   parseCalendarMonth,
   type CalendarMonth,
 } from '@/lib/datetime/calendar-month'
@@ -20,8 +22,13 @@ import { MonthNav } from '@/components/budgets/month-nav'
  *
  * The selected month lives in the URL, exactly like Reports' period filter —
  * `?month=yyyy-MM`, defaulting to the user's current local calendar month. A
- * malformed value silently falls back rather than erroring: this is
- * navigation, not a data request the user typed by hand for its figures.
+ * malformed value, or a well-formed one outside the year `Budget.year` can
+ * actually hold (`isBudgetableMonth`, `lib/datetime/calendar-month.ts`),
+ * silently falls back rather than erroring: this is navigation, not a data
+ * request the user typed by hand for its figures. Falling back matters for
+ * more than cosmetics here — an out-of-range year would otherwise render a
+ * create form whose hidden `year` field `createBudgetSchema` always rejects,
+ * so "Add budget" would submit and silently do nothing.
  */
 
 /** True when `month` is strictly earlier than `now` — a closed month, whose
@@ -34,7 +41,10 @@ function isPastMonth(month: CalendarMonth, now: CalendarMonth): boolean {
 export default async function BudgetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string }>
+  // Query parameters as Next delivers them — untrusted, and never cast: a
+  // repeated `?month=` key arrives as `string[]`, not `string` (see the same
+  // convention in `app/(app)/reports/page.tsx`).
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own. `user.id` — never anything from the
@@ -43,9 +53,14 @@ export default async function BudgetsPage({
   const { timezone } = resolveProfileDefaults(user)
   const now = new Date()
 
-  const { month } = await searchParams
+  const params = await searchParams
   const current = getCalendarMonth(timezone, now)
-  const selected = (month ? parseCalendarMonth(month) : null) ?? current
+  // Only a `string` ever reaches the parser; anything else (`undefined`, a
+  // repeated key's `string[]`) is treated as absent. A parsed month outside
+  // the budgetable year range falls back exactly like a malformed one — see
+  // the module doc above.
+  const parsed = typeof params.month === 'string' ? parseCalendarMonth(params.month) : null
+  const selected = parsed && isBudgetableMonth(parsed) ? parsed : current
 
   const [progress, categories] = await Promise.all([
     getBudgetProgressForMonth(user.id, timezone, selected.year, selected.month),
@@ -57,11 +72,14 @@ export default async function BudgetsPage({
   const dtos = progress.map(toBudgetProgressDto)
   const overallExists = dtos.some((dto) => dto.scope === 'OVERALL')
 
-  // A label, not an instant: any date inside the month works, formatted in
-  // 'UTC' so the month it names never shifts with the reader's zone.
+  // The month's own local start, formatted in the user's zone — an honest
+  // instant rather than a hand-built `Date.UTC`, which for a year below 100
+  // hits JavaScript's legacy two-digit-year mapping (`Date.UTC(1, 0, 1)`
+  // silently becomes 1901, not year 1) even though that year is now
+  // unreachable here (`isBudgetableMonth` bounds it to 2000–2100).
   const monthLabel = formatInTimeZone(
-    new Date(Date.UTC(selected.year, selected.month - 1, 1)),
-    'UTC',
+    getCalendarMonthBounds(timezone, selected.year, selected.month).startUtc,
+    timezone,
     'LLLL yyyy',
   )
 
@@ -83,15 +101,19 @@ export default async function BudgetsPage({
         {dtos.length === 0 ? (
           <p className="text-sm text-foreground/60">No budgets for {monthLabel} — add one below.</p>
         ) : (
-          <BudgetProgressList
-            budgets={dtos}
-            renderActions={(budget) => <BudgetRowActions budget={budget} />}
-          />
+          <>
+            <BudgetProgressList
+              budgets={dtos}
+              renderActions={(budget) => <BudgetRowActions budget={budget} />}
+            />
+            {/* Only qualifies figures that are actually on screen — the empty
+                state above has none for this note to explain. */}
+            <p className="text-xs text-muted-foreground">
+              Spending counts expense transactions only, converted at each transaction&rsquo;s own
+              recorded rate.
+            </p>
+          </>
         )}
-        <p className="text-xs text-muted-foreground">
-          Spending counts expense transactions only, converted at each transaction&rsquo;s own
-          recorded rate.
-        </p>
       </div>
 
       <div id="new" className="scroll-mt-6">

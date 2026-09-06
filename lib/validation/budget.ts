@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_BUDGET_YEAR, MIN_BUDGET_YEAR } from '@/lib/datetime/calendar-month'
 import { moneyAmountSchema } from '@/lib/validation/money'
 
 /**
@@ -25,7 +26,7 @@ export const budgetScopeSchema = z.enum(['OVERALL', 'CATEGORY'])
 export const budgetCurrencySchema = z.enum(['VND', 'USD'])
 
 const budgetFields = {
-  year: z.number().int().min(2000).max(2100),
+  year: z.number().int().min(MIN_BUDGET_YEAR).max(MAX_BUDGET_YEAR),
   month: z.number().int().min(1).max(12),
   scope: budgetScopeSchema,
   categoryId: z.string().min(1).optional(),
