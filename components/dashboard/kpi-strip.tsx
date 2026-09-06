@@ -23,20 +23,26 @@ import type { KpiDto } from '@/lib/ui/dashboard-view-model'
 
 /**
  * Tailwind resolves class names from source text, so each one has to appear
- * whole — the counts the app actually renders are listed literally. Anything
- * else falls back to the dashboard's five.
+ * whole — the counts the app actually renders are listed literally.
+ *
+ * Typed with `| undefined` on purpose: an index signature otherwise promises a
+ * `string` for every number, which would make the `??` fallback below look like
+ * dead code to a reader and to the type-checker.
  */
-const MD_COLUMNS: Record<number, string> = {
+const MD_COLUMNS: Record<number, string | undefined> = {
   3: 'md:grid-cols-3',
   5: 'md:grid-cols-5',
 }
+
+/** What a count with no entry above falls back to — the dashboard's shape. */
+const DEFAULT_MD_COLUMNS = 'md:grid-cols-5'
 
 export function KpiStrip({ kpis, currency }: { kpis: KpiDto[]; currency: Currency }) {
   return (
     <dl
       className={cn(
         'grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border',
-        MD_COLUMNS[kpis.length] ?? MD_COLUMNS[5],
+        MD_COLUMNS[kpis.length] ?? DEFAULT_MD_COLUMNS,
       )}
     >
       {kpis.map((kpi, index) => (

@@ -184,6 +184,66 @@ describe('resolveReportRange — custom range', () => {
   })
 })
 
+describe('resolveReportRange — supported calendar years', () => {
+  /**
+   * A date can be real and still be unusable. Two ways, both reachable from a
+   * hand-typed URL:
+   *
+   * - `9999-12-31` is a real day whose *successor* is year 10000, which
+   *   `Date#toISOString` writes in expanded form (`+010000-01-01T…`). Sliced to
+   *   ten characters that is `+010000-0`, which parses to an Invalid Date and
+   *   would reach Prisma as `lt: NaN` — a 500, not the inline message the page
+   *   promises.
+   * - `0099-01-01` is a real day that `Date.UTC` maps to *1999*, because years
+   *   0–99 are two-digit years to that constructor. The range would silently
+   *   cover a different two millennia than the one the user typed.
+   *
+   * Both are excluded by bounding the accepted year, which is tested at each
+   * edge below rather than only in the middle.
+   */
+  it.each([
+    ['to is far in the future', '2026-03-01', '9999-12-31'],
+    ['from is in year 1', '0001-01-01', '2026-03-01'],
+    ['from is a two-digit year Date.UTC would remap', '0099-01-01', '2026-03-01'],
+    ['from is just below the lower bound', '1899-12-31', '1900-01-31'],
+    ['to is just above the upper bound', '2999-12-31', '3000-01-01'],
+  ])('rejects a custom range where %s', (_why, from, to) => {
+    expect(() => resolveReportRange({ period: 'custom', from, to }, TZ, NOW)).toThrow(
+      InvalidReportRangeError,
+    )
+  })
+
+  it('accepts the first supported day', () => {
+    const r = resolveReportRange(
+      { period: 'custom', from: '1900-01-01', to: '1900-01-02' },
+      'UTC',
+      NOW,
+    )
+    expect(r.startUtc.toISOString()).toBe('1900-01-01T00:00:00.000Z')
+    expect(r.endUtc.toISOString()).toBe('1900-01-03T00:00:00.000Z')
+  })
+
+  it('accepts the last supported day, rolling its exclusive bound into the next millennium', () => {
+    const r = resolveReportRange(
+      { period: 'custom', from: '2999-12-01', to: '2999-12-31' },
+      'UTC',
+      NOW,
+    )
+    expect(r.startUtc.toISOString()).toBe('2999-12-01T00:00:00.000Z')
+    expect(r.endUtc.toISOString()).toBe('3000-01-01T00:00:00.000Z')
+  })
+
+  it('never returns a bound a database query could not use', () => {
+    const r = resolveReportRange(
+      { period: 'custom', from: '2999-12-31', to: '2999-12-31' },
+      TZ,
+      NOW,
+    )
+    expect(Number.isNaN(r.startUtc.getTime())).toBe(false)
+    expect(Number.isNaN(r.endUtc.getTime())).toBe(false)
+  })
+})
+
 describe('describeRange', () => {
   it('labels a custom range with the dates the user typed, end inclusive', () => {
     const r = resolveReportRange(
