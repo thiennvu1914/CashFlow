@@ -1,9 +1,9 @@
 import { Prisma } from '@prisma/client'
-import { subMonths } from 'date-fns'
-import { formatInTimeZone, fromZonedTime, toZonedTime } from 'date-fns-tz'
+import { formatInTimeZone } from 'date-fns-tz'
 import { prisma } from '@/lib/prisma'
 import type { Currency } from '@/lib/currency/provider'
 import { historicalAmountIn } from '@/lib/currency/historical-amount'
+import { getRecentMonthWindows } from '@/lib/datetime/month-windows'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 
 /**
@@ -208,13 +208,10 @@ export interface CashFlowPoint extends ActivityRange {
  * oldest first, with empty months present as zeros so the chart's x-axis has no
  * gaps.
  *
- * The windows are the user's *local* months. `now` is projected into
- * `timezone`, stepped back with `subMonths` on that local wall clock, and each
- * step converted back to an instant, so `getPeriodBounds` lands on local month
- * boundaries — for `Asia/Ho_Chi_Minh` those are 17:00Z on the last day of the
- * preceding UTC month, not midnight UTC. Stepping on the local clock is also
- * what keeps the sequence correct across a year boundary and immune to a `now`
- * that falls in a different UTC month than the local one.
+ * The windows are the user's *local* months, built by the shared
+ * `getRecentMonthWindows` — the same helper the balance-over-time chart samples
+ * at, so the dashboard's two trend charts cannot disagree about which months
+ * they are showing or where a month begins.
  *
  * Cost is one query, not one per month: the whole span `[first.startUtc,
  * last.endUtc)` is fetched once and each row is dropped into its local month
@@ -228,19 +225,8 @@ export async function getCashFlowTrend(
   monthsBack = 6,
   now: Date = new Date(),
 ): Promise<CashFlowPoint[]> {
-  if (monthsBack < 1) return []
-
-  const nowZoned = toZonedTime(now, timezone)
-  const windows = []
-  for (let i = monthsBack - 1; i >= 0; i--) {
-    // `subMonths` on the *local* wall clock; back to an instant before
-    // `getPeriodBounds` re-projects it. A day-of-month that does not exist in
-    // the earlier month is clamped by date-fns, which still lands in the
-    // intended month — only the month matters here.
-    const reference = fromZonedTime(subMonths(nowZoned, i), timezone)
-    const bounds = getPeriodBounds(timezone, 'month', reference)
-    windows.push({ month: formatInTimeZone(bounds.startUtc, timezone, 'yyyy-MM'), ...bounds })
-  }
+  const windows = getRecentMonthWindows(timezone, monthsBack, now)
+  if (windows.length === 0) return []
 
   const rows = await prisma.transaction.findMany({
     where: {
