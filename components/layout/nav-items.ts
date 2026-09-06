@@ -5,6 +5,7 @@ import {
   Receipt,
   Settings,
   Tags,
+  Target,
   Wallet,
   type LucideIcon,
 } from 'lucide-react'
@@ -13,9 +14,8 @@ import {
  * The application's navigation, in one place, so the desktop rail and the
  * mobile bar can never drift apart about what exists or where it lives.
  *
- * Only routes that exist are listed. There is deliberately no Budgets entry:
- * budgets arrive in Phase 5, and a link to a page that is not there yet is a
- * 404 dressed up as a feature.
+ * Only routes that exist are listed — Budgets is here now that Phase 5 has
+ * shipped `/budgets`.
  */
 export interface NavItem {
   href: string
@@ -28,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/transactions', label: 'Transactions', icon: Receipt },
   { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight },
   { href: '/accounts', label: 'Accounts', icon: Wallet },
+  { href: '/budgets', label: 'Budgets', icon: Target },
   { href: '/categories', label: 'Categories', icon: Tags },
   { href: '/reports', label: 'Reports', icon: ChartColumn },
   { href: '/settings', label: 'Settings', icon: Settings },
