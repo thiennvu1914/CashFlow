@@ -1,18 +1,38 @@
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
+import { prisma } from '@/lib/prisma'
 import {
   listActiveFinancialAccounts,
   listAllFinancialAccounts,
   accountsWithActivity,
 } from '@/lib/server/services/financial-account'
 import { listAccountTypes } from '@/lib/server/services/account-type'
-import { getAccountBalances } from '@/lib/server/services/balance'
+import { getCurrentAccountBalances } from '@/lib/server/services/balance'
 import { AccountForm } from '@/components/accounts/account-form'
 import { AccountList } from '@/components/accounts/account-list'
+
+/**
+ * How many of this user's entries are dated after `now` — a transaction or
+ * either leg of a transfer. Only ever compared against zero: it decides whether
+ * the "balances are as of now" note is shown, so the note appears exactly when
+ * it has something to explain and stays absent for the ordinary user who never
+ * post-dates anything.
+ */
+async function countFutureDatedEntries(userId: string, now: Date): Promise<number> {
+  const [transactions, transfers] = await Promise.all([
+    prisma.transaction.count({ where: { userId, date: { gt: now } } }),
+    prisma.transfer.count({ where: { userId, date: { gt: now } } }),
+  ])
+  return transactions + transfers
+}
 
 export default async function AccountsPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own rather than relying on `requireUser`.
   const user = await requireUserOrRedirect()
+  // ONE `now` for the whole request — the page owns it, not a component and not
+  // a service reading the clock again mid-render, so every balance below is cut
+  // at the same instant.
+  const now = new Date()
   const [accounts, accountTypes, allAccounts] = await Promise.all([
     listActiveFinancialAccounts(user.id),
     listAccountTypes(user.id),
@@ -20,11 +40,19 @@ export default async function AccountsPage() {
   ])
   const archivedAccounts = allAccounts.filter((a) => a.status === 'ARCHIVED')
   // One batched call for every account on the page — never one query per
-  // account — via `getAccountBalances`'s single `groupBy` + `findMany`.
-  const [balances, locked] = await Promise.all([
-    getAccountBalances(
+  // account — via `getCurrentAccountBalances`'s single `groupBy` + `findMany`.
+  //
+  // `getCurrentAccountBalances`, not `getAccountBalances`: a "current balance"
+  // means the same thing here as on the dashboard and in the Excel export —
+  // the balance as of now, with future-dated entries excluded until their date
+  // (`lib/server/services/balance.ts`). Those entries are still stored and
+  // still listed on the Transactions and Transfers pages; they simply are not
+  // money held yet.
+  const [balances, locked, futureDatedCount] = await Promise.all([
+    getCurrentAccountBalances(
       user.id,
       accounts.map((a) => a.id),
+      now,
     ),
     // Whether an edit form must disable/omit currency & initialBalance
     // (Task 15's lock) — one batched query for every account on the page,
@@ -33,6 +61,10 @@ export default async function AccountsPage() {
       user.id,
       accounts.map((a) => a.id),
     ),
+    // Two cheap counts, only to decide whether the "as of now" note below is
+    // worth showing. Not a balance input — nothing on this page is derived
+    // from it.
+    countFutureDatedEntries(user.id, now),
   ])
   // Serialised to a string/number here: a `Prisma.Decimal` cannot cross the
   // server-to-client-component boundary, so `AccountList` receives plain
@@ -57,7 +89,14 @@ export default async function AccountsPage() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <AccountList accounts={accountsWithBalance} accountTypes={accountTypes} />
+      <div className="flex flex-col gap-2">
+        <AccountList accounts={accountsWithBalance} accountTypes={accountTypes} />
+        {futureDatedCount > 0 && (
+          <p className="text-sm text-muted-foreground">
+            Balances are as of now; future-dated entries are excluded until their date.
+          </p>
+        )}
+      </div>
       <div>
         <h2 className="mb-3 text-lg font-semibold">Add account</h2>
         <AccountForm accountTypes={accountTypes} />

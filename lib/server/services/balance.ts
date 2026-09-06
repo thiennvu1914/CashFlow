@@ -145,3 +145,54 @@ export async function getAccountBalances(
   }
   return result
 }
+
+/**
+ * **The one definition of a "current balance" in this app.**
+ *
+ *     current balance = derived balance as of the current instant
+ *
+ * Future-dated activity — next month's rent, a post-dated cheque, a transfer
+ * booked for Monday — stays stored and stays visible in the transaction and
+ * transfer lists, but it does not move a current balance until its timestamp is
+ * reached. It is not money the user holds yet.
+ *
+ * Every surface that shows a user a "current balance" goes through this one
+ * function so the figures cannot disagree with each other: the **Accounts
+ * page**, the **dashboard's current position** (`getCurrentPosition`, and with
+ * it the Total Account Balance card, the Net Worth card and the Account Balance
+ * Distribution chart), and the **Excel export's** Accounts and Summary sheets.
+ * The Account Balance Over Time chart samples its current point at `now` too,
+ * so it lands on the same number.
+ *
+ * `now` is a parameter, not a call to the clock inside the loop: a page or route
+ * that renders several figures from one request takes ONE `new Date()` and
+ * threads it through, so no two figures on a page are computed against a clock
+ * that ticked between two awaits.
+ *
+ * This is a thin, deliberate wrapper — `getAccountBalances(userId, ids, now)` —
+ * and adds no arithmetic of its own. Use `getAccountBalances` directly only for
+ * a genuinely *historical* as-of read (the balance-history chart) or for the
+ * *booked* total, every entry included regardless of date, which is what
+ * `archiveFinancialAccount` checks alongside this one.
+ */
+export async function getCurrentAccountBalances(
+  userId: string,
+  accountIds: string[],
+  now: Date = new Date(),
+  db: BalanceDb = prisma,
+): Promise<Map<string, Prisma.Decimal>> {
+  return getAccountBalances(userId, accountIds, now, db)
+}
+
+/** Single-account form of `getCurrentAccountBalances`; same semantic. */
+export async function getCurrentAccountBalance(
+  userId: string,
+  accountId: string,
+  now: Date = new Date(),
+  db: BalanceDb = prisma,
+): Promise<Prisma.Decimal> {
+  const balances = await getCurrentAccountBalances(userId, [accountId], now, db)
+  // `getCurrentAccountBalances` throws `AccountNotFoundError` before returning
+  // if `accountId` doesn't resolve, so this is always present here.
+  return balances.get(accountId) as Prisma.Decimal
+}

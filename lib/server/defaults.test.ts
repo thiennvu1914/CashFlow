@@ -87,6 +87,48 @@ describe('seedDefaultsForUser', () => {
     expect(await prisma.category.count({ where: { userId } })).toBe(16)
   })
 
+  it('fills in only the missing defaults for a partially seeded user', async () => {
+    const userId = await createUser()
+    // A user who has some taxonomy but not all of it — the state the
+    // `backfill_default_taxonomy` migration was written for, and the state an
+    // interrupted first seed leaves behind. A count-based skip would leave this
+    // user stuck with one account type and one category forever.
+    await prisma.accountType.create({ data: { userId, name: 'Cash', isDefault: true } })
+    await prisma.category.create({
+      data: { userId, name: 'Salary', type: 'INCOME', isDefault: true },
+    })
+
+    await seedDefaultsForUser(userId)
+
+    expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
+    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.accountType.count({ where: { userId, name: 'Cash' } })).toBe(1)
+    expect(await prisma.category.count({ where: { userId, name: 'Salary', type: 'INCOME' } })).toBe(
+      1,
+    )
+  })
+
+  it('never overwrites a user-created row that happens to use a default name', async () => {
+    const userId = await createUser()
+    const custom = await prisma.accountType.create({
+      data: { userId, name: 'Cash', icon: 'wallet', isDefault: false },
+    })
+    const customCategory = await prisma.category.create({
+      data: { userId, name: 'Other', type: 'EXPENSE', icon: 'dots', isDefault: false },
+    })
+
+    await seedDefaultsForUser(userId)
+
+    // The row is left exactly as the user made it — same id, same icon, still
+    // `isDefault: false` — and no second row with that name appears.
+    expect(await prisma.accountType.findMany({ where: { userId, name: 'Cash' } })).toEqual([custom])
+    expect(
+      await prisma.category.findMany({ where: { userId, name: 'Other', type: 'EXPENSE' } }),
+    ).toEqual([customCategory])
+    expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
+    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+  })
+
   it('seeds each user separately', async () => {
     const firstUserId = await createUser()
     const secondUserId = await createUser()

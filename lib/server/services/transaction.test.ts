@@ -10,10 +10,12 @@ import { instantToLocalDateTime, localDateTimeToInstant } from '@/lib/datetime/l
 import {
   ArchivedAccountError,
   CurrencyMismatchError,
+  DEFAULT_TRANSACTION_LIST_LIMIT,
   InvalidCategoryError,
   createTransaction,
   deleteTransaction,
   listTransactions,
+  listTransactionsForExport,
   updateTransaction,
 } from './transaction'
 
@@ -657,6 +659,110 @@ describe('transaction service', () => {
       expect(row).not.toHaveProperty('userId')
       expect(row).not.toHaveProperty('vndPerUsdAtEntry')
       expect(row.account).not.toHaveProperty('initialBalance')
+    })
+  })
+
+  describe('listTransactionsForExport', () => {
+    /**
+     * Inserts `count` rows straight through Prisma rather than through
+     * `createTransaction`: this suite is about the *query*, and 205 service
+     * calls would each open an interactive transaction and take a row lock for
+     * no benefit to what is being proved.
+     */
+    async function seedRows(
+      s: Awaited<ReturnType<typeof setup>>,
+      count: number,
+      date = new Date('2026-03-10T05:00:00Z'),
+    ) {
+      await prisma.transaction.createMany({
+        data: Array.from({ length: count }, (_, index) => ({
+          userId: s.userId,
+          accountId: s.accountId,
+          categoryId: s.expenseCategoryId,
+          type: 'EXPENSE' as const,
+          amount: new Prisma.Decimal(index + 1),
+          currency: 'VND' as const,
+          date,
+          vndPerUsdAtEntry: new Prisma.Decimal(25000),
+          fxRateFetchedAt: date,
+          fxRateEffectiveAt: utcDayStart(date),
+          fxRateSource: 'seeded',
+        })),
+      })
+    }
+
+    it('returns every row — an export is unbounded, unlike the 200-row UI list', async () => {
+      const s = await setup()
+      await seedRows(s, 205)
+
+      // The bounded UI helper stops at its default limit; the export query must
+      // not, or a workbook silently loses five transactions.
+      expect(await listTransactions(s.userId)).toHaveLength(DEFAULT_TRANSACTION_LIST_LIMIT)
+      expect(await listTransactionsForExport(s.userId)).toHaveLength(205)
+    })
+
+    it('filters to the range with an exclusive end bound', async () => {
+      const s = await setup()
+      const inside = new Date('2026-03-10T05:00:00Z')
+      const lastInstant = new Date('2026-03-31T16:59:00Z')
+      const onTheBound = new Date('2026-03-31T17:00:00Z')
+      const before = new Date('2026-02-28T16:59:00Z')
+      for (const date of [inside, lastInstant, onTheBound, before]) {
+        await seedRows(s, 1, date)
+      }
+
+      const rows = await listTransactionsForExport(s.userId, {
+        startUtc: new Date('2026-02-28T17:00:00Z'),
+        endUtc: onTheBound,
+      })
+
+      // `endUtc` is the first instant of the next period: the row dated exactly
+      // on it belongs to that period, not this one.
+      expect(rows.map((row) => row.date.toISOString())).toEqual([
+        inside.toISOString(),
+        lastInstant.toISOString(),
+      ])
+    })
+
+    it('scopes to the calling user and orders oldest first', async () => {
+      const s = await setup()
+      const other = await setup()
+      await seedRows(s, 1, new Date('2026-03-02T00:00:00Z'))
+      await seedRows(s, 1, new Date('2026-03-01T00:00:00Z'))
+      await seedRows(other, 1, new Date('2026-03-03T00:00:00Z'))
+
+      const rows = await listTransactionsForExport(s.userId)
+
+      expect(rows.map((row) => row.date.toISOString())).toEqual([
+        '2026-03-01T00:00:00.000Z',
+        '2026-03-02T00:00:00.000Z',
+      ])
+    })
+
+    it('selects the FX snapshot and joined names an export needs', async () => {
+      const s = await setup()
+      await seedRows(s, 1)
+
+      const [row] = await listTransactionsForExport(s.userId)
+
+      expect(Object.keys(row).sort()).toEqual(
+        [
+          'account',
+          'amount',
+          'category',
+          'currency',
+          'date',
+          'fxRateEffectiveAt',
+          'fxRateFetchedAt',
+          'fxRateSource',
+          'id',
+          'note',
+          'type',
+          'vndPerUsdAtEntry',
+        ].sort(),
+      )
+      expect(Object.keys(row.account).sort()).toEqual(['currency', 'name'])
+      expect(row).not.toHaveProperty('userId')
     })
   })
 

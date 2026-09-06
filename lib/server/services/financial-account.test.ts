@@ -73,6 +73,32 @@ describe('financial-account service', () => {
   }
 
   /**
+   * A transaction dated an hour from now — the asymmetry the archive rule has
+   * to survive: it counts towards the booked balance but not the current one.
+   */
+  async function recordFutureTransaction(
+    userId: string,
+    accountId: string,
+    type: 'INCOME' | 'EXPENSE',
+    amount: number,
+  ) {
+    return prisma.transaction.create({
+      data: {
+        userId,
+        accountId,
+        type,
+        amount,
+        currency: 'VND',
+        date: new Date(Date.now() + 60 * 60 * 1000),
+        vndPerUsdAtEntry: 25000,
+        fxRateFetchedAt: new Date(),
+        fxRateEffectiveAt: new Date(),
+        fxRateSource: 'fixture',
+      },
+    })
+  }
+
+  /**
    * Inserts a transfer directly, bypassing the transfer service, for the same
    * reason as `recordActivity` above: this file only cares that activity
    * exists on one of the two legs.
@@ -554,6 +580,56 @@ describe('financial-account service', () => {
       )
       const stored = await prisma.financialAccount.findUniqueOrThrow({
         where: { userId_id: { userId, id: target.id } },
+      })
+      expect(stored.status).toBe('ACTIVE')
+    })
+
+    /**
+     * Archiving is strict on purpose (controller ruling R4-19): it requires the
+     * *booked* balance AND the current ("as of now") balance to be zero. An
+     * account with pending future-dated activity is not empty from either angle
+     * — freezing it would either strand the money that is still to arrive or
+     * silently drop an entry the user has already recorded — so both of the
+     * asymmetric cases below are refused.
+     */
+    it('rejects archiving when a future-dated expense zeroes the booked balance but the current balance is not zero', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const account = await createFinancialAccount(userId, {
+        name: 'Pending Expense',
+        accountTypeId: accountType.id,
+        initialBalance: 1000,
+        currency: 'VND',
+      })
+      // booked: 1000 − 1000 = 0. current: 1000, the expense has not happened yet.
+      await recordFutureTransaction(userId, account.id, 'EXPENSE', 1000)
+
+      await expect(archiveFinancialAccount(userId, account.id)).rejects.toThrow(
+        AccountHasNonZeroBalanceError,
+      )
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: account.id } },
+      })
+      expect(stored.status).toBe('ACTIVE')
+    })
+
+    it('rejects archiving when the current balance is zero but a future-dated income leaves the booked balance non-zero', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const account = await createFinancialAccount(userId, {
+        name: 'Pending Income',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      // current: 0, the income has not arrived. booked: 500 and still owed.
+      await recordFutureTransaction(userId, account.id, 'INCOME', 500)
+
+      await expect(archiveFinancialAccount(userId, account.id)).rejects.toThrow(
+        AccountHasNonZeroBalanceError,
+      )
+      const stored = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId, id: account.id } },
       })
       expect(stored.status).toBe('ACTIVE')
     })

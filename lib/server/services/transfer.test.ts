@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { createTransferSchema } from '@/lib/validation/transfer'
-import { createTransfer, deleteTransfer, listTransfers, SameAccountTransferError } from './transfer'
+import {
+  createTransfer,
+  deleteTransfer,
+  listTransfers,
+  listTransfersForExport,
+  SameAccountTransferError,
+} from './transfer'
 import { ArchivedAccountError } from './transaction'
 import { getAccountBalance } from './balance'
 
@@ -380,6 +386,59 @@ describe('transfer service', () => {
       })
       expect(rows.map((r) => r.id)).toEqual(byIdDesc.map((r) => r.id))
       expect(rows).toHaveLength(3)
+    })
+  })
+
+  describe('listTransfersForExport', () => {
+    it('returns the calling user rows oldest first with both accounts named and priced', async () => {
+      const s = await setupTwoAccounts()
+      const other = await setupTwoAccounts()
+      const newer = await createTransfer(s.userId, {
+        fromAccountId: s.accountAId,
+        toAccountId: s.accountBId,
+        fromAmount: 200,
+        toAmount: 200,
+        date: new Date('2026-02-01'),
+      })
+      const older = await createTransfer(s.userId, {
+        fromAccountId: s.accountAId,
+        toAccountId: s.accountBId,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date('2026-01-01'),
+      })
+      await createTransfer(other.userId, {
+        fromAccountId: other.accountAId,
+        toAccountId: other.accountBId,
+        fromAmount: 999,
+        toAmount: 999,
+        date: new Date('2026-03-01'),
+      })
+
+      const rows = await listTransfersForExport(s.userId)
+
+      // Oldest first — a spreadsheet reads forwards through time, unlike the
+      // UI list which leads with the newest entry.
+      expect(rows.map((r) => r.id)).toEqual([older.id, newer.id])
+      expect(rows[0].fromAccount).toEqual({ name: 'A', currency: 'VND' })
+      expect(rows[0].toAccount).toEqual({ name: 'B', currency: 'VND' })
+      expect(rows[0]).not.toHaveProperty('userId')
+    })
+
+    it('is unbounded — every transfer reaches the workbook', async () => {
+      const s = await setupTwoAccounts()
+      await prisma.transfer.createMany({
+        data: Array.from({ length: 205 }, (_, index) => ({
+          userId: s.userId,
+          fromAccountId: s.accountAId,
+          toAccountId: s.accountBId,
+          fromAmount: new Prisma.Decimal(1),
+          toAmount: new Prisma.Decimal(1),
+          date: new Date(Date.UTC(2026, 0, 1, 0, 0, index)),
+        })),
+      })
+
+      expect(await listTransfersForExport(s.userId)).toHaveLength(205)
     })
   })
 
