@@ -79,7 +79,9 @@ export default async function DashboardPage() {
     // One call for all three current-position figures (Total Balance, Net
     // Worth, the distribution), so they cannot disagree: they are three views
     // of one set of balances converted at one rate.
-    orNullIfFxUnavailable(getCurrentPosition(user.id, displayCurrency)),
+    // `{ now }`: the position is "as of now", so the KPI strip and the balance
+    // chart's current point are cut at the same instant.
+    orNullIfFxUnavailable(getCurrentPosition(user.id, displayCurrency, { now })),
     getMonthlyIncomeExpense(user.id, timezone, displayCurrency, now),
     getMonthlyIncomeExpense(user.id, timezone, displayCurrency, previousMonth.startUtc),
     getCashFlowTrend(user.id, timezone, displayCurrency, TREND_MONTHS, now),

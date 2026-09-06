@@ -10,10 +10,19 @@ import { listActiveFinancialAccounts } from './financial-account'
  * The user's current position: what they hold right now, restated in one
  * display currency (spec §5.4).
  *
- * Everything the dashboard's Total Balance card, Net Worth card and Account
- * Balance Distribution chart need comes out of a single `getCurrentPosition`
- * call, so the three figures can never disagree with each other: they are
- * three views of one set of balances converted at one rate.
+ * **Current position = balances as of now.** The balances are taken with `now`
+ * as the cut-off, so a booked but future-dated entry — next month's rent, a
+ * post-dated cheque — is not counted as money already held. That makes these
+ * figures agree by construction with the Account Balance Over Time chart, whose
+ * current point is likewise sampled at `now`. The Accounts page is deliberately
+ * different: it shows each account's **booked** balance, future-dated entries
+ * included, because that is the reconciliation figure a user compares against a
+ * bank statement.
+ *
+ * Everything the dashboard's Total Account Balance card, Net Worth card and
+ * Account Balance Distribution chart need comes out of a single
+ * `getCurrentPosition` call, so the three figures can never disagree with each
+ * other: they are three views of one set of balances converted at one rate.
  *
  * Cost is constant, not per-account: one `listActiveFinancialAccounts`, one
  * batched `getAccountBalances` for every id at once, and — only when at least
@@ -78,6 +87,16 @@ export interface CurrentPositionOptions {
    * entirely to have the policy consulted here as usual.
    */
   fx?: UsableRateResult | null
+  /**
+   * The instant "now" means for this read — the cut-off the balances are taken
+   * at, so a future-dated entry is not counted as money already held.
+   *
+   * Defaults to `new Date()`. A caller that renders several figures from one
+   * page load (the dashboard, the Excel export) passes its own single `now`, so
+   * every figure on that page is computed against the same instant rather than
+   * against a clock that ticks between two awaits.
+   */
+  now?: Date
 }
 
 export async function getCurrentPosition(
@@ -88,9 +107,14 @@ export async function getCurrentPosition(
   // Active only: an account can only be archived at a zero balance (Phase 2),
   // so an archived one would contribute nothing but a zero slice of noise.
   const accounts = await listActiveFinancialAccounts(userId)
+  // `asOf = now`, never omitted: a booked entry dated next week has not happened
+  // yet, and counting it here would make the KPI strip disagree with the Account
+  // Balance Over Time chart's current point, which is sampled at `now` too.
+  const asOf = options.now ?? new Date()
   const balances = await getAccountBalances(
     userId,
     accounts.map((account) => account.id),
+    asOf,
   )
 
   // The rate is resolved once, up front, and only if it is actually needed —

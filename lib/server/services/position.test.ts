@@ -416,6 +416,66 @@ describe('current position service', () => {
       // 1,500,000 VND + 100 USD x 25,000
       expect(position.totalBalance.toString()).toBe('4000000')
     })
+
+    it('excludes a future-dated transaction — the position is as of now', async () => {
+      const s = await setup()
+      const now = new Date()
+      await prisma.transaction.create({
+        data: {
+          userId: s.userId,
+          accountId: s.vndAccountId,
+          type: 'CASH_IN',
+          amount: new Prisma.Decimal('777000'),
+          currency: 'VND',
+          // Tomorrow: booked, but it has not happened yet.
+          date: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          vndPerUsdAtEntry: new Prisma.Decimal('25000'),
+          fxRateFetchedAt: now,
+          fxRateEffectiveAt: new Date('2026-03-15T00:00:00Z'),
+          fxRateSource: 'fixture',
+        },
+      })
+      const { provider } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: provider,
+        now,
+      })
+
+      // 1,000,000 VND + 100 USD x 25,000 — the 777,000 is still in the future.
+      expect(position.totalBalance.toString()).toBe('3500000')
+      const vnd = position.accounts.find((a) => a.id === s.vndAccountId)
+      expect(vnd?.nativeBalance.toString()).toBe('1000000')
+      expect(vnd?.displayBalance.toString()).toBe('1000000')
+    })
+
+    it('includes a transaction dated a minute ago', async () => {
+      const s = await setup()
+      const now = new Date()
+      await prisma.transaction.create({
+        data: {
+          userId: s.userId,
+          accountId: s.vndAccountId,
+          type: 'CASH_IN',
+          amount: new Prisma.Decimal('777000'),
+          currency: 'VND',
+          date: new Date(now.getTime() - 60 * 1000),
+          vndPerUsdAtEntry: new Prisma.Decimal('25000'),
+          fxRateFetchedAt: now,
+          fxRateEffectiveAt: new Date('2026-03-15T00:00:00Z'),
+          fxRateSource: 'fixture',
+        },
+      })
+      const { provider } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: provider,
+        now,
+      })
+
+      // 1,777,000 VND + 100 USD x 25,000
+      expect(position.totalBalance.toString()).toBe('4277000')
+    })
   })
 
   describe('getNetWorth', () => {

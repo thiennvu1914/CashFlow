@@ -110,7 +110,13 @@ async function currentPositionOrNull(ctx: ExportContext): Promise<CurrentPositio
     // dependence on a cache row happening to be warm. A supplied `null` with a
     // conversion to do raises `FxUnavailableError` exactly as the policy would,
     // which is the branch that blanks these two cells.
-    return await getCurrentPosition(ctx.userId, ctx.displayCurrency, { fx: ctx.fx })
+    // `now: ctx.now` is the same instant the "Generated at" cell reports, so the
+    // two current figures are balances as of exactly the moment this workbook
+    // says it was made — a future-dated entry is not counted as money held.
+    return await getCurrentPosition(ctx.userId, ctx.displayCurrency, {
+      fx: ctx.fx,
+      now: ctx.now,
+    })
   } catch (error) {
     if (!isFxUnavailableError(error)) throw error
     return null
