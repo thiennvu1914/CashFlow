@@ -1,7 +1,7 @@
 import type ExcelJS from 'exceljs'
 import type { Prisma } from '@prisma/client'
 import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
-import { getAccountBalances } from '@/lib/server/services/balance'
+import { getCurrentAccountBalances } from '@/lib/server/services/balance'
 import { listAllFinancialAccounts } from '@/lib/server/services/financial-account'
 import {
   DATE_FMT,
@@ -23,7 +23,7 @@ import type { ExportContext } from './sheet-registry'
  * an account its Accounts sheet never mentions is not a complete record. The
  * `Status` column is what distinguishes them.
  *
- * Balances come from ONE batched `getAccountBalances` call rather than a
+ * Balances come from ONE batched `getCurrentAccountBalances` call rather than a
  * per-account lookup, so the sheet costs a constant number of queries however
  * many accounts there are, and every figure on it is derived from the same read.
  *
@@ -36,10 +36,13 @@ export async function buildAccountsSheet(
   ctx: ExportContext,
 ): Promise<void> {
   const accounts = await listAllFinancialAccounts(ctx.userId)
-  // As of `ctx.now`, the same instant the Summary sheet's totals use, so the
+  // `getCurrentAccountBalances` at `ctx.now` — the one shared "as of now"
+  // definition (`balance.ts`), the same instant the Summary sheet's totals use
+  // and the same helper the Accounts page and dashboard call. So the
   // per-account "Current balance" column sums to the Summary's total inside one
-  // workbook (a future-dated transaction is excluded from both).
-  const balances = await getAccountBalances(
+  // workbook, and matches what the app shows on screen (a future-dated entry is
+  // excluded from all of them).
+  const balances = await getCurrentAccountBalances(
     ctx.userId,
     accounts.map((account) => account.id),
     ctx.now,
@@ -59,7 +62,7 @@ export async function buildAccountsSheet(
   ])
 
   for (const account of accounts) {
-    // `getAccountBalances` rejects the whole batch if any id fails to resolve,
+    // `getCurrentAccountBalances` rejects the whole batch if any id fails to resolve,
     // so every requested account is present here.
     const native = balances.get(account.id) as Prisma.Decimal
     const written = sheet.addRow([

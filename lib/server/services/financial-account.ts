@@ -6,7 +6,7 @@ import {
   type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import type { Prisma } from '@prisma/client'
-import { getAccountBalance, AccountNotFoundError } from './balance'
+import { getAccountBalances, getCurrentAccountBalances, AccountNotFoundError } from './balance'
 // `account-lock.ts` owns the locking read and the `ArchivedAccountError` it
 // raises, and imports nothing from this module, so there is no cycle. One error
 // type for "this account is archived" keeps the code the UI sees identical
@@ -104,10 +104,10 @@ export async function accountsWithActivity(
 }
 
 /**
- * Thrown by `archiveFinancialAccount` when the account's derived balance
- * (Task 13's `getAccountBalance`) is not exactly zero. An account frozen
- * mid-balance would either strand money with no owner-visible location or
- * silently vanish from every report — archiving is only ever a no-op on the
+ * Thrown by `archiveFinancialAccount` when the account's derived balance is not
+ * exactly zero — either the booked balance or the current one. An account
+ * frozen mid-balance would either strand money with no owner-visible location
+ * or silently vanish from every report — archiving is only ever a no-op on the
  * ledger, never a way to make a balance disappear.
  */
 export class AccountHasNonZeroBalanceError extends Error {
@@ -121,7 +121,20 @@ export class AccountHasNonZeroBalanceError extends Error {
 
 /**
  * Archives a FinancialAccount once its derived balance is exactly zero (spec
- * §4.3). Idempotent: archiving an already-ARCHIVED account returns it
+ * §4.3).
+ *
+ * **Archiving stays strict: it requires the BOOKED balance — every entry,
+ * future-dated included — AND the current ("as of now") balance to be zero.**
+ * Everywhere else in the app a "current balance" excludes future-dated activity
+ * (`getCurrentAccountBalances` in `balance.ts`), but archiving is not a display
+ * question: an account with a post-dated cheque still to clear is not empty,
+ * and freezing it would strand that entry against an account the transaction
+ * and transfer services have already stopped accepting activity for. So both
+ * asymmetric cases are refused — initial 1000 with a future-dated expense of
+ * 1000 (booked 0, current 1000) just as much as initial 0 with a future-dated
+ * income of 500 (booked 500, current 0).
+ *
+ * Idempotent: archiving an already-ARCHIVED account returns it
  * unchanged rather than re-deriving a balance that is frozen by construction
  * — the transaction/transfer services (Tasks 9/12) already refuse any new
  * activity against an archived account, so its balance cannot have moved
@@ -163,8 +176,18 @@ export async function archiveFinancialAccount(userId: string, accountId: string)
       })
     }
 
-    const balance = await getAccountBalance(userId, accountId, undefined, tx)
-    if (!balance.isZero()) throw new AccountHasNonZeroBalanceError()
+    // BOTH must be zero — see the docstring. `undefined` asOf is the booked
+    // balance (every entry, future-dated included); `now` is the current
+    // balance the rest of the app shows. Two batched calls inside the same
+    // locked transaction, so neither can see a write the other missed.
+    const now = new Date()
+    const [bookedBalances, currentBalances] = await Promise.all([
+      getAccountBalances(userId, [accountId], undefined, tx),
+      getCurrentAccountBalances(userId, [accountId], now, tx),
+    ])
+    const booked = bookedBalances.get(accountId) as Prisma.Decimal
+    const current = currentBalances.get(accountId) as Prisma.Decimal
+    if (!booked.isZero() || !current.isZero()) throw new AccountHasNonZeroBalanceError()
 
     return tx.financialAccount.update({
       where: { userId_id: { userId, id: accountId }, status: 'ACTIVE' },

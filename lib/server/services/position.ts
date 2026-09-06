@@ -3,21 +3,21 @@ import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
 import { FxUnavailableError, getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
-import { getAccountBalances } from './balance'
+import { getCurrentAccountBalances } from './balance'
 import { listActiveFinancialAccounts } from './financial-account'
 
 /**
  * The user's current position: what they hold right now, restated in one
  * display currency (spec §5.4).
  *
- * **Current position = balances as of now.** The balances are taken with `now`
- * as the cut-off, so a booked but future-dated entry — next month's rent, a
- * post-dated cheque — is not counted as money already held. That makes these
- * figures agree by construction with the Account Balance Over Time chart, whose
- * current point is likewise sampled at `now`. The Accounts page is deliberately
- * different: it shows each account's **booked** balance, future-dated entries
- * included, because that is the reconciliation figure a user compares against a
- * bank statement.
+ * **Current position = balances as of now.** The balances come from
+ * `getCurrentAccountBalances` (`balance.ts`), the single definition of a current
+ * balance in this app: `now` is the cut-off, so a booked but future-dated
+ * entry — next month's rent, a post-dated cheque — is not counted as money
+ * already held. The Accounts page and the Excel export call the same helper, so
+ * an account shows one figure everywhere, and these numbers agree by
+ * construction with the Account Balance Over Time chart, whose current point is
+ * likewise sampled at `now`.
  *
  * Everything the dashboard's Total Account Balance card, Net Worth card and
  * Account Balance Distribution chart need comes out of a single
@@ -107,11 +107,14 @@ export async function getCurrentPosition(
   // Active only: an account can only be archived at a zero balance (Phase 2),
   // so an archived one would contribute nothing but a zero slice of noise.
   const accounts = await listActiveFinancialAccounts(userId)
-  // `asOf = now`, never omitted: a booked entry dated next week has not happened
-  // yet, and counting it here would make the KPI strip disagree with the Account
-  // Balance Over Time chart's current point, which is sampled at `now` too.
+  // `getCurrentAccountBalances` — the one shared "as of now" definition
+  // (`balance.ts`), the same one the Accounts page and the Excel export use, so
+  // no two surfaces can put different numbers on the same account. A booked
+  // entry dated next week has not happened yet, and counting it here would also
+  // make the KPI strip disagree with the Account Balance Over Time chart's
+  // current point, which is sampled at `now` too.
   const asOf = options.now ?? new Date()
-  const balances = await getAccountBalances(
+  const balances = await getCurrentAccountBalances(
     userId,
     accounts.map((account) => account.id),
     asOf,
