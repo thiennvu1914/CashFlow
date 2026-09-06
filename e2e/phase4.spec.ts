@@ -5,7 +5,6 @@ import {
   createAccountViaUi,
   createTransactionViaUi,
   digitsOnly,
-  neutralizeDevOverlay,
   registerNewUser,
   todayInZone,
 } from './helpers'
@@ -34,14 +33,6 @@ const BASE_URL = 'http://localhost:3000'
 
 test.describe.serial('Phase 4 — dashboard, reports and export', () => {
   test.use({ storageState: STORAGE_STATE_PATH })
-
-  // See `neutralizeDevOverlay` in `./helpers`: the dev-mode route indicator's
-  // portal can intercept clicks meant for real page content, independently of
-  // anything this spec exercises. Applied per test, since each test gets its
-  // own fresh `page` from `storageState`.
-  test.beforeEach(async ({ page }) => {
-    await neutralizeDevOverlay(page)
-  })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)

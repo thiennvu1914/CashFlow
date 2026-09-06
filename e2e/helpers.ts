@@ -2,44 +2,6 @@ import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 
 /**
- * Next.js 16's dev-mode route indicator renders inside a `<nextjs-portal>`
- * custom element whose invisible hit-testing area spans (at least) the whole
- * viewport, and it sits in front of ordinary page content — reproduced live
- * against this dev server: even the existing `e2e/auth.spec.ts`'s "Log out"
- * click times out after 30s with Playwright reporting
- * "<nextjs-portal></nextjs-portal> ... subtree intercepts pointer events",
- * nowhere near the indicator's own on-screen badge. `devIndicators: false` in
- * `next.config.ts` is Next's own documented way to turn this off, but that is
- * an app source change this task must not make.
- *
- * This is the test-side workaround instead: force the portal's pointer-events
- * off for this one Playwright page, before its first navigation. It changes
- * nothing about the app or what is rendered — only whether that (dev-only,
- * invisible) element can steal a click meant for the real page underneath it.
- * A descendant that explicitly re-asserts `pointer-events: auto` (the
- * indicator's own visible badge, presumably) is unaffected by this — CSS
- * `pointer-events` is inherited, not enforced top-down, so an explicit value
- * on a descendant always wins over an ancestor's.
- */
-export async function neutralizeDevOverlay(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const STYLE_ID = '__e2e_disable_dev_overlay__'
-    function install() {
-      if (document.getElementById(STYLE_ID)) return
-      const style = document.createElement('style')
-      style.id = STYLE_ID
-      style.textContent = 'nextjs-portal { pointer-events: none !important; }'
-      document.documentElement.appendChild(style)
-    }
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', install)
-    } else {
-      install()
-    }
-  })
-}
-
-/**
  * Registers a brand-new throwaway user via `/register` (the same UI flow
  * `auth.spec.ts` exercises) and leaves `page` on `/dashboard`, signed in.
  *
@@ -53,7 +15,6 @@ export async function registerNewUser(
   const email = `${opts.emailPrefix ?? 'e2e-phase4'}-${Date.now()}@example.com`
   const password = 'correct-horse-battery-staple'
 
-  await neutralizeDevOverlay(page)
   await page.goto('/register')
   await page.getByPlaceholder('Name').fill('Phase 4 E2E User')
   await page.getByPlaceholder('Email').fill(email)
