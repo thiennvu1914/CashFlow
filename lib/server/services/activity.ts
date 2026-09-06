@@ -157,8 +157,22 @@ export async function getActivitySummary(
     income,
     expense,
     netIncome: income.sub(expense),
-    byCategory: [...byCategory.values()].sort((a, b) => b.total.comparedTo(a.total)),
-    byAccount: [...byAccount.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    // Both sorts carry an id tiebreak so the order is *total*, not merely
+    // sorted: two categories with the same total (or two accounts sharing a
+    // name — names are not unique) would otherwise be ordered by whatever
+    // `Array#sort` happened to do with them, and the same data could render a
+    // chart's bars, a report's rows and a CSV's lines in different orders on
+    // two consecutive requests. The id is the one key guaranteed unique and
+    // stable. `categoryId` is `null` for the uncategorised bucket; it sorts as
+    // the empty string, i.e. first among ties, and there is only ever one of
+    // it so no two rows can collide on that value.
+    byCategory: [...byCategory.values()].sort(
+      (a, b) =>
+        b.total.comparedTo(a.total) || (a.categoryId ?? '').localeCompare(b.categoryId ?? ''),
+    ),
+    byAccount: [...byAccount.values()].sort(
+      (a, b) => a.name.localeCompare(b.name) || a.accountId.localeCompare(b.accountId),
+    ),
   }
 }
 
@@ -252,10 +266,20 @@ export async function getCashFlowTrend(
   )
 
   for (const row of rows) {
-    const point = points.get(formatInTimeZone(row.date, timezone, 'yyyy-MM'))
-    // Unreachable while the query span equals the union of the windows; a row
-    // outside every bucket is silently ignored rather than mis-attributed.
-    if (!point) continue
+    const month = formatInTimeZone(row.date, timezone, 'yyyy-MM')
+    const point = points.get(month)
+    // Unreachable: the query span is exactly `[first.startUtc, last.endUtc)`
+    // and the windows are the local calendar months tiling that span, so every
+    // fetched row lands in one of them. Throwing rather than skipping is
+    // deliberate (mirroring the loud unreachable branch in `position.ts`): a
+    // row that fell out of every bucket means the query span and the windows
+    // have drifted apart, and silently dropping it would quietly understate a
+    // month's totals — money going missing from a chart with no error anywhere.
+    if (!point) {
+      throw new Error(
+        `getCashFlowTrend: transaction dated ${row.date.toISOString()} fell in local month ${month}, which is outside every requested window`,
+      )
+    }
     const amount = historicalAmountIn(displayCurrency, row)
     if (row.type === 'INCOME') point.income = point.income.add(amount)
     else point.expense = point.expense.add(amount)

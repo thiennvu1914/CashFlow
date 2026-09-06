@@ -490,6 +490,60 @@ describe('historical activity service', () => {
       expect('transactions' in summary).toBe(false)
     })
 
+    it('orders ties deterministically by id, in both breakdowns', async () => {
+      const s = await setup()
+      // A second account sharing the first one's name: `name` is not unique, so
+      // a name-only sort would leave these two in an arbitrary order.
+      const twin = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          name: 'A Wallet',
+          accountTypeId: (
+            await prisma.accountType.findFirstOrThrow({
+              where: { userId: s.userId },
+            })
+          ).id,
+          initialBalance: 0,
+          currency: 'VND',
+        },
+      })
+      const inMonth = new Date('2026-03-15T10:00:00Z')
+      // Equal totals in two categories, so the amount comparison alone cannot
+      // decide their order either — and the rows are written in the *reverse*
+      // of their ids' order (cuids are monotonic, so the later-created
+      // `Transport`/`twin` sort after `Food`/`accountId`). A stable sort with no
+      // tiebreak therefore leaves them in the order the rows came back in,
+      // which is the opposite of the deterministic answer this asserts.
+      await makeTx({
+        userId: s.userId,
+        accountId: twin.id,
+        categoryId: s.transportCategoryId,
+        type: 'EXPENSE',
+        amount: '500000',
+        date: inMonth,
+      })
+      await makeTx({
+        userId: s.userId,
+        accountId: s.accountId,
+        categoryId: s.foodCategoryId,
+        type: 'EXPENSE',
+        amount: '500000',
+        date: inMonth,
+      })
+
+      const summary = await getActivitySummary(s.userId, 'VND', {
+        startUtc: new Date('2026-02-28T17:00:00Z'),
+        endUtc: new Date('2026-03-31T17:00:00Z'),
+      })
+
+      expect(summary.byCategory.map((c) => c.categoryId)).toEqual(
+        [s.foodCategoryId, s.transportCategoryId].sort((a, b) => a.localeCompare(b)),
+      )
+      expect(summary.byAccount.map((a) => a.accountId)).toEqual(
+        [s.accountId, twin.id].sort((a, b) => a.localeCompare(b)),
+      )
+    })
+
     it('answers zeros for a range with no activity', async () => {
       const s = await setup()
 
