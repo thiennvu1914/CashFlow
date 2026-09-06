@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { Currency, TransactionType } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { resolveReportRange } from '@/lib/reports/report-range'
 import {
   getActivitySummary,
   getCashFlowTrend,
@@ -557,6 +558,43 @@ describe('historical activity service', () => {
       expect(summary.netIncome.toString()).toBe('0')
       expect(summary.byCategory).toEqual([])
       expect(summary.byAccount).toEqual([])
+    })
+
+    it('honours a resolved CUSTOM range: the day after `to` is outside it', async () => {
+      const s = await setup()
+      // 23:30 on 31 March in Ho Chi Minh City — the last moment the user means
+      // by "to 2026-03-31", and inside the range.
+      await makeTx({
+        userId: s.userId,
+        accountId: s.accountId,
+        categoryId: s.foodCategoryId,
+        type: 'EXPENSE',
+        amount: '1000',
+        date: new Date('2026-03-31T16:30:00Z'),
+      })
+      // 00:30 on 1 April locally, though still 31 March in UTC — outside it.
+      await makeTx({
+        userId: s.userId,
+        accountId: s.accountId,
+        categoryId: s.foodCategoryId,
+        type: 'EXPENSE',
+        amount: '2000',
+        date: new Date('2026-03-31T17:30:00Z'),
+      })
+
+      // The range comes from the same resolver the Reports page and the export
+      // route use, so this asserts the two halves agree about where a custom
+      // range ends — not merely that `getActivitySummary` respects some bound.
+      const range = resolveReportRange(
+        { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
+        HCMC,
+      )
+      const summary = await getActivitySummary(s.userId, 'VND', range)
+
+      expect(summary.expense.toString()).toBe('1000')
+      expect(
+        summary.byAccount.map((a) => [a.name, a.expense.toString(), a.netIncome.toString()]),
+      ).toEqual([['A Wallet', '1000', '-1000']])
     })
 
     it('treats endUtc as exclusive', async () => {

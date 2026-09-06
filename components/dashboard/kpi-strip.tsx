@@ -15,10 +15,30 @@ import type { KpiDto } from '@/lib/ui/dashboard-view-model'
  * draws a line down the middle of the wrong row as soon as the grid reflows.
  * Five cells do not divide into two columns, so the last one spans the row on
  * narrow screens instead of leaving a bare panel beside it.
+ *
+ * Reports shows the same strip with three figures, so the wide-screen column
+ * count follows the number of cells: a fixed five would leave two empty panels
+ * of bare border colour beside them.
  */
+
+/**
+ * Tailwind resolves class names from source text, so each one has to appear
+ * whole — the counts the app actually renders are listed literally. Anything
+ * else falls back to the dashboard's five.
+ */
+const MD_COLUMNS: Record<number, string> = {
+  3: 'md:grid-cols-3',
+  5: 'md:grid-cols-5',
+}
+
 export function KpiStrip({ kpis, currency }: { kpis: KpiDto[]; currency: Currency }) {
   return (
-    <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border md:grid-cols-5">
+    <dl
+      className={cn(
+        'grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border',
+        MD_COLUMNS[kpis.length] ?? MD_COLUMNS[5],
+      )}
+    >
       {kpis.map((kpi, index) => (
         <div
           key={kpi.label}
