@@ -44,6 +44,12 @@ export function writeTransactionsSheet(
   const displayFmt = moneyFmt(ctx.displayCurrency)
 
   writeHeader(sheet, [
+    // First, and deliberately: it is the only value on the row that identifies
+    // it uniquely and permanently. Two coffees on the same day for the same
+    // amount are otherwise indistinguishable, so a user reconciling a workbook
+    // against the app — or against last month's workbook — has nothing to join
+    // on without it.
+    { header: 'Transaction id', width: 28 },
     { header: 'Date', width: 18 },
     { header: 'Type', width: 20 },
     { header: 'Category', width: 20 },
@@ -60,6 +66,7 @@ export function writeTransactionsSheet(
 
   for (const row of rows) {
     const written = sheet.addRow([
+      row.id,
       localDateCell(row.date, ctx.timezone),
       row.type,
       row.category?.name ?? '',
@@ -76,14 +83,14 @@ export function writeTransactionsSheet(
       localDateCell(row.fxRateFetchedAt, ctx.timezone),
       row.note ?? '',
     ])
-    written.getCell(1).numFmt = DATE_TIME_FMT
+    written.getCell(2).numFmt = DATE_TIME_FMT
     // Formatted by the ROW's currency, not the user's: a USD row shows cents
     // even in a workbook whose display currency is VND.
-    written.getCell(5).numFmt = moneyFmt(row.currency)
-    written.getCell(7).numFmt = displayFmt
-    written.getCell(8).numFmt = RATE_FMT
-    written.getCell(10).numFmt = DATE_FMT
-    written.getCell(11).numFmt = DATE_TIME_FMT
+    written.getCell(6).numFmt = moneyFmt(row.currency)
+    written.getCell(8).numFmt = displayFmt
+    written.getCell(9).numFmt = RATE_FMT
+    written.getCell(11).numFmt = DATE_FMT
+    written.getCell(12).numFmt = DATE_TIME_FMT
   }
 }
 

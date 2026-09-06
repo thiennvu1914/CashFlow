@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
-import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
+import { FxUnavailableError, getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
 import { getAccountBalances } from './balance'
@@ -56,10 +56,34 @@ export interface CurrentPosition {
   fx: UsableRateResult | null
 }
 
+/**
+ * How a caller supplies, or delegates, the rate this position is computed at.
+ *
+ * The two keys are alternatives, not a pair. `fx` is for a caller that has
+ * *already* resolved a rate and needs this result computed at that exact one —
+ * the Excel export, which resolves the workbook's single rate up front so its
+ * FX status line and its totals cannot describe two different numbers.
+ * `providerOverride` is the test seam on the ordinary path.
+ */
+export interface CurrentPositionOptions {
+  /** tests only; production callers omit it. Ignored when `fx` is present. */
+  providerOverride?: ExchangeRateProvider
+  /**
+   * A rate the caller has already resolved through the shared policy.
+   *
+   * The **presence of the key** is what matters, not its value: `fx: null` is
+   * an answer — "I asked, and no usable rate exists" — and is honoured as such,
+   * so a needed conversion raises `FxUnavailableError` rather than quietly
+   * going and finding a rate the caller was not told about. Omit the key
+   * entirely to have the policy consulted here as usual.
+   */
+  fx?: UsableRateResult | null
+}
+
 export async function getCurrentPosition(
   userId: string,
   displayCurrency: Currency,
-  providerOverride?: ExchangeRateProvider,
+  options: CurrentPositionOptions = {},
 ): Promise<CurrentPosition> {
   // Active only: an account can only be archived at a zero balance (Phase 2),
   // so an archived one would contribute nothing but a zero slice of noise.
@@ -69,16 +93,26 @@ export async function getCurrentPosition(
     accounts.map((account) => account.id),
   )
 
-  // The rate is fetched once, up front, and only if it is actually needed —
+  // The rate is resolved once, up front, and only if it is actually needed —
   // never inside the per-account loop, and never for a user whose accounts are
   // all in the display currency already.
   const needsConversion = accounts.some((account) => account.currency !== displayCurrency)
-  const fx = needsConversion
-    ? // Deliberately not caught: when a conversion is genuinely required there
-      // is no honest number to show, so `FxUnavailableError` propagates and the
-      // caller degrades (spec §6.3) rather than this function inventing a rate.
-      await getUsableCurrentRate({ base: 'USD', quote: 'VND' }, providerOverride)
-    : null
+  // `in`, not a truthiness test: a supplied `null` must suppress the lookup
+  // exactly as a supplied rate does.
+  const rateWasSupplied = 'fx' in options
+  let fx: UsableRateResult | null = null
+  if (needsConversion) {
+    fx = rateWasSupplied
+      ? (options.fx ?? null)
+      : // Deliberately not caught: when a conversion is genuinely required there
+        // is no honest number to show, so `FxUnavailableError` propagates and the
+        // caller degrades (spec §6.3) rather than this function inventing a rate.
+        await getUsableCurrentRate({ base: 'USD', quote: 'VND' }, options.providerOverride)
+    // The supplied-null case reaches the same refusal the policy would have
+    // raised, so both paths fail identically and no caller has to special-case
+    // which one it took.
+    if (!fx) throw new FxUnavailableError()
+  }
 
   let totalBalance = new Prisma.Decimal(0)
   const positionAccounts: PositionAccount[] = accounts.map((account) => {
@@ -113,9 +147,9 @@ export async function getCurrentPosition(
 export async function getTotalAccountBalance(
   userId: string,
   displayCurrency: Currency,
-  providerOverride?: ExchangeRateProvider,
+  options: CurrentPositionOptions = {},
 ): Promise<Prisma.Decimal> {
-  const { totalBalance } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  const { totalBalance } = await getCurrentPosition(userId, displayCurrency, options)
   return totalBalance
 }
 
@@ -131,9 +165,9 @@ export async function getTotalAccountBalance(
 export async function getNetWorth(
   userId: string,
   displayCurrency: Currency,
-  providerOverride?: ExchangeRateProvider,
+  options: CurrentPositionOptions = {},
 ): Promise<Prisma.Decimal> {
-  const { netWorth } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  const { netWorth } = await getCurrentPosition(userId, displayCurrency, options)
   return netWorth
 }
 
@@ -146,8 +180,8 @@ export async function getNetWorth(
 export async function getAccountDistribution(
   userId: string,
   displayCurrency: Currency,
-  providerOverride?: ExchangeRateProvider,
+  options: CurrentPositionOptions = {},
 ): Promise<PositionAccount[]> {
-  const { accounts } = await getCurrentPosition(userId, displayCurrency, providerOverride)
+  const { accounts } = await getCurrentPosition(userId, displayCurrency, options)
   return accounts
 }

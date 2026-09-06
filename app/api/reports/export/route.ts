@@ -1,9 +1,10 @@
 import { formatInTimeZone } from 'date-fns-tz'
 import { UnauthorizedError, requireUser } from '@/lib/auth/require-user'
 import { InvalidReportRangeError, resolveReportRange } from '@/lib/reports/report-range'
-import { buildExportContext } from '@/lib/server/export/export-context'
+import { loadExportProfile, resolveExportFx } from '@/lib/server/export/export-context'
 import { buildFilteredWorkbook } from '@/lib/server/export/filtered-export'
 import { buildFullWorkbook } from '@/lib/server/export/sheet-registry'
+import type { ExportContext } from '@/lib/server/export/sheet-registry'
 
 /**
  * `GET /api/reports/export` — the Excel download (spec §12).
@@ -26,6 +27,12 @@ import { buildFullWorkbook } from '@/lib/server/export/sheet-registry'
  * page uses — including its refusal of a repeated parameter, which Next
  * delivers as an array. That shared resolver is what guarantees the workbook
  * covers exactly the window the page was showing.
+ *
+ * **Work is done in the cheapest order.** The profile is loaded, the range is
+ * validated, and only then — and only for the full workbook — is an exchange
+ * rate fetched. A malformed URL therefore costs no provider round trip, and the
+ * filtered export costs none at all, because it is historical end to end and
+ * reads no current rate.
  *
  * **Nothing is logged.** Not the parameters, not the row counts, not the user.
  * The payload is the user's complete financial history.
@@ -76,15 +83,15 @@ export async function GET(request: Request): Promise<Response> {
     return refuse(`mode must be one of ${MODES.join(', ')}`, 400)
   }
 
+  // The profile first and on its own — no FX yet. It carries the timezone the
+  // range is resolved in, and a range the user typed wrong must be a 400
+  // *before* a third-party rate lookup is made on its behalf.
   // `user.id` from the session, never anything from the query string, is what
   // scopes every query the builders run.
-  const ctx = await buildExportContext(user.id)
+  const profile = await loadExportProfile(user.id)
 
-  let workbook
-  if (mode === 'full') {
-    workbook = await buildFullWorkbook(ctx)
-  } else {
-    let range
+  let range = null
+  if (mode === 'filtered') {
     try {
       range = resolveReportRange(
         {
@@ -92,7 +99,7 @@ export async function GET(request: Request): Promise<Response> {
           from: rawParam(params, 'from'),
           to: rawParam(params, 'to'),
         },
-        ctx.timezone,
+        profile.timezone,
       )
     } catch (error) {
       // Exactly `InvalidReportRangeError`: a hand-typed `?period=weekly` is the
@@ -101,8 +108,20 @@ export async function GET(request: Request): Promise<Response> {
       if (!(error instanceof InvalidReportRangeError)) throw error
       return refuse(error.message, 400)
     }
-    workbook = await buildFilteredWorkbook(ctx, range)
   }
+
+  const ctx: ExportContext = {
+    ...profile,
+    // Only the full workbook restates anything at a current rate. The filtered
+    // one is historical end to end — every figure comes from the rate its own
+    // row snapshotted — so asking the provider for a rate it will never read
+    // would be a network round trip spent on nothing.
+    fx: mode === 'full' ? await resolveExportFx() : null,
+    now: new Date(),
+  }
+
+  const workbook =
+    range === null ? await buildFullWorkbook(ctx) : await buildFilteredWorkbook(ctx, range)
 
   const body = await workbook.xlsx.writeBuffer()
   // The date is the user's local one: a file saved at 01:00 on 1 January in

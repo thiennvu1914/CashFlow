@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
+import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import {
   getAccountDistribution,
@@ -50,6 +51,20 @@ const failingProvider: ExchangeRateProvider = {
     throw new Error('provider down')
   },
   getHistoricalRate: async () => null,
+}
+
+/** A `UsableRateResult` a caller already holds — what the export's single FX
+ *  lookup hands to every sheet. */
+function suppliedRate(rate: string): UsableRateResult {
+  const at = new Date()
+  return {
+    rate: Number(rate),
+    rateDecimal: new Prisma.Decimal(rate),
+    effectiveDate: at,
+    fetchedAt: at,
+    source: 'supplied',
+    isFallback: false,
+  }
 }
 
 describe('current position service', () => {
@@ -146,7 +161,7 @@ describe('current position service', () => {
       const uniqueSource = `vnd-only-${randomUUID()}`
       const { provider, callCount } = countingProvider(25_000, uniqueSource)
 
-      const position = await getCurrentPosition(s.userId, 'VND', provider)
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
 
       expect(position.totalBalance.toString()).toBe('1250000')
       // No account needs converting, so the policy is never consulted and the
@@ -163,7 +178,7 @@ describe('current position service', () => {
       const s = await setup()
       const { provider } = countingProvider()
 
-      const position = await getCurrentPosition(s.userId, 'VND', provider)
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
 
       // 1,000,000 VND + (100 USD x 25,000) = 3,500,000 VND. A bug that summed
       // raw native numbers would answer 1,000,100.
@@ -181,7 +196,7 @@ describe('current position service', () => {
       const s = await setup()
       const { provider } = countingProvider()
 
-      const position = await getCurrentPosition(s.userId, 'USD', provider)
+      const position = await getCurrentPosition(s.userId, 'USD', { providerOverride: provider })
 
       const vnd = position.accounts.find((a) => a.id === s.vndAccountId)
       // 1,000,000 VND / 25,000 = 40 USD — division, not multiplication.
@@ -203,7 +218,7 @@ describe('current position service', () => {
       })
       const { provider, callCount } = countingProvider()
 
-      const position = await getCurrentPosition(s.userId, 'VND', provider)
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
 
       // 1,000,000 + 100 x 25,000 + 200 x 25,000
       expect(position.totalBalance.toString()).toBe('8500000')
@@ -224,7 +239,9 @@ describe('current position service', () => {
         },
       })
 
-      const position = await getCurrentPosition(s.userId, 'VND', failingProvider)
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: failingProvider,
+      })
 
       // 1,000,000 + 100 x 24,000
       expect(position.totalBalance.toString()).toBe('3400000')
@@ -235,9 +252,9 @@ describe('current position service', () => {
     it('propagates FxUnavailableError when a conversion is needed and no rate exists', async () => {
       const s = await setup()
 
-      await expect(getCurrentPosition(s.userId, 'VND', failingProvider)).rejects.toThrow(
-        FxUnavailableError,
-      )
+      await expect(
+        getCurrentPosition(s.userId, 'VND', { providerOverride: failingProvider }),
+      ).rejects.toThrow(FxUnavailableError)
     })
 
     it('still answers during an FX outage when no conversion is needed', async () => {
@@ -246,7 +263,9 @@ describe('current position service', () => {
         where: { userId_id: { userId: s.userId, id: s.usdAccountId } },
       })
 
-      const position = await getCurrentPosition(s.userId, 'VND', failingProvider)
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: failingProvider,
+      })
 
       expect(position.totalBalance.toString()).toBe('1000000')
       expect(position.fx).toBeNull()
@@ -271,7 +290,7 @@ describe('current position service', () => {
       })
       const { provider } = countingProvider()
 
-      const position = await getCurrentPosition(s.userId, 'VND', provider)
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
 
       expect(position.accounts.some((a) => a.id === archived.id)).toBe(false)
       expect(position.totalBalance.toString()).toBe('3500000')
@@ -281,7 +300,9 @@ describe('current position service', () => {
       const mine = await setup()
       const theirs = await setup()
 
-      const position = await getCurrentPosition(mine.userId, 'VND', countingProvider().provider)
+      const position = await getCurrentPosition(mine.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
 
       expect(position.accounts.map((a) => a.id).sort()).toEqual(
         [mine.vndAccountId, mine.usdAccountId].sort(),
@@ -301,12 +322,75 @@ describe('current position service', () => {
       createdUserIds.push(user.id)
       const { provider, callCount } = countingProvider()
 
-      const position = await getCurrentPosition(user.id, 'VND', provider)
+      const position = await getCurrentPosition(user.id, 'VND', { providerOverride: provider })
 
       expect(position.totalBalance.toString()).toBe('0')
       expect(position.accounts).toEqual([])
       expect(position.fx).toBeNull()
       expect(callCount()).toBe(0)
+    })
+
+    it('uses a supplied rate and consults no policy at all', async () => {
+      const s = await setup()
+      const { provider, callCount } = countingProvider()
+      // A rate the caller already resolved — a workbook's single FX lookup, say.
+      const supplied = suppliedRate('26000.5')
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        fx: supplied,
+        providerOverride: provider,
+      })
+
+      // 1,000,000 + 100 x 26,000.5 — the supplied rate, not the provider's.
+      expect(position.totalBalance.toString()).toBe('3600050')
+      // The provider is never asked: a caller that already holds a rate must
+      // not have a second, possibly different, one fetched behind its back.
+      expect(callCount()).toBe(0)
+      expect(position.fx).toBe(supplied)
+    })
+
+    it('refuses a needed conversion when the supplied rate is explicitly null', async () => {
+      const s = await setup()
+      const { provider, callCount } = countingProvider()
+
+      // `fx: null` is an answer, not an absence: the caller has already been
+      // told no usable rate exists, so this must not go looking for one.
+      await expect(
+        getCurrentPosition(s.userId, 'VND', { fx: null, providerOverride: provider }),
+      ).rejects.toThrow(FxUnavailableError)
+      expect(callCount()).toBe(0)
+    })
+
+    it('answers with a supplied null rate when no conversion is needed', async () => {
+      const s = await setup()
+      await prisma.financialAccount.delete({
+        where: { userId_id: { userId: s.userId, id: s.usdAccountId } },
+      })
+      const { provider, callCount } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        fx: null,
+        providerOverride: provider,
+      })
+
+      expect(position.totalBalance.toString()).toBe('1000000')
+      expect(position.fx).toBeNull()
+      expect(callCount()).toBe(0)
+    })
+
+    it('reports no rate for a supplied rate nothing needed converting', async () => {
+      const s = await setup()
+      await prisma.financialAccount.delete({
+        where: { userId_id: { userId: s.userId, id: s.usdAccountId } },
+      })
+      const supplied = suppliedRate('26000.5')
+
+      const position = await getCurrentPosition(s.userId, 'VND', { fx: supplied })
+
+      // `fx` reports the rate the conversions used, and there were none — the
+      // same meaning it carries on the policy path.
+      expect(position.fx).toBeNull()
+      expect(position.totalBalance.toString()).toBe('1000000')
     })
 
     it('counts transaction activity, not just opening balances', async () => {
@@ -327,7 +411,7 @@ describe('current position service', () => {
       })
       const { provider } = countingProvider()
 
-      const position = await getCurrentPosition(s.userId, 'VND', provider)
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
 
       // 1,500,000 VND + 100 USD x 25,000
       expect(position.totalBalance.toString()).toBe('4000000')
@@ -338,8 +422,12 @@ describe('current position service', () => {
     it('equals total account balance until Phase 6 extends it', async () => {
       const s = await setup()
 
-      const netWorth = await getNetWorth(s.userId, 'VND', countingProvider().provider)
-      const total = await getTotalAccountBalance(s.userId, 'VND', countingProvider().provider)
+      const netWorth = await getNetWorth(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+      const total = await getTotalAccountBalance(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
 
       expect(netWorth.toString()).toBe('3500000')
       expect(netWorth.toString()).toBe(total.toString())
@@ -350,11 +438,9 @@ describe('current position service', () => {
     it('returns per-account Decimals converted into the display currency', async () => {
       const s = await setup()
 
-      const distribution = await getAccountDistribution(
-        s.userId,
-        'VND',
-        countingProvider().provider,
-      )
+      const distribution = await getAccountDistribution(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
 
       const vnd = distribution.find((d) => d.name === 'VND')
       const usd = distribution.find((d) => d.name === 'USD')

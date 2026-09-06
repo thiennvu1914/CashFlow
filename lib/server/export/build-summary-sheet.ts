@@ -69,6 +69,9 @@ export async function buildSummarySheet(
 
   sheet.addRow(['Timezone', ctx.timezone, ''])
   sheet.addRow(['Display currency', ctx.displayCurrency, ''])
+  // `ctx.fx` is the very object the totals below were computed from — it was
+  // handed to `getCurrentPosition` rather than re-fetched — so this line
+  // describes the rate those figures used, not a second opinion about it.
   sheet.addRow(['FX rate', describeFx(ctx.fx, ctx.timezone), ''])
 
   for (const [label, value] of [
@@ -100,11 +103,14 @@ export async function buildSummarySheet(
 
 async function currentPositionOrNull(ctx: ExportContext): Promise<CurrentPosition | null> {
   try {
-    // One call: total balance and net worth are two views of the same set of
-    // balances converted at one rate, so they can never disagree. Its own
-    // policy lookup is served from the row `buildExportContext` has already
-    // cached for today, so this is not a second trip to the provider.
-    return await getCurrentPosition(ctx.userId, ctx.displayCurrency)
+    // `{ fx: ctx.fx }` is what makes the FX line and the totals two statements
+    // about ONE rate. With the rate handed in, `getCurrentPosition` makes no
+    // policy call of its own, so there is no second lookup that could return a
+    // different number between the line and the figure it describes — and no
+    // dependence on a cache row happening to be warm. A supplied `null` with a
+    // conversion to do raises `FxUnavailableError` exactly as the policy would,
+    // which is the branch that blanks these two cells.
+    return await getCurrentPosition(ctx.userId, ctx.displayCurrency, { fx: ctx.fx })
   } catch (error) {
     if (!isFxUnavailableError(error)) throw error
     return null

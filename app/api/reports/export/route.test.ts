@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ExcelJS from 'exceljs'
 import { UnauthorizedError } from '@/lib/auth/require-user'
+import type { ExportProfile } from '@/lib/server/export/export-context'
 import type { ExportContext } from '@/lib/server/export/sheet-registry'
 
 /**
@@ -14,7 +15,8 @@ import type { ExportContext } from '@/lib/server/export/sheet-registry'
  */
 
 const requireUser = vi.hoisted(() => vi.fn())
-const buildExportContext = vi.hoisted(() => vi.fn())
+const loadExportProfile = vi.hoisted(() => vi.fn())
+const resolveExportFx = vi.hoisted(() => vi.fn())
 const buildFilteredWorkbook = vi.hoisted(() => vi.fn())
 const buildFullWorkbook = vi.hoisted(() => vi.fn())
 
@@ -24,7 +26,7 @@ vi.mock('@/lib/auth/require-user', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth/require-user')>()),
   requireUser,
 }))
-vi.mock('@/lib/server/export/export-context', () => ({ buildExportContext }))
+vi.mock('@/lib/server/export/export-context', () => ({ loadExportProfile, resolveExportFx }))
 vi.mock('@/lib/server/export/filtered-export', () => ({ buildFilteredWorkbook }))
 vi.mock('@/lib/server/export/sheet-registry', () => ({ buildFullWorkbook }))
 
@@ -37,14 +39,22 @@ function tinyWorkbook() {
   return workbook
 }
 
-const CONTEXT: ExportContext = {
+const PROFILE: ExportProfile = {
   userId: 'user-1',
   displayCurrency: 'VND',
   timezone: 'Asia/Ho_Chi_Minh',
-  fx: null,
-  // 31 Dec 2026 18:00Z is already 01:00 on 1 Jan 2027 in Asia/Ho_Chi_Minh, so
-  // the filename proves the date is stamped in the user's zone, not in UTC.
-  now: new Date('2026-12-31T18:00:00Z'),
+}
+
+/**
+ * 31 Dec 2026 18:00Z is already 01:00 on 1 Jan 2027 in Asia/Ho_Chi_Minh, so
+ * pinning the clock here is what lets the filename assertions prove the stamp
+ * is the user's local date rather than the UTC one.
+ */
+const FIXED_NOW = new Date('2026-12-31T18:00:00Z')
+
+/** The context the route is expected to assemble for a given rate. */
+function expectedContext(fx: ExportContext['fx']): ExportContext {
+  return { ...PROFILE, fx, now: FIXED_NOW }
 }
 
 function request(query: string) {
@@ -54,10 +64,19 @@ function request(query: string) {
 describe('GET /api/reports/export', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // `shouldAdvanceTime` keeps real promises resolving; only the clock the
+    // route reads for its filename stamp is pinned.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(FIXED_NOW)
     requireUser.mockResolvedValue({ id: 'user-1' })
-    buildExportContext.mockResolvedValue(CONTEXT)
+    loadExportProfile.mockResolvedValue(PROFILE)
+    resolveExportFx.mockResolvedValue(null)
     buildFilteredWorkbook.mockResolvedValue(tinyWorkbook())
     buildFullWorkbook.mockResolvedValue(tinyWorkbook())
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('answers 401 rather than redirecting when there is no session', async () => {
@@ -68,7 +87,7 @@ describe('GET /api/reports/export', () => {
     // A download link cannot follow a redirect into an HTML login page and
     // hand the browser something it will save as .xlsx.
     expect(response.status).toBe(401)
-    expect(buildExportContext).not.toHaveBeenCalled()
+    expect(loadExportProfile).not.toHaveBeenCalled()
   })
 
   it('rejects an unknown mode with 400', async () => {
@@ -77,6 +96,9 @@ describe('GET /api/reports/export', () => {
     expect(response.status).toBe(400)
     expect(buildFullWorkbook).not.toHaveBeenCalled()
     expect(buildFilteredWorkbook).not.toHaveBeenCalled()
+    // A mode that means nothing is refused before any work is done for it.
+    expect(loadExportProfile).not.toHaveBeenCalled()
+    expect(resolveExportFx).not.toHaveBeenCalled()
   })
 
   it('rejects a missing mode with 400', async () => {
@@ -89,6 +111,16 @@ describe('GET /api/reports/export', () => {
     expect(response.status).toBe(400)
     expect(response.headers.get('Content-Type')).toContain('text/plain')
     expect(await response.text()).toContain('bogus')
+  })
+
+  it('refuses a bad range before it costs an exchange-rate lookup', async () => {
+    const response = await GET(request('?mode=filtered&period=bogus'))
+
+    expect(response.status).toBe(400)
+    // The profile is needed to know the timezone the range is read in; the FX
+    // provider is not, and a malformed URL must not cost a round trip to it.
+    expect(loadExportProfile).toHaveBeenCalledTimes(1)
+    expect(resolveExportFx).not.toHaveBeenCalled()
   })
 
   it('rejects a repeated range parameter with 400', async () => {
@@ -119,8 +151,10 @@ describe('GET /api/reports/export', () => {
     )
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0)
-    expect(buildFullWorkbook).toHaveBeenCalledWith(CONTEXT)
+    expect(buildFullWorkbook).toHaveBeenCalledWith(expectedContext(null))
     expect(buildFilteredWorkbook).not.toHaveBeenCalled()
+    // The full workbook restates balances at a current rate, so it gets one.
+    expect(resolveExportFx).toHaveBeenCalledTimes(1)
   })
 
   it('hands the filtered builder the range the query string resolves to', async () => {
@@ -132,7 +166,7 @@ describe('GET /api/reports/export', () => {
     expect(response.headers.get('Content-Disposition')).toBe(
       'attachment; filename="cashflow-filtered-20270101.xlsx"',
     )
-    expect(buildFilteredWorkbook).toHaveBeenCalledWith(CONTEXT, {
+    expect(buildFilteredWorkbook).toHaveBeenCalledWith(expectedContext(null), {
       kind: 'custom',
       from: '2026-03-01',
       to: '2026-03-31',
@@ -140,5 +174,8 @@ describe('GET /api/reports/export', () => {
       endUtc: new Date('2026-03-31T17:00:00.000Z'),
     })
     expect(buildFullWorkbook).not.toHaveBeenCalled()
+    // The filtered workbook is historical end to end, so no rate is fetched
+    // for it at all.
+    expect(resolveExportFx).not.toHaveBeenCalled()
   })
 })

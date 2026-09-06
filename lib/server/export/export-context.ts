@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { getUsableCurrentRate, isFxUnavailableError } from '@/lib/currency/current-rate-policy'
+import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import type { ExportContext } from './sheet-registry'
@@ -8,46 +9,81 @@ import type { ExportContext } from './sheet-registry'
 const PAIR = { base: 'USD', quote: 'VND' } as const
 
 /**
- * Everything an export needs to know about the user, resolved once.
+ * Who the export is for, before any rate is involved.
  *
- * Two things happen here rather than in a sheet builder, and both are about
- * consistency across the workbook:
- *
- * 1. **The profile is read once.** `resolveProfileDefaults` is the single place
- *    a stored `baseCurrency`/`timezone` becomes a validated value, so every
- *    sheet formats money and dates the same way. The row is read from the
- *    database rather than taken from the session object because the session's
- *    additional fields are typed as bare `string`.
- *
- * 2. **FX is fetched once, and may be absent.** One `getUsableCurrentRate` per
- *    workbook — never per sheet, and never per row — so two sheets cannot
- *    restate balances at two different rates. `FxUnavailableError` is the one
- *    error swallowed, and it becomes `fx: null`: an export is a read-only
- *    snapshot of data the user already owns, and refusing to hand it over
- *    because a third-party rate service is down would be the wrong trade. Every
- *    *converted* figure is then left blank and labelled unavailable — nothing
- *    downstream substitutes a rate. Any other error propagates: a database
- *    fault is not an FX outage.
- *
- * `now` and `providerOverride` are injection points for tests; production
- * callers pass neither.
+ * Split out from the FX step for two reasons. The route needs `timezone` to
+ * resolve the requested range, and a range the user typed wrong must be a 400
+ * *before* a third-party rate lookup is made on its behalf — otherwise every
+ * malformed URL costs a provider round trip. And the filtered workbook reads no
+ * current rate at all, so fetching one for it would be pure waste.
  */
-export async function buildExportContext(
-  userId: string,
-  now: Date = new Date(),
-  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
-): Promise<ExportContext> {
+export interface ExportProfile {
+  userId: string
+  displayCurrency: ExportContext['displayCurrency']
+  timezone: string
+}
+
+/**
+ * The user's export-relevant settings.
+ *
+ * Read from the database rather than taken from the session object, whose
+ * additional fields are typed as bare `string`; `resolveProfileDefaults` is the
+ * single place a stored `baseCurrency`/`timezone` becomes a validated value, so
+ * every sheet formats money and dates the same way.
+ */
+export async function loadExportProfile(userId: string): Promise<ExportProfile> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } })
   const { baseCurrency: displayCurrency, timezone } = resolveProfileDefaults(user)
+  return { userId, displayCurrency, timezone }
+}
 
-  let fx = null
+/**
+ * The one usable current rate for a workbook, or `null` when none exists.
+ *
+ * Called at most once per export — never per sheet, and never per row — so two
+ * sheets cannot restate balances at two different rates. `FxUnavailableError`
+ * is the one error swallowed: an export is a read-only snapshot of data the
+ * user already owns, and refusing to hand it over because a third-party rate
+ * service is down would be the wrong trade. Every *converted* figure is then
+ * left blank and labelled unavailable — nothing downstream substitutes a rate.
+ * Any other error propagates: a database fault is not an FX outage.
+ */
+export async function resolveExportFx(
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<UsableRateResult | null> {
   try {
-    fx = await getUsableCurrentRate(PAIR, providerOverride)
+    return await getUsableCurrentRate(PAIR, providerOverride)
   } catch (error) {
     // Narrowed deliberately: only "no usable rate exists" degrades to a blank
-    // column. Anything else is a real fault and must reach the route.
+    // column.
     if (!isFxUnavailableError(error)) throw error
+    return null
   }
+}
 
-  return { userId, displayCurrency, timezone, fx, now }
+export interface BuildExportContextOptions {
+  /** The instant the export was requested. Injectable for tests. */
+  now?: Date
+  /**
+   * Whether this workbook needs a current rate at all. `false` for the filtered
+   * export, which is historical end to end and reads `ctx.fx` nowhere — see the
+   * warning on `ExportContext.fx`.
+   */
+  withFx?: boolean
+  /** tests only; production callers omit it. */
+  providerOverride?: ExchangeRateProvider
+}
+
+/** Profile and (optionally) rate together — the whole context in one call. */
+export async function buildExportContext(
+  userId: string,
+  options: BuildExportContextOptions = {},
+): Promise<ExportContext> {
+  const { now = new Date(), withFx = true, providerOverride } = options
+  const profile = await loadExportProfile(userId)
+  return {
+    ...profile,
+    fx: withFx ? await resolveExportFx(providerOverride) : null,
+    now,
+  }
 }

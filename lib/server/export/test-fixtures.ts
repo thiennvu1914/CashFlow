@@ -26,10 +26,12 @@ export const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
 
 /**
  * A provider that always answers, so `buildExportContext` gets a real
- * `UsableRateResult` without touching the network. Its `effectiveDate` is now,
- * so `getLatestRate` files it under today's UTC day — which means a later
- * policy call inside `getCurrentPosition` is served from that cached row rather
- * than reaching for a provider of its own.
+ * `UsableRateResult` without touching the network.
+ *
+ * It is consulted exactly once per export, by the context builder. Every sheet
+ * is then handed that resolved rate, so nothing downstream reaches for a
+ * provider — or a cache row — of its own, and a suite can assert an exact rate
+ * without depending on what the shared `ExchangeRate` table happens to hold.
  */
 export function fakeFxProvider(rate = 26000): ExchangeRateProvider {
   const fetchedAt = new Date(Date.now() - 5 * 60 * 1000)

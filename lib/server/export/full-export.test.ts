@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
 import type ExcelJS from 'exceljs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
@@ -48,14 +49,18 @@ function labelledRow(worksheet: ExcelJS.Worksheet, label: string): ExcelJS.Row {
 
 describe('full export workbook', () => {
   const createdUserIds: string[] = []
+  let fetchSpy: MockInstance
 
   beforeEach(async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network access in test')
     })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // A rate cached by an earlier test in this file would otherwise let the
-    // FX-unavailable case quietly find one.
+    // Today's USD/VND row is the shared cache `getLatestRate` serves from, so a
+    // rate left by an earlier test would pin the rate this one's fake provider
+    // is supposed to supply. Nothing here *depends* on the cache being cold any
+    // more — every sheet is handed `ctx.fx` — but a stale row would still make
+    // an exact-rate assertion read the wrong number.
     await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
   })
 
@@ -107,7 +112,7 @@ describe('full export workbook', () => {
 
   it('produces Summary, Accounts, Transactions and Transfers in registry order', async () => {
     const s = await setup()
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
@@ -124,7 +129,7 @@ describe('full export workbook', () => {
   it('includes archived accounts, their status, and their history', async () => {
     const s = await setup()
     const archived = await archivedAccountWithHistory(s)
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
@@ -140,7 +145,7 @@ describe('full export workbook', () => {
     const transactions = sheet(workbook, 'Transactions')
     const notes: unknown[] = []
     transactions.eachRow((row, index) => {
-      if (index > 1) notes.push(row.getCell(12).value)
+      if (index > 1) notes.push(row.getCell(13).value)
     })
     expect(notes).toEqual(['opening float', 'closed out'])
     expect(await prisma.transaction.count({ where: { accountId: archived.id } })).toBe(2)
@@ -164,13 +169,14 @@ describe('full export workbook', () => {
         fxRateSource: 'export-seeded',
       })),
     })
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const workbook = await buildFullWorkbook(ctx)
 
     // Header row plus 205 data rows — the bounded UI list would have stopped
-    // at 200 and the workbook would have looked complete.
-    expect(sheet(workbook, 'Transactions').rowCount).toBe(206)
+    // at 200 and the workbook would have looked complete. `actualRowCount`
+    // counts rows carrying values, so a stray blank cannot pad the tally.
+    expect(sheet(workbook, 'Transactions').actualRowCount).toBe(206)
     expect(labelledRow(sheet(workbook, 'Summary'), 'Transactions').getCell(2).value).toBe(205)
   })
 
@@ -188,11 +194,11 @@ describe('full export workbook', () => {
         note: 'to savings',
       },
     })
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
     const transfers = sheet(await buildFullWorkbook(ctx), 'Transfers')
 
-    expect(transfers.rowCount).toBe(2)
+    expect(transfers.actualRowCount).toBe(2)
     const row = transfers.getRow(2)
     expect(row.getCell(1).value).toEqual(new Date(Date.UTC(2026, 2, 12, 12, 0)))
     expect(row.getCell(2).value).toBe('Wallet')
@@ -207,7 +213,7 @@ describe('full export workbook', () => {
   it('converts each transaction at its own snapshot rate, not at the current one', async () => {
     const s = await setup()
     // A USD row that snapshotted 25,500 while today's usable rate is 26,000.
-    await seedTransaction(s.userId, {
+    const tx = await seedTransaction(s.userId, {
       accountId: s.usdAccountId,
       categoryId: s.expenseCategoryId,
       amount: 100,
@@ -215,19 +221,25 @@ describe('full export workbook', () => {
       date: new Date('2026-03-10T05:00:00Z'),
       vndPerUsdAtEntry: 25_500,
     })
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider(26_000))
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider(26_000) })
     expect(ctx.fx?.rateDecimal.toNumber()).toBe(26_000)
 
     const transactions = sheet(await buildFullWorkbook(ctx), 'Transactions')
     const row = transactions.getRow(2)
 
-    // The native amount is untouched...
-    expect(row.getCell(5).value).toBe(100)
-    expect(row.getCell(6).value).toBe('USD')
+    // The row is identifiable...
+    expect(row.getCell(1).value).toBe(tx.id)
+    // ...the native amount is untouched...
+    expect(row.getCell(6).value).toBe(100)
+    expect(row.getCell(7).value).toBe('USD')
     // ...and the display-currency column is 100 × 25,500, the row's own rate —
     // 100 × 26,000 would mean history moved when this morning's rate did.
-    expect(row.getCell(7).value).toBe(2_550_000)
-    expect(row.getCell(8).value).toBe(25_500)
+    expect(row.getCell(8).value).toBe(2_550_000)
+    expect(row.getCell(9).value).toBe(25_500)
+    // Each amount column is formatted by the currency it is denominated in.
+    expect(row.getCell(6).numFmt).toBe('#,##0.00')
+    expect(row.getCell(8).numFmt).toBe('#,##0')
+    expect(row.getCell(9).numFmt).toBe('#,##0.000000')
   })
 
   it('leaves converted balances blank and says so when no usable rate exists', async () => {
@@ -240,12 +252,16 @@ describe('full export workbook', () => {
       date: new Date('2026-03-10T05:00:00Z'),
     })
 
-    // No cached rate, a provider that refuses, and `fetch` stubbed to throw:
-    // there is no honest number available anywhere.
-    const ctx = await buildExportContext(s.userId, new Date(), failingFxProvider)
+    // A provider that refuses, so the context resolves no rate at all.
+    const ctx = await buildExportContext(s.userId, { providerOverride: failingFxProvider })
     expect(ctx.fx).toBeNull()
 
     const workbook = await buildFullWorkbook(ctx)
+
+    // Nothing in the workbook went looking for a rate of its own: the sheets
+    // are handed `ctx.fx` and use it, so this outcome does not depend on the
+    // shared `ExchangeRate` cache happening to be cold.
+    expect(fetchSpy).not.toHaveBeenCalled()
 
     const accounts = sheet(workbook, 'Accounts')
     const usdRow = labelledRow(accounts, 'Dollar savings')
@@ -280,7 +296,9 @@ describe('full export workbook', () => {
         date: new Date('2026-03-12T05:00:00Z'),
       },
     })
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider(26_000))
+    // A rate with a fractional part, so the total can only come out right if
+    // this exact number reached the arithmetic.
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider(26_000.5) })
 
     const summary = sheet(await buildFullWorkbook(ctx), 'Summary')
 
@@ -290,8 +308,50 @@ describe('full export workbook', () => {
     expect(labelledRow(summary, 'Archived accounts').getCell(2).value).toBe(1)
     expect(labelledRow(summary, 'Transactions').getCell(2).value).toBe(3)
     expect(labelledRow(summary, 'Transfers').getCell(2).value).toBe(1)
-    // 1,000,000 − 260,000 in the VND wallet, plus 10 USD restated at 26,000.
-    expect(labelledRow(summary, 'Total account balance').getCell(2).value).toBe(1_000_000)
-    expect(String(labelledRow(summary, 'FX rate').getCell(2).value)).toContain('26000')
+    // The FX line and the total are two statements about ONE rate: 740,000 in
+    // the VND wallet plus 10 USD × 26,000.5. A second lookup answering 26,000
+    // would total 1,000,000 and the line would still read 26,000.5 — this pins
+    // both cells to the same number so that divergence cannot pass.
+    expect(labelledRow(summary, 'Total account balance').getCell(2).value).toBe(1_000_005)
+    expect(labelledRow(summary, 'Net worth').getCell(2).value).toBe(1_000_005)
+    expect(String(labelledRow(summary, 'FX rate').getCell(2).value)).toContain('26000.5')
+    // And no sheet went shopping for a rate of its own.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('bolds and freezes every sheet header and formats VND without a subunit', async () => {
+    const s = await setup()
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      categoryId: s.expenseCategoryId,
+      amount: 1_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+
+    const workbook = await buildFullWorkbook(ctx)
+
+    for (const name of ['Summary', 'Accounts', 'Transactions', 'Transfers']) {
+      const worksheet = sheet(workbook, name)
+      expect(worksheet.getRow(1).font?.bold).toBe(true)
+      // Frozen, so the headers stay visible while scrolling a ledger that can
+      // run to thousands of rows. `ySplit` lives only on the frozen/split
+      // members of the view union, so the narrowing is asserted first.
+      const view = worksheet.views[0]
+      expect(view.state).toBe('frozen')
+      if (view.state !== 'frozen') throw new Error(`${name} header is not frozen`)
+      expect(view.ySplit).toBe(1)
+    }
+
+    // VND has no circulating subunit, so two decimal places would be false
+    // precision on every row; USD keeps its cents (asserted above).
+    const row = sheet(workbook, 'Transactions').getRow(2)
+    expect(row.getCell(6).numFmt).toBe('#,##0')
+    expect(row.getCell(8).numFmt).toBe('#,##0')
+    const account = labelledRow(sheet(workbook, 'Accounts'), 'Dollar savings')
+    expect(account.getCell(6).numFmt).toBe('#,##0.00')
+    // The display-currency column always carries the DISPLAY currency's format,
+    // whatever the account is held in.
+    expect(account.getCell(7).numFmt).toBe('#,##0')
   })
 })

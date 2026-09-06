@@ -42,6 +42,10 @@ export async function buildFilteredWorkbook(
 
 type ActivitySummary = Awaited<ReturnType<typeof getActivitySummary>>
 
+/** Why the three headline totals do not add up to the Transactions sheet. */
+const ACTIVITY_SCOPE_NOTE =
+  'Income and Expense count INCOME/EXPENSE rows only; the Transactions sheet lists all types.'
+
 /**
  * The cover sheet: which window, then the totals, then the same two breakdowns
  * the Reports page shows.
@@ -81,7 +85,13 @@ function writeSummarySheet(
     ['Expense', summary.expense],
     ['Net Income', summary.netIncome],
   ] as const) {
-    const row = sheet.addRow([label, moneyCell(value)])
+    // The note is on every one of the three because the discrepancy it explains
+    // is real and would otherwise look like a bug: CASH_IN, CASH_OUT and the
+    // two ADJUSTMENT types move a balance without being earnings or spending,
+    // and a Transfer is its own entity — none of them is activity, yet all of
+    // them appear on the Transactions sheet. Someone adding the amount column
+    // up by hand must be told why it does not match these totals.
+    const row = sheet.addRow([label, moneyCell(value), ACTIVITY_SCOPE_NOTE])
     row.getCell(2).numFmt = displayFmt
   }
 

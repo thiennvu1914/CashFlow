@@ -88,13 +88,14 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
 
     const transactions = workbook.getWorksheet('Transactions')
     if (!transactions) throw new Error('no Transactions sheet')
-    // Header row plus exactly the two rows inside the window.
-    expect(transactions.rowCount).toBe(3)
+    // Header row plus exactly the two rows inside the window. `actualRowCount`
+    // counts rows that actually carry values, so a stray blank cannot pad it.
+    expect(transactions.actualRowCount).toBe(3)
 
     const summary = workbook.getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')
@@ -116,7 +117,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
     const transactions = workbook.getWorksheet('Transactions')
     if (!transactions) throw new Error('no Transactions sheet')
@@ -124,7 +125,7 @@ describe('buildFilteredWorkbook', () => {
     // 05:00Z is 12:00 in Asia/Ho_Chi_Minh. Excel has no timezone, so the cell
     // carries a Date whose UTC components ARE the local wall clock — which is
     // what the spreadsheet then displays.
-    expect(transactions.getRow(2).getCell(1).value).toEqual(new Date(Date.UTC(2026, 2, 10, 12, 0)))
+    expect(transactions.getRow(2).getCell(2).value).toEqual(new Date(Date.UTC(2026, 2, 10, 12, 0)))
   })
 
   it('describes the range the way the page does, with an inclusive end date', async () => {
@@ -133,7 +134,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const summary = (await buildFilteredWorkbook(ctx, range)).getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')
 
@@ -167,7 +168,7 @@ describe('buildFilteredWorkbook', () => {
       { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
       TEST_TIMEZONE,
     )
-    const ctx = await buildExportContext(s.userId, new Date(), fakeFxProvider())
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const summary = (await buildFilteredWorkbook(ctx, range)).getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')
 
@@ -179,5 +180,38 @@ describe('buildFilteredWorkbook', () => {
     expect(account.getCell(2).value).toBe(10_000)
     expect(account.getCell(3).value).toBe(3_000)
     expect(account.getCell(4).value).toBe(7_000)
+  })
+
+  it('says on the sheet why the totals exclude non-activity rows', async () => {
+    const s = await setup()
+    // A CASH_IN is a balance movement, not income: it shows up on the
+    // Transactions sheet but in none of the three totals.
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      type: 'CASH_IN',
+      amount: 500,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+
+    const range = resolveReportRange(
+      { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
+      TEST_TIMEZONE,
+    )
+    const ctx = await buildExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const workbook = await buildFilteredWorkbook(ctx, range)
+    const summary = workbook.getWorksheet('Summary')
+    const transactions = workbook.getWorksheet('Transactions')
+    if (!summary || !transactions) throw new Error('missing sheet')
+
+    // The row is in the ledger...
+    expect(transactions.actualRowCount).toBe(2)
+    // ...and in none of the totals, which the note next to them explains.
+    expect(labelledRow(summary, 'Income').getCell(2).value).toBe(0)
+    const note = labelledRow(summary, 'Income').getCell(3).value
+    expect(note).toBe(
+      'Income and Expense count INCOME/EXPENSE rows only; the Transactions sheet lists all types.',
+    )
+    expect(labelledRow(summary, 'Expense').getCell(3).value).toBe(note)
+    expect(labelledRow(summary, 'Net Income').getCell(3).value).toBe(note)
   })
 })

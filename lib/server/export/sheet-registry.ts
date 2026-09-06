@@ -23,9 +23,15 @@ export interface ExportContext {
   /** The user's IANA zone, in which every date cell's wall clock is computed. */
   timezone: string
   /**
-   * The one usable current rate for this workbook, or `null` when none exists.
+   * The one usable current rate for this workbook, or `null`.
+   *
    * `null` means converted columns are left blank and said to be unavailable —
-   * never filled with a fabricated number.
+   * never filled with a fabricated number. It carries two causes that a builder
+   * cannot tell apart: no usable rate existed, or the workbook declared it
+   * needs none (`withFx: false`, which the filtered export passes because it is
+   * historical end to end). A builder that genuinely needs a current rate must
+   * therefore not be added to the filtered workbook without turning FX back on
+   * — it would silently render blanks rather than fail.
    */
   fx: UsableRateResult | null
   /** The instant the export was requested; every "as of" figure uses it. */
