@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
+import type { Currency, TransactionType } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   classifyBudgetStatus,
@@ -18,19 +21,24 @@ import {
 /**
  * Phase 5's data-layer acceptance check (spec §4.6, §5.5).
  *
- * Three properties are what this suite exists to hold:
+ * Four properties are what this suite exists to hold:
  *
  * 1. **Uniqueness is the database's, not the service's.** Several cases bypass
  *    the service entirely and call Prisma directly, to prove the two partial
  *    unique indexes and the composite `(userId, categoryId)` foreign key hold
  *    even if application code regressed.
  * 2. **Progress is historical and EXPENSE-only.** Rows are inserted with their
- *    own `vndPerUsdAtEntry`, and one case writes a *different* rate into today's
- *    `ExchangeRate` cache and asserts the answer does not move. `fetch` is a
+ *    own `vndPerUsdAtEntry` — values no live rate would produce — and the
+ *    service is checked to import nothing that could fetch one. `fetch` is a
  *    throwing spy for every test and `afterEach` asserts it was never called, so
- *    a stray FX lookup fails the suite rather than passing quietly.
+ *    a stray FX lookup fails the suite rather than passing quietly. Nothing here
+ *    reads or writes the global `ExchangeRate` table; see the "imports nothing
+ *    that could reach a live rate" case for why.
  * 3. **The month is the user's.** The boundary cases use 17:00Z / 17:30Z, the
  *    instants that fall either side of local midnight in `Asia/Ho_Chi_Minh`.
+ * 4. **Every read is tenant-scoped.** A second user with their own March budget
+ *    and March spending is present in the progress cases, so dropping `userId`
+ *    from any list or progress query fails a test.
  *
  * Rows are inserted directly rather than through `createTransaction`: these
  * cases are about what the budget aggregate computes, and going through the
@@ -43,7 +51,8 @@ import {
 /** UTC+7, no DST, so every wall-clock assertion below is exact. */
 const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
 
-/** The `source` string this suite can leave in the shared FX cache. */
+/** The `fxRateSource` this suite stamps on the transactions it seeds. It never
+ *  reaches the global `ExchangeRate` table — nothing here writes that table. */
 const FX_TEST_SOURCE = 'budget-test'
 
 /** March 2026 in `TEST_TIMEZONE` is [2026-02-28T17:00Z, 2026-03-31T17:00Z). */
@@ -123,10 +132,11 @@ async function createBudgetUser(): Promise<BudgetFixture> {
 interface SeedTransaction {
   accountId: string
   categoryId?: string | null
-  type?:
-    'INCOME' | 'EXPENSE' | 'CASH_IN' | 'CASH_OUT' | 'ADJUSTMENT_INCREASE' | 'ADJUSTMENT_DECREASE'
+  /** The generated enum types, not hand-copied unions: if `TransactionType` or
+   *  `Currency` ever gains a member, this fixture keeps up on its own. */
+  type?: TransactionType
   amount: number | string
-  currency?: 'VND' | 'USD'
+  currency?: Currency
   date?: Date
   /** The row's OWN snapshot rate — settable per row, so a case can prove the
    *  aggregate uses it rather than whatever today's rate happens to be. */
@@ -207,6 +217,17 @@ describe('classifyBudgetStatus', () => {
     expect(classifyBudgetStatus(amount, new Prisma.Decimal('1000000.00'))).toBe('at_100')
   })
 
+  it('agrees with itself whether the ratio is supplied or computed', () => {
+    // `getBudgetProgressForMonth` passes the ratio it already divided, so the
+    // status and the number the UI renders can never diverge.
+    for (const spent of ['0', '499999.99', '500000', '799999', '800000', '999999']) {
+      const value = new Prisma.Decimal(spent)
+      expect(classifyBudgetStatus(value, amount, value.div(amount))).toBe(
+        classifyBudgetStatus(value, amount),
+      )
+    }
+  })
+
   it('refuses a non-positive amount rather than dividing by zero', () => {
     expect(() => classifyBudgetStatus(new Prisma.Decimal(1), new Prisma.Decimal(0))).toThrow(
       /must be positive/,
@@ -234,7 +255,9 @@ describe('budget service', () => {
   afterEach(async () => {
     const fetchCalls = fetchSpy.mock.calls.length
     vi.restoreAllMocks()
-    await prisma.exchangeRate.deleteMany({ where: { source: FX_TEST_SOURCE } })
+    // Only this suite's own users are cleaned up. `ExchangeRate` is deliberately
+    // absent from the cleanup because it is deliberately absent from the suite:
+    // see "imports nothing that could reach a live rate" below.
     await cleanupUsers([fx.userId, ...extraUserIds])
     // No budget code path may reach the network: progress is computed from each
     // row's own snapshot, never from a live rate.
@@ -601,6 +624,80 @@ describe('budget service', () => {
   })
 
   describe('progress', () => {
+    /**
+     * The tenant filter on the *read* paths, which the mutation cases above
+     * cannot reach: `createBudget` / `updateBudget` / `deleteBudget` fail loudly
+     * on another user's id, but a list or a progress scan missing its `userId`
+     * fails silently — it just returns too much. So a second user is given the
+     * same month, the same category name and their own spending, and every read
+     * is asserted to see none of it. Delete `userId` from the `where` in
+     * `listBudgetsForMonth`, `listAllBudgets` or the transaction scan in
+     * `getBudgetProgressForMonth` and this case fails.
+     */
+    it("never sees another user's budgets or spending", async () => {
+      const other = await createBudgetUser()
+      extraUserIds.push(other.userId)
+
+      await createBudget(fx.userId, {
+        ...MARCH,
+        scope: 'CATEGORY',
+        categoryId: fx.foodCategoryId,
+        amount: 1_000_000,
+        currency: 'VND',
+      })
+      await seedTransaction(fx.userId, {
+        accountId: fx.vndAccountId,
+        categoryId: fx.foodCategoryId,
+        amount: 400_000,
+      })
+
+      // The other user's month is identical in every respect except ownership:
+      // same year and month, a category with the same name, and both an OVERALL
+      // and a CATEGORY budget so neither scope's scan can leak.
+      const theirOverall = await createBudget(other.userId, {
+        ...MARCH,
+        scope: 'OVERALL',
+        amount: 9_000_000,
+        currency: 'VND',
+      })
+      const theirCategory = await createBudget(other.userId, {
+        ...MARCH,
+        scope: 'CATEGORY',
+        categoryId: other.foodCategoryId,
+        amount: 1_000_000,
+        currency: 'VND',
+      })
+      await seedTransaction(other.userId, {
+        accountId: other.vndAccountId,
+        categoryId: other.foodCategoryId,
+        amount: 777_000,
+      })
+      await seedTransaction(other.userId, {
+        accountId: other.vndAccountId,
+        categoryId: other.transportCategoryId,
+        amount: 888_000,
+      })
+
+      const progress = await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)
+      expect(progress).toHaveLength(1)
+      // 400000, not 1177000: the other user's Food spending is invisible even
+      // though it is the same month and the same category name.
+      expect(progress[0].spent.toString()).toBe('400000')
+      expect(progress[0].budget.userId).toBe(fx.userId)
+
+      const month = await listBudgetsForMonth(fx.userId, MARCH.year, MARCH.month)
+      const all = await listAllBudgets(fx.userId)
+      for (const list of [month, all]) {
+        expect(list.map((b) => b.userId)).toEqual([fx.userId])
+        expect(list.map((b) => b.id)).not.toContain(theirOverall.id)
+        expect(list.map((b) => b.id)).not.toContain(theirCategory.id)
+      }
+
+      // And symmetrically: the other user's own read is unaffected by ours.
+      const theirProgress = await getBudgetProgressForMonth(other.userId, TEST_TIMEZONE, 2026, 3)
+      expect(theirProgress.map((p) => p.spent.toString())).toEqual(['1665000', '777000'])
+    })
+
     it('counts only EXPENSE transactions — never income, cash movements, adjustments or transfers', async () => {
       const budget = await createBudget(fx.userId, {
         ...MARCH,
@@ -767,33 +864,53 @@ describe('budget service', () => {
         vndPerUsdAtEntry: 25500,
       })
 
-      const before = await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)
-      expect(before[0].spent.toString()).toBe('2550000')
-
-      // Today's cached rate moves a long way. Progress must not follow it: the
-      // service reads no current rate and makes no provider call.
-      //
-      // `upsert`, not `create`: `ExchangeRate` is the one global, non-tenant
-      // table (`(base, quote, effectiveDate)` is its natural key), so a
-      // neighbouring suite may already have cached today's USD/VND row. The
-      // point here is that *whatever* today's rate says, the answer does not
-      // move — so overwriting an existing row is the right operation, and
-      // `afterEach` deletes it by source afterwards.
-      const today = utcDayStart(new Date())
-      const rate = {
-        rate: new Prisma.Decimal(30000),
-        fetchedAt: new Date(),
-        source: FX_TEST_SOURCE,
-      }
-      await prisma.exchangeRate.upsert({
-        where: { base_quote_effectiveDate: { base: 'USD', quote: 'VND', effectiveDate: today } },
-        create: { base: 'USD', quote: 'VND', effectiveDate: today, ...rate },
-        update: rate,
-      })
-
-      const after = await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)
-      expect(after[0].spent.toString()).toBe('2550000')
+      // 25500 is the row's own snapshot, and no live rate produced it: this
+      // suite never lets a provider run, so 2550000 can only have come from the
+      // stored value.
+      const progress = await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)
+      expect(progress[0].spent.toString()).toBe('2550000')
+      // Repeating the call is the "today's rate cannot move it" half: the answer
+      // is a pure function of the stored rows, so it is stable by construction.
+      const again = await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)
+      expect(again[0].spent.toString()).toBe('2550000')
       expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    /**
+     * The structural half of "changing today's FX cannot alter progress", and
+     * the reason no case here writes to `ExchangeRate`.
+     *
+     * `ExchangeRate` is the one global, non-tenant table
+     * (`(base, quote, effectiveDate)` is its natural key), and today's USD/VND
+     * row is owned by `lib/currency/current-rate-policy.test.ts`, which seeds it
+     * and asserts on its exact rate and source. Vitest runs test *files* in
+     * parallel, so writing or deleting that row from here would make a sibling
+     * suite fail non-deterministically — this suite would be proving its own
+     * invariant by breaking someone else's.
+     *
+     * So the invariant is proved where it actually lives: the service cannot
+     * consult a live rate because it does not import anything that can produce
+     * one. Reading the source is deliberate rather than fragile — an import
+     * added in a later phase (a "show the target in today's money" feature, say)
+     * would silently reintroduce exactly the drift `historicalAmountIn` exists
+     * to prevent, and nothing else in the suite would notice.
+     */
+    it('imports nothing that could reach a live rate', () => {
+      const source = readFileSync(fileURLToPath(new URL('./budget.ts', import.meta.url)), 'utf8')
+
+      for (const forbidden of [
+        'current-rate-policy',
+        'fx-service',
+        'current-amount',
+        'currency/provider',
+        '@prisma/client/runtime',
+      ]) {
+        // Import specifiers only: the doc comment names these modules on
+        // purpose, to say why they are absent.
+        expect(source).not.toMatch(new RegExp(`from '[^']*${forbidden}`))
+      }
+      // And the conversion it does use is the historical one.
+      expect(source).toContain("from '@/lib/currency/historical-amount'")
     })
 
     it('aggregates mixed VND and USD expenses into a VND budget', async () => {
@@ -874,6 +991,24 @@ describe('budget service', () => {
 
       expect(await getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 3)).toEqual([])
       expect(findMany).not.toHaveBeenCalled()
+    })
+
+    it('rejects an out-of-range month whether or not the user has budgets', async () => {
+      // Validated before the empty-month early return, so a bad request from
+      // Task 3's URL param fails the same way for every user.
+      await expect(getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 13)).rejects.toThrow(
+        RangeError,
+      )
+
+      await createBudget(fx.userId, {
+        ...MARCH,
+        scope: 'OVERALL',
+        amount: 1_000_000,
+        currency: 'VND',
+      })
+      await expect(getBudgetProgressForMonth(fx.userId, TEST_TIMEZONE, 2026, 13)).rejects.toThrow(
+        RangeError,
+      )
     })
 
     it('scans the transaction table exactly once, whatever the number of budgets', async () => {

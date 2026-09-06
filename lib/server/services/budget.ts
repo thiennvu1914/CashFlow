@@ -87,8 +87,11 @@ const BUDGET_CATEGORY_SELECT = {
   select: { id: true, name: true, type: true, status: true },
 } satisfies Prisma.Budget$categoryArgs
 
+/** Derived from `BUDGET_CATEGORY_SELECT` rather than restating it: adding a
+ *  column to the const above must widen this type too, or every caller that
+ *  renders off `BudgetRow` (Tasks 3/4) would silently not see the new field. */
 export type BudgetRow = Prisma.BudgetGetPayload<{
-  include: { category: { select: { id: true; name: true; type: true; status: true } } }
+  include: { category: typeof BUDGET_CATEGORY_SELECT }
 }>
 
 export interface BudgetProgress {
@@ -119,8 +122,20 @@ const WARNING_80 = new Prisma.Decimal('0.8')
  * CHECK, so the division below is always safe — but a zero would divide to
  * `Infinity` or `NaN` and silently paint a bar rather than fail, so it is
  * rejected loudly instead.
+ *
+ * `ratio` is an optional pre-computed `spent ÷ amount`. `getBudgetProgressForMonth`
+ * has to compute that quotient anyway (it returns it), and dividing a second
+ * time here would make `status` and the `ratio` the UI renders two independent
+ * computations of the same number — they agree today, but a later change to
+ * either (a rounding mode, a guard) could have a bar say 79 % while the badge
+ * says `warning_80`. One division, one answer. Callers with no ratio in hand
+ * omit it and this computes it.
  */
-export function classifyBudgetStatus(spent: Prisma.Decimal, amount: Prisma.Decimal): BudgetStatus {
+export function classifyBudgetStatus(
+  spent: Prisma.Decimal,
+  amount: Prisma.Decimal,
+  ratio?: Prisma.Decimal,
+): BudgetStatus {
   if (amount.lte(0)) {
     throw new Error(
       `classifyBudgetStatus: budget amount must be positive, got ${amount.toString()}`,
@@ -129,9 +144,9 @@ export function classifyBudgetStatus(spent: Prisma.Decimal, amount: Prisma.Decim
   const cmp = spent.comparedTo(amount)
   if (cmp > 0) return 'exceeded'
   if (cmp === 0) return 'at_100'
-  const ratio = spent.div(amount)
-  if (ratio.gte(WARNING_80)) return 'warning_80'
-  if (ratio.gte(WARNING_50)) return 'warning_50'
+  const share = ratio ?? spent.div(amount)
+  if (share.gte(WARNING_80)) return 'warning_80'
+  if (share.gte(WARNING_50)) return 'warning_50'
   return 'ok'
 }
 
@@ -314,10 +329,16 @@ export async function getBudgetProgressForMonth(
   year: number,
   month: number,
 ): Promise<BudgetProgress[]> {
+  // Before the early return, deliberately: `getCalendarMonthBounds` is the only
+  // thing that validates `year`/`month`, and Task 3 parses both from a URL
+  // param. Validating after the return would make `month: 13` throw for a user
+  // who has budgets and answer `[]` for a user who does not — the same bad
+  // request quietly succeeding or failing depending on unrelated data.
+  const { startUtc, endUtc } = getCalendarMonthBounds(timezone, year, month)
+
   const budgets = await listBudgetsForMonth(userId, year, month)
   if (budgets.length === 0) return []
 
-  const { startUtc, endUtc } = getCalendarMonthBounds(timezone, year, month)
   const rows = await prisma.transaction.findMany({
     where: {
       userId,
@@ -340,12 +361,15 @@ export async function getBudgetProgressForMonth(
       if (budget.scope === 'CATEGORY' && row.categoryId !== budget.categoryId) continue
       spent = spent.add(historicalAmountIn(budget.currency, row))
     }
+    // Divided once and shared with the classifier, so `status` and `ratio` can
+    // never be two different readings of the same budget.
+    const ratio = spent.div(budget.amount)
     return {
       budget,
       spent,
       remaining: budget.amount.sub(spent),
-      ratio: spent.div(budget.amount),
-      status: classifyBudgetStatus(spent, budget.amount),
+      ratio,
+      status: classifyBudgetStatus(spent, budget.amount, ratio),
     }
   })
 }
