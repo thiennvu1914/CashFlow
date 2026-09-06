@@ -194,10 +194,10 @@ export default async function ReportsPage({
  * The links are plain anchors, not `next/link`: the response is a file
  * download, not a route, so a client-side navigation is the wrong mechanism.
  *
- * NOTE: `/api/reports/export` is Task 7 of this phase and does not exist yet —
- * both links 404 until it lands. They are built here, from
- * `rangeToQueryString(range)`, because the *resolved* range is the only thing
- * that guarantees the filtered export matches what this page is showing.
+ * The filtered link's query string is built from `rangeToQueryString(range)` —
+ * the *resolved* range, not the raw parameters — because that is what
+ * guarantees `/api/reports/export` re-resolves the identical window through the
+ * same `resolveReportRange` and exports exactly the rows this page is showing.
  */
 function ReportsHeader({
   subtitle,
