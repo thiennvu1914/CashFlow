@@ -248,8 +248,11 @@ describe('buildFilteredWorkbook', () => {
     const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
     const workbook = await buildFilteredWorkbook(ctx, range)
 
-    // No Transfers sheet, by design.
+    // No Transfers sheet, by design — and no Budgets sheet either (spec §12):
+    // a budget belongs to a calendar month, which a report range need not line
+    // up with, so a filtered workbook has nothing honest to say about one.
     expect(workbook.worksheets.map((w) => w.name)).toEqual(['Summary', 'Transactions'])
+    expect(workbook.getWorksheet('Budgets')).toBeUndefined()
 
     const summary = workbook.getWorksheet('Summary')
     if (!summary) throw new Error('no Summary sheet')

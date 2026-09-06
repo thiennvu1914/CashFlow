@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency } from '@/lib/currency/provider'
 import { buildAccountsSheet } from './build-accounts-sheet'
+import { buildBudgetsSheet } from './build-budgets-sheet'
 import { buildSummarySheet } from './build-summary-sheet'
 import { buildTransactionsSheet } from './build-transactions-sheet'
 import { buildTransfersSheet } from './build-transfers-sheet'
@@ -53,16 +54,19 @@ export type SheetBuilder = (workbook: ExcelJS.Workbook, ctx: ExportContext) => P
  * contract: the sheets are visible in one place, in the order they appear in
  * the file, and a builder that is not listed cannot run.
  *
- * Phase 5 appends `buildBudgetsSheet`. Phase 6 appends Savings Goals, Debts,
- * Debt Payments, Loans, Loan Payments and Reminders — completing spec §12's
- * full workbook. Each is one import plus one entry below; nothing else changes,
- * and the route never learns their names.
+ * Phase 5 appended `buildBudgetsSheet` — it is the only sheet here that reads
+ * nothing from `ctx.fx`, because budget progress is historical end to end (see
+ * that builder's own comment). Phase 6 appends Savings Goals, Debts, Debt
+ * Payments, Loans, Loan Payments and Reminders — completing spec §12's full
+ * workbook. Each is one import plus one entry below; nothing else changes, and
+ * the route never learns their names.
  */
 export const FULL_EXPORT_SHEET_BUILDERS: readonly SheetBuilder[] = [
   buildSummarySheet,
   buildAccountsSheet,
   buildTransactionsSheet,
   buildTransfersSheet,
+  buildBudgetsSheet,
 ]
 
 /**

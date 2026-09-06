@@ -198,6 +198,9 @@ export async function cleanupExportUsers(userIds: string[]) {
     await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+    // Before the categories: a CATEGORY budget references one, so deleting the
+    // category first is a foreign-key violation rather than a cascade.
+    await prisma.budget.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
   } finally {
     await prisma.user.deleteMany({ where: { id: { in: userIds } } })
