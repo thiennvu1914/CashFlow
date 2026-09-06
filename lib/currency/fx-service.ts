@@ -135,12 +135,18 @@ export async function getLatestRate(
  * §6.2); without this, the same rate would look like two different facts
  * depending on whether it happened to be cached already. `fetchedAt` and
  * `source` are passed through untouched.
+ *
+ * Like `getLatestRate`, the result carries `rateDecimal` alongside the boundary
+ * `number`: on a hit it is the stored `Decimal(18, 6)` itself, on a miss the
+ * Decimal built from the number just written to the cache. Historical money
+ * arithmetic — Phase 4's balance-over-time points — reads that, never `rate`,
+ * so an 18-significant-digit rate survives the trip intact.
  */
 export async function getHistoricalRate(
   pair: CurrencyPair,
   date: Date,
   providerOverride?: ExchangeRateProvider,
-): Promise<RateResult | null> {
+): Promise<CachedRateResult | null> {
   const effectiveDate = startOfUtcDay(date)
   const cached = await findCached(pair, effectiveDate)
   if (cached) return toRateResult(cached)
@@ -149,5 +155,5 @@ export async function getHistoricalRate(
   const fetched = await provider.getHistoricalRate(pair, effectiveDate)
   if (!fetched) return null
   await cacheRate(pair, effectiveDate, fetched)
-  return { ...fetched, effectiveDate }
+  return { ...fetched, effectiveDate, rateDecimal: new Prisma.Decimal(fetched.rate) }
 }

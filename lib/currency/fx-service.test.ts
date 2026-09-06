@@ -281,4 +281,63 @@ describe('getHistoricalRate', () => {
     expect(result?.fetchedAt.getTime()).toBe(fetchedAt.getTime())
     expect(result?.effectiveDate.getTime()).toBe(Date.UTC(2019, 5, 15))
   })
+
+  it("returns the cached row's own Decimal on a hit, digit for digit", async () => {
+    // `Decimal(18, 6)` at full width — 12 integer digits and 6 fractional. A
+    // double cannot hold 18 significant digits, so `rate` (the provider
+    // boundary's plain number) has already lost the last digit by the time a
+    // caller sees it. `rateDecimal` must therefore be the stored column
+    // itself, never a value rebuilt from that widened number: Phase 4's
+    // balance-over-time points multiply by it.
+    const stored = '123456789012.123456'
+    await prisma.exchangeRate.create({
+      data: {
+        base: PAIR.base,
+        quote: PAIR.quote,
+        rate: new Prisma.Decimal(stored),
+        effectiveDate: new Date(Date.UTC(2021, 3, 9)),
+        fetchedAt: new Date('2021-04-10T02:00:00.000Z'),
+        source: 'seeded',
+      },
+    })
+
+    const result = await getHistoricalRate(
+      PAIR,
+      new Date('2021-04-09T23:59:59.999Z'),
+      forbiddenProvider,
+    )
+
+    expect(result?.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result?.rateDecimal.toString()).toBe(stored)
+    expect(result?.rateDecimal.equals(new Prisma.Decimal(stored))).toBe(true)
+    // The day-start key, identical to what a miss returns for the same request.
+    expect(result?.effectiveDate.getTime()).toBe(Date.UTC(2021, 3, 9))
+    // Proof the two are not interchangeable: the widened number really has
+    // dropped a digit, so rebuilding the Decimal from `rate` would lose it.
+    expect(new Prisma.Decimal(result?.rate ?? 0).equals(new Prisma.Decimal(stored))).toBe(false)
+  })
+
+  it('carries the fetched rate as a Decimal on a miss, keyed to the requested day', async () => {
+    const fetchedAt = new Date('2026-09-05T10:00:00.000Z')
+    const fakeProvider: ExchangeRateProvider = {
+      getLatestRate: async () => {
+        throw new Error('provider must not be called')
+      },
+      getHistoricalRate: async () => ({
+        rate: 24567.891234,
+        effectiveDate: new Date('2020-03-05T21:30:00.000Z'),
+        fetchedAt,
+        source: 'fake-historical',
+      }),
+    }
+
+    const result = await getHistoricalRate(PAIR, new Date('2020-03-05T13:45:00.000Z'), fakeProvider)
+
+    expect(result?.rate).toBe(24567.891234)
+    // decimal.js parses the number's shortest decimal representation — the same
+    // digits the provider sent, and the same ones just written to the cache.
+    expect(result?.rateDecimal).toBeInstanceOf(Prisma.Decimal)
+    expect(result?.rateDecimal.equals(new Prisma.Decimal(24567.891234))).toBe(true)
+    expect(result?.effectiveDate.getTime()).toBe(Date.UTC(2020, 2, 5))
+  })
 })
