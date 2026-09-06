@@ -1,12 +1,8 @@
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
-import { getRecentMonthWindows } from '@/lib/datetime/month-windows'
+import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { getAccountBalanceOverTime } from '@/lib/server/services/account-balance-history'
-import {
-  getCashFlowTrend,
-  getExpenseByCategory,
-  getMonthlyIncomeExpense,
-} from '@/lib/server/services/activity'
+import { getActivitySummary, getCashFlowTrend } from '@/lib/server/services/activity'
 import { getCurrentPosition } from '@/lib/server/services/position'
 import { listTransactions } from '@/lib/server/services/transaction'
 import { buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
@@ -36,11 +32,11 @@ const RECENT_TRANSACTION_COUNT = 5
  * a database fault, a bug in the balance maths — is rethrown so it surfaces as
  * an error instead of being disguised as a missing exchange rate.
  *
- * Nothing historical is ever wrapped in this. `getCashFlowTrend`,
- * `getExpenseByCategory`, `getMonthlyIncomeExpense` and
- * `getAccountBalanceOverTime` restate the past from each row's own FX snapshot
- * (or that day's historical rate) and never consult the current-rate policy, so
- * an FX outage cannot reach them and there is nothing for them to degrade to.
+ * Nothing historical is ever wrapped in this. `getActivitySummary`,
+ * `getCashFlowTrend` and `getAccountBalanceOverTime` restate the past from each
+ * row's own FX snapshot (or that day's historical rate) and never consult the
+ * current-rate policy, so an FX outage cannot reach them and there is nothing
+ * for them to degrade to.
  */
 async function orNullIfFxUnavailable<T>(promise: Promise<T>): Promise<T | null> {
   try {
@@ -62,30 +58,43 @@ export default async function DashboardPage() {
   // midnight.
   const now = new Date()
 
-  // The previous calendar month *in the user's zone*, from the same helper the
-  // trend charts bucket by — so "last month" on the comparison chart is exactly
-  // the month before the one the trend's last point covers.
-  const [previousMonth] = getRecentMonthWindows(timezone, 2, now)
+  // Per render, the whole page costs:
+  //   · 1 `listActiveFinancialAccounts` + 1 batched `getAccountBalances`
+  //     + at most 1 current-FX policy call        (getCurrentPosition)
+  //   · 1 month scan  — KPIs *and* Expense by Category   (getActivitySummary)
+  //   · 1 six-month scan — the trend, and the Income vs Expense bars derived
+  //     from its last two points                        (getCashFlowTrend)
+  //   · 6 batched balance reads + at most 6 historical-rate lookups
+  //                                              (getAccountBalanceOverTime)
+  //   · 1 recent-transactions list                       (listTransactions)
+  // Nothing here is per-account or per-row, and no widget fetches on its own.
 
-  const [
-    position,
-    monthly,
-    previousMonthly,
-    cashFlowTrend,
-    expenseByCategory,
-    balanceOverTime,
-    recentTransactions,
-  ] = await Promise.all([
-    // One call for all three current-position figures (Total Balance, Net
-    // Worth, the distribution), so they cannot disagree: they are three views
-    // of one set of balances converted at one rate.
-    // `{ now }`: the position is "as of now", so the KPI strip and the balance
-    // chart's current point are cut at the same instant.
-    orNullIfFxUnavailable(getCurrentPosition(user.id, displayCurrency, { now })),
-    getMonthlyIncomeExpense(user.id, timezone, displayCurrency, now),
-    getMonthlyIncomeExpense(user.id, timezone, displayCurrency, previousMonth.startUtc),
+  // Resolved FIRST, on its own, and only then the rest.
+  //
+  // `getCurrentPosition` is the one call that may consult the *current*-rate
+  // policy, which caches today's row on a miss. `getAccountBalanceOverTime`'s
+  // current point then looks that very day up. Awaiting the position before
+  // starting the others means the row is already written when the chart asks,
+  // so on a live-rate day the current point is a figure rather than a gap —
+  // deterministically, instead of depending on which of two concurrent promises
+  // happened to win. It costs one round trip of serialisation; everything below
+  // still runs concurrently.
+  //
+  // One call answers all three current-position figures (Total Account Balance,
+  // Net Worth, the distribution), so they cannot disagree: they are three views
+  // of one set of balances converted at one rate. `{ now }` makes it "as of
+  // now", cut at the same instant as the balance chart's current point.
+  const position = await orNullIfFxUnavailable(
+    getCurrentPosition(user.id, displayCurrency, { now }),
+  )
+
+  const [monthly, cashFlowTrend, balanceOverTime, recentTransactions] = await Promise.all([
+    // ONE scan of the current local month, feeding the three monthly KPIs and
+    // the Expense by Category chart. Two scans of the same window could only
+    // ever produce the same numbers at a higher price — or different ones, if a
+    // row landed between them.
+    getActivitySummary(user.id, displayCurrency, getPeriodBounds(timezone, 'month', now)),
     getCashFlowTrend(user.id, timezone, displayCurrency, TREND_MONTHS, now),
-    getExpenseByCategory(user.id, timezone, displayCurrency, now),
     getAccountBalanceOverTime(user.id, timezone, displayCurrency, TREND_MONTHS, undefined, now),
     listTransactions(user.id, { limit: RECENT_TRANSACTION_COUNT }),
   ])
@@ -99,9 +108,7 @@ export default async function DashboardPage() {
     now,
     position,
     monthly,
-    previousMonthly,
     cashFlowTrend,
-    expenseByCategory,
     balanceOverTime,
     recentTransactions,
   })

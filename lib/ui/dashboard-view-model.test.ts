@@ -64,12 +64,19 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
       expense: decimal('8000000'),
       netIncome: decimal('22000000'),
       ...SEPTEMBER,
-    },
-    previousMonthly: {
-      income: decimal('20000000'),
-      expense: decimal('25000000'),
-      netIncome: decimal('-5000000'),
-      ...AUGUST,
+      byCategory: [
+        { categoryId: 'c1', name: 'Food', total: decimal('5000000') },
+        { categoryId: null, name: 'Uncategorized', total: decimal('3000000') },
+      ],
+      byAccount: [
+        {
+          accountId: 'a1',
+          name: 'Wallet',
+          income: decimal('30000000'),
+          expense: decimal('8000000'),
+          netIncome: decimal('22000000'),
+        },
+      ],
     },
     cashFlowTrend: [
       {
@@ -86,10 +93,6 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
         expense: decimal('8000000'),
         netIncome: decimal('22000000'),
       },
-    ],
-    expenseByCategory: [
-      { categoryId: 'c1', name: 'Food', total: decimal('5000000') },
-      { categoryId: null, name: 'Uncategorized', total: decimal('3000000') },
     ],
     balanceOverTime: [
       { month: '2026-08', asOf: new Date('2026-08-31T16:59:59.999Z'), balance: null },
@@ -135,7 +138,7 @@ describe('buildDashboardViewModel', () => {
     const vm = buildDashboardViewModel(makeInput())
 
     expect(vm.kpis.map((k) => [k.label, k.value])).toEqual([
-      ['Total Balance', '12.000.000'],
+      ['Total Account Balance', '12.000.000'],
       ['Net Worth', '12.000.000'],
       ['Monthly Income', '30.000.000'],
       ['Monthly Expense', '8.000.000'],
@@ -161,8 +164,8 @@ describe('buildDashboardViewModel', () => {
 
     it('withholds the two converted KPIs and says why', () => {
       const byLabel = new Map(vm.kpis.map((k) => [k.label, k]))
-      expect(byLabel.get('Total Balance')).toEqual({
-        label: 'Total Balance',
+      expect(byLabel.get('Total Account Balance')).toEqual({
+        label: 'Total Account Balance',
         value: null,
         hint: 'FX unavailable',
         negative: false,
@@ -234,6 +237,65 @@ describe('buildDashboardViewModel', () => {
       { period: 'Aug 2026', income: 20000000, expense: 25000000 },
       { period: 'Sep 2026', income: 30000000, expense: 8000000 },
     ])
+  })
+
+  it('derives the comparison from the trend’s last two points, never a separate scan', () => {
+    const input = makeInput()
+    const july = {
+      month: '2026-07',
+      startUtc: new Date('2026-06-30T17:00:00Z'),
+      endUtc: new Date('2026-07-31T17:00:00Z'),
+      income: decimal('1'),
+      expense: decimal('2'),
+      netIncome: decimal('-1'),
+    }
+    const vm = buildDashboardViewModel({
+      ...input,
+      cashFlowTrend: [july, ...input.cashFlowTrend],
+    })
+
+    // Three points in, two bars out — the *last* two, and July is not one of them.
+    expect(vm.cashFlowTrend).toHaveLength(3)
+    expect(vm.incomeVsExpense).toEqual([
+      { period: 'Aug 2026', income: 20000000, expense: 25000000 },
+      { period: 'Sep 2026', income: 30000000, expense: 8000000 },
+    ])
+    // The comparison's right-hand bar and the trend's final point are the same
+    // window, so they cannot disagree.
+    const last = vm.incomeVsExpense.at(-1)
+    expect(last?.income).toBe(vm.cashFlowTrend.at(-1)?.income)
+    expect(last?.expense).toBe(vm.cashFlowTrend.at(-1)?.expense)
+  })
+
+  it('shows a single bar when only one month of trend exists', () => {
+    const input = makeInput()
+    const vm = buildDashboardViewModel({ ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) })
+
+    // One point, one bar — never an invented zero month beside it.
+    expect(vm.incomeVsExpense).toEqual([{ period: 'Sep 2026', income: 30000000, expense: 8000000 }])
+  })
+
+  it('takes Expense by Category from the same month aggregate as the KPIs', () => {
+    const input = makeInput()
+    const vm = buildDashboardViewModel({
+      ...input,
+      monthly: {
+        ...input.monthly,
+        expense: decimal('9000000'),
+        byCategory: [
+          { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
+          { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
+        ],
+      },
+    })
+
+    expect(vm.expenseByCategory).toEqual([
+      { name: 'Rent', value: 6000000 },
+      { name: 'Food', value: 3000000 },
+    ])
+    // One scan, so the slices add up to the card above them.
+    const sliceTotal = vm.expenseByCategory.reduce((sum, slice) => sum + slice.value, 0)
+    expect(sliceTotal).toBe(9000000)
   })
 
   it('orders the distribution largest first, using converted balances', () => {

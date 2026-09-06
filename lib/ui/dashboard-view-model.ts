@@ -3,11 +3,7 @@ import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
-import type {
-  CashFlowPoint,
-  CategoryTotal,
-  getMonthlyIncomeExpense,
-} from '@/lib/server/services/activity'
+import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
 import type { CurrentPosition } from '@/lib/server/services/position'
 import type { listTransactions } from '@/lib/server/services/transaction'
 import { formatMoney, formatRate } from './format-money'
@@ -27,8 +23,8 @@ import { formatMoney, formatRate } from './format-money'
  * results, does the dashboard say the right thing — including when FX is out.
  */
 
-/** `getMonthlyIncomeExpense`'s shape, borrowed so the two cannot drift apart. */
-export type MonthlyTotals = Awaited<ReturnType<typeof getMonthlyIncomeExpense>>
+/** `getActivitySummary`'s shape, borrowed so the two cannot drift apart. */
+export type MonthSummary = Awaited<ReturnType<typeof getActivitySummary>>
 
 /** One row of `listTransactions`. */
 export type RecentTransactionRow = Awaited<ReturnType<typeof listTransactions>>[number]
@@ -44,10 +40,20 @@ export interface DashboardInput {
    * depend on it; every historical figure below is unaffected by design.
    */
   position: CurrentPosition | null
-  monthly: MonthlyTotals
-  previousMonthly: MonthlyTotals
+  /**
+   * The current local month, scanned once. It carries the three monthly KPI
+   * figures *and* `byCategory`, which is the Expense by Category chart — one
+   * aggregate, so the pie chart's slices always add up to the Monthly Expense
+   * card above it.
+   */
+  monthly: MonthSummary
+  /**
+   * The trend, oldest first. Its last two points are also the Income vs Expense
+   * comparison: the trend's windows are the same local calendar months, so
+   * deriving the comparison from them rather than re-scanning makes the two
+   * charts agree by construction instead of by coincidence.
+   */
   cashFlowTrend: CashFlowPoint[]
-  expenseByCategory: CategoryTotal[]
   balanceOverTime: AccountBalancePoint[]
   recentTransactions: RecentTransactionRow[]
 }
@@ -147,9 +153,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     now,
     position,
     monthly,
-    previousMonthly,
     cashFlowTrend,
-    expenseByCategory,
     balanceOverTime,
     recentTransactions,
   } = input
@@ -165,7 +169,11 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
   }
 
   const kpis: KpiDto[] = [
-    positionKpi('Total Balance', position?.totalBalance),
+    // "Total Account Balance", not "Total Balance": the figure is the sum of the
+    // *account* balances (spec §5.2), and Phase 6's Net Worth widens beyond
+    // them — a card labelled just "Total Balance" would then read as the wrong
+    // total. The export's Summary sheet says the same thing.
+    positionKpi('Total Account Balance', position?.totalBalance),
     positionKpi('Net Worth', position?.netWorth),
     { label: 'Monthly Income', value: formatMoney(monthly.income, currency), negative: false },
     // Expense is stored and aggregated as a positive magnitude, so it is never
@@ -191,25 +199,27 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       expense: point.expense.toNumber(),
       netIncome: point.netIncome.toNumber(),
     })),
-    incomeVsExpense: [
-      {
-        period: formatInTimeZone(previousMonthly.startUtc, timezone, 'LLL yyyy'),
-        income: previousMonthly.income.toNumber(),
-        expense: previousMonthly.expense.toNumber(),
-      },
-      {
-        period: formatInTimeZone(monthly.startUtc, timezone, 'LLL yyyy'),
-        income: monthly.income.toNumber(),
-        expense: monthly.expense.toNumber(),
-      },
-    ],
+    // The trend's last two points — last month beside this one. Derived rather
+    // than fetched: the trend's windows *are* the local calendar months, so the
+    // comparison chart cannot show a different figure from the trend's final
+    // point, and the month is scanned once instead of three times. A trend
+    // shorter than two points yields whatever it has rather than a fabricated
+    // zero month.
+    incomeVsExpense: cashFlowTrend.slice(-2).map((point) => ({
+      period: formatInTimeZone(point.startUtc, timezone, 'LLL yyyy'),
+      income: point.income.toNumber(),
+      expense: point.expense.toNumber(),
+    })),
     balanceOverTime: balanceOverTime.map((point) => ({
       label: formatInTimeZone(point.asOf, timezone, 'LLL'),
       // Preserved as `null`, never coerced to 0: a month with no known rate is
       // a hole in the line, and a zero would draw a cliff that never happened.
       balance: point.balance === null ? null : point.balance.toNumber(),
     })),
-    expenseByCategory: expenseByCategory.map((row) => ({
+    // The same month aggregate the three monthly KPIs come from, so the slices
+    // sum to the Monthly Expense card by construction. Already largest-first
+    // with a stable tiebreak (`getActivitySummary`).
+    expenseByCategory: monthly.byCategory.map((row) => ({
       name: row.name,
       value: row.total.toNumber(),
     })),

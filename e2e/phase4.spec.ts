@@ -48,7 +48,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await registerNewUser(page, { emailPrefix: 'e2e-phase4' })
 
     // A VND account and a USD account — enough to make FX conversion actually
-    // apply on the Dashboard's Total Balance / Net Worth / distribution.
+    // apply on the Dashboard's Total Account Balance / Net Worth / distribution.
     await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
     await createAccountViaUi(page, { name: 'Wallet', currency: 'USD', initialBalance: 100 })
 
@@ -99,7 +99,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     // this page, which a page-wide getByText would ambiguously match too.
     const kpiStrip = page.locator('dl')
     for (const label of [
-      'Total Balance',
+      'Total Account Balance',
       'Net Worth',
       'Monthly Income',
       'Monthly Expense',
@@ -135,11 +135,12 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       /cached rate|FX rate unavailable|USD = .* VND|No conversion needed/,
     )
 
-    // Total Balance must be a formatted number or the "unknown" placeholder —
-    // never a raw NaN/undefined leaking through the FX-unavailable fallback.
+    // Total Account Balance must be a formatted number or the "unknown"
+    // placeholder — never a raw NaN/undefined leaking through the
+    // FX-unavailable fallback.
     const totalBalanceCell = page
       .locator('dl > div')
-      .filter({ has: page.getByText('Total Balance', { exact: true }) })
+      .filter({ has: page.getByText('Total Account Balance', { exact: true }) })
     const totalBalanceValue = (
       await totalBalanceCell.locator('dd span.tabular-nums').first().textContent()
     )?.trim()
