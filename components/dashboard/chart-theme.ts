@@ -23,9 +23,15 @@ export const CHART_COLORS = {
 /** Chart body height. One value, so a two-column row never lands ragged. */
 export const CHART_HEIGHT = 240
 
-/** Axis chrome: present enough to read against, quiet enough to ignore. */
+/**
+ * Axis chrome: present enough to read against, quiet enough to ignore.
+ *
+ * `tabular-nums` matters more on an axis than anywhere else — proportional
+ * digits give each tick a different width, so a column of numbers stops lining
+ * up under itself and the scale becomes harder to read than the data.
+ */
 export const AXIS_PROPS = {
-  tick: { fill: CHART_COLORS.axis, fontSize: 11 },
+  tick: { fill: CHART_COLORS.axis, fontSize: 11, fontVariantNumeric: 'tabular-nums' },
   tickLine: false,
   axisLine: false,
 } as const

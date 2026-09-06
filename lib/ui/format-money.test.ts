@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
-import { formatCompactAmount, formatMoney, formatRate } from './format-money'
+import { formatChartValue, formatCompactAmount, formatMoney, formatRate } from './format-money'
 
 /**
  * Pure formatting — no database, no session. Every expectation is the literal
@@ -50,6 +50,47 @@ describe('formatRate', () => {
   it('groups a stored Decimal(18, 6) rate and trims it to two decimals', () => {
     expect(formatRate(new Prisma.Decimal('25000.500000'))).toBe('25.000,5')
     expect(formatRate(new Prisma.Decimal('26123.000000'))).toBe('26.123')
+  })
+})
+
+/**
+ * Recharts hands a tooltip formatter whatever is in the datum, typed as
+ * `number | string | Array<number | string>`, so these cases are the shapes
+ * that actually arrive rather than the ones we would prefer.
+ */
+describe('formatChartValue', () => {
+  it('formats a plain number with its currency code', () => {
+    expect(formatChartValue(1234567, 'VND')).toBe('1.234.567 VND')
+    expect(formatChartValue(12.5, 'USD')).toBe('12,50 USD')
+  })
+
+  it('formats a numeric string', () => {
+    expect(formatChartValue('2500000', 'VND')).toBe('2.500.000 VND')
+  })
+
+  it('reads an array datum at its first element', () => {
+    // A stacked or range series yields `[from, to]`.
+    expect(formatChartValue([1000, 2000], 'VND')).toBe('1.000 VND')
+    expect(formatChartValue(['1000'], 'VND')).toBe('1.000 VND')
+  })
+
+  it('shows an em dash rather than a zero for anything unreadable', () => {
+    // Never `0`: a tooltip reading "0 VND" over a gap in the balance line
+    // would assert a measurement nobody took.
+    expect(formatChartValue(Number.NaN, 'VND')).toBe('—')
+    expect(formatChartValue(null, 'VND')).toBe('—')
+    expect(formatChartValue(undefined, 'VND')).toBe('—')
+    expect(formatChartValue('', 'VND')).toBe('—')
+    expect(formatChartValue('not a number', 'VND')).toBe('—')
+    expect(formatChartValue([], 'VND')).toBe('—')
+    expect(formatChartValue(Number.POSITIVE_INFINITY, 'VND')).toBe('—')
+    expect(formatChartValue({ nope: true }, 'VND')).toBe('—')
+  })
+
+  it('still formats a legitimate zero', () => {
+    // A month with genuinely no expenses is 0, and must not be confused with
+    // a month whose figure is unknown.
+    expect(formatChartValue(0, 'VND')).toBe('0 VND')
   })
 })
 

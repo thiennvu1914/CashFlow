@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import type { Currency } from '@/lib/currency/provider'
 import type { BalancePointDto } from '@/lib/ui/dashboard-view-model'
-import { formatCompactAmount, formatMoney } from '@/lib/ui/format-money'
+import { formatChartValue, formatCompactAmount } from '@/lib/ui/format-money'
 import {
   AXIS_PROPS,
   CHART_COLORS,
@@ -65,7 +65,7 @@ export function AccountBalanceHistoryChart({
             cursor={LINE_CURSOR}
             contentStyle={TOOLTIP_CONTENT_STYLE}
             labelStyle={TOOLTIP_LABEL_STYLE}
-            formatter={(value) => `${formatMoney(Number(value), currency)} ${currency}`}
+            formatter={(value) => formatChartValue(value, currency)}
           />
           <Line
             {...LINE_PROPS}

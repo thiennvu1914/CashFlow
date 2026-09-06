@@ -12,7 +12,7 @@ import {
 } from 'recharts'
 import type { Currency } from '@/lib/currency/provider'
 import type { ComparisonBarDto } from '@/lib/ui/dashboard-view-model'
-import { formatCompactAmount, formatMoney } from '@/lib/ui/format-money'
+import { formatChartValue, formatCompactAmount } from '@/lib/ui/format-money'
 import {
   AXIS_PROPS,
   BAR_CURSOR,
@@ -59,7 +59,7 @@ export function IncomeVsExpenseChart({
             cursor={BAR_CURSOR}
             contentStyle={TOOLTIP_CONTENT_STYLE}
             labelStyle={TOOLTIP_LABEL_STYLE}
-            formatter={(value) => `${formatMoney(Number(value), currency)} ${currency}`}
+            formatter={(value) => formatChartValue(value, currency)}
           />
           <Legend wrapperStyle={{ fontSize: '0.7rem' }} />
           <Bar {...BAR_PROPS} dataKey="income" name="Income" fill={CHART_COLORS.income} />

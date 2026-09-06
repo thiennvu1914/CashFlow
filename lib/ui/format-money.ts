@@ -54,6 +54,32 @@ export function formatMoney(value: Prisma.Decimal | string | number, currency: C
   return FORMATTERS[currency].format(Number(String(value)))
 }
 
+/** Stands in for a figure that does not exist or cannot be read as a number. */
+const NO_VALUE = '—'
+
+/**
+ * A recharts tooltip value, formatted with its currency code.
+ *
+ * Recharts types a datum as `ValueType = number | string | Array<number |
+ * string>` and hands it to the formatter as-is, so the tooltip callbacks take
+ * `unknown` and normalise here rather than each doing its own `Number(value)`
+ * — which is what keeps every money-to-float coercion in this one file.
+ *
+ * An array (what a stacked or range series yields) is read at its first
+ * element; anything that does not resolve to a finite number — `null`, an
+ * `undefined` datum, a label recharts passed through, `NaN` — becomes an em
+ * dash. It must never become `0`: a tooltip reading "0 VND" over a gap in the
+ * balance line would assert a measurement nobody took.
+ */
+export function formatChartValue(value: unknown, currency: Currency): string {
+  const scalar = Array.isArray(value) ? value[0] : value
+  if (scalar === null || scalar === undefined || scalar === '') return NO_VALUE
+  if (typeof scalar !== 'number' && typeof scalar !== 'string') return NO_VALUE
+  const asNumber = Number(scalar)
+  if (!Number.isFinite(asNumber)) return NO_VALUE
+  return `${FORMATTERS[currency].format(asNumber)} ${currency}`
+}
+
 /**
  * An FX rate for display — always VND per 1 USD, so it is grouped like a VND
  * figure but keeps up to two decimals of the stored `Decimal(18, 6)`. Rates are

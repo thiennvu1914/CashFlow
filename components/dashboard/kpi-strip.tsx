@@ -28,23 +28,36 @@ export function KpiStrip({ kpis, currency }: { kpis: KpiDto[]; currency: Currenc
           )}
         >
           <dt className="text-xs text-muted-foreground">{kpi.label}</dt>
-          <dd
-            className={cn(
-              'text-xl font-semibold tabular-nums',
-              kpi.negative && 'text-negative',
-              kpi.value === null && 'text-muted-foreground',
-            )}
-          >
-            {/* An em dash, not a zero: "we cannot say" and "nothing" are
-                different answers, and only one of them is a number. */}
-            {kpi.value ?? '—'}
-            {kpi.value !== null && (
-              <span className="ml-1 text-xs font-normal text-muted-foreground">{currency}</span>
+          {/* The hint lives inside the `dd`, not beside it: a `dl` (or its
+              wrapper `div`) may contain only `dt` and `dd`, and a stray `p`
+              between them is invalid enough to change how a screen reader
+              pairs terms with descriptions. */}
+          <dd className="flex flex-col gap-1">
+            {/* `flex-wrap` with a `whitespace-nowrap` figure: the number itself
+                may never break mid-digits, but the currency suffix is allowed
+                to drop to a second line on a narrow phone rather than force the
+                figure to overflow its cell. */}
+            <span className="flex flex-wrap items-baseline gap-x-1">
+              <span
+                className={cn(
+                  // A step smaller on phones, where two of these share a row.
+                  'text-lg font-semibold whitespace-nowrap tabular-nums md:text-xl',
+                  kpi.negative && 'text-negative',
+                  kpi.value === null && 'text-muted-foreground',
+                )}
+              >
+                {/* An em dash, not a zero: "we cannot say" and "nothing" are
+                    different answers, and only one of them is a number. */}
+                {kpi.value ?? '—'}
+              </span>
+              {kpi.value !== null && (
+                <span className="text-sm text-muted-foreground">{currency}</span>
+              )}
+            </span>
+            {kpi.value === null && kpi.hint && (
+              <span className="text-xs text-muted-foreground">{kpi.hint}</span>
             )}
           </dd>
-          {kpi.value === null && kpi.hint && (
-            <p className="text-xs text-muted-foreground">{kpi.hint}</p>
-          )}
         </div>
       ))}
     </dl>
