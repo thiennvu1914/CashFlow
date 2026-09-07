@@ -100,6 +100,7 @@ interface ReminderFixture {
   archivedAccountId: string
   expenseCategoryId: string
   incomeCategoryId: string
+  archivedCategoryId: string
   transactionId: string
 }
 
@@ -117,7 +118,7 @@ const BASE_REMINDER = {
 
 /**
  * A user with one active account, one archived account, an EXPENSE and an INCOME
- * category, and one expense already recorded.
+ * category, one archived EXPENSE category, and one expense already recorded.
  *
  * The account and the transaction exist purely so "no money moves" has something
  * that *could* be corrupted: with an empty ledger, "counts unchanged" and
@@ -159,6 +160,9 @@ async function createReminderUser(timezone = TEST_TIMEZONE): Promise<ReminderFix
   const incomeCategory = await prisma.category.create({
     data: { userId: user.id, name: 'Salary', type: 'INCOME' },
   })
+  const archivedCategory = await prisma.category.create({
+    data: { userId: user.id, name: 'Old housing', type: 'EXPENSE', status: 'ARCHIVED' },
+  })
   const date = new Date('2026-03-15T05:00:00.000Z')
   const transaction = await prisma.transaction.create({
     data: {
@@ -180,6 +184,7 @@ async function createReminderUser(timezone = TEST_TIMEZONE): Promise<ReminderFix
     archivedAccountId: archived.id,
     expenseCategoryId: expenseCategory.id,
     incomeCategoryId: incomeCategory.id,
+    archivedCategoryId: archivedCategory.id,
     transactionId: transaction.id,
   }
 }
@@ -564,6 +569,22 @@ describe('reminder service', () => {
 
         expect(expense.category?.name).toBe('Housing')
         expect(income.category?.name).toBe('Salary')
+      })
+
+      it('refuses an archived category', async () => {
+        // Ruling R6-17, and the same rule `transaction.ts` and `budget.ts`
+        // apply: a *new* record may not be filed under a category the user has
+        // retired, even though an existing one survives its category being
+        // archived.
+        const caught = await captureRejection(
+          createReminder(fx.userId, TEST_TIMEZONE, {
+            ...BASE_REMINDER,
+            categoryId: fx.archivedCategoryId,
+          }),
+        )
+
+        expect(caught).toBeInstanceOf(InvalidReminderCategoryError)
+        expect(await prisma.recurringReminder.count({ where: { userId: fx.userId } })).toBe(0)
       })
 
       it('refuses an archived account', async () => {

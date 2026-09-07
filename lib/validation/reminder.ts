@@ -26,17 +26,29 @@ import { moneyAmountSchema } from '@/lib/validation/money'
  */
 
 /**
- * The two refines below both concern *which fields a frequency gives meaning
- * to*, and both reject rather than quietly drop.
+ * The refines below both concern *which fields a frequency gives meaning to*,
+ * and both reject rather than quietly drop.
  *
  * Dropping would be the friendlier-looking choice and the wrong one: a user who
  * typed "the 15th" and picked Weekly has told the form two contradictory things,
  * and silently keeping only one of them creates a reminder that fires on a day
  * they did not choose — a bill they then miss. Saying "not applicable for this
  * frequency" under the field they filled in is the honest answer, and it also
- * keeps the stored row unambiguous: `dayOfMonth` and `month` are NULL for WEEKLY
- * and ONE_TIME rows, which is what the `RecurringReminder_dayOfMonth_range` /
- * `_month_range` CHECKs and `lib/server/services/recurrence.ts` both assume.
+ * keeps the stored row unambiguous, which is what the
+ * `RecurringReminder_dayOfMonth_range` / `_month_range` CHECKs and
+ * `lib/server/services/recurrence.ts` both assume.
+ *
+ * The two anchors are **not** applicable to the same set of frequencies, and the
+ * asymmetry is the point (ruling R6-18):
+ *
+ * - `dayOfMonth` is meaningful for MONTHLY *and* YEARLY — both land on a day of
+ *   a month.
+ * - `month` is meaningful for **YEARLY only**. A monthly reminder recurs in every
+ *   month, so it has no anchor month to name: `recurrence.ts` takes a MONTHLY
+ *   rule's phase from `startDate` and never reads `month`, so accepting one here
+ *   would be accepting a value nothing can act on. (The service normalises it to
+ *   NULL as well, as defence in depth — but the honest place to say "that field
+ *   does nothing here" is under the field, before the request is trusted.)
  *
  * The messages are attached to the offending *field* rather than the object
  * root, so react-hook-form renders each under an input the user can correct — a
@@ -45,7 +57,7 @@ import { moneyAmountSchema } from '@/lib/validation/money'
  * told about both at once, instead of surfacing the second only after the first
  * is fixed.
  */
-const ANCHOR_FREQUENCIES = new Set(['MONTHLY', 'YEARLY'])
+const DAY_OF_MONTH_FREQUENCIES = new Set(['MONTHLY', 'YEARLY'])
 
 export const createReminderSchema = z
   .object({
@@ -109,7 +121,8 @@ export const createReminderSchema = z
       .optional(),
     /** The anchor month for a YEARLY reminder, **1–12** in the human numbering
      *  the column stores (not JavaScript's 0–11). Defaulted from `startDate` by
-     *  the service when absent. */
+     *  the service when absent, and rejected outright on every other frequency
+     *  — including MONTHLY, which has no anchor month (ruling R6-18). */
     month: z
       .number({ error: 'Enter the month' })
       .int('Whole numbers only')
@@ -142,11 +155,11 @@ export const createReminderSchema = z
       .max(500, 'Keep the note under 500 characters')
       .optional(),
   })
-  .refine((r) => r.dayOfMonth === undefined || ANCHOR_FREQUENCIES.has(r.frequency), {
+  .refine((r) => r.dayOfMonth === undefined || DAY_OF_MONTH_FREQUENCIES.has(r.frequency), {
     message: 'Not applicable for this frequency',
     path: ['dayOfMonth'],
   })
-  .refine((r) => r.month === undefined || ANCHOR_FREQUENCIES.has(r.frequency), {
+  .refine((r) => r.month === undefined || r.frequency === 'YEARLY', {
     message: 'Not applicable for this frequency',
     path: ['month'],
   })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { daysInUtcMonth } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { computeDueDates, oneIntervalBefore, type RecurrenceRule } from './recurrence'
 
@@ -395,6 +396,226 @@ describe('computeDueDates', () => {
       expect(dates[0]).not.toBe(startDate)
       dates[0].setUTCFullYear(1999)
       expect(formatCalendarDate(startDate)).toBe('2026-01-31')
+    })
+  })
+})
+
+/**
+ * A deliberately naive, independent reading of what a rule means, used to prove
+ * the arithmetic seek in `computeDueDates` neither skips an occurrence nor
+ * emits one twice.
+ *
+ * It walks the window one day at a time and asks of each day "is this a due
+ * date of this rule?", answered from the rule's own definition rather than by
+ * stepping a cursor. That makes it structurally independent of the thing under
+ * test — the seek's whole risk is landing on the wrong *starting* step, and a
+ * scan has no starting step to get wrong. It is far too slow to ship (a
+ * ten-year window is 3,650 iterations for six results), which is exactly why
+ * the implementation seeks instead.
+ */
+function bruteForceDueDates(rule: RecurrenceRule, from: Date, to: Date): string[] {
+  const out: string[] = []
+  for (let ms = from.getTime(); ms <= to.getTime(); ms += 24 * 60 * 60 * 1000) {
+    const day = new Date(ms)
+    if (ms < rule.startDate.getTime()) continue
+
+    const anchorDay = rule.dayOfMonth ?? rule.startDate.getUTCDate()
+    const clampedDay = Math.min(anchorDay, daysInUtcMonth(day.getUTCFullYear(), day.getUTCMonth()))
+
+    switch (rule.frequency) {
+      case 'ONE_TIME':
+        if (ms === rule.startDate.getTime()) out.push(formatCalendarDate(day))
+        break
+      case 'WEEKLY': {
+        const elapsedDays = (ms - rule.startDate.getTime()) / (24 * 60 * 60 * 1000)
+        if (elapsedDays % (7 * rule.interval) === 0) out.push(formatCalendarDate(day))
+        break
+      }
+      case 'MONTHLY': {
+        const elapsedMonths =
+          (day.getUTCFullYear() - rule.startDate.getUTCFullYear()) * 12 +
+          (day.getUTCMonth() - rule.startDate.getUTCMonth())
+        if (elapsedMonths % rule.interval === 0 && day.getUTCDate() === clampedDay) {
+          out.push(formatCalendarDate(day))
+        }
+        break
+      }
+      case 'YEARLY': {
+        const anchorMonthIndex = (rule.month ?? rule.startDate.getUTCMonth() + 1) - 1
+        const elapsedYears = day.getUTCFullYear() - rule.startDate.getUTCFullYear()
+        if (
+          day.getUTCMonth() === anchorMonthIndex &&
+          elapsedYears % rule.interval === 0 &&
+          day.getUTCDate() === clampedDay
+        ) {
+          out.push(formatCalendarDate(day))
+        }
+        break
+      }
+    }
+  }
+  return out
+}
+
+describe('computeDueDates seeks to the window instead of walking from startDate', () => {
+  /**
+   * The regression this whole seek exists for.
+   *
+   * Before it, the WEEKLY loop stepped from `startDate`, so a reminder started
+   * in 1800 needed 11,806 iterations to reach a 2026 window of six dates — past
+   * the 10,000 cap, which threw a `RangeError` out through
+   * `materializeDueOccurrences` and `listUpcomingOccurrences` and so broke
+   * *every* render of the reminders page and the dashboard widget, permanently,
+   * with no way for the user to get back to a working page. Nothing bounds
+   * `startDate`: `calendarDateStringSchema` checks shape and reality only, and
+   * `<input type="date">` will happily submit `1800-01-05`.
+   *
+   * The cap itself stays (it is what makes "the loop cannot run away" a
+   * property of the code), but it is now only reachable by asking for a
+   * genuinely enormous *result* set rather than by an old start date — see the
+   * pathological-range case above, which asks for 17,000 dates.
+   */
+  it('returns a weekly reminder’s 2026 dates for a startDate in 1800, without throwing', () => {
+    // 5 January 1800 was a Sunday; 82,607 days — 11,806 weekly steps — before
+    // the window below.
+    const rule: RecurrenceRule = { frequency: 'WEEKLY', interval: 1, startDate: c('1800-01-05') }
+
+    const dates = computeDueDates(rule, c('2026-03-08'), c('2026-04-14'))
+
+    expect(days(dates)).toEqual([
+      '2026-03-08',
+      '2026-03-15',
+      '2026-03-22',
+      '2026-03-29',
+      '2026-04-05',
+      '2026-04-12',
+    ])
+    // Still Sundays, 226 years on: the seek moves the cursor, never the phase.
+    expect(dates.every((date) => date.getUTCDay() === 0)).toBe(true)
+  })
+
+  it('holds a fortnightly phase across 226 years', () => {
+    const rule: RecurrenceRule = { frequency: 'WEEKLY', interval: 2, startDate: c('1800-01-05') }
+
+    expect(days(computeDueDates(rule, c('2026-03-08'), c('2026-04-14')))).toEqual([
+      '2026-03-15',
+      '2026-03-29',
+      '2026-04-12',
+    ])
+  })
+
+  it('returns a monthly reminder’s 2026 dates for a startDate in 1000, clamp intact', () => {
+    // 12,313 monthly steps away, past the cap's 833-year MONTHLY threshold.
+    const rule: RecurrenceRule = {
+      frequency: 'MONTHLY',
+      interval: 1,
+      dayOfMonth: 31,
+      startDate: c('1000-01-31'),
+    }
+
+    expect(days(computeDueDates(rule, c('2026-02-15'), c('2026-04-14')))).toEqual([
+      '2026-02-28',
+      '2026-03-31',
+    ])
+  })
+
+  it('returns a yearly reminder’s 2026 date for a leap-day startDate in 400', () => {
+    // 29 February 400 is a real day (400 is divisible by 400), 1,626 yearly
+    // steps back, and the anchor still clamps to the 28th in non-leap 2026.
+    const rule: RecurrenceRule = { frequency: 'YEARLY', interval: 1, startDate: c('0400-02-29') }
+
+    expect(days(computeDueDates(rule, c('2026-02-15'), c('2026-04-14')))).toEqual(['2026-02-28'])
+  })
+
+  it('keeps a quarterly phase from 1500 rather than re-phasing on the window', () => {
+    // The seek must land on a step that is congruent to the *original* phase:
+    // 1500-02 plus a multiple of 3 months is a month with index ≡ 1 (mod 3), so
+    // February, May, August and November — and never March.
+    const rule: RecurrenceRule = {
+      frequency: 'MONTHLY',
+      interval: 3,
+      dayOfMonth: 10,
+      startDate: c('1500-02-10'),
+    }
+
+    expect(days(computeDueDates(rule, c('2026-01-01'), c('2026-12-31')))).toEqual([
+      '2026-02-10',
+      '2026-05-10',
+      '2026-08-10',
+      '2026-11-10',
+    ])
+  })
+
+  describe('agrees with a brute-force day-by-day scan', () => {
+    const cases: [string, RecurrenceRule, string, string][] = [
+      // Recent start dates, where the seek starts at or near step 0 — the cases
+      // the old iterate-from-startDate code also got right, so a regression in
+      // either direction shows up here.
+      [
+        'weekly, window starting mid-cycle',
+        { frequency: 'WEEKLY', interval: 1, startDate: c('2026-01-05') },
+        '2026-01-20',
+        '2026-03-31',
+      ],
+      [
+        'fortnightly, window starting exactly on an occurrence',
+        { frequency: 'WEEKLY', interval: 2, startDate: c('2026-01-05') },
+        '2026-01-19',
+        '2026-04-30',
+      ],
+      [
+        'monthly on the 31st across two short months',
+        { frequency: 'MONTHLY', interval: 1, dayOfMonth: 31, startDate: c('2026-01-31') },
+        '2026-02-01',
+        '2026-07-31',
+      ],
+      [
+        'quarterly from an anchor before the window',
+        { frequency: 'MONTHLY', interval: 3, dayOfMonth: 15, startDate: c('2025-01-15') },
+        '2026-01-01',
+        '2026-12-31',
+      ],
+      [
+        'yearly on a leap-day anchor over a leap year',
+        { frequency: 'YEARLY', interval: 1, startDate: c('2028-02-29') },
+        '2028-01-01',
+        '2032-12-31',
+      ],
+      [
+        'yearly anchored to a month before the start month',
+        { frequency: 'YEARLY', interval: 1, month: 3, dayOfMonth: 10, startDate: c('2026-06-15') },
+        '2026-01-01',
+        '2029-01-01',
+      ],
+      // Ancient start dates, where the seek does all the work. A short window
+      // keeps the scan cheap while the seek has to jump thousands of steps.
+      [
+        'weekly from 1800',
+        { frequency: 'WEEKLY', interval: 1, startDate: c('1800-01-05') },
+        '2026-03-01',
+        '2026-05-31',
+      ],
+      [
+        'monthly from 1000 on the 31st',
+        { frequency: 'MONTHLY', interval: 1, dayOfMonth: 31, startDate: c('1000-01-31') },
+        '2026-01-01',
+        '2026-12-31',
+      ],
+      [
+        'yearly from 400 on a leap day',
+        { frequency: 'YEARLY', interval: 1, startDate: c('0400-02-29') },
+        '2024-01-01',
+        '2029-12-31',
+      ],
+    ]
+
+    it.each(cases)('matches for %s', (_label, rule, from, to) => {
+      const reference = bruteForceDueDates(rule, c(from), c(to))
+
+      expect(days(computeDueDates(rule, c(from), c(to)))).toEqual(reference)
+      // Guards the guard: a reference that found nothing would make the
+      // assertion above pass whatever the implementation did.
+      expect(reference.length).toBeGreaterThan(0)
     })
   })
 })

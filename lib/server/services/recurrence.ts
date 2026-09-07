@@ -49,6 +49,25 @@ import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
  * ONE_TIME for the matching reason: the service must not clamp a one-time
  * reminder's backfill window at all, or an overdue one would silently vanish
  * (directive O).
+ *
+ * ## Cost: proportional to the answer, not to the calendar
+ *
+ * Both stepping loops **seek** to the window's start arithmetically before they
+ * begin (`seekToWindow`), so producing six dates in 2026 costs six iterations
+ * whether the reminder started last month or in 1800. Walking every step from
+ * `startDate` instead — the obvious implementation — makes the work
+ * proportional to *elapsed time*, which is not merely slow: it trips
+ * `MAX_ITERATIONS` for a start date only 191 years back on a weekly rule, and
+ * that `RangeError` propagates out through `materializeDueOccurrences` and
+ * `listUpcomingOccurrences` and breaks every render of the reminders page and
+ * the dashboard widget, permanently, for a value `<input type="date">` will
+ * happily submit.
+ *
+ * Every occurrence is still computed from the *original* phase — `startMs` for
+ * WEEKLY, the phase month for MONTHLY/YEARLY — never by accumulating onto the
+ * previous result, so seeking thousands of steps cannot shift the weekday or
+ * decay the anchor. `recurrence.test.ts` proves that against a brute-force
+ * day-by-day scan.
  */
 
 /** Milliseconds in a day — exact in UTC, where no DST shift can shorten one. */
@@ -57,14 +76,23 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000
 /**
  * The hard stop on either stepping loop below.
  *
- * Neither loop can run away on a well-formed rule — each step is strictly
- * forward and each stops at `to` — but "cannot" there is a property of the
- * *inputs*, and the inputs include a `startDate` read from a database column. A
- * corrupt or absurd one (year 1700, or a millisecond value nobody meant) would
- * otherwise turn one page render into hundreds of thousands of `Date`
- * allocations. Failing loudly at a bound no real schedule can reach — 10,000
- * weekly steps is 191 years, 10,000 monthly steps 833 — makes the bound a
- * property of the code instead.
+ * Because both loops *seek* to the window before they start (see
+ * `seekToWindow`), the number of iterations is now the number of dates the
+ * caller asked for plus at most two — so this bound is reached only by
+ * requesting a genuinely enormous *range*, never by an old `startDate`. It stays
+ * because "the loop cannot run away" should be a property of the code rather
+ * than of its inputs, and because a corrupt `startDate` or `to` read from a
+ * database column must fail loudly instead of filling a request's memory with
+ * `Date` allocations.
+ *
+ * It emphatically must **not** be reachable by an old start date, which is what
+ * it was before the seek: the WEEKLY loop stepped from `startDate`, so a
+ * reminder started in 1800 needed 11,806 steps to reach a six-date window in
+ * 2026 and threw — out through `materializeDueOccurrences` and
+ * `listUpcomingOccurrences`, breaking every render of the reminders page and the
+ * dashboard widget, permanently. Nothing bounds `startDate`
+ * (`calendarDateStringSchema` checks shape and reality only), so the fix had to
+ * be in the arithmetic, not in a wider cap.
  */
 const MAX_ITERATIONS = 10_000
 
@@ -126,6 +154,36 @@ function assertInterval(interval: number): void {
 }
 
 /**
+ * The step index to start a stepping loop at: an index provably *at or before*
+ * the first occurrence inside the window.
+ *
+ * This is what makes both loops below cost O(dates returned) instead of
+ * O(time since `startDate`). `distance` is how far the window's start lies from
+ * the rule's phase, and `stride` how far one step moves — both in the same unit
+ * (milliseconds for WEEKLY, whole months for MONTHLY/YEARLY), and both exact
+ * integers well inside `Number.MAX_SAFE_INTEGER`.
+ *
+ * It deliberately **under**-estimates by one step rather than trying to land
+ * exactly on the first occurrence, for two independent reasons:
+ *
+ * 1. *Correctness by construction.* Whether `Math.floor` of a float division
+ *    lands on the true quotient at these magnitudes is an argument about ulps;
+ *    whether the loop's own `occurrence >= fromMs` filter drops a date before
+ *    the window is not an argument at all. Starting early and letting the
+ *    existing filter decide where the window begins means the seek cannot skip
+ *    an occurrence even if the division were off by one.
+ * 2. *The month case needs it anyway.* A monthly rule's step lands on a day
+ *    *within* a month, so the step whose month contains `from` can still fall
+ *    before `from` — an anchor of the 1st with a window starting on the 15th.
+ *    That candidate has to be generated and rejected, not seeked past.
+ *
+ * The cost is at most two wasted iterations, against thousands saved.
+ */
+function seekToWindow(distance: number, stride: number): number {
+  return Math.max(0, Math.floor(distance / stride) - 1)
+}
+
+/**
  * Every due date of `rule` with `from <= date <= to` (inclusive, both local
  * calendar date carriers), never before `rule.startDate`, ascending.
  *
@@ -177,11 +235,17 @@ export function computeDueDates(rule: RecurrenceRule, from: Date, to: Date): Dat
     // weekday exactly: "every other Monday" stays a Monday, because a carrier is
     // UTC and no DST shift can make one of these days 23 or 25 hours long.
     const stepMs = 7 * rule.interval * MS_PER_DAY
+    // Seek rather than walk: jump straight to the last step at or before the
+    // window instead of stepping through every week since `startDate`. Each
+    // occurrence is then computed from `startMs` afresh — never by accumulating
+    // onto the previous one — so the phase (and therefore the weekday) is exact
+    // however many thousands of steps were skipped.
+    const firstStep = seekToWindow(fromMs - startMs, stepMs)
     for (let iteration = 0; ; iteration += 1) {
       if (iteration >= MAX_ITERATIONS) {
         throw new RangeError(`Recurrence would need more than ${MAX_ITERATIONS} iterations`)
       }
-      const occurrenceMs = startMs + iteration * stepMs
+      const occurrenceMs = startMs + (firstStep + iteration) * stepMs
       if (occurrenceMs > toMs) break
       if (occurrenceMs >= fromMs) dates.push(new Date(occurrenceMs))
     }
@@ -206,14 +270,28 @@ export function computeDueDates(rule: RecurrenceRule, from: Date, to: Date): Dat
   // result — which is what stops the schedule decaying (module comment).
   const phase = utcCarrier(rule.startDate.getUTCFullYear(), anchorMonthIndex, 1)
 
-  for (let step = 0; ; step += 1) {
-    if (step >= MAX_ITERATIONS) {
+  // The same seek as WEEKLY, measured in whole months: how many months lie
+  // between the phase month and the month the window starts in, divided by the
+  // stride. Both are small exact integers, so this is plain integer arithmetic
+  // — and it is congruent to the original phase by construction, so a quarterly
+  // rule anchored in February stays on February/May/August/November however far
+  // the seek jumped.
+  const windowStart = new Date(fromMs)
+  const monthsToWindow =
+    (windowStart.getUTCFullYear() - phase.getUTCFullYear()) * 12 +
+    (windowStart.getUTCMonth() - phase.getUTCMonth())
+  const firstStep = seekToWindow(monthsToWindow, stepMonths)
+
+  for (let iteration = 0; ; iteration += 1) {
+    if (iteration >= MAX_ITERATIONS) {
       throw new RangeError(`Recurrence would need more than ${MAX_ITERATIONS} iterations`)
     }
     // `daysInUtcMonth` is what does the clamp, one level down inside
     // `addMonthsUtcClamped` — the same function Group 4's loan schedule uses, so
     // a reminder and an instalment can never disagree about February's length.
-    const occurrence = addMonthsUtcClamped(phase, step * stepMonths, anchorDay)
+    // Always computed from `phase`, never from the previous result, so the
+    // anchor cannot decay however large the step index is.
+    const occurrence = addMonthsUtcClamped(phase, (firstStep + iteration) * stepMonths, anchorDay)
     const occurrenceMs = occurrence.getTime()
     if (occurrenceMs > toMs) break
     // The first candidate can precede `startDate` — an anchor of the 1st on a

@@ -107,14 +107,15 @@ const DEFAULT_OCCURRENCE_HISTORY_LIMIT = 200
 const MAX_OCCURRENCE_HISTORY_LIMIT = 500
 
 /**
- * Thrown when a reminder's category is not the user's own, or does not match the
- * reminder's type.
+ * Thrown when a reminder's category is not the user's own, does not match the
+ * reminder's type, or is archived.
  *
- * One class for both, deliberately: "no such category", "not your category" and
- * "wrong type of category" must be indistinguishable from outside, or the error
- * itself becomes an oracle for which category ids exist. The `reason` is for the
- * server log and the developer, and the action layer maps the class — not the
- * message — to the sentence the user sees.
+ * One class for all of them, deliberately: "no such category", "not your
+ * category", "wrong type of category" and "retired category" must be
+ * indistinguishable from outside, or the error itself becomes an oracle for
+ * which category ids exist. The `reason` is for the server log and the
+ * developer, and the action layer maps the class — not the message — to the
+ * sentence the user sees.
  */
 export class InvalidReminderCategoryError extends Error {
   constructor(reason: string) {
@@ -347,6 +348,15 @@ export async function createReminder(
       throw new InvalidReminderCategoryError(
         `expected a ${parsed.type} category, got ${category.type}`,
       )
+    }
+    // ACTIVE at creation, matching `resolveCategoryId` in `transaction.ts` and
+    // `createBudget` in `budget.ts` (ruling R6-17): a *new* record must not be
+    // filed under a category the user has retired, or the reminder would appear
+    // in a list under a label the category picker no longer offers. As with the
+    // account below, this is a creation-time rule only — archiving a category
+    // later must never freeze the reminders already filed under it.
+    if (category.status !== 'ACTIVE') {
+      throw new InvalidReminderCategoryError('category is archived')
     }
   }
   if (parsed.accountId) {

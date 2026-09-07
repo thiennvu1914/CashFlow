@@ -183,6 +183,8 @@ describe('createReminderSchema', () => {
         { note: 42 },
         { frequency: 'WEEKLY', dayOfMonth: 1 },
         { frequency: 'ONE_TIME', month: 3 },
+        { month: 3 },
+        { frequency: 'MONTHLY', dayOfMonth: 15, month: 6 },
         { frequency: 'ONE_TIME', dayOfMonth: undefined, interval: 2 },
         // Every field missing at once — the shape a completely empty submit or a
         // crafted empty body produces.
@@ -220,7 +222,14 @@ describe('createReminderSchema', () => {
       },
     )
 
-    it.each(['WEEKLY', 'ONE_TIME'] as const)(
+    /**
+     * `month` is YEARLY-only — rejected on MONTHLY as well as on WEEKLY and
+     * ONE_TIME (ruling R6-18). A monthly reminder recurs in *every* month, so
+     * there is no anchor month to name: `recurrence.ts` takes a MONTHLY rule's
+     * phase from `startDate` and never reads `month`, so accepting one would be
+     * accepting a value nothing can act on.
+     */
+    it.each(['WEEKLY', 'ONE_TIME', 'MONTHLY'] as const)(
       'rejects a month on %s as not applicable',
       (frequency) => {
         expect(
@@ -233,7 +242,22 @@ describe('createReminderSchema', () => {
       },
     )
 
-    it('accepts both anchors on MONTHLY and on YEARLY', () => {
+    it('rejects a month on MONTHLY even alongside a perfectly valid dayOfMonth', () => {
+      // The shape a form that offered both fields for Monthly would submit.
+      // `dayOfMonth` stays fine; only `month` is marked.
+      const result = createReminderSchema.safeParse({
+        ...VALID_REMINDER,
+        frequency: 'MONTHLY',
+        dayOfMonth: 15,
+        month: 6,
+      })
+
+      expect(result.success).toBe(false)
+      if (result.success) return
+      expect(result.error.issues.map((issue) => issue.path.join('.'))).toEqual(['month'])
+    })
+
+    it('accepts dayOfMonth on MONTHLY, and both anchors on YEARLY', () => {
       expect(
         createReminderSchema.parse({ ...VALID_REMINDER, frequency: 'MONTHLY', dayOfMonth: 31 })
           .dayOfMonth,
@@ -246,6 +270,13 @@ describe('createReminderSchema', () => {
       })
       expect(yearly.dayOfMonth).toBe(25)
       expect(yearly.month).toBe(12)
+    })
+
+    it('accepts MONTHLY with no month at all — the only shape it has', () => {
+      const parsed = createReminderSchema.parse({ ...VALID_REMINDER, frequency: 'MONTHLY' })
+
+      expect(parsed.month).toBeUndefined()
+      expect(parsed.dayOfMonth).toBe(1)
     })
 
     it('accepts WEEKLY and ONE_TIME with both anchors simply absent', () => {
