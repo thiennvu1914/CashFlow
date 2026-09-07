@@ -316,8 +316,16 @@ describe('recordLoanPaymentSchema', () => {
     [{ principalAmount: Number.NaN }, 'Enter an amount'],
     [{ interestAmount: -1 }, 'The interest cannot be negative'],
     [{ interestAmount: undefined }, 'Enter an amount'],
-    [{ paymentDate: '' }, 'Enter a date as yyyy-MM-dd'],
-    [{ paymentDate: undefined }, 'Enter a date as yyyy-MM-dd'],
+    // A required date, so an empty or missing one gets copy about *this* field
+    // rather than advice about a format the user never typed — the same wording
+    // `recordDebtPaymentSchema.date` uses, because the same gesture on the two
+    // payment forms must not produce two different messages (ruling R6-16).
+    [{ paymentDate: '' }, 'Enter a payment date'],
+    [{ paymentDate: undefined }, 'Enter a payment date'],
+    [{ paymentDate: null }, 'Enter a payment date'],
+    // A malformed or impossible value still gets the shared calendar-date
+    // wording, so an instalment date and a due date fail identically for the
+    // same typo.
     [{ paymentDate: '15/03/2026' }, 'Enter a date as yyyy-MM-dd'],
     [{ paymentDate: '2026-02-30' }, 'Enter a real date'],
     [{ note: 'x'.repeat(501) }, 'Keep the note under 500 characters'],

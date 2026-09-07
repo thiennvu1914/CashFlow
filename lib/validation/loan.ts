@@ -172,9 +172,24 @@ export const recordLoanPaymentSchema = z
     /** The cost of the loan. It reduces nothing, and zero is valid — a 0 % loan,
      *  or the final sweep of what is left. */
     interestAmount: moneyAmountSchema.refine((v) => v >= 0, 'The interest cannot be negative'),
-    /** Required, unlike anything optional on the loan itself — an instalment
-     *  happened on a day, and which day it was is what the history is for. */
-    paymentDate: calendarDateStringSchema,
+    /**
+     * Required, unlike anything optional on the loan itself — an instalment
+     * happened on a day, and which day it was is what the history is for.
+     *
+     * Fronted with its own `z.string().min(1)` rather than used bare, exactly as
+     * `recordDebtPaymentSchema.date` is, so the two *reachable empty* cases (a
+     * submitted-but-untouched date input, which sends `''`, and a missing key)
+     * get copy about this field instead of advice about a format the user never
+     * typed. A malformed or impossible value still gets
+     * `calendarDateStringSchema`'s shared wording, so an instalment date and a
+     * debt repayment date never fail differently for the same typo (ruling
+     * R6-16: the same gesture on the two payment forms must not produce two
+     * different messages).
+     */
+    paymentDate: z
+      .string({ error: 'Enter a payment date' })
+      .min(1, 'Enter a payment date')
+      .pipe(calendarDateStringSchema),
     note: z
       .string({ error: 'Enter the note as text' })
       .max(500, 'Keep the note under 500 characters')
