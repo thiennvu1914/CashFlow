@@ -213,6 +213,19 @@ test.describe.serial('Settings profile form — hydration gate', () => {
     await save.click()
     await expect(page.getByText('Profile saved')).toBeVisible()
 
+    // The one render path this patch introduces: after a save the form calls
+    // `router.refresh()`, so `ProfileForm` re-renders in place with a NEW
+    // `defaultValues` prop and new `defaultValue` attributes while the user's
+    // edited values are still the live form state. `networkidle` marks the
+    // refresh round-trip as finished; every control must still read the edited
+    // value afterwards — the changed attributes may never replay over the DOM.
+    await page.waitForLoadState('networkidle')
+    await expect(name).toHaveValue(EDITED.name)
+    await expect(baseCurrency).toHaveValue(EDITED.baseCurrency)
+    await expect(locale).toHaveValue(EDITED.locale)
+    await expect(theme).toHaveValue(EDITED.theme)
+    await expect(timezone).toHaveValue(EDITED.timezone)
+
     // A fresh navigation: the values now come from the database, not from the
     // form state the click left behind.
     await page.goto('/settings')

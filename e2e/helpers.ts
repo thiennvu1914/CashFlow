@@ -20,7 +20,16 @@ export async function registerNewUser(
   await page.getByPlaceholder('Email').fill(email)
   await page.getByPlaceholder('Password').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
-  await expect(page).toHaveURL(/\/dashboard/)
+  // A wider bound than Playwright's default 5 s, for one reason only: on a
+  // freshly started dev server (`CI=1` makes the config start its own) this is
+  // the FIRST request that hits the auth API route and `/dashboard`, and
+  // Turbopack compiles both on demand before it can answer — routinely more
+  // than 5 s on a cold machine. That is the server building code, not the app
+  // being slow, and it has nothing to do with the hydration gate: this form has
+  // no `defaultValues`, so react-hook-form reads the typed values from the DOM
+  // rather than writing over them. Every later assertion in the suite keeps the
+  // default timeout.
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 })
 
   return { email, password }
 }
