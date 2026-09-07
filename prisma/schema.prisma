@@ -414,3 +414,97 @@ model SavingsGoal {
   @@unique([userId, id])
   @@index([userId, status])
 }
+
+enum DebtDirection {
+  RECEIVABLE
+  PAYABLE
+}
+
+/// Stored status is deliberately only ACTIVE | WRITTEN_OFF. OPEN,
+/// PARTIALLY_PAID, PAID and OVERDUE are all computable from the derived
+/// outstanding amount and the due date, and storing any of them would let them
+/// drift the moment a payment is recorded or a due date passes (spec §5,
+/// "never store what can drift"). Writing a debt off is the one genuine human
+/// decision here — "I am never getting this back" is not derivable from any
+/// figure — so it is the one thing stored.
+enum DebtStoredStatus {
+  ACTIVE
+  WRITTEN_OFF
+}
+
+/// Money someone owes the user (RECEIVABLE) or the user owes someone else
+/// (PAYABLE), spec §4.9. Tracking only: there is no foreign key and no code
+/// path from here to FinancialAccount or Transaction, so recording a repayment
+/// changes no balance — `lib/server/services/debt.ts` imports nothing that
+/// could, and `debt.test.ts` re-asserts the account counts and a derived
+/// balance after every mutation.
+///
+/// The outstanding amount is never stored: it is `originalAmount` minus the sum
+/// of this debt's `DebtPayment` rows, computed in `debt.ts`
+/// (`deriveDebtOutstanding`). A stored copy would be a second source of truth
+/// that a failed write, a deleted payment or a concurrent request could put out
+/// of step with the payments themselves.
+///
+/// `direction`, `originalAmount` and `currency` are immutable after creation
+/// (see `lib/validation/debt.ts`): they define *which* debt this is, and
+/// changing one after payments exist would rewrite history rather than correct
+/// it. Editing covers `person`, `description`, `dueDate` and `notes`.
+///
+/// `dueDate` is a calendar date, not an instant: stored as the UTC midnight of
+/// the chosen day — a carrier — and never re-projected through a timezone. An
+/// overdue check compares `formatCalendarDate(dueDate)` against
+/// `todayCalendarDateInZone(user.timezone)`; see `lib/datetime/calendar-date.ts`
+/// (ruling R6-7).
+///
+/// `currency` is the debt's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). `Debt_originalAmount_positive` (> 0) is a database
+/// CHECK constraint in this model's migration, since Prisma's schema language
+/// has no CHECK syntax.
+model Debt {
+  id             String           @id @default(cuid())
+  userId         String
+  direction      DebtDirection
+  person         String
+  description    String?
+  originalAmount Decimal          @db.Decimal(18, 2)
+  currency       Currency
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  dueDate        DateTime?
+  status         DebtStoredStatus @default(ACTIVE)
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  payments DebtPayment[]
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
+
+/// One repayment recorded against a Debt (spec §4.9). It inherits the debt's
+/// currency — there are no cross-currency debt payments in the MVP, so a
+/// payment carries no currency column of its own and no FX snapshot.
+///
+/// The composite `(userId, debtId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: a payment can never point at
+/// another user's debt (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+///
+/// `date` is a calendar date carrier, like `Debt.dueDate` — "I was paid back on
+/// the 12th" names a day, not a moment. `DebtPayment_amount_positive` (> 0) is
+/// a database CHECK constraint in this model's migration.
+model DebtPayment {
+  id        String   @id @default(cuid())
+  userId    String
+  debtId    String
+  amount    Decimal  @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  date      DateTime
+  note      String?
+  createdAt DateTime @default(now())
+
+  debt Debt @relation(fields: [userId, debtId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, debtId, date])
+}
