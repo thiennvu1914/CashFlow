@@ -79,6 +79,40 @@ function resolveTab(raw: string | string[] | undefined): Tab {
   return TABS.some((tab) => tab.id === raw) ? (raw as Tab) : 'all'
 }
 
+/**
+ * What the "Due" section says when it has nothing to show (ruling R6-20).
+ *
+ * Two different facts, so two different sentences. With nothing pending at all
+ * the page can say so outright. But an empty list *under a tab* means "nothing
+ * of this kind" — bills can sit overdue while `?tab=income` is showing — and
+ * the unfiltered sentence would then be a claim the user disproves by clicking
+ * All. An empty state has to say what the tab is hiding, not that there is
+ * nothing.
+ *
+ * `anyPending` is taken from the UNFILTERED service result, which is what makes
+ * the distinction possible at all. The `all` tab only ever reaches the first
+ * branch: its filtered list *is* the unfiltered one, so an empty one means
+ * both are.
+ */
+function dueEmptyMessage(tab: Tab, anyPending: boolean): string {
+  // The window comes from the service's own exported constant, so this copy and
+  // what materialization actually looks ahead cannot drift apart.
+  const horizon = `in the next ${OCCURRENCE_LOOKAHEAD_DAYS} days.`
+  if (!anyPending) return `Nothing due ${horizon}`
+  return tab === 'income' ? `No income due ${horizon}` : `No bills due ${horizon}`
+}
+
+/**
+ * The same distinction for the definitions list. "No reminders yet — add one
+ * below." points at the form underneath, which is the right answer for a user
+ * who has none; it is the wrong answer for a user with three income reminders
+ * looking at the Bills tab, who has plenty and is one click from seeing them.
+ */
+function remindersEmptyMessage(tab: Tab, anyReminders: boolean): string {
+  if (!anyReminders) return 'No reminders yet — add one below.'
+  return tab === 'income' ? 'No income reminders yet.' : 'No bills yet.'
+}
+
 export default async function RemindersPage({
   searchParams,
 }: {
@@ -171,8 +205,10 @@ export default async function RemindersPage({
         <h2 className="text-lg font-semibold">Due</h2>
 
         {overdue.length === 0 && upcoming.length === 0 ? (
+          // `occurrenceRows`, not `occurrences`: the unfiltered list is what
+          // decides whether "nothing is due" is true or is just this tab.
           <p className="text-sm text-foreground/60">
-            Nothing due in the next {OCCURRENCE_LOOKAHEAD_DAYS} days.
+            {dueEmptyMessage(tab, occurrenceRows.length > 0)}
           </p>
         ) : (
           <>
@@ -208,7 +244,11 @@ export default async function RemindersPage({
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Your reminders</h2>
         {reminders.length === 0 ? (
-          <p className="text-sm text-foreground/60">No reminders yet — add one below.</p>
+          // `reminderRows`, not `reminders`: a user with income reminders on the
+          // Bills tab has reminders, and must not be told they have none.
+          <p className="text-sm text-foreground/60">
+            {remindersEmptyMessage(tab, reminderRows.length > 0)}
+          </p>
         ) : (
           // Paused definitions are listed here too, dimmed and labelled: a
           // reminder the user cannot see is one they cannot resume.
