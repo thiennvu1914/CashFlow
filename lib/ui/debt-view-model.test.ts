@@ -74,6 +74,37 @@ function row(
   }
 }
 
+/**
+ * True only for an object literal — the kind of value this walk should descend
+ * *into*. A `Date` and a `Prisma.Decimal` are objects too, but their prototypes
+ * are their own, so they come back false and are treated as leaves: they are
+ * precisely what the case has to inspect rather than recurse through.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * Every leaf inside a DTO as `[path, value]` pairs, recursing through arrays and
+ * object literals so a value nested in `editable` or in `payments[n]` is
+ * reached rather than skipped.
+ *
+ * The path is carried along purely so a failure names the field that leaked
+ * ("dto.payments[0].amount is a Prisma.Decimal") instead of leaving the reader
+ * to find it.
+ */
+function leafValues(value: unknown, path = 'dto'): [string, unknown][] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => leafValues(item, `${path}[${index}]`))
+  }
+  if (isPlainObject(value)) {
+    return Object.entries(value).flatMap(([key, item]) => leafValues(item, `${path}.${key}`))
+  }
+  return [[path, value]]
+}
+
 describe('toDebtDto', () => {
   it('maps an untouched VND receivable: own currency, whole dong, 0 % paid', () => {
     const dto = toDebtDto(row())
@@ -268,14 +299,34 @@ describe('toDebtDto', () => {
 
     // `DebtRowActions` is a client component taking a whole `DebtDto`, and
     // neither a `Prisma.Decimal` nor a `Date` can survive that boundary.
-    const values = [
-      ...Object.values(dto),
-      ...Object.values(dto.editable),
-      ...Object.values(dto.payments[0]),
-    ].filter((value) => !Array.isArray(value) && typeof value !== 'object')
-    for (const value of values) {
-      expect(['string', 'number', 'boolean']).toContain(typeof value)
+    const leaves = leafValues(dto)
+    const paths = leaves.map(([path]) => path)
+
+    // First: the walk really reached the nested places a leak would hide in —
+    // otherwise the loop below could pass over an empty list and assert
+    // nothing at all.
+    expect(paths).toContain('dto.dueDate')
+    expect(paths).toContain('dto.outstanding')
+    expect(paths).toContain('dto.editable.dueDate')
+    expect(paths).toContain('dto.payments[0].date')
+    expect(paths).toContain('dto.payments[0].amount')
+
+    for (const [path, value] of leaves) {
+      // Asserted by *identity*, never by `typeof`: `typeof new Date()` and
+      // `typeof new Prisma.Decimal(0)` are both `'object'`, so a `typeof`
+      // check is exactly the one that cannot see either leak.
+      expect(value instanceof Date, `${path} is a Date`).toBe(false)
+      expect(Prisma.Decimal.isDecimal(value), `${path} is a Prisma.Decimal`).toBe(false)
+      // And the positive statement, so a leak of some *other* non-serialisable
+      // object (a `Map`, a class instance a later field introduces) is caught
+      // too: a primitive or `null` is the only thing a leaf may be.
+      if (value !== null) {
+        expect(['string', 'number', 'boolean'], `${path} is a ${typeof value}`).toContain(
+          typeof value,
+        )
+      }
     }
+
     expect(dto.dueDate).toBe('2026-06-30')
   })
 })
