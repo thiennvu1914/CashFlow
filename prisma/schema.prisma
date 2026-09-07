@@ -367,3 +367,50 @@ model Budget {
   @@unique([userId, id])
   @@index([userId, year, month])
 }
+
+enum SavingsGoalStatus {
+  ACTIVE
+  ACHIEVED
+  ARCHIVED
+}
+
+/// A manual savings target (spec §4.8). Tracking only — `currentProgress` is
+/// typed in by the user and is never derived from, or written to, any account.
+/// Nothing in `lib/server/services/savings-goal.ts` creates a Transaction or a
+/// Transfer, so a goal reaching its target moves no money and changes no
+/// balance; the two are related only in the user's head.
+///
+/// ACHIEVED is recomputed from progress >= target on every write (spec §5,
+/// "never store what can drift") rather than being a state the user sets, so
+/// raising a target past what is already saved reverts the goal to ACTIVE on
+/// its own. ARCHIVED is the one stored human decision, and it is terminal: an
+/// archived goal refuses further edits (`SavingsGoalArchivedError`).
+///
+/// `deadline` is a calendar date, not an instant: it is stored as the UTC
+/// midnight of the chosen day — a carrier — and never re-projected through a
+/// timezone. See `lib/datetime/calendar-date.ts` (ruling R6-7).
+///
+/// `currency` is the goal's own, and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3): the page renders each goal in the currency it was set
+/// in. Two invariants are database CHECK constraints in this model's migration,
+/// since Prisma's schema language has no CHECK syntax:
+/// `SavingsGoal_targetAmount_positive` (> 0) and
+/// `SavingsGoal_currentProgress_nonnegative` (>= 0). There is deliberately no
+/// `currentProgress <= targetAmount` CHECK — over-saving is a real thing that
+/// happens, and the UI clamps only the progress *bar*.
+model SavingsGoal {
+  id              String            @id @default(cuid())
+  userId          String
+  name            String
+  targetAmount    Decimal           @db.Decimal(18, 2)
+  currentProgress Decimal           @db.Decimal(18, 2) @default(0)
+  currency        Currency
+  deadline        DateTime?
+  note            String?
+  status          SavingsGoalStatus @default(ACTIVE)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
