@@ -666,7 +666,9 @@ describe('buildDashboardViewModel', () => {
     })
 
     it('shows at most five occurrences, in the dueAt order the service gave them', () => {
-      const occurrences = Array.from({ length: 7 }, (_, index) =>
+      // Eight rows, none of them late: the cap is the only thing that applies,
+      // and the widget reads exactly as it did before the partition existed.
+      const occurrences = Array.from({ length: 8 }, (_, index) =>
         occurrence({
           id: `o${index}`,
           dueAt: new Date(Date.UTC(2026, 8, 15 + index, 17, 0, 0)),
@@ -677,6 +679,63 @@ describe('buildDashboardViewModel', () => {
 
       // The Reminders page is the unbounded list; the widget is the next five.
       expect(vm.upcomingReminders.map((o) => o.id)).toEqual(['o0', 'o1', 'o2', 'o3', 'o4'])
+      expect(vm.overdueReminderCount).toBe(0)
+    })
+
+    it('keeps room for upcoming rows when the user has a pile of overdue ones', () => {
+      // Ruling R6-23: `listUpcomingOccurrences` is unbounded and `dueAt asc`, so
+      // taking the head of it filled a widget captioned "the next 30 days" with
+      // nothing but months-old rows — permanently, for any user carrying five
+      // unanswered bills.
+      const overdue = Array.from({ length: 7 }, (_, index) =>
+        // Local midnight on 2–8 September in Ho Chi Minh City, oldest first.
+        occurrence({
+          id: `late${index + 1}`,
+          title: `Late ${index + 1}`,
+          dueAt: new Date(Date.UTC(2026, 8, index + 1, 17, 0, 0)),
+        }),
+      )
+      const upcoming = Array.from({ length: 3 }, (_, index) =>
+        // Local midnight on 16–18 September, soonest first.
+        occurrence({
+          id: `soon${index + 1}`,
+          title: `Soon ${index + 1}`,
+          dueAt: new Date(Date.UTC(2026, 8, 15 + index, 17, 0, 0)),
+        }),
+      )
+
+      const vm = buildDashboardViewModel(makeInput({ occurrences: [...overdue, ...upcoming] }))
+
+      // Two overdue — the two oldest — and then everything genuinely coming.
+      expect(vm.upcomingReminders.map((o) => [o.id, o.overdue])).toEqual([
+        ['late1', true],
+        ['late2', true],
+        ['soon1', false],
+        ['soon2', false],
+        ['soon3', false],
+      ])
+      // And the count is of ALL of them, not of the two on show: the widget's
+      // muted line is where the other five are accounted for.
+      expect(vm.overdueReminderCount).toBe(7)
+    })
+
+    it('shows a single overdue row beside a single upcoming one', () => {
+      // The overdue allowance is a cap, not a reservation: one late bill takes
+      // one slot, and nothing about the upcoming half changes.
+      const vm = buildDashboardViewModel(
+        makeInput({
+          occurrences: [
+            occurrence({ id: 'late', title: 'Rent', dueAt: new Date('2026-09-09T17:00:00Z') }),
+            occurrence({ id: 'soon', title: 'Salary', dueAt: new Date('2026-09-15T17:00:00Z') }),
+          ],
+        }),
+      )
+
+      expect(vm.upcomingReminders.map((o) => [o.id, o.dueLabel])).toEqual([
+        ['late', 'Overdue'],
+        ['soon', 'Tomorrow'],
+      ])
+      expect(vm.overdueReminderCount).toBe(1)
     })
 
     it('is unaffected by an FX outage — a reminder needs no rate', () => {
@@ -689,7 +748,12 @@ describe('buildDashboardViewModel', () => {
     })
 
     it('maps no occurrences to an empty list', () => {
-      expect(buildDashboardViewModel(makeInput()).upcomingReminders).toEqual([])
+      const vm = buildDashboardViewModel(makeInput())
+
+      // Both empty together: the widget's "nothing due" sentence is reachable
+      // only in this state, never with pending rows hidden behind a cap.
+      expect(vm.upcomingReminders).toEqual([])
+      expect(vm.overdueReminderCount).toBe(0)
     })
   })
 })

@@ -36,7 +36,7 @@ import { getLoansWithOutstanding } from './loan'
  * `getCurrentPosition` call, so the three figures can never disagree with each
  * other: they are three views of one set of balances converted at one rate.
  *
- * Cost is constant, not per-account and not per-record: one
+ * The **query count** is constant, not per-account and not per-record: one
  * `listActiveFinancialAccounts`, one batched `getAccountBalances` for every id
  * at once, one `getDebtsWithOutstanding` and one `getLoansWithOutstanding`
  * (each of those is itself one `findMany` plus one `groupBy`, whatever the
@@ -45,6 +45,16 @@ import { getLoansWithOutstanding } from './loan'
  * call to `getUsableCurrentRate`. A single-currency user therefore never
  * touches FX at all and their dashboard renders unchanged through a provider
  * outage.
+ *
+ * The **payload** is not constant, and this function does not need what it
+ * pays for: both of those services read through their own `WITH_PAYMENTS`
+ * include (`debt.ts`, `loan.ts`), so every `DebtPayment` and `LoanPayment` row
+ * crosses the wire on every dashboard render — O(payments) — while the only
+ * figures used here come from the accompanying `groupBy` sums, and the payment
+ * arrays are discarded. It is one include shared with the Debts and Loans
+ * pages, which do render each payment, and splitting it means a second read
+ * path and a second definition of a debt's shape; that trade is Phase 7
+ * backlog, not something this comment should claim away.
  *
  * No conversion happens inside a transaction and none of the three reads opens
  * one: the debt and loan services do no FX of their own (each record keeps its

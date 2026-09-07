@@ -94,7 +94,13 @@ export interface DashboardInput {
   /**
    * Every PENDING occurrence, soonest first, from `listUpcomingOccurrences` —
    * which puts the overdue ones at the top by construction because their
-   * `dueAt` is in the past.
+   * `dueAt` is in the past. Deliberately unbounded and *not* limited to the
+   * lookahead window: an unanswered bill from three months ago is still a bill,
+   * so it is in this list.
+   *
+   * Which is why the widget partitions it rather than taking the head (ruling
+   * R6-23): a user with five old unanswered bills would otherwise get a widget
+   * captioned "the next 30 days" containing nothing from the next 30 days.
    *
    * Expected amounts are in each reminder's own currency and are never
    * converted, so this widget too is untouched by an FX outage.
@@ -214,9 +220,24 @@ export interface DashboardViewModel {
    *  could not be converted are not comparable, and inventing a zero would say
    *  the user owes nothing. */
   debtLoanOverview: DebtLoanOverviewDto | null
-  /** The reminders widget: the next few PENDING occurrences, overdue first,
-   *  each in its reminder's own currency. Empty when nothing is due. */
+  /**
+   * The reminders widget's rows: at most two overdue occurrences (oldest first)
+   * and then genuinely upcoming ones (soonest first), five in all, each in its
+   * reminder's own currency. Empty only when nothing at all is pending.
+   *
+   * The two-row cap on the overdue half is the whole point (ruling R6-23):
+   * taking the head of a `dueAt asc` list filled the widget with months-old
+   * rows and pushed everything actually coming out of it. Two is enough to say
+   * "you are behind" and leaves three slots for what the widget is for; the
+   * Reminders page is where the full overdue list lives.
+   */
   upcomingReminders: OccurrenceDto[]
+  /**
+   * How many PENDING occurrences are already past due — *all* of them, not just
+   * the ones above, so the widget can say "7 overdue" while showing two of
+   * them. Zero when the user is up to date.
+   */
+  overdueReminderCount: number
 }
 
 /** Shown instead of a figure that would need a rate we do not have. */
@@ -232,6 +253,20 @@ const FX_UNAVAILABLE_HINT = 'FX unavailable'
  * shows, so the column of widgets stays one height.
  */
 const WIDGET_ROW_LIMIT = 5
+
+/**
+ * How many of the reminders widget's five rows an overdue occurrence may take
+ * (ruling R6-23).
+ *
+ * `listUpcomingOccurrences` is unbounded and ordered `dueAt asc`, so the head of
+ * it is the *oldest unanswered* bill, not the next one due. Five slots filled
+ * from that head is a widget captioned "the next 30 days" showing nothing from
+ * the next 30 days — the state a user with a few forgotten bills lives in
+ * permanently. Two says "you are behind, and here is the oldest of it" and
+ * still leaves three slots for what the widget exists to show; the count beside
+ * the list carries the rest, and the Reminders page has the complete group.
+ */
+const WIDGET_OVERDUE_ROW_LIMIT = 2
 
 export function buildDashboardViewModel(input: DashboardInput): DashboardViewModel {
   const {
@@ -277,6 +312,18 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       negative: monthly.netIncome.isNegative(),
     },
   ]
+
+  // Mapped in full before anything is dropped, unlike the goals above — the
+  // count needs every pending occurrence classified, and `overdue` is decided
+  // by `toOccurrenceDto` (a calendar-day comparison in the user's zone, ruling
+  // R6-7). Re-deriving it here to save formatting the rows the widget will not
+  // show would be a second definition of "late", which is the one thing this
+  // page must not have; the Reminders page maps the same list in full.
+  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today))
+  const overdueOccurrences = allOccurrences.filter((occurrence) => occurrence.overdue)
+  // Both halves keep the service's `dueAt asc` order — oldest overdue first,
+  // soonest upcoming first — exactly as the Reminders page groups them.
+  const upcomingOccurrences = allOccurrences.filter((occurrence) => !occurrence.overdue)
 
   return {
     displayCurrency: currency,
@@ -377,13 +424,19 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
             payables: formatMoney(position.payables, currency),
             loanOutstanding: formatMoney(position.loanOutstanding, currency),
           },
-    // Capped before mapping, so no row is formatted only to be dropped. The
-    // service's `dueAt asc` order is kept exactly as it is: it puts the
-    // occurrences the user is already late for at the top by construction, so
-    // re-sorting on `overdue` here would be the same order computed twice.
-    upcomingReminders: occurrences
-      .slice(0, WIDGET_ROW_LIMIT)
-      .map((row) => toOccurrenceDto(row, timezone, today)),
+    // At most two overdue rows, then whatever is genuinely coming, five in all.
+    // The single `slice` at the end is what makes the overdue half a *cap*
+    // rather than a reservation: one overdue occurrence takes one slot and
+    // leaves four for the upcoming ones, and a user with nothing overdue sees
+    // five upcoming rows exactly as before.
+    upcomingReminders: [
+      ...overdueOccurrences.slice(0, WIDGET_OVERDUE_ROW_LIMIT),
+      ...upcomingOccurrences,
+    ].slice(0, WIDGET_ROW_LIMIT),
+    // The full tally, not the number shown: the widget's one muted line is the
+    // only place the user learns that the two rows above it are the tip of
+    // seven.
+    overdueReminderCount: overdueOccurrences.length,
   }
 }
 

@@ -262,19 +262,40 @@ export default async function DashboardPage() {
 
         {/* The window comes from the service's own exported constant, so this
             copy and what materialization actually looks ahead cannot drift
-            apart — the Reminders page says it the same way. */}
+            apart — the Reminders page says it the same way. "Overdue and"
+            because the list genuinely contains both: an unanswered bill from
+            three months ago is outside the 30 days and is still shown (ruling
+            R6-23), so a caption naming only the window would be wrong about
+            the rows underneath it. */}
         <DashboardSection
           title="Upcoming Reminders"
-          caption={`Next ${OCCURRENCE_LOOKAHEAD_DAYS} days`}
+          caption={`Overdue and the next ${OCCURRENCE_LOOKAHEAD_DAYS} days`}
         >
           {vm.upcomingReminders.length === 0 ? (
             // One interpolated string, not text either side of `{…}`:
             // `DashboardEmpty`'s `p` is a flex container, so three children
             // would be three flex items and the spaces around the number would
             // be dropped (the same trap the budgets empty state notes above).
+            //
+            // Reached only when NOTHING is pending: the widget no longer fills
+            // itself from the overdue end of the list, so "nothing due" and
+            // "nothing shown" are the same state again.
             <DashboardEmpty>{`Nothing due in the next ${OCCURRENCE_LOOKAHEAD_DAYS} days.`}</DashboardEmpty>
           ) : (
-            <OccurrenceList occurrences={vm.upcomingReminders} compact />
+            <>
+              {/* A muted count, not a banner — the same line the Reminders
+                  page puts over its Overdue group, for the same reason: the
+                  user needs to know how much of it there is (the list shows at
+                  most two of them) without being shouted at. Only the number
+                  carries colour. */}
+              {vm.overdueReminderCount > 0 && (
+                <p className="mb-2 text-xs text-muted-foreground">
+                  <span className="text-negative tabular-nums">{vm.overdueReminderCount}</span>{' '}
+                  overdue
+                </p>
+              )}
+              <OccurrenceList occurrences={vm.upcomingReminders} compact />
+            </>
           )}
         </DashboardSection>
 

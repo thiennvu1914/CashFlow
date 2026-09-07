@@ -97,9 +97,10 @@ export const LOAN_ERROR_MESSAGES: Record<LoanActionError, string> = {
   // "Closed loans" — so the message names the state the user can see rather
   // than claiming the row has gone.
   NOT_ACTIVE: 'This loan is closed and can no longer be changed.',
-  // The same sentence the schema's refine puts under the total field, so the
-  // split invariant reads identically whichever of its three layers refused
-  // the instalment.
+  // The wording the schema's refine puts under the total field, so the split
+  // invariant reads the same whichever of its three layers refused the
+  // instalment — with the full stop every message in this file ends in, which
+  // an inline field error does not carry.
   SPLIT_MISMATCH: 'Total must equal principal plus interest.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That loan no longer exists.',

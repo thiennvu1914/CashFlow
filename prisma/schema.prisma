@@ -672,10 +672,11 @@ enum RecurrenceFrequency {
 /// materialization ever writes; the other two are the user's own answer to
 /// "have you dealt with this?".
 ///
-/// "Overdue" is deliberately **not** a member: it is `dueAt < now && status =
-/// PENDING`, a derived display flag, and storing it would need a background job
-/// to keep it true and would be wrong for every reader in a different timezone
-/// (spec §4.7, §5 "never store what can drift").
+/// "Overdue" is deliberately **not** a member: it is a derived display flag —
+/// PENDING, with `dueAt`'s calendar day in the viewer's zone before the viewer's
+/// own today (`lib/ui/reminder-view-model.ts`) — and storing it would need a
+/// background job to keep it true and would be wrong for every reader in a
+/// different timezone (spec §4.7, §5 "never store what can drift").
 enum OccurrenceStatus {
   PENDING
   ACKNOWLEDGED
@@ -791,11 +792,21 @@ model RecurringReminder {
 /// later read — the property `reminder.test.ts` pins down directly.
 ///
 /// `dueAt` is the instant of LOCAL midnight of the day the occurrence falls on,
-/// in the user's timezone (17:00Z the previous day for `Asia/Ho_Chi_Minh`), so
-/// "due on the 1st" is the 1st where the user lives. It is *not* a calendar-date
-/// carrier: unlike a debt's due date, an occurrence is compared against `now` to
-/// decide whether it is overdue, and that comparison has to be between two real
-/// instants.
+/// in the reminder's own `timezone` (17:00Z the previous day for
+/// `Asia/Ho_Chi_Minh`), so "due on the 1st" is the 1st where the user lives.
+///
+/// It is an instant rather than a calendar-date carrier because the *database*
+/// reasons about it: `@@unique([reminderId, dueAt])` is what makes lazy
+/// materialization idempotent, and `@@index([userId, status, dueAt])` is what
+/// orders the upcoming list — both need exactly one unambiguous value per due
+/// day, which a zone-resolved instant is and a carrier plus a zone is not.
+///
+/// Deciding whether an occurrence is *overdue* is a different comparison and it
+/// does not happen against `now`: `lib/ui/reminder-view-model.ts` reads `dueAt`
+/// as a calendar day in the viewer's zone and compares it with the user's own
+/// today, as dates — so a bill due today is never "late" merely because the
+/// server's clock has passed local midnight (ruling R6-7). Nothing stores an
+/// overdue flag.
 ///
 /// The composite `(userId, reminderId)` foreign key is what makes cross-tenant
 /// reference impossible at the database level: an occurrence can never point at
