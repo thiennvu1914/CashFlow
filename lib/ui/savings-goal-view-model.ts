@@ -1,0 +1,122 @@
+import { Prisma } from '@prisma/client'
+import type { SavingsGoalStatus } from '@prisma/client'
+import type { Currency } from '@/lib/currency/provider'
+import { compareCalendarDates, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
+import { formatMoney } from './format-money'
+
+/**
+ * The Savings page's DTO boundary, as one pure function.
+ *
+ * `listSavingsGoals` returns rows carrying `Prisma.Decimal`s and a `Date`;
+ * nothing downstream of this file may touch either, because neither can cross
+ * the server-to-client-component boundary (`GoalRowActions` and the edit form
+ * are client components). `percent` is the one `toNumber()` in this DTO — a
+ * progress-bar width has to be a plain number — and `percentLabel` is rounded
+ * on the `Decimal` itself, before that widening, so the label and the bar can
+ * never read two different roundings of the same ratio.
+ *
+ * A goal is never converted to `User.baseCurrency` here or anywhere else
+ * (ledger ruling R5-3): `target`/`progress`/`remaining` are formatted in the
+ * goal's own `currency`, full stop. Two goals in two currencies are two
+ * targets, never a sum.
+ *
+ * `today` is passed in rather than read here, for the reason
+ * `lib/datetime/calendar-date.ts` gives: the user's zone is what decides which
+ * calendar day "now" is, and this module has no user. It is also what makes
+ * every "overdue" case testable without freezing a clock.
+ */
+export interface SavingsGoalDto {
+  id: string
+  name: string
+  currency: Currency
+  status: SavingsGoalStatus
+  statusLabel: string
+  target: string
+  progress: string
+  /** How much is still to go — `max(0, target − progress)`, never negative:
+   *  over-saving leaves nothing remaining rather than a "−200.000" to read. */
+  remaining: string
+  /** Bar fill 0–100, clamped; the one `toNumber()` for this DTO. */
+  percent: number
+  /** e.g. "120 %" — whole percent, half-up on the `Decimal`, and deliberately
+   *  NOT clamped: the bar's width may not overflow, the figure may. */
+  percentLabel: string
+  /** The stored carrier as the calendar date the user picked, or `null`. */
+  deadline: string | null
+  /** The deadline is behind us and the goal is still unmet. An ACHIEVED goal is
+   *  never late — saved after the date is still saved. */
+  deadlinePassed: boolean
+  /** Prefill for the inline edit and progress forms. Strings only — a
+   *  `Prisma.Decimal` cannot cross to a client component, and `''` is what an
+   *  empty `<input>` needs (the schema reads it back as "no value"). */
+  editable: {
+    name: string
+    /** `toFixed(2)`, so the number input round-trips the stored scale. */
+    targetAmount: string
+    currency: Currency
+    /** `yyyy-MM-dd` for `<input type="date">`; `''` when the goal has none. */
+    deadline: string
+    note: string
+    currentProgress: string
+  }
+}
+
+/**
+ * Fixed English copy for each stored status (Phase 7 replaces these literals
+ * with i18n keys, same as `lib/ui/action-error-messages.ts`).
+ *
+ * "In progress" rather than "Active": every goal on the page is active in the
+ * sense of existing, and what the badge answers is "am I there yet?".
+ */
+export const SAVINGS_GOAL_STATUS_LABELS: Record<SavingsGoalStatus, string> = {
+  ACTIVE: 'In progress',
+  ACHIEVED: 'Achieved',
+  ARCHIVED: 'Archived',
+}
+
+/** The bar can fill the track, never overflow it. */
+const MAX_PERCENT = 100
+
+export function toSavingsGoalDto(goal: SavingsGoalRow, today: string): SavingsGoalDto {
+  const currency = goal.currency
+  const target = goal.targetAmount
+  const progress = goal.currentProgress
+
+  const shortfall = target.sub(progress)
+  const remaining = shortfall.isNegative() ? new Prisma.Decimal(0) : shortfall
+  // Safe without a zero guard: `SavingsGoal_targetAmount_positive` (the CHECK
+  // in this model's migration) and `createSavingsGoalSchema` both forbid a
+  // target of zero, so there is no stored row this could divide by.
+  const ratio = progress.div(target)
+
+  const deadline = goal.deadline === null ? null : formatCalendarDate(goal.deadline)
+
+  return {
+    id: goal.id,
+    name: goal.name,
+    currency,
+    status: goal.status,
+    statusLabel: SAVINGS_GOAL_STATUS_LABELS[goal.status],
+    target: formatMoney(target, currency),
+    progress: formatMoney(progress, currency),
+    remaining: formatMoney(remaining, currency),
+    percent: Math.min(MAX_PERCENT, ratio.mul(100).toNumber()),
+    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    deadline,
+    // A string compare, not an instant one — `compareCalendarDates` documents
+    // why. `=== -1` so a deadline of *today* is not yet missed.
+    deadlinePassed:
+      deadline !== null &&
+      goal.status !== 'ACHIEVED' &&
+      compareCalendarDates(deadline, today) === -1,
+    editable: {
+      name: goal.name,
+      targetAmount: target.toFixed(2),
+      currency,
+      deadline: deadline ?? '',
+      note: goal.note ?? '',
+      currentProgress: progress.toFixed(2),
+    },
+  }
+}

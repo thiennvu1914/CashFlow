@@ -1,5 +1,6 @@
 import type { BudgetActionError } from '@/lib/server/actions/budget-actions'
 import type { FinancialAccountActionError } from '@/lib/server/actions/financial-account-actions'
+import type { SavingsGoalActionError } from '@/lib/server/actions/savings-goal-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
 
@@ -57,4 +58,12 @@ export const BUDGET_ERROR_MESSAGES: Record<BudgetActionError, string> = {
   INVALID_CATEGORY: 'Choose an active expense category.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That budget no longer exists.',
+}
+
+export const SAVINGS_GOAL_ERROR_MESSAGES: Record<SavingsGoalActionError, string> = {
+  // Not "no longer exists": the goal is still on the page, under "Archived
+  // goals", so the message has to name the state the user can actually see.
+  ARCHIVED: 'This goal is archived and can no longer be changed.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That goal no longer exists.',
 }
