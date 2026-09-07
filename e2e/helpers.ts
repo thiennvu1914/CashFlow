@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 
 /**
@@ -52,16 +52,12 @@ export async function createAccountViaUi(
  * default (in the user's configured timezone) — the seed data does not need
  * a specific instant, only "today".
  *
- * Every field goes through `selectAndVerify`/`fillAndVerify` rather than a bare
- * `selectOption`/`fill`: `TransactionForm` has exactly the mount-time-default
- * race documented on `selectAndVerify` below, and its defaults (`type:
- * 'EXPENSE'`, no category) make the consequence particularly quiet. A type
- * selected in the window between `load` and hydration completing is reverted to
- * EXPENSE, after which the category `<select>` never lists an INCOME category —
- * so the failure surfaces as "waiting for a category that will never appear",
- * several lines away from the select that actually lost. How wide that window
- * is depends on how much client JavaScript the page has to fetch first, which
- * is not something a seeding helper should be sensitive to.
+ * Plain `selectOption`/`fill`, with no verify-and-retry wrapper: the form is
+ * inside a `<fieldset disabled>` until hydration finishes (`useHydrated`,
+ * `lib/ui/use-hydrated.ts`), and Playwright's actionability check treats a
+ * control in a disabled fieldset as disabled — so every action below already
+ * waits for the earliest moment the app itself accepts input, and nothing it
+ * accepts is ever thrown away afterwards.
  */
 export async function createTransactionViaUi(
   page: Page,
@@ -73,74 +69,21 @@ export async function createTransactionViaUi(
   },
 ): Promise<void> {
   await page.goto('/transactions')
-  await selectAndVerify(page.getByLabel('Transaction type'), opts.type)
+  await page.getByLabel('Transaction type').selectOption(opts.type)
   // The category <select>'s options are re-filtered by `type` via client
   // state, not a fresh navigation — wait for the relevant category to
   // actually appear among its options before selecting it, so a slow
   // re-render cannot race the next action.
   const categorySelect = page.getByLabel('Category', { exact: true })
   await expect(categorySelect).toContainText(opts.categoryName)
-  await selectAndVerify(page.getByLabel('Account', { exact: true }), { label: opts.accountName })
-  await selectAndVerify(categorySelect, { label: opts.categoryName })
+  await page.getByLabel('Account', { exact: true }).selectOption({ label: opts.accountName })
+  await categorySelect.selectOption({ label: opts.categoryName })
   const amountInput = page.getByLabel('Amount', { exact: true })
-  await fillAndVerify(amountInput, String(opts.amount))
+  await amountInput.fill(String(opts.amount))
   await page.getByRole('button', { name: 'Add transaction' }).click()
   // A successful submit resets the form to its defaults, which sets the
   // amount field back to `0`.
   await expect(amountInput).toHaveValue('0')
-}
-
-/**
- * `locator.selectOption()`, made robust against a form's own
- * `react-hook-form` default (`BudgetForm`'s below; `TransactionForm`'s in
- * `createTransactionViaUi` above): the field's `ref` callback applies
- * `useForm`'s `defaultValues` to the DOM `<select>` once React finishes
- * hydrating, which can land *after* an interaction made in the brief window
- * between the page's `load` event and that hydration completing — silently
- * reverting a selection back to the form's default. That is invisible
- * whenever the wanted option already matches the default (an Overall budget
- * on an otherwise-empty month, whose default *is* Overall), which is exactly
- * why this only surfaces once a different default has taken over (Overall
- * again, once a Category default already exists for the month) — the same
- * `<select>`, the same call, a different silent outcome. Retrying the whole
- * select-then-verify cycle (rather than the select alone) means a revert
- * landing mid-verification is simply tried again, until the value actually
- * sticks.
- */
-async function selectAndVerify(
-  locator: Locator,
-  option: string | { label: string },
-): Promise<void> {
-  const page = locator.page()
-  await expect(async () => {
-    await locator.selectOption(option)
-    // A value that "took" immediately after `selectOption` can still be
-    // reverted a moment later — by the same `react-hook-form` mount-time
-    // default landing just *after* this select fired, on a slow/cold dev
-    // bundle. Checking only right away would race exactly that delayed
-    // revert; pausing before reading back, then retrying the whole cycle on
-    // a mismatch, is what actually catches it.
-    await page.waitForTimeout(250)
-    if (typeof option === 'string') {
-      await expect(locator).toHaveValue(option)
-    } else {
-      await expect(locator.locator('option:checked')).toHaveText(option.label)
-    }
-  }).toPass({ timeout: 15_000 })
-}
-
-/** The same mount-time-default race `selectAndVerify` guards against, for a
- *  plain `<input>` — `react-hook-form`'s ref callback applies `defaultValues`
- *  to an uncontrolled input's DOM value on mount exactly as it does for a
- *  `<select>`, so a `.fill()` in that same window can just as easily be
- *  reverted to `0`. */
-async function fillAndVerify(locator: Locator, value: string): Promise<void> {
-  const page = locator.page()
-  await expect(async () => {
-    await locator.fill(value)
-    await page.waitForTimeout(250)
-    await expect(locator).toHaveValue(value)
-  }).toPass({ timeout: 15_000 })
 }
 
 /**
@@ -162,6 +105,9 @@ async function fillAndVerify(locator: Locator, value: string): Promise<void> {
  * Does not assert success: a duplicate submission is expected to fail with an
  * inline error rather than resetting the form, so the caller — not this
  * helper — asserts whichever outcome the scenario expects.
+ *
+ * Plain `selectOption`/`fill` here too — see `createTransactionViaUi` and
+ * `lib/ui/use-hydrated.ts`.
  */
 export async function createBudgetViaUi(
   page: Page,
@@ -174,16 +120,16 @@ export async function createBudgetViaUi(
   },
 ): Promise<void> {
   if (!opts.stayOnPage) await page.goto('/budgets')
-  await selectAndVerify(page.getByLabel('Budget scope'), opts.scope)
+  await page.getByLabel('Budget scope').selectOption(opts.scope)
   if (opts.scope === 'CATEGORY') {
     if (!opts.categoryName) {
       throw new Error('createBudgetViaUi: categoryName is required when scope is CATEGORY')
     }
-    await selectAndVerify(page.getByLabel('Budget category'), { label: opts.categoryName })
+    await page.getByLabel('Budget category').selectOption({ label: opts.categoryName })
   }
-  await fillAndVerify(page.getByLabel('Budget amount'), String(opts.amount))
+  await page.getByLabel('Budget amount').fill(String(opts.amount))
   if (opts.currency && opts.currency !== 'VND') {
-    await selectAndVerify(page.getByLabel('Budget currency'), opts.currency)
+    await page.getByLabel('Budget currency').selectOption(opts.currency)
   }
   await page.getByRole('button', { name: 'Add budget' }).click()
 }

@@ -132,6 +132,59 @@ describe('TransactionForm with active accounts', () => {
     expect(html).toContain('>VND</span>')
   })
 
+  /**
+   * The server HTML is where the hydration-race fix has to be visible: the
+   * first bytes the browser paints are the only thing standing between the
+   * user and a control that would silently discard what they typed. See
+   * `lib/ui/use-hydrated.ts` for the react-hook-form/React interaction, and
+   * `e2e/transaction-form-hydration.spec.ts` for the same three facts checked
+   * against a real server response plus the behaviour they buy.
+   */
+  it('ships the form gated: a disabled, aria-busy fieldset with an sr-only legend', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+
+    expect(html).toContain('<fieldset disabled=""')
+    expect(html).toContain('aria-busy="true"')
+    expect(html).toContain('<legend class="sr-only">Transaction details</legend>')
+  })
+
+  it('moves the form layout onto the fieldset, so lifting the gate shifts nothing', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+
+    // The flex column lives on the fieldset (the new flex container), not on
+    // the <form> — a `<fieldset>` wrapping a flex form's children without
+    // taking over its layout would re-flow every field the moment it appears.
+    expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
+    expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
+    expect(html).not.toMatch(/<form[^>]*class=/)
+  })
+
+  it('server-renders the real Type default, EXPENSE, as the selected option', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+    const typeSelect = selectMarkup(html, 'Transaction type')
+
+    // `register()` emits no value/defaultValue of its own
+    // (`react-hook-form/dist/index.esm.mjs:3118-3183`), so without an explicit
+    // `defaultValue` the browser would show the FIRST option — Income — while
+    // form state, and the Category list below, already said EXPENSE.
+    expect(typeSelect).toContain('value="EXPENSE" selected=""')
+    expect(typeSelect).not.toContain('value="INCOME" selected=""')
+    // Exactly one Type option is pre-selected, and it is not a `value=` prop
+    // on the <select> itself — that would make the control controlled.
+    expect(countOf(typeSelect, 'selected=""')).toBe(1)
+    expect(typeSelect).not.toMatch(/<select[^>]*\svalue=/)
+  })
+
+  it('lists the EXPENSE categories, matching the EXPENSE default', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+    const categorySelect = selectMarkup(html, 'Category')
+
+    // HTML-escaped, because this is markup: "Food & Dining" → "Food &amp; Dining".
+    expect(optionLabels(categorySelect)).toEqual(['Select a category', 'Food &amp; Dining'])
+    // The placeholder is the pre-selected one — nothing is chosen for the user.
+    expect(categorySelect).toContain('<option value="" selected="">Select a category</option>')
+  })
+
   it('renders exactly the accounts it is given — no filtering of its own', () => {
     // Every row here is ACTIVE-shaped, which is all this component is ever
     // handed: `app/(app)/transactions/page.tsx` passes

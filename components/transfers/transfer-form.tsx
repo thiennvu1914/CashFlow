@@ -8,6 +8,7 @@ import type { Currency } from '@prisma/client'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 import { createTransferAction } from '@/lib/server/actions/transfer-actions'
 import { GENERIC_ERROR_MESSAGE, TRANSFER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { useHydrated } from '@/lib/ui/use-hydrated'
 import { nowInZone } from '@/lib/datetime/local-date-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,10 +24,22 @@ type FormInput = CreateTransferFormInput
 
 type Account = { id: string; name: string; currency: Currency }
 
+/**
+ * A transfer defaults to moving money *between* two accounts, so the "to"
+ * account is the second one — which is exactly why it needs its own
+ * `defaultValue` on the `<select>` below: unlike every other selector here it
+ * is not the first option, so without it the server HTML shows account #1
+ * while the form state already says account #2. Shared with the JSX so the two
+ * can never drift apart.
+ */
+function defaultToAccountId(accounts: Account[]): string {
+  return accounts[1]?.id ?? accounts[0]?.id ?? ''
+}
+
 function defaultValues(accounts: Account[], timezone: string): FormInput {
   return {
     fromAccountId: accounts[0]?.id ?? '',
-    toAccountId: accounts[1]?.id ?? accounts[0]?.id ?? '',
+    toAccountId: defaultToAccountId(accounts),
     fromAmount: 0,
     toAmount: 0,
     date: nowInZone(timezone),
@@ -49,6 +62,8 @@ export function TransferForm({
 }) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
+  /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
+  const hydrated = useHydrated()
   const {
     register,
     control,
@@ -111,85 +126,105 @@ export function TransferForm({
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
-      <div>
-        <select
-          {...register('fromAccountId')}
-          aria-label="From account"
-          className="rounded-md border p-2"
-        >
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name} ({a.currency})
-            </option>
-          ))}
-        </select>
-        {errors.fromAccountId && (
-          <p className="text-sm text-negative">{errors.fromAccountId.message}</p>
-        )}
-      </div>
-      <div>
-        <select
-          {...register('toAccountId')}
-          aria-label="To account"
-          className="rounded-md border p-2"
-        >
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name} ({a.currency})
-            </option>
-          ))}
-        </select>
-        {errors.toAccountId && (
-          <p className="text-sm text-negative">{errors.toAccountId.message}</p>
-        )}
-      </div>
-      <div>
-        <div className="flex items-center gap-2">
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Amount sent"
-            placeholder="Amount sent"
-            {...register('fromAmount', { valueAsNumber: true })}
-          />
-          {/* Read-only: currency always follows the selected account, so the
-             client never sends it — this is display only. */}
-          <span className="text-sm text-foreground/60">{fromAccount?.currency ?? ''}</span>
+    <form onSubmit={handleSubmit(onSubmit)}>
+      {/* The hydration gate — same mechanism, same reasoning, as
+          `TransactionForm`'s; `lib/ui/use-hydrated.ts` documents the defect.
+          A live pre-fix probe reverted this form's "Amount sent" 5/5 times and
+          both account selectors 5/5 times when they were driven to a
+          non-default value before hydration finished. */}
+      <fieldset
+        disabled={!hydrated}
+        aria-busy={hydrated ? undefined : true}
+        className="flex min-w-0 flex-col gap-3"
+      >
+        <legend className="sr-only">Transfer details</legend>
+        <div>
+          {/* No `defaultValue`: `fromAccountId` defaults to `accounts[0]`,
+              already the first option the browser selects on its own. */}
+          <select
+            {...register('fromAccountId')}
+            aria-label="From account"
+            className="rounded-md border p-2"
+          >
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({a.currency})
+              </option>
+            ))}
+          </select>
+          {errors.fromAccountId && (
+            <p className="text-sm text-negative">{errors.fromAccountId.message}</p>
+          )}
         </div>
-        {errors.fromAmount && <p className="text-sm text-negative">{errors.fromAmount.message}</p>}
-      </div>
-      {!sameCurrency && (
-        <div className="flex items-center gap-2">
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Amount received"
-            placeholder="Amount received"
-            {...register('toAmount', { valueAsNumber: true })}
-          />
-          <span className="text-sm text-foreground/60">{toAccount?.currency ?? ''}</span>
+        <div>
+          {/* `defaultValue` (never `value` — that would make this controlled)
+              so the server renders `selected` on the second account, the one
+              the form state already holds. See `defaultToAccountId`. */}
+          <select
+            {...register('toAccountId')}
+            defaultValue={defaultToAccountId(accounts)}
+            aria-label="To account"
+            className="rounded-md border p-2"
+          >
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({a.currency})
+              </option>
+            ))}
+          </select>
+          {errors.toAccountId && (
+            <p className="text-sm text-negative">{errors.toAccountId.message}</p>
+          )}
         </div>
-      )}
-      {/* Rendered regardless of `sameCurrency` so a validation error on this
-         field is never silently hidden by the field itself being hidden. */}
-      {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
-      <div>
-        <Input type="datetime-local" aria-label="Date & time" {...register('date')} />
-        {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
-      </div>
-      <div>
-        <Input placeholder="Note (optional)" aria-label="Note" {...register('note')} />
-        {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
-      </div>
-      <Button type="submit" disabled={isSubmitting}>
-        Transfer
-      </Button>
-      {error && (
-        <p role="alert" className="text-sm text-negative">
-          {error}
-        </p>
-      )}
+        <div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              step="0.01"
+              aria-label="Amount sent"
+              placeholder="Amount sent"
+              {...register('fromAmount', { valueAsNumber: true })}
+            />
+            {/* Read-only: currency always follows the selected account, so the
+               client never sends it — this is display only. */}
+            <span className="text-sm text-foreground/60">{fromAccount?.currency ?? ''}</span>
+          </div>
+          {errors.fromAmount && (
+            <p className="text-sm text-negative">{errors.fromAmount.message}</p>
+          )}
+        </div>
+        {!sameCurrency && (
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              step="0.01"
+              aria-label="Amount received"
+              placeholder="Amount received"
+              {...register('toAmount', { valueAsNumber: true })}
+            />
+            <span className="text-sm text-foreground/60">{toAccount?.currency ?? ''}</span>
+          </div>
+        )}
+        {/* Rendered regardless of `sameCurrency` so a validation error on this
+           field is never silently hidden by the field itself being hidden. */}
+        {errors.toAmount && <p className="text-sm text-negative">{errors.toAmount.message}</p>}
+        <div>
+          <Input type="datetime-local" aria-label="Date & time" {...register('date')} />
+          {errors.date && <p className="text-sm text-negative">{errors.date.message}</p>}
+        </div>
+        <div>
+          <Input placeholder="Note (optional)" aria-label="Note" {...register('note')} />
+          {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
+        </div>
+        <Button type="submit" disabled={isSubmitting}>
+          Transfer
+        </Button>
+        {error && (
+          <p role="alert" className="text-sm text-negative">
+            {error}
+          </p>
+        )}
+      </fieldset>
     </form>
   )
 }
