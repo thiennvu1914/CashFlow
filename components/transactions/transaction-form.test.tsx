@@ -75,6 +75,14 @@ function optionLabels(selectHtml: string): string[] {
   return [...selectHtml.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])
 }
 
+/** `<option value="…" … selected="">` regardless of attribute order — the
+ *  order react-dom happens to emit attributes in is not what is under test. */
+function selectedOption(value: string): RegExp {
+  return new RegExp(
+    `<option[^>]*\\svalue="${value}"[^>]*\\sselected=""|<option[^>]*\\sselected=""[^>]*\\svalue="${value}"`,
+  )
+}
+
 describe('TransactionForm with no accounts', () => {
   it('replaces the whole form with a notice and a link to /accounts', () => {
     const html = render([])
@@ -167,8 +175,8 @@ describe('TransactionForm with active accounts', () => {
     // (`react-hook-form/dist/index.esm.mjs:3118-3183`), so without an explicit
     // `defaultValue` the browser would show the FIRST option — Income — while
     // form state, and the Category list below, already said EXPENSE.
-    expect(typeSelect).toContain('value="EXPENSE" selected=""')
-    expect(typeSelect).not.toContain('value="INCOME" selected=""')
+    expect(typeSelect).toMatch(selectedOption('EXPENSE'))
+    expect(typeSelect).not.toMatch(selectedOption('INCOME'))
     // Exactly one Type option is pre-selected, and it is not a `value=` prop
     // on the <select> itself — that would make the control controlled.
     expect(countOf(typeSelect, 'selected=""')).toBe(1)
@@ -182,7 +190,8 @@ describe('TransactionForm with active accounts', () => {
     // HTML-escaped, because this is markup: "Food & Dining" → "Food &amp; Dining".
     expect(optionLabels(categorySelect)).toEqual(['Select a category', 'Food &amp; Dining'])
     // The placeholder is the pre-selected one — nothing is chosen for the user.
-    expect(categorySelect).toContain('<option value="" selected="">Select a category</option>')
+    expect(categorySelect).toMatch(selectedOption(''))
+    expect(categorySelect).not.toMatch(selectedOption('cat_food'))
   })
 
   it('renders exactly the accounts it is given — no filtering of its own', () => {
