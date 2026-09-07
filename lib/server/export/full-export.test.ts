@@ -6,9 +6,21 @@ import ExcelJS from 'exceljs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
+import { createDebt, recordDebtPayment, writeOffDebt } from '@/lib/server/services/debt'
+import { closeLoan, createLoan, recordLoanPayment } from '@/lib/server/services/loan'
+import {
+  acknowledgeOccurrence,
+  createReminder,
+  dismissOccurrence,
+  listUpcomingOccurrences,
+  setReminderActive,
+} from '@/lib/server/services/reminder'
+import { archiveSavingsGoal, createSavingsGoal } from '@/lib/server/services/savings-goal'
+
 import { buildBudgetsSheet } from './build-budgets-sheet'
 import { FULL_EXPORT_SHEET_BUILDERS, buildFullWorkbook } from './sheet-registry'
 import {
+  TEST_TIMEZONE,
   cleanupExportUsers,
   createExportUser,
   failingFxProvider,
@@ -50,6 +62,52 @@ function labelledRow(worksheet: ExcelJS.Worksheet, label: string): ExcelJS.Row {
   if (!found) throw new Error(`No row labelled ${JSON.stringify(label)} in ${worksheet.name}`)
   return found
 }
+
+/**
+ * The first *data* row whose `column` holds `value`.
+ *
+ * The Phase 6 sheets do not all put a name in column A — the Debts sheet leads
+ * with the direction — so a record is located by the cell that identifies it
+ * rather than by a row index, which a later seed or a changed sort would shift
+ * silently.
+ */
+function rowBy(worksheet: ExcelJS.Worksheet, column: number, value: unknown): ExcelJS.Row {
+  let found: ExcelJS.Row | undefined
+  worksheet.eachRow((row, index) => {
+    if (index > 1 && found === undefined && row.getCell(column).value === value) found = row
+  })
+  if (!found) {
+    throw new Error(`No row with ${JSON.stringify(value)} in column ${column} of ${worksheet.name}`)
+  }
+  return found
+}
+
+/** Every sheet of the full workbook, in the order spec §12 lists them. */
+const FULL_EXPORT_SHEETS = [
+  'Summary',
+  'Accounts',
+  'Transactions',
+  'Transfers',
+  'Budgets',
+  'Savings Goals',
+  'Debts',
+  'Debt Payments',
+  'Loans',
+  'Loan Payments',
+  'Reminders',
+]
+
+/**
+ * The instant every Phase 6 case exports "as of": 15 March 2026, 12:00 in
+ * `Asia/Ho_Chi_Minh`.
+ *
+ * Fixed, and comfortably inside the day at both ends, because the four derived
+ * statuses on those sheets (OVERDUE, PAID, PARTIALLY_PAID, PAID_OFF) are decided
+ * against `todayCalendarDateInZone(ctx.timezone, ctx.now)`. A real `new Date()`
+ * would make "due on 30 April" eventually overdue and this suite would start
+ * failing on its own one day.
+ */
+const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
 
 describe('full export workbook', () => {
   const createdUserIds: string[] = []
@@ -114,21 +172,183 @@ describe('full export workbook', () => {
     return account
   }
 
-  it('produces Summary, Accounts, Transactions, Transfers and Budgets in registry order', async () => {
+  /**
+   * An ACTIVE goal in VND with a deadline, and an ARCHIVED one in USD that was
+   * over-saved — the two rows that pin the "history is never omitted",
+   * "own currency" and "unclamped percentage" rules at once.
+   */
+  async function seedSavingsGoals(userId: string) {
+    const emergency = await createSavingsGoal(userId, {
+      name: 'Emergency fund',
+      targetAmount: 10_000_000,
+      currency: 'VND',
+      deadline: '2026-12-31',
+      note: 'three months of expenses',
+      currentProgress: 2_500_000,
+    })
+    const laptop = await createSavingsGoal(userId, {
+      name: 'New laptop',
+      targetAmount: 1_000,
+      currency: 'USD',
+      // Over the target on purpose: ACHIEVED, then archived, and 120 % is a
+      // figure the sheet must be able to state.
+      currentProgress: 1_200,
+    })
+    await archiveSavingsGoal(userId, laptop.id)
+    return { emergency, laptop }
+  }
+
+  /**
+   * A part-paid receivable, a written-off payable that had already been paid
+   * down, and a receivable settled *after* its due date.
+   */
+  async function seedDebts(userId: string) {
+    const receivable = await createDebt(userId, {
+      direction: 'RECEIVABLE',
+      person: 'An',
+      originalAmount: 1_000_000,
+      currency: 'VND',
+      dueDate: '2026-04-30',
+      description: 'lent for the deposit',
+      notes: 'paying in instalments',
+    })
+    await recordDebtPayment(userId, receivable.id, {
+      amount: 300_000,
+      date: '2026-03-05',
+      note: 'first instalment',
+    })
+    await recordDebtPayment(userId, receivable.id, { amount: 200_000, date: '2026-03-06' })
+
+    const payable = await createDebt(userId, {
+      direction: 'PAYABLE',
+      person: 'Binh',
+      originalAmount: 400,
+      currency: 'USD',
+    })
+    // Paid down first, THEN written off: a written-off debt takes no further
+    // payments, and the point of this row is that the history survives the
+    // write-off.
+    await recordDebtPayment(userId, payable.id, { amount: 100, date: '2026-03-04' })
+    await writeOffDebt(userId, payable.id)
+
+    const settled = await createDebt(userId, {
+      direction: 'RECEIVABLE',
+      person: 'Chi',
+      originalAmount: 100_000,
+      currency: 'VND',
+      // Behind `EXPORT_NOW`, and settled two weeks late: a repaid debt is
+      // repaid, never overdue.
+      dueDate: '2026-03-01',
+    })
+    await recordDebtPayment(userId, settled.id, { amount: 100_000, date: '2026-03-07' })
+    return { receivable, payable, settled }
+  }
+
+  /** An ACTIVE VND loan with one instalment, and a CLOSED USD one that also has
+   *  a payment behind it. */
+  async function seedLoans(userId: string) {
+    const active = await createLoan(userId, {
+      lender: 'Sacombank',
+      principal: 1_000_000,
+      currency: 'VND',
+      // Three decimal places, which is exactly what `Decimal(6, 3)` holds — so
+      // a cell that lost a digit or scaled by 100 would show.
+      interestRate: 7.125,
+      startDate: '2026-01-01',
+      termMonths: 12,
+      paymentFrequency: 'MONTHLY',
+      scheduledPaymentAmount: 90_000,
+      nextDueDate: '2026-03-01',
+      notes: 'car loan',
+    })
+    await recordLoanPayment(userId, active.id, {
+      totalAmount: 90_000,
+      principalAmount: 80_000,
+      interestAmount: 10_000,
+      paymentDate: '2026-03-01',
+      note: 'March instalment',
+    })
+
+    const closed = await createLoan(userId, {
+      lender: 'Family',
+      principal: 200,
+      currency: 'USD',
+      interestRate: 0,
+      startDate: '2026-02-01',
+      termMonths: 6,
+      paymentFrequency: 'MONTHLY',
+      scheduledPaymentAmount: 50,
+      nextDueDate: '2026-03-01',
+    })
+    await recordLoanPayment(userId, closed.id, {
+      totalAmount: 50,
+      principalAmount: 40,
+      interestAmount: 10,
+      paymentDate: '2026-03-02',
+    })
+    await closeLoan(userId, closed.id)
+    return { active, closed }
+  }
+
+  /**
+   * An active monthly reminder with one dismissed occurrence and one still
+   * pending, and a paused one-time reminder whose single occurrence was
+   * acknowledged.
+   *
+   * The occurrences are materialized by `listUpcomingOccurrences` — the page's
+   * own read, at the fixed `EXPORT_NOW` — because the export itself must never
+   * write one.
+   */
+  async function seedReminders(userId: string, s: Awaited<ReturnType<typeof setup>>) {
+    const rent = await createReminder(userId, TEST_TIMEZONE, {
+      title: 'Rent',
+      type: 'EXPENSE',
+      expectedAmount: 5_000_000,
+      currency: 'VND',
+      categoryId: s.expenseCategoryId,
+      accountId: s.vndAccountId,
+      frequency: 'MONTHLY',
+      interval: 1,
+      startDate: '2026-03-01',
+      note: 'landlord transfers',
+    })
+    const passport = await createReminder(userId, TEST_TIMEZONE, {
+      title: 'Passport renewal',
+      type: 'EXPENSE',
+      expectedAmount: 200,
+      currency: 'USD',
+      frequency: 'ONE_TIME',
+      interval: 1,
+      startDate: '2026-03-10',
+    })
+
+    // From 1 March, monthly, read on 15 March: 1 March and 1 April are inside
+    // the window, and the one-time reminder's single day is too.
+    const upcoming = await listUpcomingOccurrences(userId, TEST_TIMEZONE, EXPORT_NOW)
+    const forRent = upcoming.filter((occurrence) => occurrence.reminderId === rent.id)
+    const forPassport = upcoming.filter((occurrence) => occurrence.reminderId === passport.id)
+    expect(forRent).toHaveLength(2)
+    expect(forPassport).toHaveLength(1)
+
+    await dismissOccurrence(userId, forRent[0].id, EXPORT_NOW)
+    await acknowledgeOccurrence(userId, forPassport[0].id, EXPORT_NOW)
+    // Paused AFTER its occurrence was answered — the row and its history stay.
+    await setReminderActive(userId, passport.id, false)
+    return { rent, passport }
+  }
+
+  it('produces every sheet spec §12 lists, in registry order', async () => {
     const s = await setup()
-    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
 
     const workbook = await buildFullWorkbook(ctx)
 
-    expect(workbook.worksheets.map((w) => w.name)).toEqual([
-      'Summary',
-      'Accounts',
-      'Transactions',
-      'Transfers',
-      'Budgets',
-    ])
-    // The array is the single source of truth Phase 6 appends to.
-    expect(FULL_EXPORT_SHEET_BUILDERS).toHaveLength(5)
+    expect(workbook.worksheets.map((w) => w.name)).toEqual(FULL_EXPORT_SHEETS)
+    // The array is the single source of truth, and Phase 6 completed it.
+    expect(FULL_EXPORT_SHEET_BUILDERS).toHaveLength(11)
   })
 
   it('includes archived accounts, their status, and their history', async () => {
@@ -594,7 +814,7 @@ describe('full export workbook', () => {
 
     const workbook = await buildFullWorkbook(ctx)
 
-    for (const name of ['Summary', 'Accounts', 'Transactions', 'Transfers', 'Budgets']) {
+    for (const name of FULL_EXPORT_SHEETS) {
       const worksheet = sheet(workbook, name)
       expect(worksheet.getRow(1).font?.bold).toBe(true)
       // Frozen, so the headers stay visible while scrolling a ledger that can
@@ -616,5 +836,348 @@ describe('full export workbook', () => {
     // The display-currency column always carries the DISPLAY currency's format,
     // whatever the account is held in.
     expect(account.getCell(7).numFmt).toBe('#,##0')
+  })
+
+  it('writes every savings goal in its own currency, archived ones included', async () => {
+    const s = await setup()
+    await seedSavingsGoals(s.userId)
+    // A rate is available and deliberately unlike anything below: nothing on
+    // this sheet may be restated at it.
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(30_000),
+    })
+
+    const goals = sheet(await buildFullWorkbook(ctx), 'Savings Goals')
+
+    // Header plus both goals — the archived one is not dropped.
+    expect(goals.actualRowCount).toBe(3)
+
+    const emergency = rowBy(goals, 1, 'Emergency fund')
+    expect(emergency.getCell(2).value).toBe(10_000_000)
+    expect(emergency.getCell(3).value).toBe(2_500_000)
+    expect(emergency.getCell(4).value).toBe(7_500_000)
+    expect(emergency.getCell(5).value).toBeCloseTo(0.25, 6)
+    expect(emergency.getCell(6).value).toBe('VND')
+    // A deadline carrier goes straight through: the calendar day the user
+    // picked, at UTC midnight, whatever zone the reader is in.
+    expect(emergency.getCell(7).value).toEqual(new Date(Date.UTC(2026, 11, 31)))
+    expect(emergency.getCell(8).value).toBe('In progress')
+    expect(emergency.getCell(9).value).toBe('three months of expenses')
+    // VND has no circulating subunit — the GOAL's currency decides the format,
+    // not the user's display currency.
+    expect(emergency.getCell(2).numFmt).toBe('#,##0')
+    expect(emergency.getCell(5).numFmt).toBe('0%')
+    expect(emergency.getCell(7).numFmt).toBe('yyyy-mm-dd')
+
+    const laptop = rowBy(goals, 1, 'New laptop')
+    expect(laptop.getCell(2).value).toBe(1_000)
+    expect(laptop.getCell(3).value).toBe(1_200)
+    // Nothing left to save — and the over-saving is stated as 120 % rather than
+    // as a negative remainder.
+    expect(laptop.getCell(4).value).toBe(0)
+    expect(laptop.getCell(5).value).toBeCloseTo(1.2, 6)
+    expect(laptop.getCell(6).value).toBe('USD')
+    // No deadline: blank, never a date this goal never had.
+    expect(laptop.getCell(7).value).toBeNull()
+    // Archived, with its state on the row rather than implied by its absence.
+    expect(laptop.getCell(8).value).toBe('Archived')
+    expect(laptop.getCell(9).value).toBe('')
+    // Cents, in a workbook whose display currency is VND.
+    expect(laptop.getCell(2).numFmt).toBe('#,##0.00')
+    expect(laptop.getCell(4).numFmt).toBe('#,##0.00')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes every debt with its derived outstanding, written-off ones included', async () => {
+    const s = await setup()
+    await seedDebts(s.userId)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const debts = sheet(await buildFullWorkbook(ctx), 'Debts')
+
+    // Header plus all three, the written-off one included.
+    expect(debts.actualRowCount).toBe(4)
+
+    const an = rowBy(debts, 2, 'An')
+    expect(an.getCell(1).value).toBe('Receivable')
+    expect(an.getCell(3).value).toBe(1_000_000)
+    // 300,000 + 200,000 paid, so 500,000 still owed — exactly original − paid.
+    expect(an.getCell(4).value).toBe(500_000)
+    expect(an.getCell(5).value).toBe(500_000)
+    expect(an.getCell(6).value).toBe('VND')
+    expect(an.getCell(7).value).toEqual(new Date(Date.UTC(2026, 3, 30)))
+    // Something paid, and nothing late on 15 March.
+    expect(an.getCell(8).value).toBe('Partly paid')
+    expect(an.getCell(9).value).toBe('lent for the deposit')
+    expect(an.getCell(10).value).toBe('paying in instalments')
+    expect(an.getCell(3).numFmt).toBe('#,##0')
+    expect(an.getCell(7).numFmt).toBe('yyyy-mm-dd')
+
+    const binh = rowBy(debts, 2, 'Binh')
+    expect(binh.getCell(1).value).toBe('Payable')
+    expect(binh.getCell(3).value).toBe(400)
+    expect(binh.getCell(4).value).toBe(100)
+    // NOT zeroed by the write-off: what happened stays readable, and only Net
+    // Worth stops counting it.
+    expect(binh.getCell(5).value).toBe(300)
+    // No agreed due date: blank, never today's.
+    expect(binh.getCell(7).value).toBeNull()
+    expect(binh.getCell(8).value).toBe('Written off')
+    // Cents, in a workbook whose display currency is VND.
+    expect(binh.getCell(5).numFmt).toBe('#,##0.00')
+
+    const chi = rowBy(debts, 2, 'Chi')
+    expect(chi.getCell(5).value).toBe(0)
+    // Settled six days after it fell due — repaid is repaid, never overdue.
+    expect(chi.getCell(8).value).toBe('Paid')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('lists every debt payment in its parent debt currency', async () => {
+    const s = await setup()
+    await seedDebts(s.userId)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const payments = sheet(await buildFullWorkbook(ctx), 'Debt Payments')
+
+    // Header plus all four, oldest first — including the one against the debt
+    // that was later written off, which really was paid.
+    expect(payments.actualRowCount).toBe(5)
+    expect(firstColumn(payments)).toEqual([
+      new Date(Date.UTC(2026, 2, 4)),
+      new Date(Date.UTC(2026, 2, 5)),
+      new Date(Date.UTC(2026, 2, 6)),
+      new Date(Date.UTC(2026, 2, 7)),
+    ])
+
+    // A payment has no currency of its own — it inherits the debt's, and the
+    // format follows the PARENT, not the user's display currency.
+    const usd = payments.getRow(2)
+    expect(usd.getCell(2).value).toBe('Binh')
+    expect(usd.getCell(3).value).toBe('Payable')
+    expect(usd.getCell(4).value).toBe(100)
+    expect(usd.getCell(5).value).toBe('USD')
+    expect(usd.getCell(4).numFmt).toBe('#,##0.00')
+    expect(usd.getCell(1).numFmt).toBe('yyyy-mm-dd')
+
+    const vnd = payments.getRow(3)
+    expect(vnd.getCell(2).value).toBe('An')
+    expect(vnd.getCell(3).value).toBe('Receivable')
+    expect(vnd.getCell(4).value).toBe(300_000)
+    expect(vnd.getCell(5).value).toBe('VND')
+    expect(vnd.getCell(6).value).toBe('first instalment')
+    expect(vnd.getCell(4).numFmt).toBe('#,##0')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes every loan with principal and interest apart, closed ones included', async () => {
+    const s = await setup()
+    await seedLoans(s.userId)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const loans = sheet(await buildFullWorkbook(ctx), 'Loans')
+
+    // Header plus both loans — the closed one included.
+    expect(loans.actualRowCount).toBe(3)
+
+    const bank = rowBy(loans, 1, 'Sacombank')
+    expect(bank.getCell(2).value).toBe(1_000_000)
+    expect(bank.getCell(3).value).toBe(80_000)
+    // Interest is reported apart from the principal and pays nothing down:
+    // 1,000,000 − 80,000, never − 90,000.
+    expect(bank.getCell(4).value).toBe(10_000)
+    expect(bank.getCell(5).value).toBe(920_000)
+    expect(bank.getCell(6).value).toBe('VND')
+    // The stored rate, unscaled, with its unit in the header — 0.07125 would
+    // mean a percentage cell had divided it by 100.
+    expect(bank.getCell(7).value).toBe(7.125)
+    expect(bank.getCell(7).numFmt).toBe('0.000')
+    expect(bank.getCell(8).value).toBe('Monthly')
+    expect(bank.getCell(9).value).toBe(90_000)
+    expect(bank.getCell(10).value).toEqual(new Date(Date.UTC(2026, 0, 1)))
+    // Advanced by exactly one interval when the instalment was recorded.
+    expect(bank.getCell(11).value).toEqual(new Date(Date.UTC(2026, 3, 1)))
+    expect(bank.getCell(12).value).toBe(12)
+    expect(bank.getCell(13).value).toBe('Active')
+    expect(bank.getCell(14).value).toBe('car loan')
+    expect(bank.getCell(2).numFmt).toBe('#,##0')
+    expect(bank.getCell(10).numFmt).toBe('yyyy-mm-dd')
+
+    const family = rowBy(loans, 1, 'Family')
+    expect(family.getCell(2).value).toBe(200)
+    expect(family.getCell(3).value).toBe(40)
+    expect(family.getCell(4).value).toBe(10)
+    // NOT zeroed by closing the loan: the agreement is finished, the history
+    // stands, and only Net Worth stops counting it.
+    expect(family.getCell(5).value).toBe(160)
+    // An interest-free loan from family is a real loan, and 0 is a rate.
+    expect(family.getCell(7).value).toBe(0)
+    expect(family.getCell(13).value).toBe('Closed')
+    expect(family.getCell(14).value).toBe('')
+    // Cents, in a workbook whose display currency is VND.
+    expect(family.getCell(5).numFmt).toBe('#,##0.00')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('lists every loan instalment in its parent loan currency, split three ways', async () => {
+    const s = await setup()
+    await seedLoans(s.userId)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const payments = sheet(await buildFullWorkbook(ctx), 'Loan Payments')
+
+    // Header plus both instalments, oldest first — including the one against
+    // the loan that was later closed.
+    expect(payments.actualRowCount).toBe(3)
+    expect(firstColumn(payments)).toEqual([
+      new Date(Date.UTC(2026, 2, 1)),
+      new Date(Date.UTC(2026, 2, 2)),
+    ])
+
+    const vnd = payments.getRow(2)
+    expect(vnd.getCell(2).value).toBe('Sacombank')
+    expect(vnd.getCell(3).value).toBe(90_000)
+    expect(vnd.getCell(4).value).toBe(80_000)
+    expect(vnd.getCell(5).value).toBe(10_000)
+    expect(vnd.getCell(6).value).toBe('VND')
+    expect(vnd.getCell(7).value).toBe('March instalment')
+    // An instalment has no currency of its own — it inherits the loan's, and
+    // all three money columns follow the PARENT.
+    expect(vnd.getCell(3).numFmt).toBe('#,##0')
+    expect(vnd.getCell(4).numFmt).toBe('#,##0')
+    expect(vnd.getCell(5).numFmt).toBe('#,##0')
+    expect(vnd.getCell(1).numFmt).toBe('yyyy-mm-dd')
+
+    const usd = payments.getRow(3)
+    expect(usd.getCell(2).value).toBe('Family')
+    expect(usd.getCell(3).value).toBe(50)
+    expect(usd.getCell(4).value).toBe(40)
+    expect(usd.getCell(5).value).toBe(10)
+    expect(usd.getCell(6).value).toBe('USD')
+    expect(usd.getCell(3).numFmt).toBe('#,##0.00')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes every reminder with its occurrence tally, paused ones included', async () => {
+    const s = await setup()
+    await seedReminders(s.userId, s)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const reminders = sheet(await buildFullWorkbook(ctx), 'Reminders')
+
+    // Header plus both reminders, the paused one included.
+    expect(reminders.actualRowCount).toBe(3)
+
+    const rent = rowBy(reminders, 1, 'Rent')
+    // "Bill", not "Expense": nothing here has been recorded yet.
+    expect(rent.getCell(2).value).toBe('Bill')
+    expect(rent.getCell(3).value).toBe(5_000_000)
+    expect(rent.getCell(4).value).toBe('VND')
+    expect(rent.getCell(5).value).toBe('Monthly')
+    // `startDate` is the instant of LOCAL midnight (17:00Z the day before in
+    // Asia/Ho_Chi_Minh), so the cell has to read back as the day the user
+    // picked — the bare stored instant would show 28 February.
+    expect(rent.getCell(6).value).toEqual(new Date(Date.UTC(2026, 2, 1)))
+    expect(rent.getCell(6).numFmt).toBe('yyyy-mm-dd')
+    expect(rent.getCell(7).value).toBe('Yes')
+    // One occurrence still pending, one dismissed, none acknowledged.
+    expect(rent.getCell(8).value).toBe(1)
+    expect(rent.getCell(9).value).toBe(0)
+    expect(rent.getCell(10).value).toBe(1)
+    expect(rent.getCell(11).value).toBe('Food')
+    expect(rent.getCell(12).value).toBe('Wallet')
+    expect(rent.getCell(13).value).toBe('landlord transfers')
+    expect(rent.getCell(3).numFmt).toBe('#,##0')
+
+    const passport = rowBy(reminders, 1, 'Passport renewal')
+    expect(passport.getCell(5).value).toBe('One time')
+    expect(passport.getCell(6).value).toEqual(new Date(Date.UTC(2026, 2, 10)))
+    // Paused, and still on the sheet with everything it produced.
+    expect(passport.getCell(7).value).toBe('No')
+    expect(passport.getCell(8).value).toBe(0)
+    expect(passport.getCell(9).value).toBe(1)
+    expect(passport.getCell(10).value).toBe(0)
+    // Neither a category nor an account: blank, not a guess.
+    expect(passport.getCell(11).value).toBe('')
+    expect(passport.getCell(12).value).toBe('')
+    // Cents, in a workbook whose display currency is VND.
+    expect(passport.getCell(3).numFmt).toBe('#,##0.00')
+
+    // The export materialized nothing of its own: the tallies count the rows
+    // the page's read created, and building the workbook added none.
+    expect(await prisma.reminderOccurrence.count({ where: { userId: s.userId } })).toBe(3)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('fills all six planning sheets even when no usable rate exists', async () => {
+    const s = await setup()
+    // A USD balance, so the Accounts and Summary sheets genuinely HAVE
+    // something to convert and therefore something to leave blank.
+    await seedTransaction(s.userId, {
+      accountId: s.usdAccountId,
+      type: 'CASH_IN',
+      amount: 100,
+      currency: 'USD',
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    await seedSavingsGoals(s.userId)
+    await seedDebts(s.userId)
+    await seedLoans(s.userId)
+    await seedReminders(s.userId, s)
+
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: failingFxProvider,
+    })
+    expect(ctx.fx).toBeNull()
+
+    const workbook = await buildFullWorkbook(ctx)
+
+    // Every planning sheet is complete...
+    expect(sheet(workbook, 'Savings Goals').actualRowCount).toBe(3)
+    expect(sheet(workbook, 'Debts').actualRowCount).toBe(4)
+    expect(sheet(workbook, 'Debt Payments').actualRowCount).toBe(5)
+    expect(sheet(workbook, 'Loans').actualRowCount).toBe(3)
+    expect(sheet(workbook, 'Loan Payments').actualRowCount).toBe(3)
+    expect(sheet(workbook, 'Reminders').actualRowCount).toBe(3)
+    // ...with every figure on it intact, because not one of them is converted.
+    expect(rowBy(sheet(workbook, 'Savings Goals'), 1, 'New laptop').getCell(3).value).toBe(1_200)
+    expect(rowBy(sheet(workbook, 'Debts'), 2, 'An').getCell(5).value).toBe(500_000)
+    expect(rowBy(sheet(workbook, 'Debt Payments'), 2, 'Binh').getCell(4).value).toBe(100)
+    expect(rowBy(sheet(workbook, 'Loans'), 1, 'Sacombank').getCell(5).value).toBe(920_000)
+    expect(rowBy(sheet(workbook, 'Loan Payments'), 2, 'Family').getCell(3).value).toBe(50)
+    expect(rowBy(sheet(workbook, 'Reminders'), 1, 'Rent').getCell(3).value).toBe(5_000_000)
+
+    // Only the CONVERTED cells are blank, and the sheet says why.
+    const summary = sheet(workbook, 'Summary')
+    expect(String(labelledRow(summary, 'FX rate').getCell(2).value)).toContain('unavailable')
+    expect(labelledRow(summary, 'Total account balance').getCell(2).value).toBeNull()
+    expect(labelledRow(summary, 'Net worth').getCell(2).value).toBeNull()
+    expect(labelledRow(sheet(workbook, 'Accounts'), 'Dollar savings').getCell(7).value).toBeNull()
+
+    // And nothing went looking for a rate of its own.
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

@@ -194,11 +194,23 @@ export async function cleanupExportUsers(userIds: string[]) {
   await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
   if (userIds.length === 0) return
   try {
+    // Children before their parent row throughout: every one of these foreign
+    // keys is ON DELETE RESTRICT, so the other order is a P2003 rather than a
+    // cascade.
+    //
+    // Occurrences and reminders come first of all, ahead of the transactions,
+    // because a reminder also references a Category and a FinancialAccount —
+    // both deleted further down — so a reminder still standing would block
+    // those deletions rather than its own.
+    await prisma.reminderOccurrence.deleteMany({ where: { userId: { in: userIds } } })
+    await prisma.recurringReminder.deleteMany({ where: { userId: { in: userIds } } })
+    // No children of its own, and referenced by nothing.
+    await prisma.savingsGoal.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
-    // Payments before their parent row: both foreign keys are ON DELETE
-    // RESTRICT, so the other order is a P2003 rather than a cascade. Debts and
-    // loans reach these suites through the Summary sheet's Net Worth figure.
+    // Debts, loans and their payment histories reach these suites through the
+    // Summary sheet's Net Worth figure and through the four Phase 6 sheets that
+    // list them outright.
     await prisma.debtPayment.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.debt.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.loanPayment.deleteMany({ where: { userId: { in: userIds } } })
