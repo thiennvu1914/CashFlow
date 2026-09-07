@@ -2,6 +2,7 @@ import type { BudgetActionError } from '@/lib/server/actions/budget-actions'
 import type { DebtActionError } from '@/lib/server/actions/debt-actions'
 import type { FinancialAccountActionError } from '@/lib/server/actions/financial-account-actions'
 import type { LoanActionError } from '@/lib/server/actions/loan-actions'
+import type { ReminderActionError } from '@/lib/server/actions/reminder-actions'
 import type { SavingsGoalActionError } from '@/lib/server/actions/savings-goal-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
@@ -102,4 +103,21 @@ export const LOAN_ERROR_MESSAGES: Record<LoanActionError, string> = {
   SPLIT_MISMATCH: 'Total must equal principal plus interest.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That loan no longer exists.',
+}
+
+export const REMINDER_ERROR_MESSAGES: Record<ReminderActionError, string> = {
+  // Names the rule the category broke — the *type* has to match — because that
+  // is the one the user can act on from the form: the other three cases the
+  // service refuses (not yours, no such id, archived) all read as "pick another
+  // one" too, and spelling them out would tell a crafted request which ids
+  // exist.
+  INVALID_CATEGORY: 'Choose a category that matches the reminder type.',
+  // "Active", because an archived account is still in the user's vocabulary —
+  // it just cannot be named on a new reminder.
+  INVALID_ACCOUNT: 'Choose one of your active accounts.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  // Covers a foreign or deleted *occurrence* id as well as a reminder one: an
+  // occurrence only exists as an instance of a reminder, so "that reminder" is
+  // what the user can see has gone from the page.
+  NOT_FOUND: 'That reminder no longer exists.',
 }

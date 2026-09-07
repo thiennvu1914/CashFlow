@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  BellRing,
   ChartColumn,
   HandCoins,
   Landmark,
@@ -19,9 +20,10 @@ import {
  *
  * Only routes that exist are listed — Budgets since Phase 5 shipped
  * `/budgets`, Savings since Phase 6's first group shipped `/goals`, Debts
- * since its third group shipped `/debts`, and Loans now that its fifth group
- * has shipped `/loans`. The mobile tab bar is unchanged: `MOBILE_TAB_HREFS`
- * names the four routes it shows, so Savings, Debts and Loans join the "More"
+ * since its third group shipped `/debts`, Loans since its fifth group shipped
+ * `/loans`, and Reminders now that its seventh group has shipped
+ * `/reminders`. The mobile tab bar is unchanged: `MOBILE_TAB_HREFS` names the
+ * four routes it shows, so Savings, Debts, Loans and Reminders join the "More"
  * menu on their own.
  */
 export interface NavItem {
@@ -39,6 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/goals', label: 'Savings', icon: PiggyBank },
   { href: '/debts', label: 'Debts', icon: HandCoins },
   { href: '/loans', label: 'Loans', icon: Landmark },
+  { href: '/reminders', label: 'Reminders', icon: BellRing },
   { href: '/categories', label: 'Categories', icon: Tags },
   { href: '/reports', label: 'Reports', icon: ChartColumn },
   { href: '/settings', label: 'Settings', icon: Settings },
