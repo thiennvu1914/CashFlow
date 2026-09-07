@@ -1,6 +1,7 @@
 import type { BudgetActionError } from '@/lib/server/actions/budget-actions'
 import type { DebtActionError } from '@/lib/server/actions/debt-actions'
 import type { FinancialAccountActionError } from '@/lib/server/actions/financial-account-actions'
+import type { LoanActionError } from '@/lib/server/actions/loan-actions'
 import type { SavingsGoalActionError } from '@/lib/server/actions/savings-goal-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
@@ -81,4 +82,24 @@ export const DEBT_ERROR_MESSAGES: Record<DebtActionError, string> = {
   NOT_ACTIVE: 'This debt has been written off and can no longer be changed.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That debt no longer exists.',
+}
+
+export const LOAN_ERROR_MESSAGES: Record<LoanActionError, string> = {
+  // Names the *principal*, because that is the only part of an instalment the
+  // check compares: a loan can be repaid in principal and still owe a final
+  // interest charge, so "that payment is too large" would be wrong advice. The
+  // outstanding figure itself is already on the row above the form, and
+  // `LoanOverpaymentError` carries a `Prisma.Decimal` that cannot cross into a
+  // client component anyway.
+  OVERPAYMENT: 'That principal payment is more than the principal still outstanding.',
+  // Like a written-off debt, a closed loan is still visible on the page — under
+  // "Closed loans" — so the message names the state the user can see rather
+  // than claiming the row has gone.
+  NOT_ACTIVE: 'This loan is closed and can no longer be changed.',
+  // The same sentence the schema's refine puts under the total field, so the
+  // split invariant reads identically whichever of its three layers refused
+  // the instalment.
+  SPLIT_MISMATCH: 'Total must equal principal plus interest.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That loan no longer exists.',
 }

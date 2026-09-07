@@ -89,6 +89,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Budgets',
       'Savings',
       'Debts',
+      'Loans',
       'Categories',
       'Reports',
       'Settings',
