@@ -196,6 +196,13 @@ export async function cleanupExportUsers(userIds: string[]) {
   try {
     await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
+    // Payments before their parent row: both foreign keys are ON DELETE
+    // RESTRICT, so the other order is a P2003 rather than a cascade. Debts and
+    // loans reach these suites through the Summary sheet's Net Worth figure.
+    await prisma.debtPayment.deleteMany({ where: { userId: { in: userIds } } })
+    await prisma.debt.deleteMany({ where: { userId: { in: userIds } } })
+    await prisma.loanPayment.deleteMany({ where: { userId: { in: userIds } } })
+    await prisma.loan.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
     // Before the categories: a CATEGORY budget references one, so deleting the

@@ -324,6 +324,86 @@ describe('full export workbook', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('reports Net worth as the accounts plus receivables less payables and loan principal', async () => {
+    const s = await setup()
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      type: 'CASH_IN',
+      amount: 1_000_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    // A receivable in the OTHER currency, so the figure can only come out right
+    // if it was converted at the workbook's one rate before being added.
+    await prisma.debt.create({
+      data: {
+        userId: s.userId,
+        direction: 'RECEIVABLE',
+        person: 'An',
+        originalAmount: new Prisma.Decimal('100'),
+        currency: 'USD',
+      },
+    })
+    await prisma.debt.create({
+      data: {
+        userId: s.userId,
+        direction: 'PAYABLE',
+        person: 'Binh',
+        originalAmount: new Prisma.Decimal('100000'),
+        currency: 'VND',
+      },
+    })
+    // Written off, and enormous: if the sheet counted it the total would be
+    // unmistakably wrong rather than subtly so.
+    await prisma.debt.create({
+      data: {
+        userId: s.userId,
+        direction: 'RECEIVABLE',
+        person: 'Never paying',
+        originalAmount: new Prisma.Decimal('9000000'),
+        currency: 'VND',
+        status: 'WRITTEN_OFF',
+      },
+    })
+    const loan = await prisma.loan.create({
+      data: {
+        userId: s.userId,
+        lender: 'Bank',
+        principal: new Prisma.Decimal('200000'),
+        currency: 'VND',
+        interestRate: new Prisma.Decimal('5'),
+        startDate: new Date('2026-01-01T00:00:00Z'),
+        termMonths: 12,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: new Prisma.Decimal('20000'),
+        nextDueDate: new Date('2026-04-01T00:00:00Z'),
+        dueDayOfMonth: 1,
+      },
+    })
+    await prisma.loanPayment.create({
+      data: {
+        userId: s.userId,
+        loanId: loan.id,
+        // Only the 50,000 of principal pays the loan down; the 25,000 of
+        // interest is the cost of borrowing and moves nothing.
+        totalAmount: new Prisma.Decimal('75000'),
+        principalAmount: new Prisma.Decimal('50000'),
+        interestAmount: new Prisma.Decimal('25000'),
+        paymentDate: new Date('2026-03-01T00:00:00Z'),
+      },
+    })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider(26_000) })
+
+    const summary = sheet(await buildFullWorkbook(ctx), 'Summary')
+
+    // The accounts alone — unchanged by any of the above.
+    expect(labelledRow(summary, 'Total account balance').getCell(2).value).toBe(1_000_000)
+    // 1,000,000 + (100 USD × 26,000) − 100,000 − 150,000 of principal still
+    // outstanding. The written-off receivable contributes nothing.
+    expect(labelledRow(summary, 'Net worth').getCell(2).value).toBe(3_350_000)
+    // And the workbook's single resolved rate is what did the converting.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('writes each budget in its own currency, from historical rates and no current one', async () => {
     const s = await setup()
     // Two budgets for the same month, in different currencies: one whole-month

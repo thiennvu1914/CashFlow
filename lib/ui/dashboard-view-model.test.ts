@@ -51,6 +51,12 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
           displayBalance: decimal('10000000'),
         },
       ],
+      // A user with nothing owed either way: Net Worth is the account total,
+      // which is what the KPI cases below assert. The cases that are about the
+      // Debt / Loan overview pass their own three figures.
+      receivables: decimal('0'),
+      payables: decimal('0'),
+      loanOutstanding: decimal('0'),
       fx: {
         rate: 25000,
         rateDecimal: decimal('25000.000000'),
