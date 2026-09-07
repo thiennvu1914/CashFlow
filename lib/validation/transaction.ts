@@ -41,7 +41,9 @@ const transactionFields = {
   categoryId: z.string().min(1).optional(),
   type: transactionTypeSchema,
   amount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
-  note: z.string().max(500).optional(),
+  // The `max` mirror of `accountId`'s `min`: the field carries no `maxLength`,
+  // so a pasted note reaches this check and its message reaches the user.
+  note: z.string().max(500, 'Keep the note under 500 characters').optional(),
 }
 
 const categoryRequirement = {

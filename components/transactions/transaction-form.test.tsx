@@ -13,9 +13,15 @@ import type { Currency } from '@prisma/client'
  * module is mocked too: importing the real one pulls in Prisma and Better Auth
  * for a test that never submits.
  *
- * `next/link` renders as a plain `<a href>` here and is NOT mocked — Next 16's
- * Link tolerates a missing router context during a static render, so the real
- * component is what produces the `href="/accounts"` these tests assert.
+ * `next/link` is NOT mocked, but note what that does and does not prove. Node
+ * resolution (`next/link` → `next/dist/client/link.js`) yields the
+ * *pages-router* Link, which renders without a router because of its own
+ * `if (!router)` guards. The app ships a different file —
+ * `next/dist/client/app-dir/link.js`, substituted by Next's compiler alias —
+ * which dereferences the app-router context. Both emit the same `<a href>`, so
+ * the `href="/accounts"` assertions below are true of the markup *shape*; that
+ * the Link the app actually bundles navigates is proved by
+ * `e2e/transactions-empty-state.spec.ts`, not here.
  */
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),

@@ -83,6 +83,18 @@ describe('createTransferFormSchema account messages', () => {
     }
   })
 
+  it('reports an over-long note as "Keep the note under 500 characters"', () => {
+    // Same field, same reasoning as `transaction.test.ts`: no `maxLength` on
+    // the input, so a pasted 501 characters renders this schema's message
+    // ("Too big: expected string to have <=500 characters" before this).
+    const issues = formIssues({ ...validFormInput, note: 'x'.repeat(501) })
+
+    expect(messagesFor(issues, 'note')).toEqual(['Keep the note under 500 characters'])
+    for (const issue of issues) {
+      expect(issue.message).not.toMatch(RAW_VALIDATION_TEXT)
+    }
+  })
+
   it('still rejects the same account on both legs with its own message', () => {
     const issues = formIssues({ ...validFormInput, toAccountId: validFormInput.fromAccountId })
 

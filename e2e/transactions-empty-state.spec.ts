@@ -27,8 +27,12 @@ const STORAGE_STATE_PATH = path.join(
 
 const NOTICE = 'You need an account before you can add a transaction.'
 
-/** Zod's own machine phrasing — the defect this spec guards against. */
-const RAW_VALIDATION_TEXT = /expected string|>=1 characters/
+/**
+ * Zod's own machine phrasing — the defect this spec guards against. The same
+ * pattern the unit tests use, so a leak cannot be invisible here and visible
+ * there.
+ */
+const RAW_VALIDATION_TEXT = /expected string|>=1 characters|Too small|Invalid input/i
 
 test.describe.serial('Transactions — no active financial account', () => {
   test.use({ storageState: STORAGE_STATE_PATH })
@@ -112,6 +116,22 @@ test.describe.serial('Transactions — no active financial account', () => {
       .filter({ has: page.getByText('Food & Dining · Cash', { exact: true }) })
     await expect(listRow).toHaveCount(1)
     await expect(listRow).toContainText('50.000')
+
+    // The only state in this spec where validation can actually fire: with an
+    // account to submit against, a failed submit renders a real message. An
+    // emptied Amount reaches the schema as `NaN` (react-hook-form's
+    // `valueAsNumber`), which used to render "Invalid input: expected number,
+    // received NaN" — so this is the one live proof that what a user sees is
+    // product copy, not validator internals.
+    const amountInput = page.getByLabel('Amount', { exact: true })
+    await amountInput.fill('')
+    await expect(amountInput).toHaveValue('')
+    await page.getByRole('button', { name: 'Add transaction' }).click()
+
+    await expect(page.getByText('Enter an amount', { exact: true })).toBeVisible()
+    expect(await page.locator('main').innerText()).not.toMatch(RAW_VALIDATION_TEXT)
+    // The rejected submit created nothing: still exactly the one row above.
+    await expect(listRow).toHaveCount(1)
   })
 
   test('a second active account joins the selector; the archived one stays out', async ({

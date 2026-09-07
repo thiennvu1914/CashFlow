@@ -94,6 +94,19 @@ describe('createTransactionFormSchema account messages', () => {
       expect(issue.message).not.toMatch(RAW_VALIDATION_TEXT)
     }
   })
+
+  it('reports an over-long note as "Keep the note under 500 characters"', () => {
+    // The `max` mirror of the `min` above — the Note input carries no
+    // `maxLength`, so a pasted 501 characters reaches the schema and its
+    // message reaches the user ("Too big: expected string to have <=500
+    // characters" before this).
+    const issues = formIssues({ ...validFormInput, note: 'x'.repeat(501) })
+
+    expect(messagesFor(issues, 'note')).toEqual(['Keep the note under 500 characters'])
+    for (const issue of issues) {
+      expect(issue.message).not.toMatch(RAW_VALIDATION_TEXT)
+    }
+  })
 })
 
 describe('createTransactionSchema account messages', () => {

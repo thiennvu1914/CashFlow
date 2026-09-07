@@ -33,7 +33,9 @@ const transferFields = {
     .min(1, 'Choose the account to transfer to'),
   fromAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
   toAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
-  note: z.string().max(500).optional(),
+  // Same field, same reasoning as `transaction.ts`: no `maxLength` on the
+  // input, so this check's message is what a pasted note renders.
+  note: z.string().max(500, 'Keep the note under 500 characters').optional(),
 }
 
 const distinctAccounts = {
