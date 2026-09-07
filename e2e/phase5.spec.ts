@@ -337,8 +337,22 @@ test.describe.serial('Phase 5 — budgets', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await fullWorkbook.xlsx.load(fullBuffer as any)
 
+    // The first five sheets, in order, and Budgets among them — deliberately
+    // NOT the whole list. This is a Phase 5 spec: what it has to prove is that
+    // its own sheet was appended after the Phase 4 four, in that position. A
+    // `toEqual` on the entire array would additionally assert the *absence* of
+    // every sheet a later phase adds, which is not Phase 5's claim to make —
+    // and it broke the moment Phase 6 appended its six planning sheets.
+    // `e2e/phase6.spec.ts` owns the exact, complete list.
     const sheetNames = fullWorkbook.worksheets.map((sheet) => sheet.name)
-    expect(sheetNames).toEqual(['Summary', 'Accounts', 'Transactions', 'Transfers', 'Budgets'])
+    expect(sheetNames.slice(0, 5)).toEqual([
+      'Summary',
+      'Accounts',
+      'Transactions',
+      'Transfers',
+      'Budgets',
+    ])
+    expect(sheetNames).toContain('Budgets')
 
     const budgetsSheet = fullWorkbook.getWorksheet('Budgets')
     if (!budgetsSheet) throw new Error('Budgets sheet not found in full export')
