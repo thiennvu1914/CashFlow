@@ -262,7 +262,10 @@ describe('buildFilteredWorkbook', () => {
         frequency: 'MONTHLY',
         interval: 1,
         dayOfMonth: 1,
+        // Local midnight on 1 March 2026 in the zone the schedule is anchored
+        // to — the two always travel together (ruling R6-22).
         startDate: new Date('2026-02-28T17:00:00Z'),
+        timezone: 'Asia/Ho_Chi_Minh',
       },
     })
 

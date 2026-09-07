@@ -260,6 +260,9 @@ function occurrence(overrides: {
       dayOfMonth: 1,
       month: null,
       startDate: new Date('2026-08-31T17:00:00Z'),
+      // The zone the schedule is anchored to (ruling R6-22) — never read here:
+      // the widget renders each `dueAt` in the *viewer's* zone.
+      timezone: 'Asia/Ho_Chi_Minh',
       note: null,
       active: true,
       createdAt: at,

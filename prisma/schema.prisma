@@ -684,9 +684,11 @@ enum OccurrenceStatus {
 
 /// A recurring financial reminder or bill (spec §4.7). Never a Transaction: when
 /// an occurrence is due it is shown in-app, and acknowledging or dismissing it
-/// changes only the occurrence. `startDate` is the instant of LOCAL midnight in
-/// the user's timezone on the chosen day; every `dueAt` is likewise a local
-/// midnight, so "due on the 1st" means the 1st where the user lives.
+/// changes only the occurrence. `startDate` is the instant of LOCAL midnight on
+/// the chosen day in `timezone` — the zone recorded on this row, not whatever
+/// the user's profile says today (ruling R6-22) — and every `dueAt` is likewise
+/// a local midnight in it, so "due on the 1st" means the 1st where the user
+/// lived when they set the reminder up.
 ///
 /// This one model is both of the product spec's "Recurring Financial Reminders"
 /// and "Bill Reminders": read side by side they describe the same mechanism, and
@@ -742,8 +744,24 @@ model RecurringReminder {
   dayOfMonth     Int?
   /// The anchor month 1–12 (not JavaScript's 0–11). YEARLY only.
   month          Int?
-  /// The instant of LOCAL midnight on the first day the reminder can fall on.
+  /// The instant of LOCAL midnight on the first day the reminder can fall on,
+  /// in `timezone` below — never in the viewer's current zone.
   startDate      DateTime
+  /// The IANA zone this schedule is anchored to — the user's zone at the moment
+  /// the reminder was created, e.g. `"Asia/Ho_Chi_Minh"`.
+  ///
+  /// Recorded on the row instead of read from `User.timezone` on each pass
+  /// because `User.timezone` is editable (ruling R6-22). Materialization derives
+  /// the local start day from `startDate` and writes each `dueAt` as local
+  /// midnight, so doing that in the *request's* zone would re-phase every
+  /// existing series the moment the profile changed: a monthly reminder stored
+  /// at `2025-12-31T17:00Z` reads as 31 December in `America/New_York`, and the
+  /// new `dueAt`s would be different instants from the stored ones — which
+  /// `@@unique([reminderId, dueAt])` cannot dedupe, leaving two PENDING rows for
+  /// one bill. A later profile change therefore never moves an existing series;
+  /// only *display* follows the viewer, and every page renders `dueAt` and
+  /// `startDate` in whatever zone the viewer is in now.
+  timezone       String
   note           String?
   active         Boolean             @default(true)
   createdAt      DateTime            @default(now())

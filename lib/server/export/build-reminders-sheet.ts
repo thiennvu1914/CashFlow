@@ -54,13 +54,20 @@ function emptyTally(): OccurrenceTally {
  * ## `Start date` is an instant, unlike every other date on the Phase 6 sheets
  *
  * `RecurringReminder.startDate` stores the *instant of local midnight* on the
- * chosen day, not a calendar-date carrier, because every `dueAt` derived from it
- * is compared against `now` to decide what is overdue. So it goes through
+ * chosen day rather than a calendar-date carrier, because the occurrences
+ * derived from it are ordered and de-duplicated as instants
+ * (`@@unique([reminderId, dueAt])`). So it goes through
  * `localDateCell(…, ctx.timezone)` — which reads the instant in the user's zone
  * and hands ExcelJS the day they picked — and is then formatted as a date only:
  * a start date names a day, and 00:00 next to it would be noise. Writing the
  * bare instant would show 1 March as 28 February for a user in
  * `Asia/Ho_Chi_Minh`.
+ *
+ * `Timezone` is the last column for the same reason: `startDate` above is read
+ * in the *viewer's* current zone, while the schedule itself is anchored to
+ * `reminder.timezone` — the zone the reminder was created in, which a later
+ * profile change never moves (ruling R6-22). Where the two differ, the column
+ * is what explains a start date that reads a day off the anchor.
  *
  * Two queries, whatever the user's history looks like: the reminders, and ONE
  * `groupBy` that tallies every occurrence of every reminder at once — never a
@@ -103,6 +110,7 @@ export async function buildRemindersSheet(
     { header: 'Account', width: 20 },
     { header: 'Note', width: 40 },
     { header: 'Created', width: 18 },
+    { header: 'Timezone', width: 20 },
   ])
 
   for (const reminder of reminders) {
@@ -130,6 +138,8 @@ export async function buildRemindersSheet(
       reminder.account?.name ?? '',
       reminder.note ?? '',
       localDateCell(reminder.createdAt, ctx.timezone),
+      // The IANA zone the schedule is anchored to, verbatim — not the viewer's.
+      reminder.timezone,
     ])
     // Formatted by the REMINDER's currency, not the user's display currency.
     written.getCell(3).numFmt = moneyFmt(reminder.currency)

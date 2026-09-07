@@ -1109,6 +1109,10 @@ describe('full export workbook', () => {
     expect(rent.getCell(12).value).toBe('Wallet')
     expect(rent.getCell(13).value).toBe('landlord transfers')
     expect(rent.getCell(3).numFmt).toBe('#,##0')
+    // The zone the schedule is anchored to, written verbatim: `Start date`
+    // beside it is the same instant read in the *viewer's* zone, and only this
+    // column says which zone the reminder actually recurs in (ruling R6-22).
+    expect(rent.getCell(15).value).toBe(TEST_TIMEZONE)
 
     const passport = rowBy(reminders, 1, 'Passport renewal')
     expect(passport.getCell(5).value).toBe('One time')

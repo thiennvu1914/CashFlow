@@ -59,6 +59,10 @@ function reminder(overrides: Partial<ReminderRow> = {}): ReminderRow {
     dayOfMonth: 15,
     month: null,
     startDate: localMidnight('2026-03-15'),
+    // The zone the schedule is anchored to (ruling R6-22). This module never
+    // reads it: a due date is rendered in the *viewer's* zone, which is what
+    // `TIMEZONE` is passed in as.
+    timezone: TIMEZONE,
     note: null,
     active: true,
     createdAt: CREATED_AT,

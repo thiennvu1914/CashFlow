@@ -65,6 +65,27 @@ import { createReminderSchema, type CreateReminderInput } from '@/lib/validation
  * from the source — because a service that used it would pass every test on a
  * `TZ=UTC` CI box and ship the wrong day to half the world.
  *
+ * ### Whose zone: the reminder's, never the request's (ruling R6-22)
+ *
+ * `createReminder` is handed the user's *current* zone and stores it on the row
+ * (`RecurringReminder.timezone`). From then on, that column — and nothing else —
+ * is what materialization reads: `nowLocal`, the backfill window, the local
+ * start day and every `dueAt` are computed in the reminder's own zone.
+ *
+ * `User.timezone` is editable, and re-deriving the schedule from the *request's*
+ * zone made a profile change re-phase every existing series: a monthly reminder
+ * stored at `2025-12-31T17:00Z` (1 January in `Asia/Ho_Chi_Minh`) reads as
+ * 31 December in `America/New_York`, so the recomputed `dueAt`s were different
+ * instants from the stored ones. Different instants are different rows —
+ * `@@unique([reminderId, dueAt])` cannot dedupe them — so the user got a second
+ * PENDING occurrence for every bill they already had, and a weekly series moved
+ * a day and duplicated every week in the backfill window.
+ *
+ * Display is the opposite and stays as it was: `dueAt` and `startDate` are
+ * instants, and every page renders them in whatever zone the *viewer* is in now
+ * (`lib/ui/reminder-view-model.ts`). Moving zone changes what the user reads a
+ * stored instant as; it never changes which instants exist.
+ *
  * `now` is injectable on every function that needs it, so none of this depends
  * on the clock: the tests pin a single instant and assert real UTC values
  * against it.
@@ -304,6 +325,11 @@ function resolveAnchors(
  * it explicitly keeps this service free of an assumption about whose request it
  * is serving (the convention `lib/datetime/local-date-time.ts` sets out).
  *
+ * It is also **stored on the row**, which is what makes the schedule mean the
+ * same thing forever (ruling R6-22): `startDate` is local midnight in this zone,
+ * every `dueAt` is derived in it, and a user who later edits their profile zone
+ * re-reads the same instants rather than acquiring a re-phased duplicate series.
+ *
  * The category and account lookups run together in one round trip and are
  * *checked* in a fixed order afterwards, so the error a caller gets does not
  * depend on which query happened to resolve first. Both are skipped entirely
@@ -388,6 +414,9 @@ export async function createReminder(
       dayOfMonth: anchors.dayOfMonth,
       month: anchors.month,
       startDate,
+      // The zone `startDate` was just built in, so materialization can rebuild
+      // the same calendar days from it however the profile changes later.
+      timezone,
       note: parsed.note ?? null,
     },
     include: REMINDER_LABELS,
@@ -447,8 +476,23 @@ export async function setReminderActive(
  * Creates the PENDING occurrence rows that are missing for every *active*
  * reminder, and returns how many rows were actually inserted.
  *
- * The window is `[from, nowLocal + 30 days]` in the user's local calendar, where
- * `from` is:
+ * **Every date here is computed in `reminder.timezone` — the zone the reminder
+ * was created in — and never in the zone the request carries** (ruling R6-22).
+ * `nowLocal`, the window, the local start day and each `dueAt` are all in it, so
+ * a user who edits their profile zone re-derives exactly the instants already
+ * stored: `skipDuplicates` then skips them and nothing moves. Deriving them from
+ * the request's zone instead re-phased the series and wrote duplicates the
+ * unique index could not catch (the module comment sets out why in full).
+ *
+ * The `timezone` parameter is consequently unused in the body, and is kept in
+ * the signature deliberately: `listUpcomingOccurrences` passes the viewer's zone
+ * straight through from the three read paths that hold it, and dropping it would
+ * churn every one of them for no behavioural change. It is not, and must not
+ * become, the anchor — a caller passing a different zone changes nothing about
+ * which instants are written.
+ *
+ * The window is `[from, nowLocal + 30 days]` in the reminder's local calendar,
+ * where `from` is:
  *
  * - **ONE_TIME: the reminder's own `startDate`, never clamped** (directive O).
  *   The one-interval clamp below exists to stop a years-old *recurring* reminder
@@ -488,19 +532,25 @@ export async function setReminderActive(
  */
 export async function materializeDueOccurrences(
   userId: string,
+  // Unused on purpose — see the doc comment above. The reminder's own
+  // `timezone` column is what every date below is computed in.
   timezone: string,
   now: Date = new Date(),
 ): Promise<number> {
   const reminders = await prisma.recurringReminder.findMany({ where: { userId, active: true } })
 
-  const nowLocal = toLocalCalendarCarrier(now, timezone)
-  // Days added to a *carrier*, where a day is exactly 24 hours because UTC has
-  // no DST — the arithmetic that would be wrong on an instant in a local zone.
-  const to = new Date(nowLocal.getTime() + OCCURRENCE_LOOKAHEAD_DAYS * MS_PER_DAY)
-
   let created = 0
   for (const reminder of reminders) {
-    const startLocal = toLocalCalendarCarrier(reminder.startDate, timezone)
+    // The reminder's own zone, per reminder: two reminders of the same user can
+    // legitimately be anchored to different zones (one created before a move,
+    // one after), so neither `nowLocal` nor the window can be hoisted out of
+    // this loop.
+    const zone = reminder.timezone
+    const nowLocal = toLocalCalendarCarrier(now, zone)
+    // Days added to a *carrier*, where a day is exactly 24 hours because UTC has
+    // no DST — the arithmetic that would be wrong on an instant in a local zone.
+    const to = new Date(nowLocal.getTime() + OCCURRENCE_LOOKAHEAD_DAYS * MS_PER_DAY)
+    const startLocal = toLocalCalendarCarrier(reminder.startDate, zone)
     const rule: RecurrenceRule = {
       frequency: reminder.frequency,
       interval: reminder.interval,
@@ -526,9 +576,10 @@ export async function materializeDueOccurrences(
       data: dueDates.map((dueDate) => ({
         userId,
         reminderId: reminder.id,
-        // Each local calendar day back to the instant it starts in the user's
-        // zone — the only place the conversion happens.
-        dueAt: localCarrierToInstant(dueDate, timezone),
+        // Each local calendar day back to the instant it starts in the
+        // REMINDER's zone — the only place the conversion happens, and the one
+        // that makes a repeat read land on the very same instants.
+        dueAt: localCarrierToInstant(dueDate, zone),
       })),
       skipDuplicates: true,
     })
@@ -544,13 +595,20 @@ export async function materializeDueOccurrences(
  *
  * Overdue occurrences come first by construction — their `dueAt` is in the past,
  * so ascending order puts them at the top — which is why nothing here stores or
- * computes an "overdue" flag. It is `dueAt < now && status = PENDING`, and the
- * view decides that against the user's own clock (spec §4.7).
+ * computes an "overdue" flag. Deciding it belongs to the view, which compares
+ * the occurrence's local calendar day with the user's own
+ * (`lib/ui/reminder-view-model.ts`, ruling R6-7) rather than two instants.
  *
  * Deliberately *not* limited to the lookahead window: a PENDING occurrence from
  * three months ago is a bill the user never answered, and dropping it out of the
  * list because it is old would be the app quietly forgetting it on their behalf.
- * It stays until they acknowledge or dismiss it.
+ * It stays until they acknowledge or dismiss it. The dashboard widget therefore
+ * partitions what it gets rather than trusting the head of the list to be
+ * upcoming (`lib/ui/dashboard-view-model.ts`, ruling R6-23).
+ *
+ * `timezone` is the *viewer's* zone and is passed straight through to
+ * materialization, which does not use it: each reminder's schedule is anchored
+ * to its own stored zone (ruling R6-22).
  */
 export async function listUpcomingOccurrences(
   userId: string,

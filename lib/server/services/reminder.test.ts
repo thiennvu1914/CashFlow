@@ -375,7 +375,11 @@ describe('reminder service', () => {
       frequency: 'MONTHLY' as const,
       interval: 1,
       dayOfMonth: 1,
+      // Local midnight on 1 January 2026 in the zone below — the pairing the
+      // column means, spelled out rather than left to a default (ruling R6-22
+      // removed the database default so a forgotten zone fails loudly).
       startDate: new Date('2025-12-31T17:00:00.000Z'),
+      timezone: TEST_TIMEZONE,
       ...overrides,
     }
   }
@@ -1000,6 +1004,98 @@ describe('reminder service', () => {
         '01 00:00',
         '01 00:00',
       ])
+    })
+
+    it('never re-phases or duplicates an existing series when the profile zone changes', async () => {
+      // Ruling R6-22, and the reason `RecurringReminder.timezone` exists.
+      //
+      // `User.timezone` is editable. Re-deriving each reminder's local start day
+      // from its stored instant in whatever zone the *request* carries would
+      // shift the whole series — a Ho Chi Minh City reminder's
+      // `2025-12-31T17:00Z` reads as 31 December in New York — and would write
+      // every `dueAt` at a different instant. Different instants are different
+      // rows: `@@unique([reminderId, dueAt])` cannot dedupe them, so the user
+      // would get a second PENDING occurrence for every bill they already had.
+      const monthly = await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+      const weekly = await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Weekly savings',
+        frequency: 'WEEKLY',
+        dayOfMonth: undefined,
+        startDate: '2026-01-05',
+      })
+
+      const before = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      // Two monthly firsts plus every Monday in the window — a real series, so
+      // "unchanged" is a meaningful assertion.
+      expect(before).toHaveLength(8)
+      const countBefore = await occurrenceCount()
+
+      // The user moves to New York and their profile follows.
+      await prisma.user.update({ where: { id: fx.userId }, data: { timezone: DST_TIMEZONE } })
+
+      const after = await listUpcomingOccurrences(fx.userId, DST_TIMEZONE, NOW)
+
+      // Not one new row, not one moved instant, and the same rows in the same
+      // order — the schedule belongs to the reminder, not to the request.
+      expect(await occurrenceCount()).toBe(countBefore)
+      expect(after.map((row) => row.id)).toEqual(before.map((row) => row.id))
+      expect(utcInstants(after)).toEqual(utcInstants(before))
+      // Still anchored to Ho Chi Minh City's local midnight, 17:00Z of the
+      // previous UTC day, every one of them.
+      expect(after.every((row) => row.dueAt.toISOString().endsWith('T17:00:00.000Z'))).toBe(true)
+      // And each series still falls on the days the user chose, read in the zone
+      // they chose them in: the 1st, and Mondays.
+      expect(localDays(after.filter((row) => row.reminderId === monthly.id))).toEqual([
+        '2026-03-01',
+        '2026-04-01',
+      ])
+      expect(localDays(after.filter((row) => row.reminderId === weekly.id))).toEqual([
+        '2026-03-09',
+        '2026-03-16',
+        '2026-03-23',
+        '2026-03-30',
+        '2026-04-06',
+        '2026-04-13',
+      ])
+    })
+
+    it('anchors a reminder created after the switch to the new zone, beside the old series', async () => {
+      // The other half of R6-22: pinning the old series must not freeze the new
+      // one. Two reminders with the same start date and the same anchor day,
+      // created either side of a profile change, keep two different anchors —
+      // and both are local midnight on the 1st where they were created.
+      const hcm = await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+
+      await prisma.user.update({ where: { id: fx.userId }, data: { timezone: DST_TIMEZONE } })
+
+      const ny = await createReminder(fx.userId, DST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Rent NY',
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+
+      // The zone is recorded on the row, so nothing later has to guess it.
+      expect((await storedReminder(hcm.id)).timezone).toBe(TEST_TIMEZONE)
+      expect((await storedReminder(ny.id)).timezone).toBe(DST_TIMEZONE)
+
+      const rows = await listUpcomingOccurrences(fx.userId, DST_TIMEZONE, NOW)
+      const instantsFor = (reminderId: string) =>
+        utcInstants(rows.filter((row) => row.reminderId === reminderId))
+
+      expect(instantsFor(hcm.id)).toEqual(['2026-02-28T17:00:00.000Z', '2026-03-31T17:00:00.000Z'])
+      // EST in March, EDT in April — 05:00Z then 04:00Z, both midnight on the
+      // 1st in New York.
+      expect(instantsFor(ny.id)).toEqual(['2026-03-01T05:00:00.000Z', '2026-04-01T04:00:00.000Z'])
     })
   })
 
