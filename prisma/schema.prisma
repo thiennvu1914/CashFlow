@@ -156,6 +156,7 @@ model Category {
 
   transactions Transaction[]
   budgets      Budget[]
+  reminders    RecurringReminder[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -177,10 +178,11 @@ model FinancialAccount {
   status         RecordStatus @default(ACTIVE)
   createdAt      DateTime     @default(now())
 
-  accountType   AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
+  accountType   AccountType         @relation(fields: [userId, accountTypeId], references: [userId, id])
   transactions  Transaction[]
-  transfersFrom Transfer[]    @relation("TransferFromAccount")
-  transfersTo   Transfer[]    @relation("TransferToAccount")
+  transfersFrom Transfer[]          @relation("TransferFromAccount")
+  transfersTo   Transfer[]          @relation("TransferToAccount")
+  reminders     RecurringReminder[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -636,4 +638,164 @@ model LoanPayment {
 
   @@unique([userId, id])
   @@index([userId, loanId, paymentDate])
+}
+
+/// Whether a reminder is money coming in or going out. Mirrors `CategoryType`
+/// value for value on purpose: a reminder's `type` is what a linked `Category`
+/// has to match (`reminder.ts` refuses an INCOME category on an EXPENSE
+/// reminder), so a divergence between the two enums would make that check
+/// meaningless. It is a separate enum rather than a reuse because the two
+/// concepts are separate — a later phase adding a transfer-shaped reminder
+/// would widen this one and must not widen categories.
+enum ReminderType {
+  INCOME
+  EXPENSE
+}
+
+/// How often a reminder recurs. ONE_TIME is a member rather than a null
+/// `frequency` so "remind me once, on the 14th" is a first-class schedule
+/// instead of a special case every query has to remember to handle — and it is
+/// the one frequency whose backfill window is never clamped (directive O; see
+/// `lib/server/services/recurrence.ts`).
+///
+/// `lib/server/services/recurrence.ts` mirrors this enum by hand as a string
+/// union so the recurrence arithmetic stays free of a Prisma import, exactly as
+/// `PaymentFrequency` is mirrored in `lib/datetime/add-months-clamped.ts`.
+enum RecurrenceFrequency {
+  ONE_TIME
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+/// What the user has done about one due instance. PENDING is the only state
+/// materialization ever writes; the other two are the user's own answer to
+/// "have you dealt with this?".
+///
+/// "Overdue" is deliberately **not** a member: it is `dueAt < now && status =
+/// PENDING`, a derived display flag, and storing it would need a background job
+/// to keep it true and would be wrong for every reader in a different timezone
+/// (spec §4.7, §5 "never store what can drift").
+enum OccurrenceStatus {
+  PENDING
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+/// A recurring financial reminder or bill (spec §4.7). Never a Transaction: when
+/// an occurrence is due it is shown in-app, and acknowledging or dismissing it
+/// changes only the occurrence. `startDate` is the instant of LOCAL midnight in
+/// the user's timezone on the chosen day; every `dueAt` is likewise a local
+/// midnight, so "due on the 1st" means the 1st where the user lives.
+///
+/// This one model is both of the product spec's "Recurring Financial Reminders"
+/// and "Bill Reminders": read side by side they describe the same mechanism, and
+/// Bills is the `type = EXPENSE` view of it (spec §4.7's design decision).
+///
+/// Tracking only, like `Debt` and `Loan`: there is no foreign key and no code
+/// path from here to `Transaction` or `Transfer`, so no reminder can ever move
+/// money. `accountId` is which account the user *expects* to pay from — a label
+/// on the reminder, not a link that debits anything — and
+/// `lib/server/services/reminder.ts` imports nothing that could write to a
+/// ledger (`reminder.test.ts` proves the absence both structurally and
+/// behaviourally).
+///
+/// `categoryId` and `accountId` are optional and carry composite
+/// `(userId, categoryId)` / `(userId, accountId)` foreign keys, so a reminder can
+/// never reference another user's category or account (spec §4.12) — an attempt
+/// raises P2003 even when the service is bypassed. `reminder.ts` additionally
+/// requires a linked category's `type` to match the reminder's and a linked
+/// account to be ACTIVE *at creation*; neither is re-checked later, because
+/// archiving a category must not freeze the reminders filed under it (the same
+/// rule `transaction.ts` applies).
+///
+/// `dayOfMonth` is the schedule's anchor day and is clamped down to each target
+/// month's length, so 31 means "the 31st, or the last day of a shorter month"
+/// and a reminder due at month end never decays to the 28th (ruling R6-6a's
+/// reasoning, applied here through `lib/datetime/add-months-clamped.ts`).
+/// `month` is 1–12 and is the YEARLY anchor month only; both are NULL for
+/// WEEKLY and ONE_TIME, where they would have no meaning.
+///
+/// `active` is a switch, not a status enum: pausing a reminder stops
+/// materialization producing new occurrences and nothing else — the ones already
+/// materialized stay exactly as they are, because they really were due.
+///
+/// `currency` is the reminder's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). Four invariants are database CHECK constraints in this
+/// model's migration, since Prisma's schema language has no CHECK syntax:
+/// `RecurringReminder_expectedAmount_positive` (> 0),
+/// `RecurringReminder_interval_min` (>= 1),
+/// `RecurringReminder_dayOfMonth_range` (NULL or 1–31) and
+/// `RecurringReminder_month_range` (NULL or 1–12).
+model RecurringReminder {
+  id             String              @id @default(cuid())
+  userId         String
+  title          String
+  type           ReminderType
+  expectedAmount Decimal             @db.Decimal(18, 2)
+  currency       Currency
+  categoryId     String?
+  accountId      String?
+  frequency      RecurrenceFrequency
+  interval       Int                 @default(1)
+  /// The anchor day 1–31, clamped to each month's length. MONTHLY/YEARLY only.
+  dayOfMonth     Int?
+  /// The anchor month 1–12 (not JavaScript's 0–11). YEARLY only.
+  month          Int?
+  /// The instant of LOCAL midnight on the first day the reminder can fall on.
+  startDate      DateTime
+  note           String?
+  active         Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  category    Category?            @relation(fields: [userId, categoryId], references: [userId, id])
+  account     FinancialAccount?    @relation(fields: [userId, accountId], references: [userId, id])
+  occurrences ReminderOccurrence[]
+
+  @@unique([userId, id])
+  @@index([userId, active])
+}
+
+/// One due instance, materialized lazily on read. `@@unique([reminderId, dueAt])`
+/// is what makes materialization idempotent under repeated and concurrent reads.
+///
+/// There is no cron and no background job (spec §4.7): reading the Reminders page
+/// or the dashboard widget computes each active reminder's due dates for a window
+/// around today and inserts the missing rows with
+/// `createMany({ skipDuplicates: true })`. The unique index is therefore not a
+/// safety net over an application check — it *is* the check, which is why two
+/// requests arriving at the same moment cannot produce a duplicate however they
+/// interleave.
+///
+/// Materialization only ever inserts. It never updates an existing row, so an
+/// ACKNOWLEDGED or DISMISSED occurrence can never be resurrected as PENDING by a
+/// later read — the property `reminder.test.ts` pins down directly.
+///
+/// `dueAt` is the instant of LOCAL midnight of the day the occurrence falls on,
+/// in the user's timezone (17:00Z the previous day for `Asia/Ho_Chi_Minh`), so
+/// "due on the 1st" is the 1st where the user lives. It is *not* a calendar-date
+/// carrier: unlike a debt's due date, an occurrence is compared against `now` to
+/// decide whether it is overdue, and that comparison has to be between two real
+/// instants.
+///
+/// The composite `(userId, reminderId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: an occurrence can never point at
+/// another user's reminder (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+model ReminderOccurrence {
+  id         String           @id @default(cuid())
+  userId     String
+  reminderId String
+  /// The instant of LOCAL midnight of the day this occurrence is due.
+  dueAt      DateTime
+  status     OccurrenceStatus @default(PENDING)
+  actionedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  reminder RecurringReminder @relation(fields: [userId, reminderId], references: [userId, id])
+
+  @@unique([reminderId, dueAt])
+  @@unique([userId, id])
+  @@index([userId, status, dueAt])
 }
