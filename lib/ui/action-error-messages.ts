@@ -1,4 +1,5 @@
 import type { BudgetActionError } from '@/lib/server/actions/budget-actions'
+import type { DebtActionError } from '@/lib/server/actions/debt-actions'
 import type { FinancialAccountActionError } from '@/lib/server/actions/financial-account-actions'
 import type { SavingsGoalActionError } from '@/lib/server/actions/savings-goal-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
@@ -66,4 +67,18 @@ export const SAVINGS_GOAL_ERROR_MESSAGES: Record<SavingsGoalActionError, string>
   ARCHIVED: 'This goal is archived and can no longer be changed.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That goal no longer exists.',
+}
+
+export const DEBT_ERROR_MESSAGES: Record<DebtActionError, string> = {
+  // Says what is wrong with the figure the user typed, not what the service
+  // compared it against: the outstanding amount is already on the row above
+  // the form, and `DebtOverpaymentError` carries a `Prisma.Decimal` that
+  // cannot cross into a client component anyway.
+  OVERPAYMENT: 'That payment is more than what is still owed.',
+  // Like an archived goal, a written-off debt is still visible on the page —
+  // under "Written-off debts" — so the message names the state the user can
+  // see rather than claiming the row has gone.
+  NOT_ACTIVE: 'This debt has been written off and can no longer be changed.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That debt no longer exists.',
 }

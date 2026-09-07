@@ -1,6 +1,7 @@
 import {
   ArrowLeftRight,
   ChartColumn,
+  HandCoins,
   LayoutDashboard,
   PiggyBank,
   Receipt,
@@ -16,9 +17,10 @@ import {
  * mobile bar can never drift apart about what exists or where it lives.
  *
  * Only routes that exist are listed — Budgets since Phase 5 shipped
- * `/budgets`, and Savings now that Phase 6's first group has shipped
- * `/goals`. The mobile tab bar is unchanged: `MOBILE_TAB_HREFS` names the
- * four routes it shows, so Savings joins the "More" menu on its own.
+ * `/budgets`, Savings since Phase 6's first group shipped `/goals`, and Debts
+ * now that its third group has shipped `/debts`. The mobile tab bar is
+ * unchanged: `MOBILE_TAB_HREFS` names the four routes it shows, so Savings and
+ * Debts join the "More" menu on their own.
  */
 export interface NavItem {
   href: string
@@ -33,6 +35,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/accounts', label: 'Accounts', icon: Wallet },
   { href: '/budgets', label: 'Budgets', icon: Target },
   { href: '/goals', label: 'Savings', icon: PiggyBank },
+  { href: '/debts', label: 'Debts', icon: HandCoins },
   { href: '/categories', label: 'Categories', icon: Tags },
   { href: '/reports', label: 'Reports', icon: ChartColumn },
   { href: '/settings', label: 'Settings', icon: Settings },
