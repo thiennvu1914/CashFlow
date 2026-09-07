@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
+import { ZodError } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
@@ -260,6 +261,22 @@ describe('transaction service', () => {
           fakeProvider().provider,
         ),
       ).rejects.toThrow(InvalidCategoryError)
+    })
+
+    it('rejects an empty accountId with a ZodError and writes nothing', async () => {
+      // The UI no longer offers an Account selector when there is nothing to
+      // select, but the service is the authority: it parses its own input, so a
+      // crafted request with no account fails here — before the FX lookup and
+      // before any row is written.
+      const s = await setup()
+      await expect(
+        createTransaction(
+          s.userId,
+          { accountId: '', type: 'CASH_IN', amount: 1000, date: new Date() },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ZodError)
+      expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
     })
 
     it('rejects any new activity on an archived account, even via a crafted request', async () => {

@@ -20,8 +20,17 @@ import { LOCAL_DATE_TIME_RE, isRealLocalDateTime } from '@/lib/datetime/local-da
 /** Everything except `date`, which is the only field the service and the form
  *  disagree about (an instant vs. the user's local date and time — see below). */
 const transferFields = {
-  fromAccountId: z.string().min(1),
-  toAccountId: z.string().min(1),
+  // Each leg names itself: the two selects look identical on the page, so
+  // "Choose an account" under one of them would not say which. Both halves are
+  // the same product copy for the same reason as `transaction.ts` — the `error`
+  // param covers a missing or non-string value, `min(1)` covers the `''` an
+  // unchosen `<select>` submits, and neither may read as validator internals.
+  fromAccountId: z
+    .string({ error: 'Choose the account to transfer from' })
+    .min(1, 'Choose the account to transfer from'),
+  toAccountId: z
+    .string({ error: 'Choose the account to transfer to' })
+    .min(1, 'Choose the account to transfer to'),
   fromAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
   toAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
   note: z.string().max(500).optional(),

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -13,7 +14,7 @@ import {
 import { createTransactionAction } from '@/lib/server/actions/transaction-actions'
 import { GENERIC_ERROR_MESSAGE, TRANSACTION_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { nowInZone } from '@/lib/datetime/local-date-time'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 type TransactionType = CreateTransactionInput['type']
@@ -106,6 +107,35 @@ export function TransactionForm({
     }
   }
 
+  /**
+   * With no account there is nothing to add a transaction *to*, so the form is
+   * replaced rather than shown half-usable: an Account `<select>` with no
+   * options looks operable, and submitting it only produced a validation error
+   * under a field the user could never fill.
+   *
+   * This lives in the component, not only in the page, on purpose. Any caller
+   * that hands over an empty `accounts` list must get a usable screen — the
+   * page cannot be the only place that knows this, or the next caller
+   * reintroduces the empty selector. The page's job stays what it already is:
+   * passing `listActiveFinancialAccounts`, so an archived account never counts
+   * as one the user could pick.
+   *
+   * Placed after every hook above, deliberately: an early return before them
+   * would call a different number of hooks depending on the prop.
+   */
+  if (accounts.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-surface p-4">
+        <p className="text-sm text-muted-foreground">
+          You need an account before you can add a transaction.
+        </p>
+        <Link href="/accounts" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+          Go to Accounts
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
       <div>
@@ -124,6 +154,9 @@ export function TransactionForm({
         {errors.type && <p className="text-sm text-negative">{errors.type.message}</p>}
       </div>
       <div>
+        {/* Exactly the `accounts` prop — the page passes
+            `listActiveFinancialAccounts`, so this list is the user's own ACTIVE
+            accounts and nothing else; the component filters nothing itself. */}
         <select {...register('accountId')} aria-label="Account" className="rounded-md border p-2">
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
@@ -131,6 +164,9 @@ export function TransactionForm({
             </option>
           ))}
         </select>
+        {/* Rendered verbatim from the schema (`lib/validation/transaction.ts`),
+            which is why no message is hard-coded here: one place owns the
+            wording, and the server re-parses the same schema. */}
         {errors.accountId && <p className="text-sm text-negative">{errors.accountId.message}</p>}
       </div>
       {needsCategory && (

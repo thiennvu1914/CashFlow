@@ -32,7 +32,12 @@ const CATEGORY_REQUIRED_TYPES = new Set<z.infer<typeof transactionTypeSchema>>([
 /** Everything except `date`, which is the only field the service and the form
  *  disagree about (an instant vs. the user's local date and time — see below). */
 const transactionFields = {
-  accountId: z.string().min(1),
+  // Both halves of the message are the same product copy on purpose: a form
+  // renders `errors.accountId.message` verbatim, so every way of arriving here
+  // has to read as product copy rather than as validator internals. The `error`
+  // param covers a missing or non-string value (a crafted request); `min(1)`
+  // covers the `''` a `<select>` with no chosen option submits.
+  accountId: z.string({ error: 'Choose an account' }).min(1, 'Choose an account'),
   categoryId: z.string().min(1).optional(),
   type: transactionTypeSchema,
   amount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),

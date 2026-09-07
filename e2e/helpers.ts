@@ -51,6 +51,17 @@ export async function createAccountViaUi(
  * transaction" form. Leaves the date/time field at its pre-filled "now"
  * default (in the user's configured timezone) — the seed data does not need
  * a specific instant, only "today".
+ *
+ * Every field goes through `selectAndVerify`/`fillAndVerify` rather than a bare
+ * `selectOption`/`fill`: `TransactionForm` has exactly the mount-time-default
+ * race documented on `selectAndVerify` below, and its defaults (`type:
+ * 'EXPENSE'`, no category) make the consequence particularly quiet. A type
+ * selected in the window between `load` and hydration completing is reverted to
+ * EXPENSE, after which the category `<select>` never lists an INCOME category —
+ * so the failure surfaces as "waiting for a category that will never appear",
+ * several lines away from the select that actually lost. How wide that window
+ * is depends on how much client JavaScript the page has to fetch first, which
+ * is not something a seeding helper should be sensitive to.
  */
 export async function createTransactionViaUi(
   page: Page,
@@ -62,17 +73,17 @@ export async function createTransactionViaUi(
   },
 ): Promise<void> {
   await page.goto('/transactions')
-  await page.getByLabel('Transaction type').selectOption(opts.type)
+  await selectAndVerify(page.getByLabel('Transaction type'), opts.type)
   // The category <select>'s options are re-filtered by `type` via client
   // state, not a fresh navigation — wait for the relevant category to
   // actually appear among its options before selecting it, so a slow
   // re-render cannot race the next action.
   const categorySelect = page.getByLabel('Category', { exact: true })
   await expect(categorySelect).toContainText(opts.categoryName)
-  await page.getByLabel('Account', { exact: true }).selectOption({ label: opts.accountName })
-  await categorySelect.selectOption({ label: opts.categoryName })
+  await selectAndVerify(page.getByLabel('Account', { exact: true }), { label: opts.accountName })
+  await selectAndVerify(categorySelect, { label: opts.categoryName })
   const amountInput = page.getByLabel('Amount', { exact: true })
-  await amountInput.fill(String(opts.amount))
+  await fillAndVerify(amountInput, String(opts.amount))
   await page.getByRole('button', { name: 'Add transaction' }).click()
   // A successful submit resets the form to its defaults, which sets the
   // amount field back to `0`.
@@ -80,8 +91,9 @@ export async function createTransactionViaUi(
 }
 
 /**
- * `locator.selectOption()`, made robust against `BudgetForm`'s own
- * `react-hook-form` default: the field's `ref` callback applies
+ * `locator.selectOption()`, made robust against a form's own
+ * `react-hook-form` default (`BudgetForm`'s below; `TransactionForm`'s in
+ * `createTransactionViaUi` above): the field's `ref` callback applies
  * `useForm`'s `defaultValues` to the DOM `<select>` once React finishes
  * hydrating, which can land *after* an interaction made in the brief window
  * between the page's `load` event and that hydration completing — silently

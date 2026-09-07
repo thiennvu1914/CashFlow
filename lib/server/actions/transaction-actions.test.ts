@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { CreateTransactionFormInput } from '@/lib/validation/transaction'
 
 /**
  * `transaction-actions.ts` starts with `'use server'`; Vitest ignores server-action
@@ -187,6 +188,34 @@ describe('createTransactionAction', () => {
 
     expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
     expect(createTransactionMock).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The Transactions page now hides the form entirely when the user has no
+   * active account, but the server stays the authority: these two cases are
+   * requests the UI can no longer produce, and they must still be refused here,
+   * before the service, with a code the form renders as a fixed message — never
+   * as an `Error#message` or a Zod string.
+   */
+  it('maps an empty accountId to INVALID_INPUT and never calls the service', async () => {
+    const result = await createTransactionAction({ ...validInput, accountId: '' })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createTransactionMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps a missing accountId to INVALID_INPUT and never calls the service', async () => {
+    const crafted: Record<string, unknown> = { ...validInput }
+    delete crafted.accountId
+    // The cast is the point: `CreateTransactionFormInput` requires `accountId`,
+    // so only a crafted (non-TypeScript) caller can send this — and it is
+    // exactly such a caller the server has to refuse.
+    const result = await createTransactionAction(crafted as unknown as CreateTransactionFormInput)
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createTransactionMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 
   it('maps FxUnavailableError to FX_UNAVAILABLE and does not revalidate', async () => {

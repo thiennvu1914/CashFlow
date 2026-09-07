@@ -41,6 +41,10 @@ export default async function TransactionsPage() {
           (`/transactions#new`), on both the desktop rail and the mobile bar. */}
       <div id="new" className="scroll-mt-6">
         <h2 className="mb-3 text-lg font-semibold">Add transaction</h2>
+        {/* `listActiveFinancialAccounts` above is what keeps archived accounts
+            out of the selector; `TransactionForm` itself owns the
+            no-account-yet notice, so a user with none never meets an empty
+            selector no matter which caller renders the form. */}
         <TransactionForm
           accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
           categories={[...expenseCategories, ...incomeCategories]}
