@@ -508,3 +508,132 @@ model DebtPayment {
   @@unique([userId, id])
   @@index([userId, debtId, date])
 }
+
+/// Stored status is deliberately only ACTIVE | CLOSED. PAID_OFF and OVERDUE are
+/// both computable — from the derived outstanding principal and from
+/// `nextDueDate` against the user's today — and storing either would let it
+/// drift the moment a payment lands or a day passes (spec §5, "never store what
+/// can drift"). Closing a loan is the one genuine human decision here ("this
+/// agreement is finished", whether it was repaid, refinanced or forgiven), so it
+/// is the one thing stored — and it is terminal.
+enum LoanStoredStatus {
+  ACTIVE
+  CLOSED
+}
+
+/// How often an instalment falls due. The advancement arithmetic for each lives
+/// in `lib/datetime/add-months-clamped.ts` (`advanceByFrequency`), whose
+/// `PaymentFrequency` union mirrors this enum by hand so the browser bundle
+/// never pulls in the Prisma client.
+enum PaymentFrequency {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+/// A loan the user owes (spec §4.10). Tracking only: there is no foreign key and
+/// no code path from here to FinancialAccount or Transaction, so recording an
+/// instalment changes no balance — `lib/server/services/loan.ts` imports nothing
+/// that could, and `loan.test.ts` re-asserts the account counts and a derived
+/// balance after every mutation.
+///
+/// Outstanding principal is never stored: it is `principal` minus the sum of
+/// this loan's `LoanPayment.principalAmount` values, computed in `loan.ts`
+/// (`deriveLoanOutstandingPrincipal`). A stored copy would be a second source of
+/// truth that a rolled-back write, a deleted payment or a concurrent request
+/// could put out of step with the payment rows themselves.
+///
+/// `dueDayOfMonth` is the schedule's anchor: the day the user's instalments fall
+/// on, captured from the first `nextDueDate`, so a loan due on the 31st goes
+/// Jan 31 → Feb 28 → Mar 31 instead of drifting to the 28th for good (ruling
+/// R6-6a). It is ignored for a WEEKLY loan, which has no day of the month.
+///
+/// `interestRate` is percent per year and purely informational: nothing in this
+/// app computes interest or an amortisation schedule from it — the user reads
+/// their instalment off their own loan statement and types the principal and
+/// interest parts in. Storing it makes the loan's own terms visible next to its
+/// history; deriving anything from it would be inventing figures the bank did
+/// not charge.
+///
+/// `principal`, `currency`, `startDate`, `termMonths`, `paymentFrequency` and
+/// `interestRate` are immutable after creation (see `lib/validation/loan.ts`):
+/// they define *which* loan this is, and changing one after payments exist would
+/// re-interpret that history against terms the loan never had. Editing covers
+/// `lender`, `scheduledPaymentAmount` and `notes`.
+///
+/// `startDate` and `nextDueDate` are calendar dates, not instants: stored as the
+/// UTC midnight of the chosen day — carriers — and never re-projected through a
+/// timezone (ruling R6-7, `lib/datetime/calendar-date.ts`). An overdue check
+/// compares `formatCalendarDate(nextDueDate)` against
+/// `todayCalendarDateInZone(user.timezone)`.
+///
+/// `currency` is the loan's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). Five invariants are database CHECK constraints in this
+/// model's migration, since Prisma's schema language has no CHECK syntax:
+/// `Loan_principal_positive` (> 0), `Loan_interestRate_nonnegative` (>= 0),
+/// `Loan_termMonths_positive` (> 0), `Loan_scheduledPaymentAmount_positive`
+/// (> 0) and `Loan_dueDayOfMonth_range` (1–31).
+model Loan {
+  id                     String           @id @default(cuid())
+  userId                 String
+  lender                 String
+  principal              Decimal          @db.Decimal(18, 2)
+  currency               Currency
+  /// Percent per year, informational only — no interest is ever computed here.
+  interestRate           Decimal          @db.Decimal(6, 3)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  startDate              DateTime
+  termMonths             Int
+  paymentFrequency       PaymentFrequency
+  scheduledPaymentAmount Decimal          @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7). Advanced
+  /// by exactly one interval inside the same transaction as each payment.
+  nextDueDate            DateTime
+  /// The schedule's anchor day, 1–31, captured from the first `nextDueDate`.
+  dueDayOfMonth          Int
+  status                 LoanStoredStatus @default(ACTIVE)
+  notes                  String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  payments LoanPayment[]
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
+
+/// One instalment recorded against a Loan (spec §4.10). It inherits the loan's
+/// currency — there are no cross-currency loan payments in the MVP, so a payment
+/// carries no currency column of its own and no FX snapshot.
+///
+/// `totalAmount = principalAmount + interestAmount`, enforced three times over:
+/// by Zod before the request is trusted (`lib/validation/loan.ts`), by a
+/// `Prisma.Decimal` re-check inside the locked transaction, and by the
+/// `LoanPayment_total_matches_split` CHECK in this model's migration. Only
+/// `principalAmount` reduces the outstanding principal; interest is the cost of
+/// the loan and reduces nothing. An interest-only instalment
+/// (`principalAmount = 0`) is legitimate and accepted (ruling R6-6), so the
+/// CHECKs are `principalAmount >= 0`, `interestAmount >= 0` and
+/// `totalAmount > 0`.
+///
+/// The composite `(userId, loanId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: a payment can never point at
+/// another user's loan (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+model LoanPayment {
+  id              String   @id @default(cuid())
+  userId          String
+  loanId          String
+  totalAmount     Decimal  @db.Decimal(18, 2)
+  principalAmount Decimal  @db.Decimal(18, 2)
+  interestAmount  Decimal  @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  paymentDate     DateTime
+  note            String?
+  createdAt       DateTime @default(now())
+
+  loan Loan @relation(fields: [userId, loanId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, loanId, paymentDate])
+}
