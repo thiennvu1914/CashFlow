@@ -1,3 +1,4 @@
+import type { BudgetActionError } from '@/lib/server/actions/budget-actions'
 import type { FinancialAccountActionError } from '@/lib/server/actions/financial-account-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
@@ -49,4 +50,11 @@ export const TRANSFER_ERROR_MESSAGES: Record<TransferActionError, string> = {
   ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
   INVALID_INPUT: 'Check the highlighted fields.',
   NOT_FOUND: 'That record no longer exists.',
+}
+
+export const BUDGET_ERROR_MESSAGES: Record<BudgetActionError, string> = {
+  DUPLICATE_BUDGET: 'A budget for this month already exists for that scope or category.',
+  INVALID_CATEGORY: 'Choose an active expense category.',
+  INVALID_INPUT: 'Check the highlighted fields.',
+  NOT_FOUND: 'That budget no longer exists.',
 }

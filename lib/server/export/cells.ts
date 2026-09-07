@@ -11,10 +11,11 @@ import type { Currency } from '@/lib/currency/provider'
  *
  * **Decimals.** Every amount is a `Prisma.Decimal` right up to the moment it
  * becomes a cell, because Excel has no decimal type — a cell value is an IEEE
- * double or it is text, and text cannot be summed. `moneyCell` is therefore the
- * one and only `toNumber()` in the export, so there is a single place to look
- * when asking where precision could have been lost, and no intermediate
- * arithmetic happens on the far side of it.
+ * double or it is text, and text cannot be summed. `moneyCell` (for an amount)
+ * and `percentCell` (for a ratio) are therefore the only `toNumber()` calls in
+ * the export, so there is a single file to look at when asking where precision
+ * could have been lost, and no intermediate arithmetic happens on the far side
+ * of either.
  *
  * **Instants.** Excel has no timezone either: a date cell is a serial number of
  * days since 1900, and whatever wall clock that serial encodes is what the
@@ -75,6 +76,21 @@ export function localDateCell(instant: Date, timezone: string): Date {
  */
 export function moneyCell(value: Prisma.Decimal): number {
   return value.toNumber()
+}
+
+/** The number format for a `percentCell`: Excel renders the fraction as a whole percent. */
+export const PERCENT_FMT = '0%'
+
+/**
+ * A `Decimal` ratio (1 = 100 %) as a percentage cell value.
+ *
+ * Excel's percentage cells hold the *fraction* and apply `PERCENT_FMT` for
+ * display, so the unrounded ratio is widened here and the spreadsheet does the
+ * rounding on screen. Nothing recomputes from the result — a status band that
+ * depends on the ratio is classified on the `Decimal` before it reaches a cell.
+ */
+export function percentCell(ratio: Prisma.Decimal): number {
+  return ratio.toNumber()
 }
 
 /**

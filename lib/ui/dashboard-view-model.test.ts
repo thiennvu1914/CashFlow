@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
+import type { BudgetProgress } from '@/lib/server/services/budget'
 import { buildDashboardViewModel, type DashboardInput } from './dashboard-view-model'
 
 /**
@@ -122,7 +123,55 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
         category: null,
       },
     ],
+    // Most cases say nothing about budgets; the two that do pass their own.
+    budgets: [],
     ...overrides,
+  }
+}
+
+/**
+ * One `BudgetProgress` as `getBudgetProgressForMonth` returns it — `Decimal`
+ * throughout, with `remaining` and `ratio` derived from `amount`/`spent` the
+ * same way the service derives them, so the DTO under test sees the numbers
+ * production hands it.
+ *
+ * The service is imported for its *type* only (as in
+ * `budget-view-model.test.ts`): a value import would pull `lib/prisma` — and a
+ * `PrismaClient` — into a suite that is pure mapping and needs no database.
+ */
+function budgetProgress(overrides: {
+  id: string
+  currency: 'VND' | 'USD'
+  amount: string
+  spent: string
+  status: BudgetProgress['status']
+  scope?: 'OVERALL' | 'CATEGORY'
+  categoryName?: string
+}): BudgetProgress {
+  const amount = decimal(overrides.amount)
+  const spent = decimal(overrides.spent)
+  const scope = overrides.scope ?? 'OVERALL'
+  return {
+    budget: {
+      id: overrides.id,
+      userId: 'u1',
+      year: 2026,
+      month: 9,
+      scope,
+      categoryId: scope === 'CATEGORY' ? 'c1' : null,
+      amount,
+      currency: overrides.currency,
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+      category:
+        scope === 'CATEGORY'
+          ? { id: 'c1', name: overrides.categoryName ?? 'Food', type: 'EXPENSE', status: 'ACTIVE' }
+          : null,
+    },
+    spent,
+    remaining: amount.sub(spent),
+    ratio: spent.div(amount),
+    status: overrides.status,
   }
 }
 
@@ -331,5 +380,47 @@ describe('buildDashboardViewModel', () => {
         positive: true,
       },
     ])
+  })
+
+  it('shows each budget in its OWN currency, not the dashboard display currency', () => {
+    // The dashboard displays VND. A USD budget on it stays in USD — a budget is
+    // compared against its own currency and is never restated (ruling R5-3).
+    const vm = buildDashboardViewModel(
+      makeInput({
+        budgets: [
+          budgetProgress({
+            id: 'b1',
+            currency: 'VND',
+            amount: '1000000',
+            spent: '500000',
+            status: 'warning_50',
+          }),
+          budgetProgress({
+            id: 'b2',
+            currency: 'USD',
+            amount: '100',
+            spent: '84.5',
+            status: 'warning_80',
+            scope: 'CATEGORY',
+          }),
+        ],
+      }),
+    )
+
+    expect(vm.displayCurrency).toBe('VND')
+    expect(vm.budgets.map((b) => [b.id, b.label, b.currency, b.amount, b.spent])).toEqual([
+      ['b1', 'Overall', 'VND', '1.000.000', '500.000'],
+      // USD grouping and cents, under a VND dashboard.
+      ['b2', 'Food', 'USD', '100,00', '84,50'],
+    ])
+    expect(vm.budgets.map((b) => [b.percentLabel, b.statusLabel, b.over])).toEqual([
+      ['50 %', 'Over half used', false],
+      // 84.5 % rounds half-up on the Decimal, before any widening to a float.
+      ['85 %', 'Approaching limit', false],
+    ])
+  })
+
+  it('maps no budgets to an empty list — the widget says so rather than charting nothing', () => {
+    expect(buildDashboardViewModel(makeInput({ budgets: [] })).budgets).toEqual([])
   })
 })

@@ -20,7 +20,16 @@ export async function registerNewUser(
   await page.getByPlaceholder('Email').fill(email)
   await page.getByPlaceholder('Password').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
-  await expect(page).toHaveURL(/\/dashboard/)
+  // A wider bound than Playwright's default 5 s, for one reason only: on a
+  // freshly started dev server (`CI=1` makes the config start its own) this is
+  // the FIRST request that hits the auth API route and `/dashboard`, and
+  // Turbopack compiles both on demand before it can answer — routinely more
+  // than 5 s on a cold machine. That is the server building code, not the app
+  // being slow, and it has nothing to do with the hydration gate: this form has
+  // no `defaultValues`, so react-hook-form reads the typed values from the DOM
+  // rather than writing over them. Every later assertion in the suite keeps the
+  // default timeout.
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 })
 
   return { email, password }
 }
@@ -51,6 +60,13 @@ export async function createAccountViaUi(
  * transaction" form. Leaves the date/time field at its pre-filled "now"
  * default (in the user's configured timezone) — the seed data does not need
  * a specific instant, only "today".
+ *
+ * Plain `selectOption`/`fill`, with no verify-and-retry wrapper: the form is
+ * inside a `<fieldset disabled>` until hydration finishes (`useHydrated`,
+ * `lib/ui/use-hydrated.ts`), and Playwright's actionability check treats a
+ * control in a disabled fieldset as disabled — so every action below already
+ * waits for the earliest moment the app itself accepts input, and nothing it
+ * accepts is ever thrown away afterwards.
  */
 export async function createTransactionViaUi(
   page: Page,
@@ -77,6 +93,54 @@ export async function createTransactionViaUi(
   // A successful submit resets the form to its defaults, which sets the
   // amount field back to `0`.
   await expect(amountInput).toHaveValue('0')
+}
+
+/**
+ * Creates one budget through the `/budgets` page's "Add budget" form.
+ *
+ * Navigates to `/budgets` first by default (the page's *current* local month —
+ * no `?month=` is ever passed, matching every seed in `phase5.spec.ts`).
+ * `stayOnPage` suppresses that navigation for the one case that must submit
+ * the form exactly as the caller left it: a client-side month change keeps the
+ * mounted form alive, and a fresh `goto` would remount it and hide the very
+ * staleness that case exists to catch.
+ *
+ * Always selects `scope` explicitly rather than relying on the form's default
+ * (which flips between `OVERALL`/`CATEGORY` depending on whether an overall
+ * budget already exists for the month) — a caller creating a second Overall
+ * budget on purpose, to exercise the duplicate rejection, needs the field
+ * selected regardless of that default.
+ *
+ * Does not assert success: a duplicate submission is expected to fail with an
+ * inline error rather than resetting the form, so the caller — not this
+ * helper — asserts whichever outcome the scenario expects.
+ *
+ * Plain `selectOption`/`fill` here too — see `createTransactionViaUi` and
+ * `lib/ui/use-hydrated.ts`.
+ */
+export async function createBudgetViaUi(
+  page: Page,
+  opts: {
+    scope: 'OVERALL' | 'CATEGORY'
+    categoryName?: string
+    amount: number
+    currency?: 'VND' | 'USD'
+    stayOnPage?: boolean
+  },
+): Promise<void> {
+  if (!opts.stayOnPage) await page.goto('/budgets')
+  await page.getByLabel('Budget scope').selectOption(opts.scope)
+  if (opts.scope === 'CATEGORY') {
+    if (!opts.categoryName) {
+      throw new Error('createBudgetViaUi: categoryName is required when scope is CATEGORY')
+    }
+    await page.getByLabel('Budget category').selectOption({ label: opts.categoryName })
+  }
+  await page.getByLabel('Budget amount').fill(String(opts.amount))
+  if (opts.currency && opts.currency !== 'VND') {
+    await page.getByLabel('Budget currency').selectOption(opts.currency)
+  }
+  await page.getByRole('button', { name: 'Add budget' }).click()
 }
 
 /** "Today" as `yyyy-MM-dd` in the given IANA timezone (no `Date` library needed). */

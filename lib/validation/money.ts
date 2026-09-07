@@ -38,9 +38,23 @@ export const MAX_MONEY_MAGNITUDE = 1e13
  * amount. Lives in its own module with no Prisma import so a client
  * component's `zodResolver` can import it directly alongside a server
  * service.
+ *
+ * The `error` param is what keeps this field's most reachable failure readable.
+ * Every amount input registers with react-hook-form's `valueAsNumber`, so an
+ * *emptied* number field arrives here as `NaN` — and Zod 4's base number check
+ * rejects `NaN`, `±Infinity`, `undefined` and non-numbers itself, before
+ * `.finite()` or either refine below is reached. Without the param those all
+ * render as "Invalid input: expected number, received NaN".
+ *
+ * The copy is deliberately generic: this schema backs the transaction,
+ * transfer, account and budget amount fields, so it has to read correctly under
+ * every one of them. A per-field wording would have to go on those fields
+ * rather than here.
  */
 export const moneyAmountSchema = z
-  .number()
+  .number({ error: 'Enter an amount' })
+  // Redundant against Zod 4's base check (which already rejects a non-finite
+  // number), and kept only so this stays true of the schema on its own terms.
   .finite()
   .refine((v) => Math.abs(v) < MAX_MONEY_MAGNITUDE, 'Amount is too large')
   .refine(hasAtMostTwoDecimalPlaces, 'Use at most 2 decimal places')

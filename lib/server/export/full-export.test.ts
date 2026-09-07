@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
-import type ExcelJS from 'exceljs'
+// A value import, not `import type`: the scan-count case below builds a bare
+// workbook to run `buildBudgetsSheet` on its own.
+import ExcelJS from 'exceljs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
+import { buildBudgetsSheet } from './build-budgets-sheet'
 import { FULL_EXPORT_SHEET_BUILDERS, buildFullWorkbook } from './sheet-registry'
 import {
   cleanupExportUsers,
@@ -111,7 +114,7 @@ describe('full export workbook', () => {
     return account
   }
 
-  it('produces Summary, Accounts, Transactions and Transfers in registry order', async () => {
+  it('produces Summary, Accounts, Transactions, Transfers and Budgets in registry order', async () => {
     const s = await setup()
     const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
 
@@ -122,9 +125,10 @@ describe('full export workbook', () => {
       'Accounts',
       'Transactions',
       'Transfers',
+      'Budgets',
     ])
-    // The array is the single source of truth Phase 5/6 append to.
-    expect(FULL_EXPORT_SHEET_BUILDERS).toHaveLength(4)
+    // The array is the single source of truth Phase 6 appends to.
+    expect(FULL_EXPORT_SHEET_BUILDERS).toHaveLength(5)
   })
 
   it('includes archived accounts, their status, and their history', async () => {
@@ -320,6 +324,184 @@ describe('full export workbook', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('writes each budget in its own currency, from historical rates and no current one', async () => {
+    const s = await setup()
+    // Two budgets for the same month, in different currencies: one whole-month
+    // VND target and one USD target on Food.
+    await prisma.budget.create({
+      data: {
+        userId: s.userId,
+        year: 2026,
+        month: 3,
+        scope: 'OVERALL',
+        amount: new Prisma.Decimal(1_000_000),
+        currency: 'VND',
+      },
+    })
+    await prisma.budget.create({
+      data: {
+        userId: s.userId,
+        year: 2026,
+        month: 3,
+        scope: 'CATEGORY',
+        categoryId: s.expenseCategoryId,
+        amount: new Prisma.Decimal(100),
+        currency: 'USD',
+      },
+    })
+
+    // March spending, both rows snapshotting 25,500 at entry.
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      categoryId: s.expenseCategoryId,
+      amount: 300_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+      vndPerUsdAtEntry: 25_500,
+    })
+    await seedTransaction(s.userId, {
+      accountId: s.usdAccountId,
+      categoryId: s.expenseCategoryId,
+      amount: 10,
+      currency: 'USD',
+      date: new Date('2026-03-11T05:00:00Z'),
+      vndPerUsdAtEntry: 25_500,
+    })
+    // A balance movement, not spending — it must reach neither budget.
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      type: 'CASH_OUT',
+      amount: 900_000,
+      date: new Date('2026-03-12T05:00:00Z'),
+      vndPerUsdAtEntry: 25_500,
+    })
+
+    // Today's usable rate is deliberately far from 25,500: if any figure below
+    // came from it rather than from the rows' own snapshots, it would show.
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider(30_000) })
+    const workbook = await buildFullWorkbook(ctx)
+    const budgets = sheet(workbook, 'Budgets')
+
+    // Header plus the two budgets, OVERALL first (the Budgets page's order).
+    expect(budgets.actualRowCount).toBe(3)
+
+    const overallRow = budgets.getRow(2)
+    expect(overallRow.getCell(1).value).toBe(2026)
+    expect(overallRow.getCell(2).value).toBe(3)
+    expect(overallRow.getCell(3).value).toBe('OVERALL')
+    expect(overallRow.getCell(4).value).toBe('')
+    expect(overallRow.getCell(5).value).toBe(1_000_000)
+    expect(overallRow.getCell(6).value).toBe('VND')
+    // 300,000 + 10 × 25,500 — the USD row at ITS OWN snapshot rate. Today's
+    // 30,000 would have made this 600,000.
+    expect(overallRow.getCell(7).value).toBe(555_000)
+    expect(overallRow.getCell(8).value).toBe(445_000)
+    expect(overallRow.getCell(9).value).toBeCloseTo(0.555, 6)
+    expect(overallRow.getCell(10).value).toBe('Over half used')
+    // VND has no circulating subunit — the budget's currency decides, not the
+    // user's display currency (which happens to agree here; the USD row below
+    // is where the two diverge).
+    expect(overallRow.getCell(5).numFmt).toBe('#,##0')
+    expect(overallRow.getCell(9).numFmt).toBe('0%')
+
+    const foodRow = budgets.getRow(3)
+    expect(foodRow.getCell(3).value).toBe('CATEGORY')
+    expect(foodRow.getCell(4).value).toBe('Food')
+    expect(foodRow.getCell(5).value).toBe(100)
+    expect(foodRow.getCell(6).value).toBe('USD')
+    // The same two expenses restated in USD at 25,500: 300,000 ÷ 25,500 + 10.
+    expect(foodRow.getCell(7).value).toBeCloseTo(300_000 / 25_500 + 10, 6)
+    expect(foodRow.getCell(8).value).toBeCloseTo(100 - (300_000 / 25_500 + 10), 6)
+    expect(foodRow.getCell(10).value).toBe('Healthy')
+    // Cents, in a workbook whose display currency is VND.
+    expect(foodRow.getCell(5).numFmt).toBe('#,##0.00')
+    expect(foodRow.getCell(7).numFmt).toBe('#,##0.00')
+    expect(foodRow.getCell(8).numFmt).toBe('#,##0.00')
+
+    // Neither budget went looking for a rate, and the Budgets sheet asked for
+    // none of its own: `ctx.fx` is resolved once and this sheet reads it never.
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    // The rest of the workbook is untouched by the new sheet — three
+    // transactions counted, the two budget rows included in neither tally.
+    const summary = sheet(workbook, 'Summary')
+    expect(labelledRow(summary, 'Transactions').getCell(2).value).toBe(3)
+    expect(labelledRow(summary, 'Transfers').getCell(2).value).toBe(0)
+    expect(labelledRow(summary, 'Active accounts').getCell(2).value).toBe(2)
+  })
+
+  it('scans the ledger once per distinct budgeted month, never once per budget', async () => {
+    const s = await setup()
+    // Three budgets across TWO months — the shape that tells a per-month scan
+    // apart from a per-budget one.
+    for (const budget of [
+      { year: 2026, month: 3, scope: 'OVERALL' as const, categoryId: null },
+      { year: 2026, month: 3, scope: 'CATEGORY' as const, categoryId: s.expenseCategoryId },
+      { year: 2026, month: 4, scope: 'OVERALL' as const, categoryId: null },
+    ]) {
+      await prisma.budget.create({
+        data: {
+          userId: s.userId,
+          ...budget,
+          amount: new Prisma.Decimal(1_000_000),
+          currency: 'VND',
+        },
+      })
+    }
+    await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      categoryId: s.expenseCategoryId,
+      amount: 100_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+
+    // The spy is scoped to `buildBudgetsSheet` alone rather than to
+    // `buildFullWorkbook`: the Summary, Accounts and Transactions sheets run
+    // `transaction.findMany` calls of their own, which would drown the number
+    // this case is about.
+    const workbook = new ExcelJS.Workbook()
+    const findMany = vi.spyOn(prisma.transaction, 'findMany')
+    await buildBudgetsSheet(workbook, ctx)
+    const scans = findMany.mock.calls.length
+    findMany.mockRestore()
+
+    // Two months, so two scans — `getBudgetProgressForMonth` answers for every
+    // budget in the month it scans. A regression to one call per budget reads 3.
+    expect(scans).toBe(2)
+    // And all three budgets are still on the sheet (header plus three rows).
+    expect(sheet(workbook, 'Budgets').actualRowCount).toBe(4)
+  })
+
+  it('keeps a budget filed under an archived category, and marks it as archived', async () => {
+    const s = await setup()
+    await prisma.budget.create({
+      data: {
+        userId: s.userId,
+        year: 2026,
+        month: 3,
+        scope: 'CATEGORY',
+        categoryId: s.expenseCategoryId,
+        amount: new Prisma.Decimal(500_000),
+        currency: 'VND',
+      },
+    })
+    // Archived AFTER the budget was set — which does not erase the target or
+    // the history filed under it.
+    await prisma.category.update({
+      where: { userId_id: { userId: s.userId, id: s.expenseCategoryId } },
+      data: { status: 'ARCHIVED' },
+    })
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+
+    const row = sheet(await buildFullWorkbook(ctx), 'Budgets').getRow(2)
+
+    // Still there, still named, and the state is on the row rather than implied
+    // by its absence.
+    expect(row.getCell(4).value).toBe('Food (archived)')
+    expect(row.getCell(5).value).toBe(500_000)
+    expect(row.getCell(7).value).toBe(0)
+  })
+
   it('bolds and freezes every sheet header and formats VND without a subunit', async () => {
     const s = await setup()
     await seedTransaction(s.userId, {
@@ -332,7 +514,7 @@ describe('full export workbook', () => {
 
     const workbook = await buildFullWorkbook(ctx)
 
-    for (const name of ['Summary', 'Accounts', 'Transactions', 'Transfers']) {
+    for (const name of ['Summary', 'Accounts', 'Transactions', 'Transfers', 'Budgets']) {
       const worksheet = sheet(workbook, name)
       expect(worksheet.getRow(1).font?.bold).toBe(true)
       // Frozen, so the headers stay visible while scrolling a ledger that can

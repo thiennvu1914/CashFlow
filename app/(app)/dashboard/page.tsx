@@ -1,12 +1,16 @@
+import Link from 'next/link'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { getCalendarMonth } from '@/lib/datetime/calendar-month'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { getAccountBalanceOverTime } from '@/lib/server/services/account-balance-history'
 import { getActivitySummary, getCashFlowTrend } from '@/lib/server/services/activity'
+import { getBudgetProgressForMonth } from '@/lib/server/services/budget'
 import { getCurrentPosition } from '@/lib/server/services/position'
 import { listTransactions } from '@/lib/server/services/transaction'
 import { buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
+import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
 import { AccountBalanceHistoryChart } from '@/components/dashboard/account-balance-history-chart'
 import { AccountDistributionChart } from '@/components/dashboard/account-distribution-chart'
 import { CashFlowTrendChart } from '@/components/dashboard/cash-flow-trend-chart'
@@ -57,6 +61,10 @@ export default async function DashboardPage() {
   // page cannot be computed against two different "nows" either side of
   // midnight.
   const now = new Date()
+  // The month the user is *in*, read in their zone — never from a server-local
+  // `Date` getter, which for a Vietnamese user on a UTC host is the previous
+  // month for seven hours of every day.
+  const currentMonth = getCalendarMonth(timezone, now)
 
   // Per render, the whole page costs:
   //   · 1 `listActiveFinancialAccounts` + 1 batched `getAccountBalances`
@@ -67,6 +75,7 @@ export default async function DashboardPage() {
   //   · 6 batched balance reads + at most 6 historical-rate lookups
   //                                              (getAccountBalanceOverTime)
   //   · 1 recent-transactions list                       (listTransactions)
+  //   · 1 budget list + 1 month EXPENSE scan  (getBudgetProgressForMonth)
   // Nothing here is per-account or per-row, and no widget fetches on its own.
 
   // Resolved FIRST, on its own, and only then the rest.
@@ -88,7 +97,7 @@ export default async function DashboardPage() {
     getCurrentPosition(user.id, displayCurrency, { now }),
   )
 
-  const [monthly, cashFlowTrend, balanceOverTime, recentTransactions] = await Promise.all([
+  const [monthly, cashFlowTrend, balanceOverTime, recentTransactions, budgets] = await Promise.all([
     // ONE scan of the current local month, feeding the three monthly KPIs and
     // the Expense by Category chart. Two scans of the same window could only
     // ever produce the same numbers at a higher price — or different ones, if a
@@ -97,6 +106,12 @@ export default async function DashboardPage() {
     getCashFlowTrend(user.id, timezone, displayCurrency, TREND_MONTHS, now),
     getAccountBalanceOverTime(user.id, timezone, displayCurrency, TREND_MONTHS, undefined, now),
     listTransactions(user.id, { limit: RECENT_TRANSACTION_COUNT }),
+    // Historical end to end: it sums each contributing row at that row's own FX
+    // snapshot and never consults the current-rate policy, so it is not wrapped
+    // in `orNullIfFxUnavailable` — an FX outage cannot reach it, and there is
+    // nothing for it to degrade to. Two queries whatever the number of budgets,
+    // and none at all in the transaction table when the month has none.
+    getBudgetProgressForMonth(user.id, timezone, currentMonth.year, currentMonth.month),
   ])
 
   // The only place `Decimal` becomes `number`/`string` on this page. Everything
@@ -111,6 +126,7 @@ export default async function DashboardPage() {
     cashFlowTrend,
     balanceOverTime,
     recentTransactions,
+    budgets,
   })
 
   return (
@@ -155,6 +171,30 @@ export default async function DashboardPage() {
 
         <DashboardSection title="Recent Transactions">
           <RecentTransactions transactions={vm.recentTransactions} />
+        </DashboardSection>
+
+        {/* The caption is not decoration: every other figure on this page is in
+            the display currency, and these are not — a budget is compared
+            against its own currency, never restated (ruling R5-3). */}
+        <DashboardSection
+          title="Budget Progress"
+          caption="This month · each budget in its own currency"
+        >
+          {vm.budgets.length === 0 ? (
+            <DashboardEmpty>
+              {/* One `span`, as in `RecentTransactions`: `DashboardEmpty`'s `p` is
+                  a flex container, so bare text and a link would be two flex
+                  items and the space between them would be dropped. */}
+              <span>
+                No budgets for this month —{' '}
+                <Link href="/budgets" className="text-brand underline-offset-4 hover:underline">
+                  set one up
+                </Link>
+              </span>
+            </DashboardEmpty>
+          ) : (
+            <BudgetProgressList budgets={vm.budgets} compact />
+          )}
         </DashboardSection>
       </div>
     </div>

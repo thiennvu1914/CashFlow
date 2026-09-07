@@ -86,13 +86,13 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Transactions',
       'Transfers',
       'Accounts',
+      'Budgets',
       'Categories',
       'Reports',
       'Settings',
     ]) {
       await expect(rail.getByRole('link', { name: label })).toBeVisible()
     }
-    await expect(rail.getByRole('link', { name: 'Budgets' })).toHaveCount(0)
 
     // Scoped to the KPI strip's <dl>: "Net Income" (and, on other pages,
     // "Income"/"Expense") also appear as recharts legend text elsewhere on
@@ -115,6 +115,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Expense by Category',
       'Account Balance Distribution',
       'Recent Transactions',
+      'Budget Progress',
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     }
@@ -172,6 +173,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     const morePanel = page.locator(`#${panelId}`)
 
     await expect(morePanel.getByRole('link', { name: 'Transfers' })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: 'Budgets' })).toBeVisible()
     await expect(morePanel.getByRole('link', { name: 'Categories' })).toBeVisible()
     await expect(morePanel.getByRole('link', { name: 'Settings' })).toBeVisible()
 

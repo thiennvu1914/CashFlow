@@ -41,4 +41,48 @@ describe('moneyAmountSchema', () => {
   it('caps the magnitude at 1e13', () => {
     expect(MAX_MONEY_MAGNITUDE).toBe(1e13)
   })
+
+  /**
+   * The message, not just the rejection. Clearing an amount input is the most
+   * reachable failure in the app — `valueAsNumber` turns an emptied number
+   * field into `NaN` — and Zod 4's base number check absorbs `NaN`,
+   * `±Infinity`, `undefined` and non-numbers before `.finite()` or either
+   * refine is reached, so the base check's own text is what a form would
+   * render. `RAW_VALIDATION_TEXT` is asserted over *every* issue of the failed
+   * parse, so no other check can start leaking machine phrasing either.
+   */
+  describe('message', () => {
+    /** Zod's own machine phrasing — never acceptable in a rendered message. */
+    const RAW_VALIDATION_TEXT = /expected number|received NaN|Invalid input|Too small|Too big/i
+
+    it.each([
+      ['NaN — a cleared number input', NaN],
+      ['undefined — a missing field', undefined],
+      ['Infinity', Infinity],
+      ['-Infinity', -Infinity],
+      ['a string', 'abc'],
+    ])('reads "Enter an amount" for %s', (_label, value) => {
+      const result = moneyAmountSchema.safeParse(value)
+
+      expect(result.success).toBe(false)
+      if (result.success) return
+      expect(result.error.issues.map((issue) => issue.message)).toEqual(['Enter an amount'])
+      for (const issue of result.error.issues) {
+        expect(issue.message).not.toMatch(RAW_VALIDATION_TEXT)
+      }
+    })
+
+    it("keeps each refine's own message — the base error param does not swallow them", () => {
+      const tooLarge = moneyAmountSchema.safeParse(1e13)
+      const tooPrecise = moneyAmountSchema.safeParse(12.345)
+
+      expect(tooLarge.success).toBe(false)
+      expect(tooPrecise.success).toBe(false)
+      if (tooLarge.success || tooPrecise.success) return
+      expect(tooLarge.error.issues.map((i) => i.message)).toEqual(['Amount is too large'])
+      expect(tooPrecise.error.issues.map((i) => i.message)).toEqual([
+        'Use at most 2 decimal places',
+      ])
+    })
+  })
 })

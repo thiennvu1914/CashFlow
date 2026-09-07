@@ -14,6 +14,12 @@ import { updateFinancialAccount, archiveFinancialAccount } from './financial-acc
  * another user's data, and a service call scoped to one user can never read,
  * write, or partially affect another user's rows.
  *
+ * It is the acceptance suite for that requirement, so every composite foreign
+ * key in the schema gets a case here as it lands — including ones later phases
+ * add (Phase 5's `Budget`→`Category`, named in spec §4.12 alongside the rest),
+ * even where the owning phase's own suite already covers it. An auditor reading
+ * this file alone should be able to enumerate them all.
+ *
  * The first `describe` bypasses every service and calls Prisma directly, to
  * prove the invariant is enforced by the database's own composite foreign
  * keys — not merely by application code that could regress. The second
@@ -89,6 +95,9 @@ async function createUserWithAccount(currency: 'VND' | 'USD' = 'VND') {
 async function cleanup(userId: string) {
   await prisma.transaction.deleteMany({ where: { userId } })
   await prisma.transfer.deleteMany({ where: { userId } })
+  // Budgets before categories: a CATEGORY budget holds a RESTRICT foreign key
+  // on one, so the `category.deleteMany` below fails while any row survives.
+  await prisma.budget.deleteMany({ where: { userId } })
   await prisma.financialAccount.deleteMany({ where: { userId } })
   await prisma.accountType.deleteMany({ where: { userId } })
   await prisma.category.deleteMany({ where: { userId } })
@@ -222,6 +231,38 @@ describe('tenant isolation at the database level', () => {
       }
       expect(isKnownRequestError(caught)).toBe(true)
       expect((caught as Prisma.PrismaClientKnownRequestError).code).toBe('P2003')
+    } finally {
+      await cleanup(userA.userId)
+      await cleanup(userB.userId)
+    }
+  })
+
+  it("rejects a Budget whose categoryId belongs to a different user (spec §4.12's Budget→Category FK)", async () => {
+    const userA = await createUserWithAccount()
+    const userB = await createUserWithAccount()
+
+    try {
+      let caught: unknown
+      try {
+        await prisma.budget.create({
+          data: {
+            userId: userA.userId,
+            year: 2026,
+            month: 3,
+            scope: 'CATEGORY',
+            categoryId: userB.expenseCategoryId,
+            amount: new Prisma.Decimal(1_000_000),
+            currency: 'VND',
+          },
+        })
+      } catch (error) {
+        caught = error
+      }
+      expect(isKnownRequestError(caught)).toBe(true)
+      expect((caught as Prisma.PrismaClientKnownRequestError).code).toBe('P2003')
+      // And nothing was written for either user.
+      expect(await prisma.budget.count({ where: { userId: userA.userId } })).toBe(0)
+      expect(await prisma.budget.count({ where: { userId: userB.userId } })).toBe(0)
     } finally {
       await cleanup(userA.userId)
       await cleanup(userB.userId)
