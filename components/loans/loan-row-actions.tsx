@@ -2,7 +2,7 @@
 
 import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useForm, useWatch, type Resolver } from 'react-hook-form'
+import { useForm, useWatch, type FieldPath, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
   recordLoanPaymentSchema,
@@ -124,10 +124,38 @@ const cents = (value: number) => Math.round(value * 100)
  * Added in exact cents and divided back, so 3.500.000,01 + 1.499.999,99 is
  * 5.000.000 and not 5.000.000,0000001.
  */
-function totalFromParts(principal: number, interest: number): number | null {
+export function totalFromParts(principal: number, interest: number): number | null {
   if (!Number.isFinite(principal) || !Number.isFinite(interest)) return null
   return (cents(principal) + cents(interest)) / 100
 }
+
+/**
+ * `register`'s `deps`, naming the field the two parts *derive* — without which
+ * the total's error goes stale and stays on screen under a field the user
+ * cannot type in.
+ *
+ * `useForm` here takes no `reValidateMode`, so after the first submit
+ * re-validation runs on change. `createFormControl`'s change handler does run
+ * the whole resolver for every keystroke, but it then updates only the changed
+ * field's error: it narrows the fresh error set with `schemaErrorLookup` for
+ * `name` and hands the single result to `shouldRenderByError`. `totalAmount` is
+ * not a registered field, so no keystroke is ever *that* field changing and its
+ * error would only be recomputed by the next submit — leaving "Enter an amount"
+ * (or "Amount must be greater than zero", or "Amount is too large") under a
+ * Total that has since become correct.
+ *
+ * `deps` is the hook for exactly this. In the same change handler, immediately
+ * before `shouldRenderByError`, RHF calls `trigger(field._f.deps)` whenever the
+ * field declares them; with a resolver, `trigger` delegates to
+ * `executeSchemaAndUpdateState(names)`, which re-runs the resolver and then,
+ * per name, either `set`s the fresh error or **`unset`s** it — and it reads the
+ * name out of the resolver's errors rather than out of `_fields`, which is what
+ * makes it work for an unregistered field. It finishes with
+ * `_subjects.state.next({ errors })`, so the form re-renders with the total's
+ * error gone. (Verified in the installed react-hook-form 7.87 source; named by
+ * mechanism rather than by line number, which the next bump would invalidate.)
+ */
+const DERIVED_FIELD: FieldPath<RecordLoanPaymentInput>[] = ['totalAmount']
 
 const validatePayment = zodResolver(recordLoanPaymentSchema)
 
@@ -158,19 +186,57 @@ const validatePayment = zodResolver(recordLoanPaymentSchema)
  *    database will check.
  * 3. **`LoanPayment_total_matches_split`**, the CHECK constraint, is the last
  *    line — it answers a direct insert that bypassed both layers above.
+ *
+ * The one thing it does post-process is the duplicate message a blank part
+ * produces — see `dropDuplicateTotalError`.
  */
-const paymentResolver: Resolver<RecordLoanPaymentInput> = (values, context, options) =>
-  validatePayment(
+export const paymentResolver: Resolver<RecordLoanPaymentInput> = async (
+  values,
+  context,
+  options,
+) => {
+  const result = await validatePayment(
     {
       ...values,
-      // `NaN` when a part is missing, which `moneyAmountSchema` rejects with
-      // "Enter an amount" under the total — alongside the same message under
-      // the part that is actually blank.
+      // `NaN` when a part is missing, which `moneyAmountSchema` rejects — the
+      // duplicate the helper below then removes.
       totalAmount: totalFromParts(values.principalAmount, values.interestAmount) ?? NaN,
     },
     context,
     options,
   )
+  return dropDuplicateTotalError(result, values)
+}
+
+/**
+ * Removes the total's error when it is only an echo of a blank part.
+ *
+ * A missing part makes the derived total `NaN`, and the schema rejects that
+ * with the very same "Enter an amount" it has already put under the part
+ * itself. One mistake, reported twice, the second time under a `readOnly` field
+ * the user cannot act on — so the second copy is dropped and the Total simply
+ * shows its em dash, which already says "no total yet".
+ *
+ * The guard is structural rather than argued: the error is removed only while
+ * at least one *other* error survives to block the submit. That matters because
+ * `handleSubmit` calls `onValid` as soon as the error set is empty, with
+ * `zodResolver`'s failure `values` — which is `{}` — so an empty-by-subtraction
+ * error set would submit an empty instalment. (Today a non-finite part always
+ * carries its own error, so the guard can never fire; it is here so that stays
+ * true if the part schemas are ever reworded.)
+ */
+function dropDuplicateTotalError(
+  result: Awaited<ReturnType<typeof validatePayment>>,
+  values: RecordLoanPaymentInput,
+): Awaited<ReturnType<typeof validatePayment>> {
+  const bothPartsPresent =
+    Number.isFinite(values.principalAmount) && Number.isFinite(values.interestAmount)
+  if (bothPartsPresent) return result
+
+  const { totalAmount, ...others } = result.errors
+  if (!totalAmount || Object.keys(others).length === 0) return result
+  return { values: {}, errors: others }
+}
 
 /**
  * "How much of this instalment paid the loan down, how much was interest, and
@@ -251,7 +317,7 @@ function LoanPaymentForm({
           aria-label={`Principal for ${loan.lender}`}
           aria-describedby={errors.principalAmount ? `${uid}-principal-error` : undefined}
           placeholder={`Principal (${loan.currency})`}
-          {...register('principalAmount', { valueAsNumber: true })}
+          {...register('principalAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
         />
         {errors.principalAmount && (
           <p id={`${uid}-principal-error`} className="text-sm text-negative">
@@ -270,7 +336,7 @@ function LoanPaymentForm({
           aria-label={`Interest for ${loan.lender}`}
           aria-describedby={errors.interestAmount ? `${uid}-interest-error` : undefined}
           placeholder={`Interest (${loan.currency})`}
-          {...register('interestAmount', { valueAsNumber: true })}
+          {...register('interestAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
         />
         {errors.interestAmount && (
           <p id={`${uid}-interest-error`} className="text-sm text-negative">
