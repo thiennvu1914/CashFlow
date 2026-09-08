@@ -26,25 +26,32 @@ import {
  * four routes it shows, so Savings, Debts, Loans and Reminders join the "More"
  * menu on their own.
  */
+/**
+ * `labelKey`, not `label`: the rail, the bottom bar and the More sheet all
+ * render the same item, and Phase 7 renders it in the reader's language — so
+ * the item carries the KEY and whichever component draws it calls `t`. A
+ * display string here would have to be translated three times, or once in a
+ * place that has no translator.
+ */
 export interface NavItem {
   href: string
-  label: string
+  labelKey: string
   icon: LucideIcon
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/transactions', label: 'Transactions', icon: Receipt },
-  { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight },
-  { href: '/accounts', label: 'Accounts', icon: Wallet },
-  { href: '/budgets', label: 'Budgets', icon: Target },
-  { href: '/goals', label: 'Savings', icon: PiggyBank },
-  { href: '/debts', label: 'Debts', icon: HandCoins },
-  { href: '/loans', label: 'Loans', icon: Landmark },
-  { href: '/reminders', label: 'Reminders', icon: BellRing },
-  { href: '/categories', label: 'Categories', icon: Tags },
-  { href: '/reports', label: 'Reports', icon: ChartColumn },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
+  { href: '/transactions', labelKey: 'nav.transactions', icon: Receipt },
+  { href: '/transfers', labelKey: 'nav.transfers', icon: ArrowLeftRight },
+  { href: '/accounts', labelKey: 'nav.accounts', icon: Wallet },
+  { href: '/budgets', labelKey: 'nav.budgets', icon: Target },
+  { href: '/goals', labelKey: 'nav.goals', icon: PiggyBank },
+  { href: '/debts', labelKey: 'nav.debts', icon: HandCoins },
+  { href: '/loans', labelKey: 'nav.loans', icon: Landmark },
+  { href: '/reminders', labelKey: 'nav.reminders', icon: BellRing },
+  { href: '/categories', labelKey: 'nav.categories', icon: Tags },
+  { href: '/reports', labelKey: 'nav.reports', icon: ChartColumn },
+  { href: '/settings', labelKey: 'nav.settings', icon: Settings },
 ]
 
 /**

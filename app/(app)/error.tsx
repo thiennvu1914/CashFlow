@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -28,6 +29,8 @@ import { Button } from '@/components/ui/button'
  * all that is recorded, and the server-side log carries the real error.
  */
 export default function AppError({ retry }: { error: unknown; retry: () => void }) {
+  const t = useTranslations()
+
   // In an effect, not the render body: rendering must stay free of side
   // effects, and a double render would otherwise log twice.
   useEffect(() => {
@@ -35,15 +38,15 @@ export default function AppError({ retry }: { error: unknown; retry: () => void 
   }, [])
 
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+    <div className="mx-auto flex min-h-[60vh] max-w-[30rem] flex-col items-center justify-center gap-4 p-6 text-center">
       <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold">Something went wrong loading this page.</h1>
-        <p className="text-sm text-muted-foreground">
-          Your data has not been changed. Try again in a moment.
+        <h1 className="text-[1.125rem]/[1.625rem] font-semibold">{t('errors.boundaryTitle')}</h1>
+        <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
+          {t('errors.boundaryBody')}
         </p>
       </div>
       <Button type="button" onClick={() => retry()}>
-        Retry
+        {t('common.retry')}
       </Button>
     </div>
   )

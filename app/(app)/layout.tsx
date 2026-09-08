@@ -9,5 +9,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // again in the page costs one query.
   const session = await getOptionalSession()
   if (!session?.user) redirect('/login')
-  return <AppShell>{children}</AppShell>
+  // The NAME only, never the session object: `AppShell` is a client component,
+  // and handing it the session would ship the whole user record — email,
+  // `isDemo`, preferences — into the browser bundle to render one line of text.
+  return <AppShell userName={session.user.name}>{children}</AppShell>
 }
