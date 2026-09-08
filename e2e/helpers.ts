@@ -57,16 +57,19 @@ export async function createAccountViaUi(
 
 /**
  * Creates one transaction through the `/transactions` page's "Add
- * transaction" form. Leaves the date/time field at its pre-filled "now"
+ * transaction" form. Leaves the date/time fields at their pre-filled "now"
  * default (in the user's configured timezone) — the seed data does not need
  * a specific instant, only "today".
  *
- * Plain `selectOption`/`fill`, with no verify-and-retry wrapper: the form is
- * inside a `<fieldset disabled>` until hydration finishes (`useHydrated`,
+ * Plain `fill`/`click`, with no verify-and-retry wrapper: the form is inside
+ * a `<fieldset disabled>` until hydration finishes (`useHydrated`,
  * `lib/ui/use-hydrated.ts`), and Playwright's actionability check treats a
  * control in a disabled fieldset as disabled — so every action below already
  * waits for the earliest moment the app itself accepts input, and nothing it
- * accepts is ever thrown away afterwards.
+ * accepts is ever thrown away afterwards. The two custom Selects (Account,
+ * Category) only mount once `useHydrated()` flips too (`transaction-form.tsx`
+ * renders their disabled native `<select>` stand-in until then), so clicking
+ * their `combobox` trigger also waits out the same gate.
  */
 export async function createTransactionViaUi(
   page: Page,
@@ -75,21 +78,34 @@ export async function createTransactionViaUi(
     accountName: string
     categoryName: string
     amount: number
+    /** Optional; typed into the Note field when given. */
+    note?: string
   },
 ): Promise<void> {
   await page.goto('/transactions')
-  await page.getByLabel('Transaction type').selectOption(opts.type)
-  // The category <select>'s options are re-filtered by `type` via client
-  // state, not a fresh navigation — wait for the relevant category to
-  // actually appear among its options before selecting it, so a slow
-  // re-render cannot race the next action.
-  const categorySelect = page.getByLabel('Category', { exact: true })
-  await expect(categorySelect).toContainText(opts.categoryName)
-  await page.getByLabel('Account', { exact: true }).selectOption({ label: opts.accountName })
-  await categorySelect.selectOption({ label: opts.categoryName })
-  const amountInput = page.getByLabel('Amount', { exact: true })
+  // The type is a radiogroup of buttons now (spec §6.2), not a <select>: click
+  // the radio whose accessible name is the type's product label. The vi/en
+  // alternation keeps this helper working in either locale.
+  const typeLabel = opts.type === 'INCOME' ? /Thu nhập|^Income$/ : /Chi tiêu|^Expense$/
+  await page.getByRole('radio', { name: typeLabel }).click()
+
+  // The account and category pickers are custom Selects (base-ui comboboxes):
+  // open, then pick the option by name. `getByRole('combobox', { name })` finds
+  // them by their visible <label>, which every field now has.
+  await page.getByRole('combobox', { name: /Tài khoản|^Account$/ }).click()
+  await page.getByRole('option', { name: new RegExp(opts.accountName) }).click()
+
+  await page.getByRole('combobox', { name: /Danh mục|^Category$/ }).click()
+  await page.getByRole('option', { name: opts.categoryName, exact: true }).click()
+
+  const amountInput = page.getByLabel(/Số tiền|^Amount$/)
   await amountInput.fill(String(opts.amount))
-  await page.getByRole('button', { name: 'Add transaction' }).click()
+  if (opts.note) await page.getByLabel(/Ghi chú|^Note/).fill(opts.note)
+
+  // Both date fields stay at their pre-filled "now" — the seed needs "today",
+  // not a specific instant, so the split into Ngày and Giờ costs this helper
+  // nothing.
+  await page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
   // A successful submit resets the form to its defaults, which sets the
   // amount field back to `0`.
   await expect(amountInput).toHaveValue('0')
@@ -158,4 +174,15 @@ export function todayInZone(timeZone: string, now: Date = new Date()): string {
 /** Strips everything but digits — for comparing locale-formatted money without caring about separators. */
 export function digitsOnly(text: string): string {
   return text.replace(/[^\d]/g, '')
+}
+
+/**
+ * A vi/en alternation for one message, so a spec asserts that the right
+ * message surfaced without pinning which locale is rendering. The message
+ * TEXT is not what these tests are about — the alternation only proves it
+ * localises to whichever locale the page is rendering.
+ */
+export function eitherLocale(vi: string, en: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`${escape(vi)}|${escape(en)}`)
 }

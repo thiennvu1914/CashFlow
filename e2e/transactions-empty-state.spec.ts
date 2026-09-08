@@ -1,7 +1,12 @@
 import os from 'os'
 import path from 'path'
 import { test, expect } from '@playwright/test'
-import { createAccountViaUi, createTransactionViaUi, registerNewUser } from './helpers'
+import {
+  createAccountViaUi,
+  createTransactionViaUi,
+  eitherLocale,
+  registerNewUser,
+} from './helpers'
 
 /**
  * The `/transactions` page for a user who has nothing to record a transaction
@@ -25,7 +30,10 @@ const STORAGE_STATE_PATH = path.join(
   `cashflow-tx-empty-storage-state-${process.pid}.json`,
 )
 
-const NOTICE = 'You need an account before you can add a transaction.'
+const NOTICE = eitherLocale(
+  'Bạn cần ít nhất một tài khoản để ghi giao dịch.',
+  'You need an account before you can add a transaction.',
+)
 
 /**
  * Zod's own machine phrasing — the defect this spec guards against. The same
@@ -59,16 +67,23 @@ test.describe.serial('Transactions — no active financial account', () => {
 
     await expect(page.getByText(NOTICE)).toBeVisible()
 
-    // Nothing that looks operable: no empty Account selector, and no submit
-    // action that could only ever fail.
-    await expect(page.getByLabel('Account', { exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Add transaction' })).toHaveCount(0)
+    // Nothing that looks operable: no empty Account picker, and no submit
+    // action that could only ever fail. Scoped to `form` because the page now
+    // also carries the create panel's OWN trigger button, whose accessible
+    // name is this same phrase — but with zero accounts `TransactionForm`
+    // never renders a `<form>` at all (it is replaced outright by the
+    // `EmptyState` below), so this is trivially satisfied and still proves
+    // the point: no submit action exists anywhere.
+    await expect(page.getByRole('combobox', { name: /Tài khoản|^Account$/ })).toHaveCount(0)
+    await expect(
+      page.locator('form').getByRole('button', { name: /Thêm giao dịch|Add transaction/ }),
+    ).toHaveCount(0)
 
     // And no internal validator text anywhere on the page.
     const mainText = await page.locator('main').innerText()
     expect(mainText).not.toMatch(RAW_VALIDATION_TEXT)
 
-    const link = page.getByRole('link', { name: 'Go to Accounts' })
+    const link = page.getByRole('link', { name: /Đến Tài khoản|Go to Accounts/ })
     await expect(link).toBeVisible()
     await link.click()
     await expect(page).toHaveURL(/\/accounts/)
@@ -80,6 +95,8 @@ test.describe.serial('Transactions — no active financial account', () => {
     await page.goto('/accounts')
     const row = page.locator('li').filter({ has: page.getByText('Old', { exact: true }) })
     // `AccountList.handleArchive` asks for confirmation via `window.confirm`.
+    // That is Task 6's own screen — unchanged by this task — so it still
+    // works via `window.confirm`, not `ConfirmDialog`.
     page.once('dialog', (dialog) => dialog.accept())
     await row.getByRole('button', { name: 'Archive' }).click()
     // Proof the archive actually landed (a `router.refresh()` away): the row
@@ -88,8 +105,10 @@ test.describe.serial('Transactions — no active financial account', () => {
 
     await page.goto('/transactions')
     await expect(page.getByText(NOTICE)).toBeVisible()
-    await expect(page.getByLabel('Account', { exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Add transaction' })).toHaveCount(0)
+    await expect(page.getByRole('combobox', { name: /Tài khoản|^Account$/ })).toHaveCount(0)
+    await expect(
+      page.locator('form').getByRole('button', { name: /Thêm giao dịch|Add transaction/ }),
+    ).toHaveCount(0)
   })
 
   test('one active account: exactly that option, and a transaction can be created', async ({
@@ -98,9 +117,15 @@ test.describe.serial('Transactions — no active financial account', () => {
     await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
 
     await page.goto('/transactions')
-    const options = page.getByLabel('Account', { exact: true }).locator('option')
-    await expect(options).toHaveCount(1)
-    await expect(options).toHaveText(['Cash'])
+    // The Account picker is a custom Select now (spec §6.2) — open it and
+    // read the option list, the same way every other spec in this suite does.
+    const accountCombobox = page.getByRole('combobox', { name: /Tài khoản|^Account$/ })
+    await accountCombobox.click()
+    await expect(page.getByRole('option')).toHaveCount(1)
+    // The option's label is `t('transactions.accountOption', ...)` —
+    // "Cash · 1.000.000 VND", not the bare account name.
+    await expect(page.getByRole('option')).toContainText('Cash')
+    await page.keyboard.press('Escape')
     await expect(page.getByText(NOTICE)).toHaveCount(0)
 
     await createTransactionViaUi(page, {
@@ -110,11 +135,12 @@ test.describe.serial('Transactions — no active financial account', () => {
       amount: 50_000,
     })
 
-    // The list row is "<category> · <account>" (`TransactionList`).
-    const listRow = page
-      .locator('li')
-      .filter({ has: page.getByText('Food & Dining · Cash', { exact: true }) })
+    // The row's title is the category name, its meta carries the account
+    // (`TransactionList`'s `FinancialListRow`, title and meta are separate
+    // elements now — not one "<category> · <account>" string).
+    const listRow = page.getByRole('listitem').filter({ hasText: 'Food & Dining' })
     await expect(listRow).toHaveCount(1)
+    await expect(listRow).toContainText('Cash')
     await expect(listRow).toContainText('50.000')
 
     // The only state in this spec where validation can actually fire: with an
@@ -123,12 +149,13 @@ test.describe.serial('Transactions — no active financial account', () => {
     // `valueAsNumber`), which used to render "Invalid input: expected number,
     // received NaN" — so this is the one live proof that what a user sees is
     // product copy, not validator internals.
-    const amountInput = page.getByLabel('Amount', { exact: true })
+    const amountInput = page.getByLabel(/Số tiền|^Amount$/)
     await amountInput.fill('')
     await expect(amountInput).toHaveValue('')
-    await page.getByRole('button', { name: 'Add transaction' }).click()
+    await page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
 
-    await expect(page.getByText('Enter an amount', { exact: true })).toBeVisible()
+    const validationText = eitherLocale('Hãy nhập số tiền', 'Enter an amount')
+    await expect(page.getByText(validationText)).toBeVisible()
     expect(await page.locator('main').innerText()).not.toMatch(RAW_VALIDATION_TEXT)
     // The rejected submit created nothing: still exactly the one row above.
     await expect(listRow).toHaveCount(1)
@@ -140,10 +167,14 @@ test.describe.serial('Transactions — no active financial account', () => {
     await createAccountViaUi(page, { name: 'Wallet', currency: 'USD', initialBalance: 100 })
 
     await page.goto('/transactions')
-    const options = page.getByLabel('Account', { exact: true }).locator('option')
+    const accountCombobox = page.getByRole('combobox', { name: /Tài khoản|^Account$/ })
+    await accountCombobox.click()
     // Both active accounts, oldest first (`listActiveFinancialAccounts` orders
     // by `createdAt`) — and "Old", archived in an earlier test, is absent.
-    await expect(options).toHaveCount(2)
-    await expect(options).toHaveText(['Cash', 'Wallet'])
+    await expect(page.getByRole('option')).toHaveCount(2)
+    // Each option's label carries its balance too ("Cash · 1.000.000 VND"),
+    // so this matches by account name rather than the exact templated text.
+    await expect(page.getByRole('option')).toHaveText([/Cash/, /Wallet/])
+    await page.keyboard.press('Escape')
   })
 })
