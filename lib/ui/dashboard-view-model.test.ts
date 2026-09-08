@@ -605,15 +605,15 @@ describe('buildDashboardViewModel', () => {
     )
 
     expect(vm.displayCurrency).toBe('VND')
-    expect(vm.budgets.map((b) => [b.id, b.label, b.currency, b.amount, b.spent])).toEqual([
-      ['b1', 'Overall', 'VND', '1.000.000', '500.000'],
+    expect(vm.budgets.map((b) => [b.id, b.categoryName, b.currency, b.amount, b.spent])).toEqual([
+      ['b1', null, 'VND', '1.000.000', '500.000'],
       // USD grouping and cents, under a VND dashboard.
       ['b2', 'Food', 'USD', '100,00', '84,50'],
     ])
-    expect(vm.budgets.map((b) => [b.percentLabel, b.statusLabel, b.over])).toEqual([
-      ['50 %', 'Over half used', false],
+    expect(vm.budgets.map((b) => [b.percentLabel, b.status, b.over])).toEqual([
+      ['50 %', 'warning_50', false],
       // 84.5 % rounds half-up on the Decimal, before any widening to a float.
-      ['85 %', 'Approaching limit', false],
+      ['85 %', 'warning_80', false],
     ])
   })
 
@@ -651,9 +651,9 @@ describe('buildDashboardViewModel', () => {
         ['g1', 'Emergency fund', 'VND', '5.000.000', '20.000.000'],
         ['g2', 'New laptop', 'USD', '2.000,00', '2.000,00'],
       ])
-      expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.statusLabel])).toEqual([
-        [25, '25 %', 'In progress'],
-        [100, '100 %', 'Achieved'],
+      expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.status])).toEqual([
+        [25, '25 %', 'ACTIVE'],
+        [100, '100 %', 'ACHIEVED'],
       ])
     })
 

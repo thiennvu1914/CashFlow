@@ -461,7 +461,13 @@ export function buildDashboardViewModel(
     // or a status label cannot read one way on one page and another way on the
     // other. `displayCurrency` is deliberately not passed — a budget is shown
     // in its own currency.
-    budgets: budgets.map(toBudgetProgressDto),
+    // Wrapped rather than passed bare: `Array#map` calls its callback with
+    // `(element, index, array)`, and `toBudgetProgressDto` now takes a second
+    // `locale` parameter — passed bare, `map`'s own index would land there as
+    // `locale` for every row after the first. This dashboard call intentionally
+    // stays at the DTO's default locale (`vi`); Task 7's Budgets/Savings pages
+    // are what thread the reader's actual locale through.
+    budgets: budgets.map((progress) => toBudgetProgressDto(progress)),
     // Delegated to the Savings page's own DTO mapper, for the reason the
     // budgets line gives: the widget's compact rows and the page's full rows
     // are the same `GoalList` fed by the same function, so a percentage or a

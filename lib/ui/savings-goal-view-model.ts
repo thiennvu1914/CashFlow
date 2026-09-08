@@ -1,7 +1,12 @@
 import { Prisma } from '@prisma/client'
 import type { SavingsGoalStatus } from '@prisma/client'
 import type { Currency } from '@/lib/currency/provider'
-import { compareCalendarDates, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import {
+  calendarDaysBetween,
+  compareCalendarDates,
+  formatCalendarDate,
+} from '@/lib/datetime/calendar-date'
+import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import { formatMoney } from './format-money'
 
@@ -25,13 +30,17 @@ import { formatMoney } from './format-money'
  * `lib/datetime/calendar-date.ts` gives: the user's zone is what decides which
  * calendar day "now" is, and this module has no user. It is also what makes
  * every "overdue" case testable without freezing a clock.
+ *
+ * No status copy is baked in here at all (Phase 7): this module returns the
+ * `SavingsGoalStatus` enum and the component that renders a row translates it
+ * via `goalStatusLabelKey` — this stays a pure function with no translator of
+ * its own.
  */
 export interface SavingsGoalDto {
   id: string
   name: string
   currency: Currency
   status: SavingsGoalStatus
-  statusLabel: string
   target: string
   progress: string
   /** How much is still to go — `max(0, target − progress)`, never negative:
@@ -47,6 +56,12 @@ export interface SavingsGoalDto {
   /** The deadline is behind us and the goal is still unmet. An ACHIEVED goal is
    *  never late — saved after the date is still saved. */
   deadlinePassed: boolean
+  /** Whole calendar days from the user's today to the deadline; negative when
+   *  it has passed, `null` when the goal has none. Computed here, on the same
+   *  UTC-midnight carrier arithmetic the rest of this module uses, so the
+   *  component does no date maths and the ICU plural in `goals.deadlineMeta`
+   *  gets a plain number. */
+  daysToDeadline: number | null
   /** Prefill for the inline edit and progress forms. Strings only — a
    *  `Prisma.Decimal` cannot cross to a client component, and `''` is what an
    *  empty `<input>` needs (the schema reads it back as "no value"). */
@@ -63,11 +78,13 @@ export interface SavingsGoalDto {
 }
 
 /**
- * Fixed English copy for each stored status (Phase 7 replaces these literals
- * with i18n keys, same as `lib/ui/action-error-messages.ts`).
- *
- * "In progress" rather than "Active": every goal on the page is active in the
- * sense of existing, and what the badge answers is "am I there yet?".
+ * Fixed English copy for each stored status, kept ONLY because
+ * `lib/server/export/build-savings-goals-sheet.ts` (frozen this phase) still
+ * imports it for the Excel export's `Status` column, which is English
+ * regardless of the reader's locale (spec §12 says nothing about localising a
+ * workbook, and Phase 7's own export sheets are out of scope). No UI component
+ * reads this: `toSavingsGoalDto` below returns the bare `status` enum, and
+ * every renderer calls `goalStatusLabelKey` instead.
  */
 export const SAVINGS_GOAL_STATUS_LABELS: Record<SavingsGoalStatus, string> = {
   ACTIVE: 'In progress',
@@ -78,7 +95,11 @@ export const SAVINGS_GOAL_STATUS_LABELS: Record<SavingsGoalStatus, string> = {
 /** The bar can fill the track, never overflow it. */
 const MAX_PERCENT = 100
 
-export function toSavingsGoalDto(goal: SavingsGoalRow, today: string): SavingsGoalDto {
+export function toSavingsGoalDto(
+  goal: SavingsGoalRow,
+  today: string,
+  locale: Locale = DEFAULT_LOCALE,
+): SavingsGoalDto {
   const currency = goal.currency
   const target = goal.targetAmount
   const progress = goal.currentProgress
@@ -97,10 +118,9 @@ export function toSavingsGoalDto(goal: SavingsGoalRow, today: string): SavingsGo
     name: goal.name,
     currency,
     status: goal.status,
-    statusLabel: SAVINGS_GOAL_STATUS_LABELS[goal.status],
-    target: formatMoney(target, currency),
-    progress: formatMoney(progress, currency),
-    remaining: formatMoney(remaining, currency),
+    target: formatMoney(target, currency, locale),
+    progress: formatMoney(progress, currency, locale),
+    remaining: formatMoney(remaining, currency, locale),
     percent: Math.min(MAX_PERCENT, ratio.mul(100).toNumber()),
     percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
     deadline,
@@ -110,6 +130,7 @@ export function toSavingsGoalDto(goal: SavingsGoalRow, today: string): SavingsGo
       deadline !== null &&
       goal.status !== 'ACHIEVED' &&
       compareCalendarDates(deadline, today) === -1,
+    daysToDeadline: deadline === null ? null : calendarDaysBetween(today, deadline),
     editable: {
       name: goal.name,
       targetAmount: target.toFixed(2),

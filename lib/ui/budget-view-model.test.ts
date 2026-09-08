@@ -55,12 +55,12 @@ function makeProgress(overrides: ProgressOverrides = {}): BudgetProgress {
 }
 
 describe('toBudgetProgressDto', () => {
-  it('maps an "ok" budget: category label, formatted VND figures, remaining not over', () => {
+  it('maps an "ok" budget: category name, formatted VND figures, remaining not over', () => {
     const dto = toBudgetProgressDto(makeProgress())
 
     expect(dto).toMatchObject({
       id: 'budget_1',
-      label: 'Food',
+      categoryName: 'Food',
       scope: 'CATEGORY',
       categoryArchived: false,
       currency: 'VND',
@@ -71,7 +71,6 @@ describe('toBudgetProgressDto', () => {
       percent: 30,
       percentLabel: '30 %',
       status: 'ok',
-      statusLabel: 'Healthy',
       editable: { amount: '1000000.00', currency: 'VND' },
     })
   })
@@ -91,7 +90,7 @@ describe('toBudgetProgressDto', () => {
     expect(dto.over).toBe(true)
     // Absolute value — the sign is conveyed by `over`, not a leading minus.
     expect(dto.remaining).toBe('200.000')
-    expect(dto.statusLabel).toBe('Exceeded')
+    expect(dto.status).toBe('exceeded')
   })
 
   it('rounds a half-boundary ratio HALF_UP, not to-even or down', () => {
@@ -140,10 +139,10 @@ describe('toBudgetProgressDto', () => {
     )
 
     expect(dto.categoryArchived).toBe(true)
-    expect(dto.label).toBe('Food')
+    expect(dto.categoryName).toBe('Food')
   })
 
-  it('labels an OVERALL budget "Overall" rather than a category name', () => {
+  it('carries `categoryName: null` for an OVERALL budget rather than the word "Overall"', () => {
     const dto = toBudgetProgressDto(
       makeProgress({
         budget: {
@@ -154,8 +153,37 @@ describe('toBudgetProgressDto', () => {
       }),
     )
 
-    expect(dto.label).toBe('Overall')
+    expect(dto.categoryName).toBeNull()
     expect(dto.scope).toBe('OVERALL')
     expect(dto.categoryArchived).toBe(false)
+  })
+
+  it('formats every money field in the caller-supplied locale', () => {
+    const dto = toBudgetProgressDto(
+      makeProgress({
+        budget: { amount: decimal('1000000') },
+        spent: decimal('300000'),
+        remaining: decimal('700000'),
+      }),
+      'en',
+    )
+
+    expect(dto.amount).toBe('1,000,000')
+    expect(dto.spent).toBe('300,000')
+    expect(dto.remaining).toBe('700,000')
+  })
+
+  it('carries no DTO field that is an English status/scope literal, an enum key, and nothing else', () => {
+    const dto = toBudgetProgressDto(makeProgress())
+
+    // No `statusLabel` (or any other translated string) on the DTO at all —
+    // the component calls `budgetStatusLabelKey`/`labels.budgetScope.OVERALL`.
+    expect(Object.keys(dto)).not.toContain('statusLabel')
+    expect(Object.keys(dto)).not.toContain('label')
+
+    const serialized = JSON.stringify(dto)
+    expect(serialized).not.toMatch(
+      /Healthy|Over half used|Approaching limit|At limit|Exceeded|Overall/,
+    )
   })
 })
