@@ -8,6 +8,8 @@ import {
   dismissOccurrenceAction,
 } from '@/lib/server/actions/reminder-actions'
 import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { formatDate } from '@/lib/ui/format-date'
+import type { Locale } from '@/lib/i18n/locale'
 import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { OccurrenceDto } from '@/lib/ui/reminder-view-model'
 import { InlineAlert } from '@/components/common/inline-alert'
@@ -39,7 +41,18 @@ import { Button } from '@/components/ui/button'
  * common answer is the one that gets a visible edge, and neither is a primary
  * call to action on a page that lists several rows.
  */
-export function OccurrenceActions({ occurrence }: { occurrence: OccurrenceDto }) {
+export function OccurrenceActions({
+  occurrence,
+  locale,
+  timeZone,
+}: {
+  occurrence: OccurrenceDto
+  /** For the accessible name's date — must read the same as the row's own
+   *  VISIBLE date (`OccurrenceList`'s `formatDate(..., 'date')`), not the
+   *  `yyyy-MM-dd` carrier, which no sighted reader ever sees on the page. */
+  locale: Locale
+  timeZone: string
+}) {
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
@@ -81,11 +94,27 @@ export function OccurrenceActions({ occurrence }: { occurrence: OccurrenceDto })
    * row the user sees names only the next occurrence, but every occurrence in
    * the disclosure gets its own pair of buttons from this same component, and
    * each of THOSE needs the same disambiguation.
+   *
+   * Formatted with `formatDate` (fix round 1, finding 5), not the bare
+   * `yyyy-MM-dd` carrier: the row's own visible date is
+   * `formatDate(occurrence.dueDate, { locale, timeZone, style: 'date' })`
+   * (`OccurrenceList`), so the accessible name has to read the same string a
+   * sighted user sees, not the internal carrier format nobody looks at.
    */
-  const rowName = `${occurrence.title} · ${occurrence.dueDate}`
+  const rowName = `${occurrence.title} · ${formatDate(occurrence.dueDate, { locale, timeZone, style: 'date' })}`
 
   return (
-    <div className="flex w-full flex-col items-end gap-2">
+    // No `w-full` (fix round 1, finding 6): this root renders in two flex
+    // contexts — `PlanningRow`'s `inlineAction` slot (full width there
+    // already comes from ordinary block flow at `<sm`, and from the actions
+    // cell's own sizing at `sm`+) and, nested inside the collapse
+    // disclosure's `<li className="flex ... justify-between">`, as a flex
+    // ITEM beside the date span. `w-full` there forced this flex item to
+    // consume the whole row width and wrap onto its own line below the date
+    // even at `sm`+, which is what this fixes: an unconstrained flex item
+    // sizes to its own content, letting the date and the button pair share
+    // one line whenever there is room.
+    <div className="flex flex-col items-end gap-2">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           type="button"

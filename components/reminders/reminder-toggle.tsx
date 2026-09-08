@@ -58,7 +58,7 @@ export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
           Internet bill" are never the same name. */}
       <Button
         type="button"
-        variant="outline"
+        variant="ghost"
         size="sm"
         disabled={submit.locked}
         aria-label={`${label} ${reminder.title}`}
