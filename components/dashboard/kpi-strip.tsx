@@ -3,6 +3,11 @@ import type { Currency } from '@/lib/currency/provider'
 import type { KpiDto } from '@/lib/ui/dashboard-view-model'
 
 /**
+ * Superseded by `ChartContainer`/`SummaryPanel` (Phase 7 Task 4); the only
+ * remaining caller is `/reports`, and Task 10 deletes this file.
+ */
+
+/**
  * The five headline figures, as one bordered strip divided into cells rather
  * than five separate cards.
  *
@@ -47,13 +52,18 @@ export function KpiStrip({ kpis, currency }: { kpis: KpiDto[]; currency: Currenc
     >
       {kpis.map((kpi, index) => (
         <div
-          key={kpi.label}
+          key={kpi.labelKey}
           className={cn(
             'flex flex-col gap-1 bg-surface p-4',
             index === kpis.length - 1 && kpis.length % 2 === 1 && 'col-span-2 md:col-span-1',
           )}
         >
-          <dt className="text-xs text-muted-foreground">{kpi.label}</dt>
+          {/* `/reports` (this component's only remaining caller, pre-Task 10)
+              has no translator of its own yet, so it passes plain text in
+              `labelKey`/`hintKey` — the same values `label`/`hint` used to
+              carry. The dashboard is the only caller that puts a real message
+              key there, and it no longer uses this component. */}
+          <dt className="text-xs text-muted-foreground">{kpi.labelKey}</dt>
           {/* The hint lives inside the `dd`, not beside it: a `dl` (or its
               wrapper `div`) may contain only `dt` and `dd`, and a stray `p`
               between them is invalid enough to change how a screen reader
@@ -80,8 +90,8 @@ export function KpiStrip({ kpis, currency }: { kpis: KpiDto[]; currency: Currenc
                 <span className="text-sm text-muted-foreground">{currency}</span>
               )}
             </span>
-            {kpi.value === null && kpi.hint && (
-              <span className="text-xs text-muted-foreground">{kpi.hint}</span>
+            {kpi.value === null && kpi.hintKey && (
+              <span className="text-xs text-muted-foreground">{kpi.hintKey}</span>
             )}
           </dd>
         </div>

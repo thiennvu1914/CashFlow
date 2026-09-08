@@ -85,13 +85,22 @@ export default async function ReportsPage({
   const { fromLabel, toLabelInclusive } = describeRange(range, timezone)
 
   // The only place a `Decimal` becomes a string on this page.
+  //
+  // `labelKey` carries plain text here, not a message key: this page has no
+  // translator of its own yet (Task 10 rewrites it), and `KpiStrip` — this
+  // component's only remaining caller — renders whatever it is given
+  // verbatim, exactly as it did when the field was named `label`.
   const kpis: KpiDto[] = [
-    { label: 'Income', value: formatMoney(summary.income, displayCurrency), negative: false },
+    { labelKey: 'Income', value: formatMoney(summary.income, displayCurrency), negative: false },
     // Expense is aggregated as a positive magnitude — red by meaning, not by
     // sign — so it is never marked negative here.
-    { label: 'Expense', value: formatMoney(summary.expense, displayCurrency), negative: false },
     {
-      label: 'Net Income',
+      labelKey: 'Expense',
+      value: formatMoney(summary.expense, displayCurrency),
+      negative: false,
+    },
+    {
+      labelKey: 'Net Income',
       value: formatMoney(summary.netIncome, displayCurrency),
       negative: summary.netIncome.isNegative(),
     },

@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client'
+import { Prisma, type TransactionType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
@@ -109,11 +109,15 @@ export interface DashboardInput {
 }
 
 export interface KpiDto {
-  label: string
+  /**
+   * A key in `dashboard.json`. The view model is a pure function with a unit
+   * test and no translator; the component that renders the panel has one.
+   */
+  labelKey: string
   /** The formatted figure, or `null` when there is no honest one to show. */
   value: string | null
-  /** Rendered in place of a `null` value, explaining the gap. */
-  hint?: string
+  /** Key for the line rendered in place of a `null` value, explaining the gap. */
+  hintKey?: string
   /** Below zero — rendered in the negative colour. */
   negative: boolean
 }
@@ -161,15 +165,22 @@ export interface BalancePointDto {
 export interface NamedAmountDto {
   name: string
   value: number
+  /** Set instead of `name` for a synthesised row the component must translate. */
+  nameKey?: string
 }
 
 export interface RecentTransactionDto {
   id: string
-  /** The category, or the transaction type when there is none. */
-  title: string
+  /** The category when there is one; `null` when the TYPE is the meaning. */
+  categoryName: string | null
+  /**
+   * The raw type. Rendered through `transactionTypeLabelKey` by the component —
+   * which is what stopped `CASH_OUT` appearing on the dashboard verbatim.
+   */
+  type: TransactionType
   accountName: string
-  /** `yyyy-MM-dd HH:mm` in the user's zone. */
-  when: string
+  /** The instant; the component formats it in the reader's locale and zone. */
+  date: Date
   /** Already signed — the sign comes from `type`, never from the amount. */
   amount: string
   currency: Currency
@@ -196,10 +207,14 @@ export interface DebtLoanOverviewDto {
 
 export interface DashboardViewModel {
   displayCurrency: Currency
-  /** e.g. `September 2026`. */
-  monthLabel: string
-  /** e.g. `September 2026 · VND`. */
-  subtitle: string
+  /**
+   * The current local month as a `Date` the page formats — no longer a
+   * pre-baked string. The header's month-and-currency line is assembled by the
+   * page from `formatDate(monthStart, { locale, timeZone, style: 'monthYear' })`
+   * and `dashboard.subtitle`, because "September 2026 · VND" is a sentence in
+   * one language and a view model has no locale.
+   */
+  monthStart: Date
   kpis: KpiDto[]
   fxStatus: FxStatus
   cashFlowTrend: TrendPointDto[]
@@ -240,8 +255,34 @@ export interface DashboardViewModel {
   overdueReminderCount: number
 }
 
-/** Shown instead of a figure that would need a rate we do not have. */
-const FX_UNAVAILABLE_HINT = 'FX unavailable'
+/** Key for the line shown instead of a figure that would need a rate we do not have. */
+const FX_UNAVAILABLE_HINT_KEY = 'dashboard.fxUnavailableHint'
+
+/** How many category bars the widget shows before bucketing the rest. */
+const EXPENSE_CATEGORY_LIMIT = 8
+
+/** The bucket's name is a KEY; the component translates it. */
+const OTHER_CATEGORY_KEY = 'dashboard.expenseByCategoryOther'
+
+/**
+ * At most eight slices plus an "other" bucket (spec §6.1): a horizontal bar
+ * chart with twenty rows is a table pretending to be a picture. The source is
+ * already largest-first with a stable tiebreak (`getActivitySummary`), so the
+ * tail is genuinely the smallest categories and the bucket's total is their
+ * exact sum — a `Decimal` sum taken before `toNumber()`.
+ */
+function bucketExpenseCategories(rows: MonthSummary['byCategory']): NamedAmountDto[] {
+  if (rows.length <= EXPENSE_CATEGORY_LIMIT) {
+    return rows.map((row) => ({ name: row.name, value: row.total.toNumber() }))
+  }
+  const head = rows.slice(0, EXPENSE_CATEGORY_LIMIT - 1)
+  const tail = rows.slice(EXPENSE_CATEGORY_LIMIT - 1)
+  const tailTotal = tail.reduce((sum, row) => sum.add(row.total), new Prisma.Decimal(0))
+  return [
+    ...head.map((row) => ({ name: row.name, value: row.total.toNumber() })),
+    { name: '', nameKey: OTHER_CATEGORY_KEY, value: tailTotal.toNumber() },
+  ]
+}
 
 /**
  * How many rows the two list widgets show.
@@ -284,30 +325,35 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     occurrences,
   } = input
 
-  const monthLabel = formatInTimeZone(now, timezone, 'LLLL yyyy')
-
   /** A current-position KPI: a figure, or a gap with the reason for it. */
-  function positionKpi(label: string, value: Prisma.Decimal | undefined): KpiDto {
+  function positionKpi(labelKey: string, value: Prisma.Decimal | undefined): KpiDto {
     if (!position || value === undefined) {
-      return { label, value: null, hint: FX_UNAVAILABLE_HINT, negative: false }
+      return { labelKey, value: null, hintKey: FX_UNAVAILABLE_HINT_KEY, negative: false }
     }
-    return { label, value: formatMoney(value, currency), negative: value.isNegative() }
+    return { labelKey, value: formatMoney(value, currency), negative: value.isNegative() }
   }
 
+  // Net Worth FIRST: it is the panel's dominant figure (spec §6.1), with Total
+  // Balance beneath it, and the three monthly metrics after. The old order put
+  // Total Account Balance first because the five sat in a flat strip where
+  // nothing was dominant.
   const kpis: KpiDto[] = [
-    // "Total Account Balance", not "Total Balance": the figure is the sum of the
-    // *account* balances (spec §5.2), and Phase 6's Net Worth widens beyond
-    // them — a card labelled just "Total Balance" would then read as the wrong
-    // total. The export's Summary sheet says the same thing.
-    positionKpi('Total Account Balance', position?.totalBalance),
-    positionKpi('Net Worth', position?.netWorth),
-    { label: 'Monthly Income', value: formatMoney(monthly.income, currency), negative: false },
-    // Expense is stored and aggregated as a positive magnitude, so it is never
-    // "negative" — it is red-by-meaning, not red-by-sign, and the strip does
-    // not colour it.
-    { label: 'Monthly Expense', value: formatMoney(monthly.expense, currency), negative: false },
+    positionKpi('dashboard.netWorth', position?.netWorth),
+    positionKpi('dashboard.totalBalance', position?.totalBalance),
     {
-      label: 'Net Income',
+      labelKey: 'dashboard.monthlyIncome',
+      value: formatMoney(monthly.income, currency),
+      negative: false,
+    },
+    // Expense is stored and aggregated as a positive magnitude, so it is never
+    // "negative" — red by meaning, not by sign, and the panel does not colour it.
+    {
+      labelKey: 'dashboard.monthlyExpense',
+      value: formatMoney(monthly.expense, currency),
+      negative: false,
+    },
+    {
+      labelKey: 'dashboard.netIncome',
       value: formatMoney(monthly.netIncome, currency),
       negative: monthly.netIncome.isNegative(),
     },
@@ -327,8 +373,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
 
   return {
     displayCurrency: currency,
-    monthLabel,
-    subtitle: `${monthLabel} · ${currency}`,
+    monthStart: now,
     kpis,
     fxStatus: buildFxStatus(position, timezone),
     cashFlowTrend: cashFlowTrend.map((point) => ({
@@ -356,11 +401,9 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     })),
     // The same month aggregate the three monthly KPIs come from, so the slices
     // sum to the Monthly Expense card by construction. Already largest-first
-    // with a stable tiebreak (`getActivitySummary`).
-    expenseByCategory: monthly.byCategory.map((row) => ({
-      name: row.name,
-      value: row.total.toNumber(),
-    })),
+    // with a stable tiebreak (`getActivitySummary`). At most eight slices plus
+    // an "other" bucket (spec §6.1) — see `bucketExpenseCategories`.
+    expenseByCategory: bucketExpenseCategories(monthly.byCategory),
     distribution:
       position === null
         ? null
@@ -380,9 +423,12 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       const positive = isBalanceIncreasing(tx.type)
       return {
         id: tx.id,
-        title: tx.category?.name ?? tx.type,
+        // The NAME or `null` — never `?? tx.type`, which is how `CASH_OUT`
+        // used to reach the screen. The component renders the type's label.
+        categoryName: tx.category?.name ?? null,
+        type: tx.type,
         accountName: tx.account.name,
-        when: formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd HH:mm'),
+        date: tx.date,
         // The sign is derived from `type` here and prefixed to the formatted
         // magnitude — `amount` itself is always positive and no arithmetic
         // negates it.
