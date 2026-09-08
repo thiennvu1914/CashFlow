@@ -1,1 +1,17 @@
-{ "title": "Categories" }
+{
+  "title": "Categories",
+  "description": "Your account types and income/expense categories.",
+  "accountTypes": "Account Types",
+  "expenseCategories": "Expense Categories",
+  "incomeCategories": "Income Categories",
+  "addLabel": "Add {section}",
+  "addPlaceholder": "New name",
+  "addAction": "Add",
+  "addPending": "Adding…",
+  "archiveAction": "Archive",
+  "archiveConfirmTitle": "Archive {name}?",
+  "archiveConfirmBody": "An archived item no longer appears when choosing, but existing records keep it.",
+  "archivePending": "Archiving…",
+  "defaultBadge": "Default",
+  "emptyTitle": "No items yet"
+}

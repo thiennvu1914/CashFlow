@@ -21,7 +21,12 @@ import {
  * `ref` callback the moment React committed, with no `change` event ever
  * reaching React. A deliberate INCOME was silently recorded as an EXPENSE.
  * `/transfers`, `/budgets` and `/accounts` each reverted at least one control
- * the same way.
+ * the same way. (Phase 7 Task 6 moved account creation behind a header button
+ * and a `Sheet` — `AccountForm` no longer renders into `/accounts`' initial
+ * HTML at all, since Base UI's `Dialog`/`Sheet` renders nothing while closed,
+ * so its own hydration-gate regression is now covered at the component level,
+ * `components/accounts/account-form.test.tsx`, rather than by the raw-fetch
+ * technique this file uses for the three forms that stay inline on their page.)
  *
  * Nothing in this file may paper over that. There is no retry helper, no
  * `waitForTimeout`, no sleep and no relaxed assertion anywhere below, and
@@ -71,18 +76,26 @@ const CATEGORYLESS_TYPES = [
   'ADJUSTMENT_DECREASE',
 ] as const
 
-/** Every page that renders a gated money form. */
-const GATED_PAGES = ['/transactions', '/transfers', '/budgets', '/accounts'] as const
+/**
+ * Every page whose gated money form is unconditionally part of its initial
+ * HTML. `/accounts`' create form (Task 6) is excluded on purpose: it now
+ * mounts inside a `Sheet` that is closed on first render, and Base UI's
+ * `Dialog`/`Sheet` renders nothing at all while closed — there is no raw HTML
+ * to fetch it from, so its gate is verified at the component level instead
+ * (`components/accounts/account-form.test.tsx`).
+ */
+const GATED_PAGES = ['/transactions', '/transfers', '/budgets'] as const
 
 /**
  * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
  * nest, so the first `</select>` after the opening tag closes it.
  *
  * Scoping is what makes the `selected` assertions below meaningful:
- * `/budgets`' scope select and `/accounts`' two selects each have siblings
- * that render similar option shapes, and only the right one may carry a
- * pre-selected option. (`/transfers`' two account selectors moved off
- * `aria-label` in Task 5b — see `selectMarkupByTransferId` below.)
+ * `/budgets`' scope select has siblings that render similar option shapes,
+ * and only the right one may carry a pre-selected option. (`/transfers`' two
+ * account selectors moved off `aria-label` in Task 5b — see
+ * `selectMarkupByTransferId` below; `/accounts`' selects did the same in
+ * Task 6, onto a visible `<label>` bound through `FormField`.)
  */
 function selectMarkup(html: string, ariaLabel: string): string {
   const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
@@ -163,16 +176,22 @@ function radiogroupMarkup(html: string): string {
 
 /**
  * The user's own category names, read off `/categories` rather than hard-coded:
- * the two `NamedListManager` lists there and the form's Category `<select>` are
+ * the two `CategoryChipList` sections there and the form's Category picker are
  * both `listCategories(userId, type)`, ordered `isDefault desc, name asc`
  * (`lib/server/services/category.ts`) — so the expected option list can be
  * exact instead of a "contains" approximation that a wrongly-filtered list
  * would still satisfy.
+ *
+ * The section heading (`<h2>`, via `SectionHeader`) is not a direct sibling of
+ * its chip `<ul>` — `SectionHeader` wraps the heading in its own two-level
+ * markup (a title/caption column, then the row that adds `right`) — so the
+ * `<ul>` is a sibling of that OUTER wrapper, two ancestor `<div>`s up from the
+ * `<h2>` itself, not of the heading directly.
  */
-async function categoryNames(page: Page, listTitle: string): Promise<string[]> {
+async function categoryNames(page: Page, listTitle: string | RegExp): Promise<string[]> {
   const list = page
     .getByRole('heading', { name: listTitle, level: 2 })
-    .locator('xpath=following-sibling::ul[1]')
+    .locator('xpath=ancestor::div[2]/following-sibling::ul[1]')
   return list.locator('li > span').allTextContents()
 }
 
@@ -220,8 +239,8 @@ test.describe.serial('Money forms — hydration gate', () => {
     ).toHaveCount(1)
 
     await page.goto('/categories')
-    incomeNames = await categoryNames(page, 'Income Categories')
-    expenseNames = await categoryNames(page, 'Expense Categories')
+    incomeNames = await categoryNames(page, eitherLocale('Danh mục thu', 'Income Categories'))
+    expenseNames = await categoryNames(page, eitherLocale('Danh mục chi', 'Expense Categories'))
     expenseOnlyNames = expenseNames.filter((name) => !incomeNames.includes(name))
     expect(incomeNames.length).toBeGreaterThan(0)
     expect(expenseOnlyNames.length).toBeGreaterThan(0)
@@ -298,13 +317,11 @@ test.describe.serial('Money forms — hydration gate', () => {
     // The CATEGORY-only field is server-rendered too — no post-hydration pop-in.
     expect(selectedOptionLabel(selectMarkup(budgets, 'Budget category'))).toBe('Select a category')
 
-    // 5. `/accounts` — every select here defaults to its own first option, so
-    //    correct behaviour is *no* marker anywhere. Asserted rather than
-    //    skipped: a `defaultValue` added to the wrong select would otherwise
-    //    pass unnoticed.
-    const accounts = bodies.get('/accounts')!
-    expect(selectedOptionLabel(selectMarkup(accounts, 'Account type'))).toBeNull()
-    expect(selectedOptionLabel(selectMarkup(accounts, 'Currency'))).toBeNull()
+    // `/accounts`' create form has no raw-HTML case to assert here (Task 6):
+    // it is mounted only inside a closed `Sheet`, which renders nothing at
+    // all until opened, so its own "every select defaults to its own first
+    // option" guarantee is asserted at the component level instead —
+    // `components/accounts/account-form.test.tsx`.
   })
 
   test('an early INCOME selection is never reverted (5 fresh navigations)', async ({ page }) => {
