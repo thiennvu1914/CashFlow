@@ -108,27 +108,31 @@ function selectedOptionLabel(selectHtml: string): string | null {
 }
 
 /**
- * The markup of one `<select>` on `/transactions`, found by its `id` rather
- * than `aria-label` — the Account and Category pickers there are custom
- * Selects now (spec §6.2), and their pre-hydration stand-in is a disabled
- * native `<select>` carrying the SAME `id` `FormField` bound the visible
- * `<label>` to, not an `aria-label`.
+ * The markup of one `<select>` on `/transactions`, found by a field name
+ * rather than `aria-label` — the Account and Category pickers there are
+ * custom Selects now (spec §6.2), and their pre-hydration stand-in is a
+ * disabled native `<select>` whose `id` (`transaction-<name>-<useId()
+ * suffix>`, unique per mounted `TransactionForm` instance — spec §14 fix
+ * round 1, finding 2) `FormField` binds the visible `<label>` to, not an
+ * `aria-label`. Matched by prefix, since the suffix is generated at runtime.
  */
-function selectMarkupById(html: string, id: string): string {
-  const idIndex = html.indexOf(`id="${id}"`)
-  if (idIndex === -1) throw new Error(`No element with id "${id}" in the markup`)
+function selectMarkupById(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transaction-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transaction-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
   const start = html.lastIndexOf('<select', idIndex)
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select id="${id}">`)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transaction-${name}-*">`)
   return html.slice(start, end + '</select>'.length)
 }
 
 /**
- * The markup of the type radiogroup's PRIMARY row on `/transactions` — from
- * `role="radiogroup"` up to the first `</div>`. The two primary `TypeButton`s
- * and the "Khác" disclosure button are all plain `<button>`s with no nested
- * `<div>`, so that first `</div>` is exactly the wrapper holding the three of
- * them, and nothing of the (collapsed) "other types" panel beyond it.
+ * The markup of the type radiogroup itself on `/transactions` — from
+ * `role="radiogroup"` up to the first `</div>`. The "Khác" disclosure button
+ * is a SIBLING of the radiogroup now (spec §14 fix round 1, finding 3: it is
+ * not itself a radio, so it may not be a child of the group), and every
+ * `TypeButton` inside is a plain `<button>` with no nested `<div>`, so this
+ * first `</div>` is exactly the radiogroup's own closing tag.
  */
 function radiogroupMarkup(html: string): string {
   const start = html.indexOf('role="radiogroup"')
@@ -234,25 +238,21 @@ test.describe.serial('Money forms — hydration gate', () => {
     expect(typeGroup).not.toMatch(/aria-checked="true"[^>]*>(Thu nhập|Income)/)
     // The Category select offers its placeholder, never a pre-chosen category
     // — and it is disabled, the gate in the bytes the browser paints first.
-    expect(selectedOptionLabel(selectMarkupById(transactions, 'transaction-category'))).toMatch(
+    expect(selectedOptionLabel(selectMarkupById(transactions, 'category'))).toMatch(
       /Chọn danh mục|Select a category/,
     )
-    expect(selectMarkupById(transactions, 'transaction-category')).toContain('disabled')
+    expect(selectMarkupById(transactions, 'category')).toContain('disabled')
     // The account stand-in shows the form's own default (`accounts[0]`, seeded
     // as "Cash" in `beforeAll`) — not hard-coded, so the two could not
     // silently disagree the first time that default changes.
-    expect(selectMarkupById(transactions, 'transaction-account')).toContain('Cash')
+    expect(selectMarkupById(transactions, 'account')).toContain('Cash')
     // Both date parts are pre-filled with "now" in the user's zone.
-    expect(transactions).toMatch(/id="transaction-date"[^>]*value="\d{4}-\d{2}-\d{2}"/)
-    expect(transactions).toMatch(/id="transaction-time"[^>]*value="\d{2}:\d{2}"/)
+    expect(transactions).toMatch(/id="transaction-date-[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(transactions).toMatch(/id="transaction-time-[^"]*"[^>]*value="\d{2}:\d{2}"/)
     // Uncontrolled — a `value=` prop on either stand-in `<select>` would make
     // it controlled.
-    expect(selectMarkupById(transactions, 'transaction-account')).not.toMatch(
-      /<select[^>]*\svalue=/,
-    )
-    expect(selectMarkupById(transactions, 'transaction-category')).not.toMatch(
-      /<select[^>]*\svalue=/,
-    )
+    expect(selectMarkupById(transactions, 'account')).not.toMatch(/<select[^>]*\svalue=/)
+    expect(selectMarkupById(transactions, 'category')).not.toMatch(/<select[^>]*\svalue=/)
 
     // 3. `/transfers` — `toAccountId` defaults to the SECOND account, so its
     //    select must carry the marker; `fromAccountId` defaults to the first
@@ -401,8 +401,8 @@ test.describe.serial('Money forms — hydration gate', () => {
     const TYPE_LABELS: Record<(typeof CATEGORYLESS_TYPES)[number], RegExp> = {
       CASH_IN: /Tiền vào \(khác\)|Cash In/,
       CASH_OUT: /Tiền ra \(khác\)|Cash Out/,
-      ADJUSTMENT_INCREASE: /Điều chỉnh tăng|Balance Adjustment/,
-      ADJUSTMENT_DECREASE: /Điều chỉnh giảm|Balance Adjustment/,
+      ADJUSTMENT_INCREASE: /Điều chỉnh tăng|Balance Adjustment — increase/,
+      ADJUSTMENT_DECREASE: /Điều chỉnh giảm|Balance Adjustment — decrease/,
     }
 
     for (const value of CATEGORYLESS_TYPES) {
@@ -426,8 +426,8 @@ test.describe.serial('Money forms — hydration gate', () => {
     expect(html).toContain('aria-busy="true"')
     const typeGroup = radiogroupMarkup(html)
     expect(typeGroup).toMatch(/aria-checked="true"[^>]*>(Chi tiêu|Expense)/)
-    expect(html).toMatch(/id="transaction-date"[^>]*value="\d{4}-\d{2}-\d{2}"/)
-    expect(html).toMatch(/id="transaction-time"[^>]*value="\d{2}:\d{2}"/)
+    expect(html).toMatch(/id="transaction-date-[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(html).toMatch(/id="transaction-time-[^"]*"[^>]*value="\d{2}:\d{2}"/)
   })
 
   test('a second submit is impossible while the first is in flight', async ({ page }) => {

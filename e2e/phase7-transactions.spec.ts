@@ -220,4 +220,61 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
       .click()
     await expect(row).toHaveCount(0)
   })
+
+  test('375: /transactions#new opens the sheet, whose labelled fields are its own', async ({
+    page,
+  }) => {
+    // Below `md` the sheet is the only home the create form has (spec §14
+    // fix round 1, finding 1) — the regression this test guards (finding 2):
+    // a first pass mounted the sticky/inline panel's OWN `TransactionForm`
+    // at the same time, both with hard-coded field ids, so a `<label for>`
+    // inside the sheet could bind to the OTHER, invisible instance's control.
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.goto('/transactions#new')
+
+    const dialog = page.getByRole('dialog', { name: /Thêm giao dịch|Add transaction/ })
+    await expect(dialog).toBeVisible()
+
+    for (const label of [
+      /Số tiền|^Amount$/,
+      /Tài khoản|^Account$/,
+      /Danh mục|^Category$/,
+      /^Ngày$|^Date$/,
+      /^Giờ$|^Time$/,
+      /Ghi chú|^Note/,
+    ]) {
+      // Scoped to the dialog: were a label bound to the OTHER instance's
+      // control, this scoped lookup would resolve to nothing at all.
+      await expect(dialog.getByLabel(label)).toBeVisible()
+    }
+
+    // The stronger, DOM-level version of the same check: every `<label
+    // for="…">` inside the sheet names an id that also resolves to an
+    // element INSIDE the sheet — never a control mounted elsewhere on the
+    // page.
+    const everyLabelBindsInside = await dialog.evaluate((dialogEl) => {
+      const labels = Array.from(dialogEl.querySelectorAll('label[for]'))
+      return (
+        labels.length > 0 &&
+        labels.every((label) => {
+          const htmlFor = label.getAttribute('for')!
+          const control = document.getElementById(htmlFor)
+          return control !== null && dialogEl.contains(control)
+        })
+      )
+    })
+    expect(everyLabelBindsInside).toBe(true)
+
+    // A valid transaction can be created from here, and the sheet closes.
+    await dialog.getByRole('radio', { name: /Chi tiêu|^Expense$/ }).click()
+    await dialog.getByRole('combobox', { name: /Danh mục|^Category$/ }).click()
+    // The popup itself renders in a portal (not a DOM descendant of the
+    // dialog), the same way every other spec in this suite reads it.
+    await page.getByRole('option').first().click()
+    await dialog.getByLabel(/Số tiền|^Amount$/).fill('88888')
+    await dialog.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
+
+    await expect(dialog).toBeHidden()
+    await expect(page.getByRole('listitem').filter({ hasText: '88.888' })).toHaveCount(1)
+  })
 })

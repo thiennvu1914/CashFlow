@@ -181,6 +181,15 @@ export function digitsOnly(text: string): string {
  * message surfaced without pinning which locale is rendering. The message
  * TEXT is not what these tests are about — the alternation only proves it
  * localises to whichever locale the page is rendering.
+ *
+ * A caller indexing `validation.json` directly (rather than passing a literal
+ * string here) must go through `validationMessageKey`'s escaping rule first
+ * (`lib/ui/validation-messages.ts`): next-intl reads `.` as a path separator,
+ * so a Zod message containing a literal dot is keyed in `validation.json`
+ * with every `.` replaced by `․` (ONE DOT LEADER) — e.g.
+ * `viValidation[validationMessageKey(RAW_MESSAGE).replace('validation.', '')]`.
+ * A message with no dot needs no such treatment, which is why every existing
+ * caller in this suite indexes `viValidation[RAW_MESSAGE]` directly.
  */
 export function eitherLocale(vi: string, en: string): RegExp {
   const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

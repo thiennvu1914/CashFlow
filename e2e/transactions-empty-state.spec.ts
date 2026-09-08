@@ -67,23 +67,22 @@ test.describe.serial('Transactions — no active financial account', () => {
 
     await expect(page.getByText(NOTICE)).toBeVisible()
 
-    // Nothing that looks operable: no empty Account picker, and no submit
-    // action that could only ever fail. Scoped to `form` because the page now
-    // also carries the create panel's OWN trigger button, whose accessible
-    // name is this same phrase — but with zero accounts `TransactionForm`
-    // never renders a `<form>` at all (it is replaced outright by the
-    // `EmptyState` below), so this is trivially satisfied and still proves
-    // the point: no submit action exists anywhere.
+    // Nothing that looks operable anywhere on the page: with zero accounts
+    // the PAGE itself (not just `TransactionForm`) replaces its whole body
+    // with this one notice (spec §14 fix round 1, finding 6) — no empty
+    // Account picker, no create trigger in the header or anywhere else, and
+    // no submit action that could only ever fail.
     await expect(page.getByRole('combobox', { name: /Tài khoản|^Account$/ })).toHaveCount(0)
-    await expect(
-      page.locator('form').getByRole('button', { name: /Thêm giao dịch|Add transaction/ }),
-    ).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ })).toHaveCount(
+      0,
+    )
+    await expect(page.locator('form')).toHaveCount(0)
 
     // And no internal validator text anywhere on the page.
     const mainText = await page.locator('main').innerText()
     expect(mainText).not.toMatch(RAW_VALIDATION_TEXT)
 
-    const link = page.getByRole('link', { name: /Đến Tài khoản|Go to Accounts/ })
+    const link = page.getByRole('link', { name: /Quản lý tài khoản|Manage accounts/ })
     await expect(link).toBeVisible()
     await link.click()
     await expect(page).toHaveURL(/\/accounts/)
@@ -106,9 +105,10 @@ test.describe.serial('Transactions — no active financial account', () => {
     await page.goto('/transactions')
     await expect(page.getByText(NOTICE)).toBeVisible()
     await expect(page.getByRole('combobox', { name: /Tài khoản|^Account$/ })).toHaveCount(0)
-    await expect(
-      page.locator('form').getByRole('button', { name: /Thêm giao dịch|Add transaction/ }),
-    ).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ })).toHaveCount(
+      0,
+    )
+    await expect(page.locator('form')).toHaveCount(0)
   })
 
   test('one active account: exactly that option, and a transaction can be created', async ({

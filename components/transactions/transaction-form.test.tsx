@@ -45,6 +45,7 @@ const CATEGORIES = [
 ]
 
 const NOTICE = 'Bạn cần ít nhất một tài khoản để ghi giao dịch.'
+const NOTICE_ACTION = 'Quản lý tài khoản'
 
 const messages = await loadMessages('vi')
 
@@ -62,26 +63,30 @@ function render(accounts: Account[]): string {
 }
 
 /**
- * The markup of one `<select>`, found by its `id` — `<select>`s cannot nest,
- * so the first `</select>` after the opening tag closes it. Every select this
- * form renders pre-hydration carries a unique `id` (`FormField`'s contract),
- * which is what makes this scoping meaningful.
+ * The markup of one `<select>`, found by a field name — `<select>`s cannot
+ * nest, so the first `</select>` after the opening tag closes it. Every
+ * field's `id` is `transaction-<name>-<useId() suffix>` (unique per mounted
+ * `TransactionForm` instance, spec §14 fix round 1, finding 2), so this
+ * matches the PREFIX rather than an exact id.
  */
-function selectMarkup(html: string, id: string): string {
-  const idIndex = html.indexOf(`id="${id}"`)
-  if (idIndex === -1) throw new Error(`No element with id "${id}" in the markup`)
+function selectMarkup(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transaction-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transaction-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
   const start = html.lastIndexOf('<select', idIndex)
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select id="${id}">`)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transaction-${name}-*">`)
   return html.slice(start, end + '</select>'.length)
 }
 
 /**
- * The markup of the type radiogroup's PRIMARY row — from `role="radiogroup"`
- * up to the first `</div>`, which (the two `TypeButton`s and the "Khác"
- * disclosure button are all plain `<button>`s with no nested `<div>`) is
- * exactly the `<div className="flex gap-2">` wrapper that holds them, and
- * nothing of the disclosure panel beyond it.
+ * The markup of the type radiogroup itself — from `role="radiogroup"` up to
+ * the first `</div>`. The "Khác" disclosure button is a SIBLING of the
+ * radiogroup now (spec §14 fix round 1, finding 3: it is not itself a radio,
+ * so it may not be a child of the group), and every `TypeButton` inside is a
+ * plain `<button>` with no nested `<div>`, so this first `</div>` is exactly
+ * the radiogroup's own closing tag — capturing the currently-visible radios
+ * (two collapsed, six expanded) and nothing else.
  */
 function radiogroupMarkup(html: string): string {
   const start = html.indexOf('role="radiogroup"')
@@ -105,7 +110,7 @@ describe('TransactionForm with no accounts', () => {
 
     expect(html).toContain(NOTICE)
     expect(html).toContain('href="/accounts"')
-    expect(html).toContain('Đến Tài khoản')
+    expect(html).toContain(NOTICE_ACTION)
   })
 
   it('offers no Account selector, no form and no submit action', () => {
@@ -114,7 +119,7 @@ describe('TransactionForm with no accounts', () => {
     // The defect: an empty Account picker looks usable and is not. None of it
     // may be rendered — not a select, not the surrounding form, not the submit
     // button that would fail validation.
-    expect(html).not.toContain('id="transaction-account"')
+    expect(html).not.toMatch(/id="transaction-account-/)
     expect(html).not.toContain('<select')
     expect(html).not.toContain('<option')
     expect(html).not.toContain('<form')
@@ -181,7 +186,7 @@ describe('TransactionForm with active accounts', () => {
 
   it('shows the Category picker gated behind its own disabled stand-in, offering only the placeholder', () => {
     const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
-    const categorySelect = selectMarkup(html, 'transaction-category')
+    const categorySelect = selectMarkup(html, 'category')
 
     expect(categorySelect).toContain('disabled')
     // Nothing is pre-chosen for the user; the placeholder is the only option.
@@ -193,7 +198,7 @@ describe('TransactionForm with active accounts', () => {
       { id: 'acc_b', name: 'Bank', currency: 'VND', balance: '2000000.00' },
       { id: 'acc_a', name: 'Cash', currency: 'VND', balance: '500000.00' },
     ]
-    const accountSelect = selectMarkup(render(accounts), 'transaction-account')
+    const accountSelect = selectMarkup(render(accounts), 'account')
 
     // Exactly one option pre-hydration — the form's own default (`accounts[0]`,
     // "Bank"), not a full option list a native `<select>` would carry: the
@@ -207,23 +212,24 @@ describe('TransactionForm with active accounts', () => {
   it('pre-fills the split date and time from nowInZone', () => {
     const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
 
-    expect(html).toMatch(/id="transaction-date"[^>]*value="\d{4}-\d{2}-\d{2}"/)
-    expect(html).toMatch(/id="transaction-time"[^>]*value="\d{2}:\d{2}"/)
+    expect(html).toMatch(/id="transaction-date-[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(html).toMatch(/id="transaction-time-[^"]*"[^>]*value="\d{2}:\d{2}"/)
   })
 
   it('renders a visible <label> for every field, including the split date and time', () => {
     const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
 
-    for (const [id, label] of [
-      ['transaction-amount', 'Số tiền'],
-      ['transaction-account', 'Tài khoản'],
-      ['transaction-category', 'Danh mục'],
-      ['transaction-date', 'Ngày'],
-      ['transaction-time', 'Giờ'],
-      ['transaction-note', 'Ghi chú'],
+    for (const [name, label] of [
+      ['amount', 'Số tiền'],
+      ['account', 'Tài khoản'],
+      ['category', 'Danh mục'],
+      ['date', 'Ngày'],
+      ['time', 'Giờ'],
+      ['note', 'Ghi chú'],
     ] as const) {
-      expect(html).toContain(`<label for="${id}"`)
-      const labelIndex = html.indexOf(`<label for="${id}"`)
+      const labelMatch = html.match(new RegExp(`<label for="transaction-${name}-[^"]*"`))
+      expect(labelMatch, `<label> for transaction-${name}-*`).not.toBeNull()
+      const labelIndex = html.indexOf(labelMatch![0])
       const labelEnd = html.indexOf('</label>', labelIndex)
       expect(html.slice(labelIndex, labelEnd)).toContain(label)
     }
