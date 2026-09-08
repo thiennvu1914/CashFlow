@@ -10,7 +10,9 @@ function leafKeys(value: unknown, prefix = ''): string[] {
 }
 
 function at(tree: unknown, key: string): unknown {
-  return key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], tree)
+  return key
+    .split('.')
+    .reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], tree)
 }
 
 describe('message files', () => {

@@ -17,7 +17,11 @@
     "at_100": "Đã đến hạn mức",
     "exceeded": "Vượt hạn mức"
   },
-  "goalStatus": { "ACTIVE": "Đang thực hiện", "ACHIEVED": "Đạt mục tiêu", "ARCHIVED": "Đã lưu trữ" },
+  "goalStatus": {
+    "ACTIVE": "Đang thực hiện",
+    "ACHIEVED": "Đạt mục tiêu",
+    "ARCHIVED": "Đã lưu trữ"
+  },
   "debtDirection": { "RECEIVABLE": "Họ nợ bạn", "PAYABLE": "Bạn nợ họ" },
   "debtStatus": {
     "OPEN": "Đang mở",
