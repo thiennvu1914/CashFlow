@@ -1,1 +1,26 @@
-{ "title": "Transfers" }
+{
+  "title": "Transfers",
+  "createTitle": "Transfer",
+  "createAction": "Transfer",
+  "createPending": "Transferring…",
+  "from": "From",
+  "to": "To",
+  "fromPlaceholder": "Select the source account",
+  "toPlaceholder": "Select the destination account",
+  "amount": "Amount",
+  "amountSent": "Amount sent",
+  "amountReceived": "Amount received",
+  "dateTime": "Date and time",
+  "note": "Note (optional)",
+  "route": "{from} → {to}",
+  "deleteAction": "Delete transfer",
+  "deleteConfirmTitle": "Delete this transfer?",
+  "deleteConfirmBody": "Both account balances will be restored. This cannot be undone.",
+  "deleteConfirm": "Delete",
+  "deletePending": "Deleting…",
+  "emptyTitle": "No transfers yet",
+  "emptyBody": "Move money between two of your accounts.",
+  "needTwoAccountsTitle": "You need at least two active accounts",
+  "needTwoAccountsBody": "A transfer moves money between two of your accounts.",
+  "needTwoAccountsAction": "Go to Accounts"
+}

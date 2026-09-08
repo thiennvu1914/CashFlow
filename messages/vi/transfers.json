@@ -1,1 +1,26 @@
-{ "title": "Chuyển tiền" }
+{
+  "title": "Chuyển tiền",
+  "createTitle": "Chuyển tiền",
+  "createAction": "Chuyển tiền",
+  "createPending": "Đang chuyển…",
+  "from": "Từ",
+  "to": "Đến",
+  "fromPlaceholder": "Chọn tài khoản nguồn",
+  "toPlaceholder": "Chọn tài khoản đích",
+  "amount": "Số tiền",
+  "amountSent": "Số tiền gửi",
+  "amountReceived": "Số tiền nhận",
+  "dateTime": "Ngày và giờ",
+  "note": "Ghi chú (tùy chọn)",
+  "route": "{from} → {to}",
+  "deleteAction": "Xóa lệnh chuyển",
+  "deleteConfirmTitle": "Xóa lệnh chuyển này?",
+  "deleteConfirmBody": "Số dư của cả hai tài khoản sẽ được hoàn lại. Không thể hoàn tác.",
+  "deleteConfirm": "Xóa",
+  "deletePending": "Đang xóa…",
+  "emptyTitle": "Chưa có lệnh chuyển nào",
+  "emptyBody": "Chuyển tiền giữa hai tài khoản của bạn.",
+  "needTwoAccountsTitle": "Cần ít nhất hai tài khoản đang hoạt động",
+  "needTwoAccountsBody": "Chuyển tiền là chuyển giữa hai tài khoản của bạn.",
+  "needTwoAccountsAction": "Đến Tài khoản"
+}
