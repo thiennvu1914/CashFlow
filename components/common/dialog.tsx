@@ -48,6 +48,7 @@ export function Dialog({
   description,
   children,
   footer,
+  closeLabel,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -55,11 +56,26 @@ export function Dialog({
   description?: string
   children: React.ReactNode
   footer?: React.ReactNode
+  /**
+   * The close button's accessible name. Optional and defaulting to `title`
+   * for now — re-announcing the dialog's title beats an unlabelled button,
+   * but Task 2b wires this to the `common.close` message once the message
+   * file exists, at which point every caller keeps working unchanged and
+   * only the fallback stops being used.
+   */
+  closeLabel?: string
 }) {
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
-        <DialogOverlay className="bg-foreground/20 duration-150 dark:bg-black/50" />
+        {/* `supports-backdrop-filter:backdrop-blur-none` overrides the
+            generated `DialogOverlay`'s `backdrop-blur-xs` (`components/ui/
+            dialog.tsx:31`) — a blurred scrim reads as glassmorphism, which the
+            design system forbids. `cn`'s tailwind-merge-style dedupe treats
+            same-modifier `backdrop-blur-*` utilities as one conflict group
+            (verified: the later value replaces the earlier one here), so this
+            reliably removes the blur without touching the generated file. */}
+        <DialogOverlay className="bg-foreground/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/50" />
         <DialogPrimitive.Popup
           className={cn(
             'fixed z-50 flex flex-col gap-4 border border-border bg-surface-2 p-6 shadow-[0_8px_24px_rgba(25,33,30,0.10)] transition-transform duration-150 dark:shadow-[0_8px_24px_rgba(0,0,0,0.40)]',
@@ -93,7 +109,7 @@ export function Dialog({
               )}
             </div>
             <DialogClose
-              aria-label={title}
+              aria-label={closeLabel ?? title}
               className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <X aria-hidden="true" className="size-4" />

@@ -47,7 +47,12 @@ export function Sheet({
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
-        <DialogOverlay className="bg-foreground/20 duration-150 dark:bg-black/50" />
+        {/* See `components/common/dialog.tsx`'s equivalent comment:
+            `supports-backdrop-filter:backdrop-blur-none` overrides the
+            generated `DialogOverlay`'s `backdrop-blur-xs`
+            (`components/ui/dialog.tsx:31`) so the scrim never reads as
+            glassmorphism. */}
+        <DialogOverlay className="bg-foreground/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/50" />
         <DialogPrimitive.Popup
           className={cn(
             'fixed z-50 flex flex-col gap-4 border-border bg-surface-2 p-6 shadow-[0_8px_24px_rgba(25,33,30,0.10)] transition-transform duration-150 dark:shadow-[0_8px_24px_rgba(0,0,0,0.40)]',

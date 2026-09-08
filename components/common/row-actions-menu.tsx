@@ -12,7 +12,14 @@ import { cn } from 'cn'
  * type-ahead, Escape, and focus back to the trigger — which is why this is not
  * a hand-rolled `useState` dropdown. The trigger is a 36×36 icon button with an
  * `aria-label` naming the row, so a page of ten of them does not present ten
- * buttons called "More".
+ * buttons called "More". Below 640 (spec's Mobile expectation: "the menu
+ * trigger's touch box is ≥ 44 px") the box itself grows to 44×44 — not an
+ * invisible hit-area layered over a 36 px visual, because the row layouts that
+ * host this (`FinancialListRow`, `PlanningRow`) give the actions cell a plain
+ * `flex items-center` with no fixed cross-axis size, so a taller trigger just
+ * grows the row to fit it like any other flex child, the same way the row
+ * already accommodates a two-line title. From 640 up it returns to 36×36 to
+ * match the Desktop expectation.
  *
  * Base UI API adaptation: `components/ui/dropdown-menu.tsx` (Task 1a) wraps
  * this same Base UI Menu, but its `DropdownMenuContent` sizes the popup to
@@ -39,7 +46,7 @@ export function RowActionsMenu({ label, actions }: { label: string; actions: Row
     <Menu.Root>
       <Menu.Trigger
         aria-label={label}
-        className="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground sm:size-9"
       >
         <MoreHorizontal aria-hidden="true" className="size-4" />
       </Menu.Trigger>
