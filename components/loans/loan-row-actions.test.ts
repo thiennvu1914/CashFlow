@@ -32,7 +32,7 @@ vi.mock('@/lib/server/actions/loan-actions', () => ({
   updateLoanAction: vi.fn(),
 }))
 
-const { paymentResolver, totalFromParts } = await import('./loan-row-actions')
+const { displayTotal, paymentResolver, totalFromParts } = await import('./loan-row-actions')
 
 /** The fields the user actually types, with the two amounts left to each case. */
 const BASE = {
@@ -88,6 +88,20 @@ describe('totalFromParts', () => {
     expect(totalFromParts(Number.NaN, Number.NaN)).toBeNull()
     expect(totalFromParts(Number.POSITIVE_INFINITY, 1)).toBeNull()
     expect(totalFromParts(1, Number.NEGATIVE_INFINITY)).toBeNull()
+  })
+})
+
+describe('displayTotal', () => {
+  it('shows the sum whenever both parts are valid numbers, including zero', () => {
+    expect(displayTotal(3_500_000, 1_500_000)).toBe(5_000_000)
+    expect(displayTotal(0, 0)).toBe(0)
+  })
+
+  it('treats a blank (NaN) part as zero for display — never a dash', () => {
+    // `totalFromParts` would answer `null` for both of these; the read-only
+    // Tổng field must still show a figure while the user is mid-edit.
+    expect(displayTotal(Number.NaN, 500_000)).toBe(500_000)
+    expect(displayTotal(Number.NaN, Number.NaN)).toBe(0)
   })
 })
 

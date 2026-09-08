@@ -6,6 +6,7 @@ import {
   compareCalendarDates,
   formatCalendarDate,
 } from '@/lib/datetime/calendar-date'
+import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { LoanDisplayStatus, LoanWithOutstanding } from '@/lib/server/services/loan'
 import { formatMoney } from './format-money'
 
@@ -41,6 +42,14 @@ import { formatMoney } from './format-money'
  * derived here, because it is not a service concept at all — it is a
  * presentation window on a due date the service already dated — and it is
  * gated on the service's ACTIVE so the two can never contradict each other.
+ *
+ * No status/frequency copy is baked in here at all (Phase 7): this module
+ * returns the bare `paymentFrequency`/`status` enums and the component that
+ * renders a row translates them via `paymentFrequencyLabelKey`/
+ * `loanStatusLabelKey` (`lib/ui/labels.ts`) — this stays a pure function with
+ * no translator of its own. `interestRateLabel` is the one exception, kept
+ * exactly as it was: it is a percentage with its own `RATE_FORMATTER`, and the
+ * `%` sign is not language-specific here.
  */
 export interface LoanPaymentDto {
   id: string
@@ -78,14 +87,12 @@ export interface LoanDto {
   /** The service's OVERDUE, relabelled as a boolean the row can style on. */
   overdue: boolean
   scheduledPayment: string
-  frequency: PaymentFrequency
-  frequencyLabel: string
+  paymentFrequency: PaymentFrequency
   /** e.g. "8,5 %" — the informational rate, not money. */
   interestRateLabel: string
   termMonths: number
   startDate: string
   status: LoanDisplayStatus
-  statusLabel: string
   /** The *stored* status is ACTIVE — what the page keys the row actions off. A
    *  closed loan refuses every write, so offering it a button would be a
    *  promise the service breaks. Not derivable from `status` alone: PAID_OFF
@@ -109,11 +116,13 @@ export interface LoanDto {
 }
 
 /**
- * Fixed English copy (Phase 7 replaces these literals with i18n keys, same as
- * `lib/ui/action-error-messages.ts`).
- *
- * The user's words for a cadence, not the enum's: they are reading how often
- * they pay, so "Monthly" and never "MONTHLY".
+ * Fixed English copy, kept ONLY because `lib/server/export/build-loans-sheet.ts`
+ * (frozen this phase) still imports both for the Excel export's `Frequency` and
+ * `Status` columns, which are English regardless of the reader's locale (spec
+ * §12 says nothing about localising a workbook, and Phase 7's own export sheets
+ * are out of scope). No UI component reads either: `toLoanDto` below returns
+ * the bare `paymentFrequency`/`status` enums, and every renderer calls
+ * `paymentFrequencyLabelKey`/`loanStatusLabelKey` instead.
  */
 export const LOAN_FREQUENCY_LABELS: Record<PaymentFrequency, string> = {
   WEEKLY: 'Weekly',
@@ -123,9 +132,7 @@ export const LOAN_FREQUENCY_LABELS: Record<PaymentFrequency, string> = {
 
 /**
  * "Payment overdue" rather than the bare "Overdue" a debt uses: a loan is not
- * late, an *instalment* is — the loan itself may have another four years to run
- * — and the badge has to say which. Each label also differs in wording as well
- * as colour, so no state depends on seeing colour to be understood.
+ * late, an *instalment* is — the loan itself may have another four years to run.
  */
 export const LOAN_STATUS_LABELS: Record<LoanDisplayStatus, string> = {
   ACTIVE: 'Active',
@@ -178,6 +185,7 @@ export function toLoanDto(
    *  this module has no user, and passing the day in is what makes every
    *  `dueSoon` case testable without freezing a clock. */
   today: string,
+  locale: Locale = DEFAULT_LOCALE,
 ): LoanDto {
   const currency = loan.currency
   // Safe without a zero guard: `Loan_principal_positive` (the CHECK in this
@@ -190,14 +198,14 @@ export function toLoanDto(
     id: loan.id,
     lender: loan.lender,
     currency,
-    principal: formatMoney(loan.principal, currency),
-    principalPaid: formatMoney(principalPaid, currency),
-    interestPaid: formatMoney(interestPaid, currency),
+    principal: formatMoney(loan.principal, currency, locale),
+    principalPaid: formatMoney(principalPaid, currency, locale),
+    interestPaid: formatMoney(interestPaid, currency, locale),
     // Not clamped at zero: this is the authoritative derived figure the
     // service's own overpayment check compares against, and it can only go
     // negative if rows were written around the service — in which case showing
     // a negative is how the user finds out, rather than a tidy "0" hiding it.
-    outstandingPrincipal: formatMoney(outstandingPrincipal, currency),
+    outstandingPrincipal: formatMoney(outstandingPrincipal, currency, locale),
     percentRepaid: Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, ratio.mul(100).toNumber())),
     percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
     nextDueDate,
@@ -214,24 +222,22 @@ export function toLoanDto(
       compareCalendarDates(nextDueDate, today) >= 0 &&
       compareCalendarDates(nextDueDate, addCalendarDays(today, DUE_SOON_DAYS)) <= 0,
     overdue: displayStatus === 'OVERDUE',
-    scheduledPayment: formatMoney(loan.scheduledPaymentAmount, currency),
-    frequency: loan.paymentFrequency,
-    frequencyLabel: LOAN_FREQUENCY_LABELS[loan.paymentFrequency],
+    scheduledPayment: formatMoney(loan.scheduledPaymentAmount, currency, locale),
+    paymentFrequency: loan.paymentFrequency,
     // The one `toNumber()` on an interest rate in the codebase — see the
     // module comment for why a percentage is not money.
     interestRateLabel: `${RATE_FORMATTER.format(loan.interestRate.toNumber())} %`,
     termMonths: loan.termMonths,
     startDate: formatCalendarDate(loan.startDate),
     status: displayStatus,
-    statusLabel: LOAN_STATUS_LABELS[displayStatus],
     active: loan.status === 'ACTIVE',
     notes: loan.notes,
     payments: loan.payments.map((p) => ({
       id: p.id,
       date: formatCalendarDate(p.paymentDate),
-      total: formatMoney(p.totalAmount, currency),
-      principal: formatMoney(p.principalAmount, currency),
-      interest: formatMoney(p.interestAmount, currency),
+      total: formatMoney(p.totalAmount, currency, locale),
+      principal: formatMoney(p.principalAmount, currency, locale),
+      interest: formatMoney(p.interestAmount, currency, locale),
       note: p.note,
     })),
     editable: {
@@ -274,7 +280,10 @@ export interface LoanCurrencySubtotalDto {
  */
 const SUBTOTAL_CURRENCY_ORDER: Currency[] = ['VND', 'USD']
 
-export function loanSubtotalsByCurrency(rows: LoanWithOutstanding[]): LoanCurrencySubtotalDto[] {
+export function loanSubtotalsByCurrency(
+  rows: LoanWithOutstanding[],
+  locale: Locale = DEFAULT_LOCALE,
+): LoanCurrencySubtotalDto[] {
   const totals = new Map<Currency, Prisma.Decimal>()
 
   for (const { loan, outstandingPrincipal } of rows) {
@@ -288,6 +297,6 @@ export function loanSubtotalsByCurrency(rows: LoanWithOutstanding[]): LoanCurren
   // move — as loans are added, repaid or closed.
   return SUBTOTAL_CURRENCY_ORDER.filter((currency) => totals.has(currency)).map((currency) => ({
     currency,
-    outstandingPrincipal: formatMoney(totals.get(currency)!, currency),
+    outstandingPrincipal: formatMoney(totals.get(currency)!, currency, locale),
   }))
 }

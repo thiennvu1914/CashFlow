@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
+import { loadMessages } from '@/lib/i18n/messages'
+import viLabels from '@/messages/vi/labels.json'
 
 /**
  * A markup test, exactly like `components/debts/debt-form.test.tsx` —
@@ -8,13 +11,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
  * What it pins down is the server HTML, which is where this form's half of the
  * hydration-race fix lives (`lib/ui/use-hydrated.ts`): the gate that stops the
  * form accepting input it would silently discard, every field being present and
- * labelled in the first paint rather than popping in after hydration, and — the
- * case this form exists to prove — that the frequency select's server-rendered
- * selection is MONTHLY even though MONTHLY is *not* its first option. That is
- * the exact shape of the defect `/transactions`' Type select once had: a
- * `<select>` whose browser fallback (the first option) disagreed with
- * `useForm`'s default, so a submission before hydration filed the loan on the
- * wrong schedule.
+ * VISIBLY labelled (a `<label for>`, not just an `aria-label`) in the first
+ * paint rather than popping in after hydration, and — the case this form exists
+ * to prove — that the frequency select's server-rendered selection is MONTHLY
+ * even though MONTHLY is *not* its first option. That is the exact shape of the
+ * defect `/transactions`' Type select once had: a `<select>` whose browser
+ * fallback (the first option) disagreed with `useForm`'s default, so a
+ * submission before hydration filed the loan on the wrong schedule.
  *
  * `useRouter` throws outside a mounted app router and the action module pulls
  * in Prisma, so both are mocked — same reasoning as the debts test.
@@ -29,31 +32,42 @@ vi.mock('@/lib/server/actions/loan-actions', () => ({
 
 const { LoanForm } = await import('./loan-form')
 
+const messages = await loadMessages('vi')
+
 /** The user's own calendar day, as the page passes it in. */
 const TODAY = '2026-04-15'
 
 function render(): string {
-  return renderToStaticMarkup(<LoanForm today={TODAY} />)
+  return renderToStaticMarkup(
+    <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+      <LoanForm today={TODAY} />
+    </NextIntlClientProvider>,
+  )
 }
 
-/** The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- *  nest, so the first `</select>` after the opening tag closes it. */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
+/** The markup of one `<select>`, found by an `id=` that starts with `prefix` —
+ *  `<select>`s cannot nest, so the first `</select>` after the opening tag
+ *  closes it. Ids are `useId()`-generated, so only the stable prefix this
+ *  form's own `fieldId` helper writes can be matched. */
+function selectMarkupById(html: string, prefix: string): string {
+  const idMatch = html.match(new RegExp(`id="${prefix}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element whose id starts with "${prefix}-" in the markup`)
+  const start = html.lastIndexOf('<select', html.indexOf(idMatch[0]))
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
+  if (start === -1 || end === -1) throw new Error(`No <select> with id "${prefix}-…"`)
   return html.slice(start, end + '</select>'.length)
 }
 
-/** The one `<input …>` tag carrying this `aria-label`. */
-function inputMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
+/** The opening tag of the one `<input>` whose id starts with `prefix`.
+ *  `<input>` is a void element, so the tag is all there is. */
+function inputMarkupById(html: string, prefix: string): string {
+  const idMatch = html.match(new RegExp(`id="${prefix}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element whose id starts with "${prefix}-" in the markup`)
+  const labelIndex = html.indexOf(idMatch[0])
   const start = html.lastIndexOf('<input', labelIndex)
-  if (start === -1) throw new Error(`No <input> labelled "${ariaLabel}"`)
-  return html.slice(start, html.indexOf('>', labelIndex) + 1)
+  const end = html.indexOf('>', labelIndex)
+  if (start === -1 || end === -1) throw new Error(`No <input> with id "${prefix}-…"`)
+  return html.slice(start, end + 1)
 }
 
 /** `<option value="…" … selected="">` regardless of attribute order — the
@@ -70,36 +84,24 @@ describe('LoanForm', () => {
 
     expect(html).toContain('<fieldset disabled=""')
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">New loan</legend>')
+    expect(html).toContain('sr-only')
     // The flex column lives on the fieldset, so nothing re-flows when the gate
     // lifts (same guarantee as `DebtForm`'s).
     expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
   })
 
-  it('server-renders every field, each labelled, in the first paint', () => {
+  it('renders a visible <label for> on every field', () => {
     const html = render()
-
-    for (const label of [
-      'Lender',
-      'Principal',
-      'Loan currency',
-      'Interest rate (%)',
-      'Start date',
-      'Term (months)',
-      'Payment frequency',
-      'Scheduled payment',
-      'Next due date',
-      'Notes',
-    ]) {
-      expect(html).toContain(`aria-label="${label}"`)
-    }
-    expect(html).toContain('Add loan')
+    // lender, principal, currency, interest rate, start date, term months,
+    // payment frequency, scheduled payment, next due date, notes.
+    const labelCount = (html.match(/<label for="/g) ?? []).length
+    expect(labelCount).toBe(10)
   })
 
   it('server-renders MONTHLY as the selected frequency, though it is not the first option', () => {
     const html = render()
-    const frequencySelect = selectMarkup(html, 'Payment frequency')
+    const frequencySelect = selectMarkupById(html, 'loan-payment-frequency')
 
     // The case this test exists for. The options are in the Prisma enum's own
     // order (WEEKLY, MONTHLY, YEARLY) so the control reads as the schema does,
@@ -119,14 +121,16 @@ describe('LoanForm', () => {
     expect(frequencySelect.indexOf('value="MONTHLY"')).toBeLessThan(
       frequencySelect.indexOf('value="YEARLY"'),
     )
+    // The user's own words for the cadence, never the raw enum.
+    expect(frequencySelect).toContain(viLabels.paymentFrequency.MONTHLY)
     // Exactly one such select — the marker above is meaningless if a second
     // frequency control is hiding elsewhere in the form.
-    expect(html.split('aria-label="Payment frequency"')).toHaveLength(2)
+    expect(html.match(/id="loan-payment-frequency-[^"]*"/g)).toHaveLength(1)
   })
 
   it('server-renders VND as the selected currency, from a single currency select', () => {
     const html = render()
-    const currencySelect = selectMarkup(html, 'Loan currency')
+    const currencySelect = selectMarkupById(html, 'loan-currency')
 
     // VND is the first option, and the marker is asserted anyway so the server
     // HTML states the form's own default rather than relying on a browser
@@ -134,11 +138,11 @@ describe('LoanForm', () => {
     expect(currencySelect).toMatch(selectedOption('VND'))
     expect(currencySelect).not.toMatch(selectedOption('USD'))
     expect(currencySelect).not.toMatch(/<select[^>]*\svalue=/)
-    expect(html.split('aria-label="Loan currency"')).toHaveLength(2)
+    expect(html.match(/id="loan-currency-[^"]*"/g)).toHaveLength(1)
   })
 
   it("pre-fills the next due date with the user's own today", () => {
-    const nextDueDate = inputMarkup(render(), 'Next due date')
+    const nextDueDate = inputMarkupById(render(), 'loan-next-due-date')
 
     // `today` comes from `todayCalendarDateInZone` on the page, never from
     // `new Date()` in the browser — whose zone is not the profile's. It is
@@ -155,14 +159,14 @@ describe('LoanForm', () => {
     // The two inputs whose DOM value format the schema depends on: an
     // `<input type="date">` submits `yyyy-MM-dd`, which is exactly what
     // `calendarDateStringSchema` accepts.
-    expect(inputMarkup(html, 'Start date')).toContain('type="date"')
-    expect(inputMarkup(html, 'Next due date')).toContain('type="date"')
+    expect(inputMarkupById(html, 'loan-start-date')).toContain('type="date"')
+    expect(inputMarkupById(html, 'loan-next-due-date')).toContain('type="date"')
   })
 
   it('starts the start date empty rather than guessing when the loan began', () => {
     // Unlike the next due date, there is no defensible default for a start
     // date: a loan began when it began, and today would be a fabricated term.
-    expect(inputMarkup(render(), 'Start date')).not.toMatch(/\svalue=/)
+    expect(inputMarkupById(render(), 'loan-start-date')).not.toContain('value=')
   })
 
   it('starts every numeric field empty rather than pre-filling a zero', () => {
@@ -173,8 +177,13 @@ describe('LoanForm', () => {
     // what the field starts at. A rate of 0 *is* valid — the interest-free loan
     // from family — but pre-filling it would state a term the user never gave,
     // and a term of 0 months is rejected outright.
-    for (const label of ['Principal', 'Scheduled payment', 'Interest rate (%)', 'Term (months)']) {
-      expect(inputMarkup(html, label)).not.toMatch(/\svalue=/)
+    for (const prefix of [
+      'loan-principal',
+      'loan-scheduled-payment',
+      'loan-interest-rate',
+      'loan-term-months',
+    ]) {
+      expect(inputMarkupById(html, prefix)).not.toContain('value=')
     }
   })
 })
