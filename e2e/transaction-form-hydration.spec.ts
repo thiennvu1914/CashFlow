@@ -79,8 +79,10 @@ const GATED_PAGES = ['/transactions', '/transfers', '/budgets', '/accounts'] as 
  * nest, so the first `</select>` after the opening tag closes it.
  *
  * Scoping is what makes the `selected` assertions below meaningful:
- * `/transfers`' two account selectors render the SAME option values, and only
- * one of them may carry a pre-selected option.
+ * `/budgets`' scope select and `/accounts`' two selects each have siblings
+ * that render similar option shapes, and only the right one may carry a
+ * pre-selected option. (`/transfers`' two account selectors moved off
+ * `aria-label` in Task 5b — see `selectMarkupByTransferId` below.)
  */
 function selectMarkup(html: string, ariaLabel: string): string {
   const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
@@ -123,6 +125,24 @@ function selectMarkupById(html: string, name: string): string {
   const start = html.lastIndexOf('<select', idIndex)
   const end = html.indexOf('</select>', start)
   if (start === -1 || end === -1) throw new Error(`No <select id="transaction-${name}-*">`)
+  return html.slice(start, end + '</select>'.length)
+}
+
+/**
+ * The markup of one `<select>` on `/transfers`, found by a field name rather
+ * than `aria-label` — Task 5b moved both account selectors off `aria-label`
+ * and onto a visible `<label>` bound through `FormField`, the same `id`
+ * convention as `selectMarkupById` above (`transfer-<name>-<useId() suffix>`,
+ * unique per mounted `TransferForm` instance). Matched by prefix, since the
+ * suffix is generated at runtime.
+ */
+function selectMarkupByTransferId(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transfer-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transfer-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
+  const start = html.lastIndexOf('<select', idIndex)
+  const end = html.indexOf('</select>', start)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transfer-${name}-*">`)
   return html.slice(start, end + '</select>'.length)
 }
 
@@ -257,12 +277,16 @@ test.describe.serial('Money forms — hydration gate', () => {
     // 3. `/transfers` — `toAccountId` defaults to the SECOND account, so its
     //    select must carry the marker; `fromAccountId` defaults to the first
     //    option and must carry none. Both selects list the identical option
-    //    values, which is why each is asserted in its own slice.
+    //    values, which is why each is asserted in its own slice. Found by
+    //    `id`, not `aria-label` (Task 5b: both are now native `<select>`s
+    //    labelled through `FormField`'s visible `<label>` — spec §2 keeps
+    //    native as the default and makes only the *transaction* Category and
+    //    Account pickers custom).
     const transfers = bodies.get('/transfers')!
-    expect(selectedOptionLabel(selectMarkup(transfers, 'To account'))).toBe(
+    expect(selectedOptionLabel(selectMarkupByTransferId(transfers, 'to'))).toBe(
       `${SECOND_ACCOUNT} (VND)`,
     )
-    expect(selectedOptionLabel(selectMarkup(transfers, 'From account'))).toBeNull()
+    expect(selectedOptionLabel(selectMarkupByTransferId(transfers, 'from'))).toBeNull()
 
     // 4. `/budgets` — an Overall budget exists for this month (seeded in
     //    `beforeAll`), so the scope default is CATEGORY: the second option.
