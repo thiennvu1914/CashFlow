@@ -23,6 +23,7 @@
   "notes": "Ghi chú (tùy chọn)",
   "paymentAction": "Ghi nhận thanh toán",
   "paymentTitle": "Ghi nhận thanh toán · {name}",
+  "paymentOutstanding": "Còn lại {amount} {currency}",
   "paymentAmount": "Số tiền",
   "paymentDate": "Ngày thanh toán",
   "paymentNote": "Ghi chú (tùy chọn)",

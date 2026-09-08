@@ -9,7 +9,7 @@ import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { DebtCreateButton } from '@/components/debts/debt-create-button'
 import { DebtList } from '@/components/debts/debt-list'
-import { DebtRowActions } from '@/components/debts/debt-row-actions'
+import { DebtPaymentButton, DebtRowMenu } from '@/components/debts/debt-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { MoneyText } from '@/components/common/money-text'
 import { PageHeader } from '@/components/common/page-header'
@@ -128,7 +128,10 @@ export default async function DebtsPage() {
                   debts={receivable}
                   locale={locale}
                   timeZone={timezone}
-                  renderActions={(debt) => <DebtRowActions debt={debt} today={today} />}
+                  renderActions={(debt) => ({
+                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    actions: <DebtRowMenu debt={debt} />,
+                  })}
                 />
               </div>
             </div>
@@ -158,7 +161,10 @@ export default async function DebtsPage() {
                   debts={payable}
                   locale={locale}
                   timeZone={timezone}
-                  renderActions={(debt) => <DebtRowActions debt={debt} today={today} />}
+                  renderActions={(debt) => ({
+                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    actions: <DebtRowMenu debt={debt} />,
+                  })}
                 />
               </div>
             </div>
@@ -168,8 +174,15 @@ export default async function DebtsPage() {
 
       {writtenOff.length > 0 && (
         <details className="rounded-lg border border-border bg-surface">
-          <summary className="cursor-pointer px-4 py-3 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
-            {t('debts.writtenOffSection', { count: writtenOff.length })}
+          {/* A heading element as a `<summary>`'s label is explicit content
+              model (a `<summary>` may include one `h1`–`h6` as its label),
+              which is what gives this disclosure's own section a real
+              heading rather than a clickable paragraph — spec a11y AC: "h2 on
+              each `<details>`". */}
+          <summary className="cursor-pointer px-4 py-3">
+            <h2 className="inline text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+              {t('debts.writtenOffSection', { count: writtenOff.length })}
+            </h2>
           </summary>
           {/* Read-only, like the archived accounts on `/accounts`: a written-off
               debt refuses every write (`DebtNotActiveError`), so no actions are

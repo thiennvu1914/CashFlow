@@ -24,25 +24,38 @@ import { Dialog } from '@/components/common/dialog'
 import { FormField } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Record payment / Edit / Write off for one debt row. Rendered only by the
- * Debts page, through `DebtList`'s `renderActions` slot — the Dashboard's
- * compact list passes no `renderActions`, so this never mounts there.
+ * Record payment / Edit / Write off for one debt row — split into two
+ * independent pieces (fix round 1, findings 4/5/6/7), rendered by `DebtList`
+ * into two different `PlanningRow` slots:
+ *
+ *  - `DebtPaymentButton` — the row's one inline action, passed as
+ *    `inlineAction`. `variant="outline"` (not filled): the header's "Thêm
+ *    công nợ" is the page's one primary action, and a filled button on every
+ *    row competed with it (fix round 1, finding 4 — the same treatment
+ *    `GoalProgressButton` already got). Hidden entirely once the debt is PAID
+ *    (`outstanding` is zero): the service refuses any further payment as
+ *    OVERPAYMENT regardless of amount, so the button would offer nothing but
+ *    a guaranteed refusal (fix round 1, finding 5).
+ *  - `DebtRowMenu` — Edit/Write off, passed as `actions`. Its write-off
+ *    failure is reported through `useRowError` rather than a local
+ *    `useState`: `DebtList` renders this into `actions` and a `RowErrorAlert`
+ *    into `extra` (under the row), and only a shared Context can connect a
+ *    menu click to an alert that renders elsewhere in the tree.
+ *
+ * Neither ever mounts on the Dashboard's compact list (no `renderActions`
+ * there) or in the page's written-off section (a written-off debt refuses
+ * every write; offering the actions would be a promise the service breaks).
  *
  * Nothing here moves money. Recording a repayment writes a `DebtPayment` row
  * and nothing else: no Transaction, no Transfer, no account balance. Whether
  * the cash also passed through a tracked account is a separate fact the user
  * records separately, which is why the page says so in its subtitle rather
  * than leaving the reader to wonder.
- *
- * "Ghi nhận thanh toán" is the row's one INLINE primary action — it opens a
- * `Dialog` (spec §6.6), not a right-aligned panel. Edit and Write off live in
- * the row's `…` menu: they are less frequent, and write-off is destructive and
- * terminal, so it is confirmed through a `ConfirmDialog` rather than a native
- * `window.confirm`.
  *
  * A payment and an edit are two forms, not one, because they are two user
  * intents — "Minh paid me 250.000 on the 2nd" and "the name was wrong" — and a
@@ -52,20 +65,55 @@ import { Input } from '@/components/ui/input'
  * the *current* row as its defaults; there is no stale-default problem to gate
  * for, and no `useHydrated` here — a click cannot happen before hydration.
  */
-export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }) {
-  const router = useRouter()
+export function DebtPaymentButton({ debt, today }: { debt: DebtDto; today: string }) {
   const t = useTranslations()
   const [paymentOpen, setPaymentOpen] = useState(false)
+
+  // A written-off debt refuses every write (`DebtNotActiveError`); guarded
+  // here as well as by the page (which renders the written-off section
+  // without a `renderActions` slot), because this component is the one that
+  // knows what its button does. A fully PAID debt keeps its menu (Edit stays
+  // useful) but drops this button: `outstanding` is zero, and the service
+  // rejects any further payment as OVERPAYMENT no matter what is typed.
+  if (!debt.active || debt.status === 'PAID') return null
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label={`${t('debts.paymentAction')} · ${debt.person}`}
+        onClick={() => setPaymentOpen(true)}
+      >
+        {t('debts.paymentAction')}
+      </Button>
+
+      <Dialog
+        open={paymentOpen}
+        onOpenChange={setPaymentOpen}
+        title={t('debts.paymentTitle', { name: debt.person })}
+        // The same "nothing here moves money" copy the page's subtitle
+        // carries, repeated at the point of action.
+        description={t('debts.description')}
+        closeLabel={t('common.close')}
+      >
+        {paymentOpen && (
+          <DebtPaymentForm debt={debt} today={today} onDone={() => setPaymentOpen(false)} />
+        )}
+      </Dialog>
+    </>
+  )
+}
+
+export function DebtRowMenu({ debt }: { debt: DebtDto }) {
+  const router = useRouter()
+  const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [writingOff, setWritingOff] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { setError } = useRowError()
   const writeOffSubmit = useSubmitState()
 
-  // A written-off debt refuses every write (`DebtNotActiveError`), so it is
-  // offered no buttons at all — showing them would be a promise the service
-  // breaks. Guarded here as well as by the page (which renders the written-off
-  // section without a `renderActions` slot), because this component is the one
-  // that knows what its buttons do.
   if (!debt.active) return null
 
   async function confirmWriteOff() {
@@ -81,7 +129,7 @@ export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }
         setWritingOff(false)
         router.refresh()
       } catch {
-        console.error('DebtRowActions: write-off failed')
+        console.error('DebtRowMenu: write-off failed')
         setWritingOff(false)
         setError(t(GENERIC_ERROR_KEY))
       }
@@ -90,52 +138,21 @@ export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }
 
   return (
     <>
-      <div className="flex w-full flex-col gap-2 min-[480px]:w-auto min-[480px]:flex-row min-[480px]:items-center">
-        <Button
-          type="button"
-          size="sm"
-          className="w-full min-[480px]:w-auto"
-          aria-label={`${t('debts.paymentAction')} · ${debt.person}`}
-          onClick={() => setPaymentOpen(true)}
-        >
-          {t('debts.paymentAction')}
-        </Button>
-        <RowActionsMenu
-          label={t('common.rowActions', { name: debt.person })}
-          actions={[
-            { id: 'edit', label: t('debts.editAction'), onSelect: () => setEditOpen(true) },
-            {
-              id: 'writeOff',
-              label: t('debts.writeOffAction'),
-              tone: 'negative',
-              onSelect: () => {
-                setError(null)
-                setWritingOff(true)
-              },
+      <RowActionsMenu
+        label={t('common.rowActions', { name: debt.person })}
+        actions={[
+          { id: 'edit', label: t('debts.editAction'), onSelect: () => setEditOpen(true) },
+          {
+            id: 'writeOff',
+            label: t('debts.writeOffAction'),
+            tone: 'negative',
+            onSelect: () => {
+              setError(null)
+              setWritingOff(true)
             },
-          ]}
-        />
-      </div>
-
-      {error && (
-        <InlineAlert tone="negative" className="mt-2">
-          {error}
-        </InlineAlert>
-      )}
-
-      <Dialog
-        open={paymentOpen}
-        onOpenChange={setPaymentOpen}
-        title={t('debts.paymentTitle', { name: debt.person })}
-        // The same "nothing here moves money" copy the page's subtitle
-        // carries, repeated at the point of action.
-        description={t('debts.description')}
-        closeLabel={t('common.close')}
-      >
-        {paymentOpen && (
-          <DebtPaymentForm debt={debt} today={today} onDone={() => setPaymentOpen(false)} />
-        )}
-      </Dialog>
+          },
+        ]}
+      />
 
       <Dialog
         open={editOpen}
@@ -163,6 +180,12 @@ export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }
 /**
  * "How much came back, and when?" — the only write that moves a debt's
  * outstanding amount.
+ *
+ * States the current outstanding above the amount field (owner requirement
+ * G4: "current outstanding, payment amount, payment date, optional note") so
+ * the OVERPAYMENT refusal below is predictable rather than a surprise — the
+ * figure the service is about to compare against is right there while the
+ * user types.
  *
  * The service refuses a payment above what is still owed, under a row lock, so
  * OVERPAYMENT is a genuinely reachable answer here (two tabs, a double-click,
@@ -219,6 +242,10 @@ function DebtPaymentForm({
     <form onSubmit={handleSubmit(onSubmit)}>
       <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
         <legend className="sr-only">{t('debts.paymentAction')}</legend>
+
+        <p className="text-sm text-muted-foreground">
+          {t('debts.paymentOutstanding', { amount: debt.outstanding, currency: debt.currency })}
+        </p>
 
         <FormField
           id={fieldId('amount')}

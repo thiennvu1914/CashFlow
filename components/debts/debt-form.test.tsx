@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NextIntlClientProvider } from 'next-intl'
 import { loadMessages } from '@/lib/i18n/messages'
+import viDebts from '@/messages/vi/debts.json'
 import viLabels from '@/messages/vi/labels.json'
 
 /**
@@ -83,11 +84,23 @@ describe('DebtForm', () => {
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
   })
 
-  it('renders a visible <label for> on every field', () => {
+  it('renders a visible <label for> naming every field, against the vi strings themselves', () => {
     const html = render()
     // direction, person, original amount, currency, due date, description, notes.
     const labelCount = (html.match(/<label for="/g) ?? []).length
     expect(labelCount).toBe(7)
+
+    for (const label of [
+      viDebts.direction,
+      viDebts.person,
+      viDebts.originalAmount,
+      viDebts.currency,
+      viDebts.dueDate,
+      viDebts.descriptionField,
+      viDebts.notes,
+    ]) {
+      expect(html).toContain(`>${label}</label>`)
+    }
   })
 
   it('renders the due date as a date input, so the browser submits yyyy-MM-dd', () => {

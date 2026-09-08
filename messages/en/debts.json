@@ -23,6 +23,7 @@
   "notes": "Notes",
   "paymentAction": "Record payment",
   "paymentTitle": "Record payment · {name}",
+  "paymentOutstanding": "Outstanding {amount} {currency}",
   "paymentAmount": "Amount",
   "paymentDate": "Payment date",
   "paymentNote": "Note (optional)",
