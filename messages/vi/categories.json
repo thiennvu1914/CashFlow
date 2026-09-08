@@ -4,7 +4,9 @@
   "accountTypes": "Loại tài khoản",
   "expenseCategories": "Danh mục chi",
   "incomeCategories": "Danh mục thu",
-  "addLabel": "Thêm {section}",
+  "addLabelAccountTypes": "Thêm loại tài khoản",
+  "addLabelExpenseCategories": "Thêm danh mục chi",
+  "addLabelIncomeCategories": "Thêm danh mục thu",
   "addPlaceholder": "Tên mới",
   "addAction": "Thêm",
   "addPending": "Đang thêm…",
@@ -12,6 +14,5 @@
   "archiveConfirmTitle": "Lưu trữ {name}?",
   "archiveConfirmBody": "Mục đã lưu trữ không còn xuất hiện khi chọn, nhưng các bản ghi cũ vẫn giữ nguyên.",
   "archivePending": "Đang lưu trữ…",
-  "defaultBadge": "Mặc định",
   "emptyTitle": "Chưa có mục nào"
 }

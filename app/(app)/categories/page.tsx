@@ -33,7 +33,7 @@ export default async function CategoriesPage() {
         <CategoryChipList
           title={t('categories.accountTypes')}
           items={accountTypes}
-          addLabel={t('categories.addLabel', { section: t('categories.accountTypes') })}
+          addLabel={t('categories.addLabelAccountTypes')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}
           onCreate={async (name) => {
@@ -48,7 +48,7 @@ export default async function CategoriesPage() {
         <CategoryChipList
           title={t('categories.expenseCategories')}
           items={expenseCategories}
-          addLabel={t('categories.addLabel', { section: t('categories.expenseCategories') })}
+          addLabel={t('categories.addLabelExpenseCategories')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}
           onCreate={async (name) => {
@@ -63,7 +63,7 @@ export default async function CategoriesPage() {
         <CategoryChipList
           title={t('categories.incomeCategories')}
           items={incomeCategories}
-          addLabel={t('categories.addLabel', { section: t('categories.incomeCategories') })}
+          addLabel={t('categories.addLabelIncomeCategories')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}
           onCreate={async (name) => {

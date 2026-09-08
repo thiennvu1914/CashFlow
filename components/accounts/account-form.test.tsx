@@ -54,4 +54,16 @@ describe('AccountForm', () => {
     const firstOption = selectHtml.match(/<option[^>]*>([^<]*)<\/option>/)
     expect(firstOption?.[1]).toBe('Cash')
   })
+
+  it('carries no stray `selected=` marker on either <select> — every default comes from option order, never a hard-coded selection', () => {
+    const html = render()
+    // The account-type and currency `<select>`s both rely on their own FIRST
+    // option to agree with `useForm`'s `defaultValues` (see the fieldset's
+    // comment in `account-form.tsx`) — neither should ever need an explicit
+    // `<option selected>` (nor, equivalently, a `defaultValue` on the
+    // `<select>` itself, which react-dom renders as `selected=""` on that
+    // option). A stray one here would mean a future edit added a default
+    // that now silently disagrees with `useForm`'s.
+    expect(html).not.toContain('selected=')
+  })
 })

@@ -64,15 +64,45 @@ export function AccountList({
   const [pendingArchive, setPendingArchive] = useState<AccountRow | null>(null)
   const [errorByAccountId, setErrorByAccountId] = useState<Record<string, string>>({})
 
-  async function confirmArchive(account: AccountRow) {
+  /** Removes any stale message for one row — a fresh confirmation attempt or
+   *  a dismissed dialog must never leave a PREVIOUS attempt's error behind. */
+  function clearError(accountId: string) {
     setErrorByAccountId((prev) => {
+      if (!(accountId in prev)) return prev
       const next = { ...prev }
-      delete next[account.id]
+      delete next[accountId]
       return next
     })
+  }
+
+  /** Opens the archive confirmation for a row, clearing any error a previous
+   *  attempt on the SAME row left behind — a retry starts clean. */
+  function openArchiveConfirm(account: AccountRow) {
+    clearError(account.id)
+    setPendingArchive(account)
+  }
+
+  /** The `ConfirmDialog`'s own `onOpenChange`: fires only when the user backs
+   *  out (Cancel, the close button, Escape, the overlay) — never when this
+   *  component closes the dialog itself (`confirmArchive` sets `pendingArchive`
+   *  to `null` directly on both outcomes). Backing out also clears a stale
+   *  error, for the same reason `openArchiveConfirm` does. */
+  function handleArchiveDialogOpenChange(open: boolean) {
+    if (open) return
+    if (pendingArchive) clearError(pendingArchive.id)
+    setPendingArchive(null)
+  }
+
+  async function confirmArchive(account: AccountRow) {
+    clearError(account.id)
     try {
       const result = await archiveFinancialAccountAction(account.id)
       if (!result.ok) {
+        // The dialog closes on failure too (spec §10): left open, its scrim
+        // hides the very `InlineAlert` below that explains why the archive
+        // was refused — the user would see a dialog that appears to have done
+        // nothing.
+        setPendingArchive(null)
         setErrorByAccountId((prev) => ({
           ...prev,
           [account.id]: t(ACCOUNT_ERROR_KEYS[result.error]),
@@ -83,6 +113,7 @@ export function AccountList({
       router.refresh()
     } catch {
       console.error('AccountList: archive failed')
+      setPendingArchive(null)
       setErrorByAccountId((prev) => ({ ...prev, [account.id]: t(GENERIC_ERROR_KEY) }))
     }
   }
@@ -109,6 +140,7 @@ export function AccountList({
                 key={account.id}
                 title={account.name}
                 meta={`${account.accountType.name} · ${account.currency}`}
+                wrapMeta
                 amount={
                   <MoneyText
                     value={formatMoney(account.balance, account.currency, locale)}
@@ -129,7 +161,7 @@ export function AccountList({
                         id: 'archive',
                         label: t('accounts.archiveAction'),
                         tone: 'negative',
-                        onSelect: () => setPendingArchive(account),
+                        onSelect: () => openArchiveConfirm(account),
                       },
                     ]}
                   />
@@ -176,7 +208,7 @@ export function AccountList({
 
       <ConfirmDialog
         open={pendingArchive !== null}
-        onOpenChange={(open) => !open && setPendingArchive(null)}
+        onOpenChange={handleArchiveDialogOpenChange}
         title={
           pendingArchive ? t('accounts.archiveConfirmTitle', { name: pendingArchive.name }) : ''
         }

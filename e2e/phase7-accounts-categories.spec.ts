@@ -172,12 +172,15 @@ test.describe.serial('Phase 7 Task 6 — accounts, categories', () => {
       })
       .click()
     await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
-    await page
-      .getByRole('dialog', {
-        name: new RegExp(`Lưu trữ ${NON_ZERO}\\?|Archive ${NON_ZERO}\\?`),
-      })
-      .getByRole('button', { name: /^Lưu trữ$|^Archive$/ })
-      .click()
+    const confirm = page.getByRole('dialog', {
+      name: new RegExp(`Lưu trữ ${NON_ZERO}\\?|Archive ${NON_ZERO}\\?`),
+    })
+    await confirm.getByRole('button', { name: /^Lưu trữ$|^Archive$/ }).click()
+
+    // The failed archive closes the dialog itself (fix round 1, finding A3):
+    // left open, its scrim would hide the very InlineAlert that explains why
+    // the archive was refused.
+    await expect(confirm).toBeHidden()
 
     // The server's own friendly refusal (`errors.account.NON_ZERO_BALANCE`),
     // never a raw exception message or a validator-internal string.
@@ -187,7 +190,6 @@ test.describe.serial('Phase 7 Task 6 — accounts, categories', () => {
       ),
     ).toBeVisible()
 
-    await page.keyboard.press('Escape')
     await expect(page.getByRole('listitem').filter({ hasText: NON_ZERO })).toHaveCount(1)
     // Still only the one account archived earlier — the failed archive above
     // added nothing to the archived section.
@@ -227,7 +229,7 @@ test.describe.serial('Phase 7 Task 6 — accounts, categories', () => {
 
     // Add a custom expense category through the section's own inline row.
     await expenseSection
-      .getByLabel(/^Thêm Danh mục chi$|^Add Expense Categories$/)
+      .getByLabel(/^Thêm danh mục chi$|^Add expense category$/)
       .fill('Zzz Custom Expense')
     await expenseSection.getByRole('button', { name: /^Thêm$|^Add$/ }).click()
 

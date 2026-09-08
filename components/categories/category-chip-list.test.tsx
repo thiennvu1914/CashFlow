@@ -7,7 +7,7 @@ import { CategoryChipList } from './category-chip-list'
 
 const PROPS = {
   title: 'Danh mục chi',
-  addLabel: 'Thêm Danh mục chi',
+  addLabel: 'Thêm danh mục chi',
   addPlaceholder: 'Tên mới',
   archiveLabel: 'Lưu trữ',
   onCreate: async () => {},
@@ -36,7 +36,7 @@ describe('CategoryChipList', () => {
   it('gives the inline add input its own visible label naming the section', () => {
     const html = renderToStaticMarkup(<CategoryChipList {...PROPS} items={[]} />)
     expect(html).toContain('<label')
-    expect(html).toContain('Thêm Danh mục chi')
+    expect(html).toContain('Thêm danh mục chi')
     expect(html).toContain('for="')
   })
 

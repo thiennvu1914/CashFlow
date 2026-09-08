@@ -136,6 +136,7 @@ export default async function AccountsPage() {
                 key={account.id}
                 title={account.name}
                 meta={`${account.accountType.name} · ${account.currency}`}
+                wrapMeta
                 amount={<StatusBadge label={t('labels.recordStatus.ARCHIVED')} tone="muted" />}
               />
             ))}

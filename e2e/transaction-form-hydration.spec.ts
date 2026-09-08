@@ -81,8 +81,12 @@ const CATEGORYLESS_TYPES = [
  * HTML. `/accounts`' create form (Task 6) is excluded on purpose: it now
  * mounts inside a `Sheet` that is closed on first render, and Base UI's
  * `Dialog`/`Sheet` renders nothing at all while closed — there is no raw HTML
- * to fetch it from, so its gate is verified at the component level instead
- * (`components/accounts/account-form.test.tsx`).
+ * to fetch it from. Its gate (`<fieldset disabled>`/`aria-busy`), its five
+ * visible labels and the account-type/currency `<select>`s' own-first-option
+ * default (no `selected=`/`defaultValue` anywhere) are verified at the
+ * component level instead — `components/accounts/account-form.test.tsx`,
+ * against the same `renderToStaticMarkup` output this file reads for every
+ * other page via a live server response.
  */
 const GATED_PAGES = ['/transactions', '/transfers', '/budgets'] as const
 
@@ -319,9 +323,9 @@ test.describe.serial('Money forms — hydration gate', () => {
 
     // `/accounts`' create form has no raw-HTML case to assert here (Task 6):
     // it is mounted only inside a closed `Sheet`, which renders nothing at
-    // all until opened, so its own "every select defaults to its own first
-    // option" guarantee is asserted at the component level instead —
-    // `components/accounts/account-form.test.tsx`.
+    // all until opened, so its gate, its labels and its two `<select>`s'
+    // own-first-option default (no stray `selected=`) are asserted at the
+    // component level instead — `components/accounts/account-form.test.tsx`.
   })
 
   test('an early INCOME selection is never reverted (5 fresh navigations)', async ({ page }) => {

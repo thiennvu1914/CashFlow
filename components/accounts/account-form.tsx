@@ -93,7 +93,9 @@ export function AccountForm({
           than leaving the rule "whichever fields happen to have a default".)
 
           Every `<select>` here defaults to its own first option, so none needs
-          a `defaultValue` to make the server HTML agree with the form. */}
+          a `defaultValue` to make the server HTML agree with the form — and
+          none may EVER carry one (or an explicit `<option selected>`), which
+          `account-form.test.tsx` asserts on the real SSR markup. */}
       <fieldset
         disabled={!hydrated || submit.locked}
         aria-busy={!hydrated || submit.busy ? true : undefined}
