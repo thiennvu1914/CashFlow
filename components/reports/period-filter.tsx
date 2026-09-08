@@ -1,7 +1,8 @@
-import Link from 'next/link'
-import { cn } from 'cn'
+import { getTranslations } from 'next-intl/server'
 import { PERIODS, type ReportRange } from '@/lib/reports/report-range'
+import { SegmentedControl, type Segment } from '@/components/common/segmented-control'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/common/form-field'
 import { Input } from '@/components/ui/input'
 
 /**
@@ -25,94 +26,99 @@ export interface PeriodFilterProps {
    * in which case nothing is highlighted, because nothing is being shown.
    */
   activeKind: ReportRange['kind'] | null
-  /** `yyyy-MM-dd` prefill for the custom inputs, or `''` when there is none. */
+  /**
+   * `yyyy-MM-dd` carriers for the custom inputs' `defaultValue`, or `''` when
+   * there is none — never a display label: an `<input type="date">` cannot
+   * hold one.
+   */
   from: string
   to: string
 }
 
-export function PeriodFilter({ activeKind, from, to }: PeriodFilterProps) {
+/**
+ * Explicit, not built from the enum: a template-literal key cannot be
+ * type-checked and cannot be found by a key-usage grep.
+ */
+const PERIOD_LABEL_KEYS: Record<(typeof PERIODS)[number], string> = {
+  day: 'reports.periodDay',
+  week: 'reports.periodWeek',
+  month: 'reports.periodMonth',
+  quarter: 'reports.periodQuarter',
+  year: 'reports.periodYear',
+}
+
+// `async`, because it now translates its own six segment labels. Still a
+// SERVER component with no state: the address bar remains the single source
+// of truth for which period is showing.
+export async function PeriodFilter({ activeKind, from, to }: PeriodFilterProps) {
+  const t = await getTranslations()
   const customActive = activeKind === 'custom'
 
-  return (
-    <section className="rounded-md border border-border bg-surface p-4">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Period
-          </h2>
-          <nav aria-label="Report period" className="mt-2 flex flex-wrap gap-1">
-            {PERIODS.map((period) => {
-              const active = activeKind === period
-              return (
-                <Link
-                  key={period}
-                  href={`/reports?period=${period}`}
-                  aria-current={active ? 'page' : undefined}
-                  className={cn(
-                    'rounded-md px-2.5 py-1.5 text-sm capitalize',
-                    // The rail's "you are here" treatment (a muted wash plus
-                    // brand text), not a filled pill: switching period is
-                    // navigation, not a call to action.
-                    active
-                      ? 'bg-muted font-medium text-brand'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                  )}
-                >
-                  {period}
-                </Link>
-              )
-            })}
-          </nav>
-        </div>
+  /**
+   * Six segments, and "Tùy chọn" is one of them (spec §6.8): the pre-flight
+   * finding was that a custom range left every segment unselected, so the
+   * control claimed no period was active while the page showed one. It is a
+   * link like the others — clicking it re-applies whatever `from`/`to` the URL
+   * already carries, or, with none, lands on the resolver's error branch, which
+   * is exactly where a user who asked for a custom range with no dates should
+   * be.
+   */
+  const segments: Segment[] = [
+    ...PERIODS.map((period) => ({
+      id: period,
+      label: t(PERIOD_LABEL_KEYS[period]),
+      href: `/reports?period=${period}`,
+    })),
+    {
+      id: 'custom',
+      label: t('reports.periodCustom'),
+      href: `/reports?period=custom${from ? `&from=${from}` : ''}${to ? `&to=${to}` : ''}`,
+    },
+  ]
 
-        <form method="get" action="/reports" className="flex flex-wrap items-end gap-2">
-          {/* Not a `<button name="period" value="custom">`: only the button that
-              was clicked is submitted, so pressing Enter in a date field would
-              otherwise send no period at all. */}
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Six segments do not fit at 375, so the TRACK scrolls (the primitive's
+          own `overflow-x-auto`). Spec §7's ban on horizontal scrolling is about
+          core METRICS — a number the user must see must not be hidden — and a
+          filter is not a metric. */}
+      <SegmentedControl label={t('reports.period')} segments={segments} activeId={activeKind} />
+
+      {/* The From/To pair appears only when the custom segment is selected
+          (spec §6.8: "'Tùy chọn' ... reveals the From/To inputs and Apply"),
+          so five of the six periods render a control with nothing under it. */}
+      {customActive && (
+        <form
+          method="get"
+          action="/reports"
+          className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end"
+        >
+          {/* Not a `<button name="period" value="custom">`: only the button
+              that was clicked is submitted, so pressing Enter in a date field
+              would otherwise send no period at all. */}
           <input type="hidden" name="period" value="custom" />
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="report-from"
-              className={cn(
-                'text-xs font-medium tracking-wide uppercase',
-                customActive ? 'text-brand' : 'text-muted-foreground',
-              )}
-            >
-              From
-            </label>
-            <Input
-              id="report-from"
-              name="from"
-              type="date"
-              required
-              defaultValue={from}
-              className="w-40"
-            />
+          {/* `Label` + `Input` directly, not `FormField`: `FormField`'s
+              control is a render prop (`children: (aria) => ReactNode`), and
+              a *function* cannot cross the Server → Client boundary as a
+              prop — `FormField` is a Client Component, `PeriodFilter` is not.
+              This form has no Zod error to translate either, which is the
+              other half of what `FormField` is for. Plain `<label htmlFor>` +
+              `Input` is also the pattern this file already had here before
+              this rewrite, and the one the accessibility criteria calls out
+              as already correct. */}
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="report-from">{t('reports.from')}</Label>
+            <Input id="report-from" name="from" type="date" required defaultValue={from} />
           </div>
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="report-to"
-              className={cn(
-                'text-xs font-medium tracking-wide uppercase',
-                customActive ? 'text-brand' : 'text-muted-foreground',
-              )}
-            >
-              To
-            </label>
-            <Input
-              id="report-to"
-              name="to"
-              type="date"
-              required
-              defaultValue={to}
-              className="w-40"
-            />
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Label htmlFor="report-to">{t('reports.to')}</Label>
+            <Input id="report-to" name="to" type="date" required defaultValue={to} />
           </div>
-          <Button type="submit" variant="secondary">
-            Apply
+          <Button type="submit" variant="secondary" className="sm:mb-0">
+            {t('reports.apply')}
           </Button>
         </form>
-      </div>
-    </section>
+      )}
+    </div>
   )
 }
