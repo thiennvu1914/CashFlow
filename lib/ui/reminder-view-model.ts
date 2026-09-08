@@ -36,27 +36,72 @@ import { formatMoney } from './format-money'
  * balance, a total or a running sum — an expected amount is what the user
  * thinks will move, not a record that it did.
  *
- * ## Phase 7: enums and a day count, not pre-baked English (this file)
+ * ## Phase 7: the DTOs return enums and a day count, not pre-baked English
  *
- * This module used to return ready-made English strings — `typeLabel`,
- * `recurrenceLabel`, `dueLabel` — which is exactly the kind of literal Phase 7
- * is removing everywhere else (`lib/ui/action-error-messages.ts` gives the
- * same treatment to server-action errors). The type and the recurrence are now
- * returned as the enum values themselves, and the component picks the message
- * key: `reminderTypeLabelKey`/`recurrenceLabelKey` (`lib/ui/labels.ts`) for the
- * two label sets, a due-date key chosen from the new `daysToDue` field for the
- * third. The "Bill rather than Expense" reasoning the old `REMINDER_TYPE_LABELS`
- * carried is preserved in `messages/*\/labels.json`'s `reminderType.EXPENSE`
- * value ("Hóa đơn" / "Bill") — JSON has no comment syntax to carry the sentence
- * INTO the message file, so it stays here instead: EXPENSE is the ledger's word
- * for a transaction that has already been recorded, and the whole point of this
- * page is that nothing here has been — the user is being reminded of a bill
- * they still have to pay, and of income they are still waiting for.
+ * `OccurrenceDto`/`ReminderDto` used to carry ready-made English strings —
+ * `typeLabel`, `recurrenceLabel`, `dueLabel` — which is exactly the kind of
+ * literal Phase 7 is removing everywhere else (`lib/ui/action-error-
+ * messages.ts` gives the same treatment to server-action errors). The type
+ * and the recurrence are now returned as the enum values themselves, and the
+ * component picks the message key: `reminderTypeLabelKey`/`recurrenceLabelKey`
+ * (`lib/ui/labels.ts`) for the two label sets, a due-date key chosen from the
+ * new `daysToDue` field for the third. `lib/ui/reminder-view-model.test.ts`
+ * asserts neither DTO carries a `*Label` field or an English literal.
+ *
+ * `REMINDER_TYPE_LABELS` and `recurrenceLabel` below are NOT part of either
+ * DTO and are not read by any UI component — they are kept exported only
+ * because `lib/server/export/build-reminders-sheet.ts` (frozen this phase)
+ * still imports them for the Excel export's `Type`/`Frequency` columns, which
+ * are English regardless of the reader's locale (spec §12 says nothing about
+ * localising a workbook). This is the same split `lib/ui/debt-view-model.ts`'s
+ * `DEBT_STATUS_LABELS` and `lib/ui/loan-view-model.ts`'s
+ * `LOAN_FREQUENCY_LABELS`/`LOAN_STATUS_LABELS` already make.
  */
 
 /** `yyyy-MM-dd` in the user's zone, the format both DTOs' date fields carry and
  *  `compareCalendarDates`/`calendarDaysBetween` both take. */
 const CALENDAR_DATE_FORMAT = 'yyyy-MM-dd'
+
+/**
+ * Fixed English copy, kept ONLY for `lib/server/export/build-reminders-
+ * sheet.ts`'s export column — see the module doc above. No UI component reads
+ * this: every renderer calls `reminderTypeLabelKey` instead.
+ *
+ * "Bill" rather than "Expense", deliberately: EXPENSE is the ledger's word for
+ * a transaction that has already been recorded, and the whole point of this
+ * page is that nothing here has been — the user is being reminded of a bill
+ * they still have to pay, and of income they are still waiting for.
+ */
+export const REMINDER_TYPE_LABELS: Record<ReminderType, 'Income' | 'Bill'> = {
+  INCOME: 'Income',
+  EXPENSE: 'Bill',
+}
+
+/**
+ * Fixed English copy for the export's `Frequency` column — see the module
+ * doc above. No UI component reads this: every renderer calls
+ * `recurrenceLabelKey` instead.
+ *
+ * At interval 1 each cadence gets its own idiom — "Every week", "Monthly",
+ * "Yearly" — because that is what a person says; "Every 1 month" reads like a
+ * form field. Above 1 the count is named. ONE_TIME ignores `interval`
+ * entirely: `createReminderSchema` refuses anything but 1 on it and the
+ * service stores 1, so a stored row with another value could only come from a
+ * write around both, and describing a one-off as happening "every 3" of
+ * anything would be a schedule it does not have.
+ */
+export function recurrenceLabel(frequency: RecurrenceFrequency, interval: number): string {
+  switch (frequency) {
+    case 'ONE_TIME':
+      return 'One time'
+    case 'WEEKLY':
+      return interval === 1 ? 'Every week' : `Every ${interval} weeks`
+    case 'MONTHLY':
+      return interval === 1 ? 'Monthly' : `Every ${interval} months`
+    case 'YEARLY':
+      return interval === 1 ? 'Yearly' : `Every ${interval} years`
+  }
+}
 
 export interface OccurrenceDto {
   id: string

@@ -1,7 +1,8 @@
-import type { OccurrenceStatus, RecurrenceFrequency, ReminderType } from '@prisma/client'
+import type { OccurrenceStatus } from '@prisma/client'
 import type ExcelJS from 'exceljs'
 import { prisma } from '@/lib/prisma'
 import { listReminders } from '@/lib/server/services/reminder'
+import { REMINDER_TYPE_LABELS, recurrenceLabel } from '@/lib/ui/reminder-view-model'
 import {
   DATE_FMT,
   DATE_TIME_FMT,
@@ -16,34 +17,6 @@ import type { ExportContext } from './sheet-registry'
 /** One reminder's occurrences, tallied by what the user did about them. A fresh
  *  object per reminder, so no two rows can share (and overwrite) a tally. */
 type OccurrenceTally = Record<OccurrenceStatus, number>
-
-/**
- * English-only reminder copy, local to this sheet (spec §12: the export is not
- * localised — it has no reader locale and no translator).
- *
- * Phase 7 moved the equivalent UI-facing logic in `lib/ui/reminder-view-model.ts`
- * from pre-baked English strings to enums plus message keys
- * (`reminderTypeLabelKey`/`recurrenceLabelKey`, resolved through
- * `messages/*.json` by a component that has a translator) — a workbook cell
- * has none, so this sheet cannot call either. These two are the exact same
- * literal values the deleted `REMINDER_TYPE_LABELS`/`recurrenceLabel` produced,
- * kept here so the workbook's copy is unchanged (`e2e/phase6.spec.ts` test 10
- * asserts these literals in the exported bytes).
- */
-const TYPE_LABELS: Record<ReminderType, 'Income' | 'Bill'> = { INCOME: 'Income', EXPENSE: 'Bill' }
-
-function recurrenceLabel(frequency: RecurrenceFrequency, interval: number): string {
-  switch (frequency) {
-    case 'ONE_TIME':
-      return 'One time'
-    case 'WEEKLY':
-      return interval === 1 ? 'Every week' : `Every ${interval} weeks`
-    case 'MONTHLY':
-      return interval === 1 ? 'Monthly' : `Every ${interval} months`
-    case 'YEARLY':
-      return interval === 1 ? 'Yearly' : `Every ${interval} years`
-  }
-}
 
 function emptyTally(): OccurrenceTally {
   return { PENDING: 0, ACKNOWLEDGED: 0, DISMISSED: 0 }
@@ -156,7 +129,7 @@ export async function buildRemindersSheet(
     const written = sheet.addRow([
       reminder.title,
       // "Bill" rather than "Expense": nothing here has been recorded yet.
-      TYPE_LABELS[reminder.type],
+      REMINDER_TYPE_LABELS[reminder.type],
       moneyCell(reminder.expectedAmount),
       reminder.currency,
       recurrenceLabel(reminder.frequency, reminder.interval),
