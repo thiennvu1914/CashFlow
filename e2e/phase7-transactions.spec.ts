@@ -167,7 +167,10 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
     )
     expect(overflow).toBe(true)
 
-    const firstRow = page.getByRole('listitem').first()
+    // Scoped to `main`: the shell's own nav rail is ALSO a `<ul><li>` list —
+    // invisible at 375 (so this test still passes unscoped today), but
+    // scoping is what keeps the assertion about the LEDGER's row regardless.
+    const firstRow = page.locator('main').getByRole('listitem').first()
     await expect(firstRow).toBeVisible()
     // `FinancialListRow` puts the title/meta column and the amount column in
     // separate flex children — the amount column is a fixed `min-w-[8.5rem]`
