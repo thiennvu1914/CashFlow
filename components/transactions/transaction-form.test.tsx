@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
 import type { Currency } from '@prisma/client'
+import { loadMessages } from '@/lib/i18n/messages'
 
 /**
  * A markup test, not a DOM test: `renderToStaticMarkup` is enough to pin down
  * *what the user is offered* on first paint — which is the whole defect here (an
- * empty, apparently usable Account `<select>`) — with no jsdom and no Testing
+ * empty, apparently usable Account picker) — with no jsdom and no Testing
  * Library, i.e. no new dependency for one component.
  *
  * `useRouter` is only ever called in the submit path, but calling it at all
@@ -13,15 +15,14 @@ import type { Currency } from '@prisma/client'
  * module is mocked too: importing the real one pulls in Prisma and Better Auth
  * for a test that never submits.
  *
- * `next/link` is NOT mocked, but note what that does and does not prove. Node
- * resolution (`next/link` → `next/dist/client/link.js`) yields the
- * *pages-router* Link, which renders without a router because of its own
- * `if (!router)` guards. The app ships a different file —
- * `next/dist/client/app-dir/link.js`, substituted by Next's compiler alias —
- * which dereferences the app-router context. Both emit the same `<a href>`, so
- * the `href="/accounts"` assertions below are true of the markup *shape*; that
- * the Link the app actually bundles navigates is proved by
- * `e2e/transactions-empty-state.spec.ts`, not here.
+ * `next/link` is NOT mocked — see the identical reasoning this file used to
+ * carry, still true: Node resolution yields the pages-router Link, which
+ * renders without a router because of its own `if (!router)` guards, and it
+ * emits the same `<a href>` markup the app-router Link does.
+ *
+ * Rendered inside a real `NextIntlClientProvider` fed the actual `vi` message
+ * tree (`loadMessages`), so every string asserted below is the actual product
+ * copy, not a stand-in.
  */
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -33,9 +34,9 @@ vi.mock('@/lib/server/actions/transaction-actions', () => ({
 
 const { TransactionForm } = await import('./transaction-form')
 
-type Account = { id: string; name: string; currency: Currency }
+type Account = { id: string; name: string; currency: Currency; balance: string }
 
-/** The user's configured zone — only used to pre-fill the date field. */
+/** The user's configured zone — only used to pre-fill the date/time fields. */
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
 const CATEGORIES = [
@@ -43,27 +44,50 @@ const CATEGORIES = [
   { id: 'cat_salary', name: 'Salary', type: 'INCOME' as const },
 ]
 
-const NOTICE = 'You need an account before you can add a transaction.'
+const NOTICE = 'Bạn cần ít nhất một tài khoản để ghi giao dịch.'
+
+const messages = await loadMessages('vi')
 
 function render(accounts: Account[]): string {
   return renderToStaticMarkup(
-    <TransactionForm accounts={accounts} categories={CATEGORIES} timezone={TIMEZONE} />,
+    <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
+      <TransactionForm
+        accounts={accounts}
+        categories={CATEGORIES}
+        timezone={TIMEZONE}
+        locale="vi"
+      />
+    </NextIntlClientProvider>,
   )
 }
 
 /**
- * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- * nest, so the first `</select>` after the opening tag closes it. Scoping to
- * this slice is what makes an option *count* meaningful: the form renders three
- * other selects (type, category), each with options of its own.
+ * The markup of one `<select>`, found by its `id` — `<select>`s cannot nest,
+ * so the first `</select>` after the opening tag closes it. Every select this
+ * form renders pre-hydration carries a unique `id` (`FormField`'s contract),
+ * which is what makes this scoping meaningful.
  */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
+function selectMarkup(html: string, id: string): string {
+  const idIndex = html.indexOf(`id="${id}"`)
+  if (idIndex === -1) throw new Error(`No element with id "${id}" in the markup`)
+  const start = html.lastIndexOf('<select', idIndex)
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
+  if (start === -1 || end === -1) throw new Error(`No <select id="${id}">`)
   return html.slice(start, end + '</select>'.length)
+}
+
+/**
+ * The markup of the type radiogroup's PRIMARY row — from `role="radiogroup"`
+ * up to the first `</div>`, which (the two `TypeButton`s and the "Khác"
+ * disclosure button are all plain `<button>`s with no nested `<div>`) is
+ * exactly the `<div className="flex gap-2">` wrapper that holds them, and
+ * nothing of the disclosure panel beyond it.
+ */
+function radiogroupMarkup(html: string): string {
+  const start = html.indexOf('role="radiogroup"')
+  if (start === -1) throw new Error('No radiogroup in the markup')
+  const end = html.indexOf('</div>', start)
+  return html.slice(start, end)
 }
 
 function countOf(html: string, needle: string): number {
@@ -75,35 +99,27 @@ function optionLabels(selectHtml: string): string[] {
   return [...selectHtml.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map((m) => m[1])
 }
 
-/** `<option value="…" … selected="">` regardless of attribute order — the
- *  order react-dom happens to emit attributes in is not what is under test. */
-function selectedOption(value: string): RegExp {
-  return new RegExp(
-    `<option[^>]*\\svalue="${value}"[^>]*\\sselected=""|<option[^>]*\\sselected=""[^>]*\\svalue="${value}"`,
-  )
-}
-
 describe('TransactionForm with no accounts', () => {
   it('replaces the whole form with a notice and a link to /accounts', () => {
     const html = render([])
 
     expect(html).toContain(NOTICE)
     expect(html).toContain('href="/accounts"')
-    expect(html).toContain('Go to Accounts')
+    expect(html).toContain('Đến Tài khoản')
   })
 
   it('offers no Account selector, no form and no submit action', () => {
     const html = render([])
 
-    // The defect: an empty `<select aria-label="Account">` looks usable and is
-    // not. None of it may be rendered — not the select, not the surrounding
-    // form, not the submit button that would fail validation.
-    expect(html).not.toContain('aria-label="Account"')
+    // The defect: an empty Account picker looks usable and is not. None of it
+    // may be rendered — not a select, not the surrounding form, not the submit
+    // button that would fail validation.
+    expect(html).not.toContain('id="transaction-account"')
     expect(html).not.toContain('<select')
     expect(html).not.toContain('<option')
     expect(html).not.toContain('<form')
     expect(html).not.toContain('<button')
-    expect(html).not.toContain('Add transaction')
+    expect(html).not.toContain('Thêm giao dịch')
   })
 
   it('leaks no raw validator text', () => {
@@ -114,29 +130,13 @@ describe('TransactionForm with no accounts', () => {
 })
 
 describe('TransactionForm with active accounts', () => {
-  it('lists a single account as exactly one option and keeps the form usable', () => {
-    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
-    const accountSelect = selectMarkup(html, 'Account')
+  it('shows the notice-free form and its currency hint follows the default account', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
 
-    expect(countOf(accountSelect, '<option')).toBe(1)
-    expect(optionLabels(accountSelect)).toEqual(['Cash'])
-    expect(html).toContain('Add transaction')
+    expect(html).toContain('Thêm giao dịch')
     expect(html).not.toContain(NOTICE)
     // The currency hint follows the selected account, which on first render is
     // the form's default — the first account in the prop.
-    expect(html).toContain('>VND</span>')
-  })
-
-  it('lists three accounts as exactly three options, in prop order', () => {
-    const html = render([
-      { id: 'acc_cash', name: 'Cash', currency: 'VND' },
-      { id: 'acc_wallet', name: 'Wallet', currency: 'USD' },
-      { id: 'acc_savings', name: 'Savings', currency: 'VND' },
-    ])
-    const accountSelect = selectMarkup(html, 'Account')
-
-    expect(countOf(accountSelect, '<option')).toBe(3)
-    expect(optionLabels(accountSelect)).toEqual(['Cash', 'Wallet', 'Savings'])
     expect(html).toContain('>VND</span>')
   })
 
@@ -145,71 +145,87 @@ describe('TransactionForm with active accounts', () => {
    * first bytes the browser paints are the only thing standing between the
    * user and a control that would silently discard what they typed. See
    * `lib/ui/use-hydrated.ts` for the react-hook-form/React interaction, and
-   * `e2e/transaction-form-hydration.spec.ts` for the same three facts checked
+   * `e2e/transaction-form-hydration.spec.ts` for the same facts checked
    * against a real server response plus the behaviour they buy.
    */
   it('ships the form gated: a disabled, aria-busy fieldset with an sr-only legend', () => {
-    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
 
     expect(html).toContain('<fieldset disabled=""')
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">Transaction details</legend>')
+    expect(html).toContain('<legend class="sr-only">Thêm giao dịch</legend>')
   })
 
   it('moves the form layout onto the fieldset, so lifting the gate shifts nothing', () => {
-    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
 
     // The flex column lives on the fieldset (the new flex container), not on
     // the <form> — a `<fieldset>` wrapping a flex form's children without
     // taking over its layout would re-flow every field the moment it appears.
-    expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
+    expect(html).toContain('class="flex min-w-0 flex-col gap-4"')
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
     expect(html).not.toMatch(/<form[^>]*class=/)
   })
 
-  it('server-renders the real Type default, EXPENSE, as the selected option', () => {
-    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
-    const typeSelect = selectMarkup(html, 'Transaction type')
+  it('server-renders the real Type default, EXPENSE, as the checked radio', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
+    const typeGroup = radiogroupMarkup(html)
 
-    // `register()` emits no value/defaultValue of its own
-    // (`react-hook-form/dist/index.esm.mjs:3118-3183`), so without an explicit
-    // `defaultValue` the browser would show the FIRST option — Income — while
-    // form state, and the Category list below, already said EXPENSE.
-    expect(typeSelect).toMatch(selectedOption('EXPENSE'))
-    expect(typeSelect).not.toMatch(selectedOption('INCOME'))
-    // Exactly one Type option is pre-selected, and it is not a `value=` prop
-    // on the <select> itself — that would make the control controlled.
-    expect(countOf(typeSelect, 'selected=""')).toBe(1)
-    expect(typeSelect).not.toMatch(/<select[^>]*\svalue=/)
+    // The Type the client is about to own is the Type the server showed —
+    // the radiogroup analogue of the old `<select>`'s `selected` marker.
+    expect(typeGroup).toMatch(/aria-checked="true"[^>]*>Chi tiêu/)
+    expect(typeGroup).not.toMatch(/aria-checked="true"[^>]*>Thu nhập/)
+    // Exactly one radio is checked.
+    expect(countOf(typeGroup, 'aria-checked="true"')).toBe(1)
   })
 
-  it('lists the EXPENSE categories, matching the EXPENSE default', () => {
-    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND' }])
-    const categorySelect = selectMarkup(html, 'Category')
+  it('shows the Category picker gated behind its own disabled stand-in, offering only the placeholder', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
+    const categorySelect = selectMarkup(html, 'transaction-category')
 
-    // HTML-escaped, because this is markup: "Food & Dining" → "Food &amp; Dining".
-    expect(optionLabels(categorySelect)).toEqual(['Select a category', 'Food &amp; Dining'])
-    // The placeholder is the pre-selected one — nothing is chosen for the user.
-    expect(categorySelect).toMatch(selectedOption(''))
-    expect(categorySelect).not.toMatch(selectedOption('cat_food'))
+    expect(categorySelect).toContain('disabled')
+    // Nothing is pre-chosen for the user; the placeholder is the only option.
+    expect(optionLabels(categorySelect)).toEqual(['Chọn danh mục'])
   })
 
-  it('renders exactly the accounts it is given — no filtering of its own', () => {
-    // Every row here is ACTIVE-shaped, which is all this component is ever
-    // handed: `app/(app)/transactions/page.tsx` passes
-    // `listActiveFinancialAccounts`. That archived accounts never reach this
-    // list is deliberately NOT asserted here — it is proved where the filtering
-    // happens, by `lib/server/services/financial-account.test.ts`
-    // ("listActiveFinancialAccounts excludes an ARCHIVED row") and end-to-end by
-    // `e2e/transactions-empty-state.spec.ts`. This case only pins down that the
-    // component adds no filtering, renaming or re-ordering of its own.
+  it('renders the account stand-in carrying the form default, matching prop order', () => {
     const accounts: Account[] = [
-      { id: 'acc_b', name: 'Bank', currency: 'VND' },
-      { id: 'acc_a', name: 'Cash', currency: 'VND' },
+      { id: 'acc_b', name: 'Bank', currency: 'VND', balance: '2000000.00' },
+      { id: 'acc_a', name: 'Cash', currency: 'VND', balance: '500000.00' },
     ]
-    const accountSelect = selectMarkup(render(accounts), 'Account')
+    const accountSelect = selectMarkup(render(accounts), 'transaction-account')
 
-    expect(optionLabels(accountSelect)).toEqual(accounts.map((a) => a.name))
-    expect(countOf(accountSelect, '<option')).toBe(accounts.length)
+    // Exactly one option pre-hydration — the form's own default (`accounts[0]`,
+    // "Bank"), not a full option list a native `<select>` would carry: the
+    // hydrated control is a custom Select with no uncontrolled DOM equivalent,
+    // so the stand-in shows only what the form state actually holds.
+    expect(countOf(accountSelect, '<option')).toBe(1)
+    expect(accountSelect).toContain('disabled')
+    expect(optionLabels(accountSelect)[0]).toContain('Bank')
+  })
+
+  it('pre-fills the split date and time from nowInZone', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
+
+    expect(html).toMatch(/id="transaction-date"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(html).toMatch(/id="transaction-time"[^>]*value="\d{2}:\d{2}"/)
+  })
+
+  it('renders a visible <label> for every field, including the split date and time', () => {
+    const html = render([{ id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' }])
+
+    for (const [id, label] of [
+      ['transaction-amount', 'Số tiền'],
+      ['transaction-account', 'Tài khoản'],
+      ['transaction-category', 'Danh mục'],
+      ['transaction-date', 'Ngày'],
+      ['transaction-time', 'Giờ'],
+      ['transaction-note', 'Ghi chú'],
+    ] as const) {
+      expect(html).toContain(`<label for="${id}"`)
+      const labelIndex = html.indexOf(`<label for="${id}"`)
+      const labelEnd = html.indexOf('</label>', labelIndex)
+      expect(html.slice(labelIndex, labelEnd)).toContain(label)
+    }
   })
 })
