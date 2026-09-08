@@ -71,9 +71,16 @@ export async function BudgetProgressList({
         return (
           <PlanningRow
             key={budget.id}
+            // The OVERALL row carries a faint tint and a bolder title — the
+            // one budget every other row is measured against, and the owner
+            // requirement is explicit that it must read as visually stronger
+            // than a category budget, not just first in the list.
+            className={budget.scope === 'OVERALL' ? 'bg-muted' : undefined}
             title={
               <>
-                {scopeLabel}
+                <span className={budget.scope === 'OVERALL' ? 'font-semibold' : undefined}>
+                  {scopeLabel}
+                </span>
                 {budget.categoryArchived && (
                   <span className="ml-1 font-normal text-muted-foreground">
                     {t('budgets.categoryArchived')}
