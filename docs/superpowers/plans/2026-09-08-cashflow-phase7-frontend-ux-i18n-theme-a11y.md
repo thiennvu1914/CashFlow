@@ -2695,7 +2695,7 @@ export async function loadMessages(locale: Locale): Promise<Record<string, unkno
 
 - [ ] **Step 1: Create the 36 message files — `common` and `nav`**
 
-Create `messages/vi/` and `messages/en/` with these seventeen basenames in each: `common.json`, `nav.json`, `auth.json`, `dashboard.json`, `transactions.json`, `transfers.json`, `accounts.json`, `categories.json`, `budgets.json`, `goals.json`, `debts.json`, `loans.json`, `reminders.json`, `reports.json`, `settings.json`, `errors.json`, `labels.json`.
+Create `messages/vi/` and `messages/en/` with these eighteen basenames in each: `common.json`, `nav.json`, `auth.json`, `dashboard.json`, `transactions.json`, `transfers.json`, `accounts.json`, `categories.json`, `budgets.json`, `goals.json`, `debts.json`, `loans.json`, `reminders.json`, `reports.json`, `settings.json`, `errors.json`, `labels.json`, `validation.json` (created as `{}`; Task 2c fills it).
 
 Each file's top-level object is its namespace *content* (the domain name is added by the loader), so `messages/vi/nav.json` is `{ "dashboard": "Tổng quan", … }` and resolves as `nav.dashboard`.
 
@@ -3033,7 +3033,7 @@ Run: `npx vitest run lib/i18n/messages.test.ts` → FAIL (unresolved `./messages
 import type { Locale } from './locale'
 
 /**
- * The seventeen message domains (spec §4), in a fixed order so the merged tree
+ * The eighteen message domains (spec §4), in a fixed order so the merged tree
  * is deterministic and a diff of it is readable.
  *
  * Split per domain rather than one file per locale because the two flat files
@@ -3059,6 +3059,7 @@ export const MESSAGE_DOMAINS = [
   'settings',
   'errors',
   'labels',
+  'validation',
 ] as const
 
 /**
@@ -3067,7 +3068,7 @@ export const MESSAGE_DOMAINS = [
  * A static `import()` per domain, written out rather than built from a template
  * literal: a `` import(`@/messages/${locale}/${domain}.json`) `` inside a loop
  * makes the bundler emit every JSON file in both directories and give up on
- * splitting them. Two locales × seventeen domains is 34 explicit specifiers,
+ * splitting them. Two locales × eighteen domains is 36 explicit specifiers,
  * and being explicit is what keeps the request cheap.
  */
 const LOADERS: Record<Locale, () => Promise<Record<string, unknown>>> = {
@@ -4142,11 +4143,11 @@ Run: `git diff --stat main -- lib/validation` → **empty**. That is this task's
 
 **User-facing behaviour:** the rail groups twelve destinations under five muted headers; the primary "Thêm giao dịch" button sits under the wordmark; the user's name and a ghost Log out sit at the bottom. On a tablet the rail is icons only, each with an accessible name. On a phone the bottom bar has five slots — Tổng quan, Giao dịch, a raised brand `+`, Tài khoản, Báo cáo — and the top bar's "Thêm" opens a bottom sheet with the remaining routes in a two-column icon grid plus Settings and Log out. The sheet closes on its close button, Escape, an overlay tap, or a navigation, and returns focus to the trigger.
 
-**Desktop expectation (≥ 1024):** rail 240 px on `bg-surface` with a right hairline; wordmark 16/600 brand; group headers 12/500 muted with 16 px above each; items 14 px, 36 px tall, active = `bg-muted text-brand` plus a 2 px brand bar on the left edge; content area centred by each page's own max width; no bottom bar.
+**Desktop expectation (≥ 1280 — amended 2026-09-08 from ≥ 1024 per the owner's directive; use `xl:`):** rail 240 px on `bg-surface` with a right hairline; wordmark 16/600 brand; group headers 12/500 muted with 16 px above each; items 14 px, 36 px tall, active = `bg-muted text-brand` plus a 2 px brand bar on the left edge; content area centred by each page's own max width; no bottom bar.
 
 **Mobile expectation (< 768):** top bar with wordmark + page-agnostic "Thêm" trigger; bottom bar 60 px plus `env(safe-area-inset-bottom)`; five slots; the `+` is a 52 px raised brand circle ringed in `border-surface`; tab labels 11 px with no `text-ellipsis` (the Vietnamese labels are chosen to fit — spec §4); `main` keeps bottom padding equal to the bar so no content sits under it.
 
-**Tablet expectation (768–1023):** the rail collapses to 64 px, icons only, each `Link` carrying `aria-label` and `title`; group headers become a 1 px divider between groups; no bottom bar (this is today's behaviour at 768 and must not regress — `e2e/phase4.spec.ts:217-229` asserts it).
+**Tablet expectation (768–1279 — amended 2026-09-08; 1024–1279 is the tablet composition):** the rail collapses to 64 px, icons only, each `Link` carrying `aria-label` and `title`; group headers become a 1 px divider between groups; no bottom bar (this is today's behaviour at 768 and must not regress — `e2e/phase4.spec.ts:217-229` asserts it).
 
 **Dark-theme expectation:** rail is `bg-surface` (#202724) against `bg-background` (#171C1A) so the frame is visible without a border-heavy look; the active item's `bg-muted` is legible; the raised `+` keeps the brand at dark L≈0.60 with `border-surface` and no glow; the More sheet is `bg-surface-2`.
 
