@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { formatInTimeZone } from 'date-fns-tz'
 import { useTranslations } from 'next-intl'
 import { Receipt } from 'lucide-react'
+import { cn } from 'cn'
 import type { Currency, TransactionType } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
@@ -123,11 +124,28 @@ export function TransactionList({
     <>
       {/* ONE bordered surface holding every row, with 1 px dividers — never a
           card per row (spec §2). The day header is sticky inside it so a long
-          month stays readable while scrolling. */}
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        {groups.map((group) => (
+          month stays readable while scrolling.
+
+          NO `overflow-hidden` here (spec §14 fix round 1, finding 4): an
+          ancestor with `overflow: hidden/auto/scroll` becomes the "nearest
+          scrolling ancestor" `position: sticky` sticks WITHIN per the CSS
+          spec, and this div never itself scrolls (the page does) — so with
+          `overflow-hidden` on it, the `<h3>` below stuck to the top of a
+          container that never moves, which reads as "not sticky" the moment
+          you actually scroll. Rounding the card's corners without it clipping
+          content is instead done on the two elements that could otherwise
+          poke a square corner past the round border: the FIRST group's own
+          `bg-surface` header, and the LAST row (only visible were it to also
+          carry its own background, e.g. the error tint below). */}
+      <div className="rounded-lg border border-border bg-surface">
+        {groups.map((group, groupIndex) => (
           <section key={group.day}>
-            <h3 className="sticky top-0 z-10 border-b border-border bg-surface px-4 py-2 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+            <h3
+              className={cn(
+                'sticky top-0 z-10 border-b border-border bg-surface px-4 py-2 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase',
+                groupIndex === 0 && 'rounded-t-lg',
+              )}
+            >
               {group.kind === 'today'
                 ? t('transactions.dayToday')
                 : group.kind === 'yesterday'
@@ -135,19 +153,26 @@ export function TransactionList({
                   : formatDate(group.day, { locale, timeZone: timezone, style: 'weekday' })}
             </h3>
             <ul className="divide-y divide-border">
-              {group.rows.map((row) => {
+              {group.rows.map((row, rowIndex) => {
                 const positive = isBalanceIncreasing(row.type)
                 // Never render the raw rate — only a fallback-source hint.
                 const cacheFallback = row.fxRateSource.startsWith('cache-fallback:')
                 const rowName = row.category?.name ?? t(transactionTypeLabelKey(row.type))
+                const isLastRow =
+                  groupIndex === groups.length - 1 && rowIndex === group.rows.length - 1
                 return (
                   <FinancialListRow
                     key={row.id}
                     title={rowName}
                     meta={
                       <>
+                        {/* Time only, not the full date (spec §14 fix round 1,
+                            finding 5): the day header above already says WHICH
+                            day, so repeating it here crowded the account name
+                            out of a 375 px row (`19:38 08/09/202…`, the
+                            account name truncated away entirely). */}
                         <span className="tabular-nums">
-                          {formatDate(row.date, { locale, timeZone: timezone, style: 'dateTime' })}
+                          {formatDate(row.date, { locale, timeZone: timezone, style: 'time' })}
                         </span>
                         {' · '}
                         {row.account.name}
@@ -184,7 +209,7 @@ export function TransactionList({
                         ]}
                       />
                     }
-                    className={errors[row.id] ? 'bg-negative/5' : undefined}
+                    className={cn(errors[row.id] && 'bg-negative/5', isLastRow && 'rounded-b-lg')}
                   />
                 )
               })}

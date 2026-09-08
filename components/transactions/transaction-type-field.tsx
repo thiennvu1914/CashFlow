@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { TransactionType } from '@prisma/client'
 import { cn } from 'cn'
@@ -15,9 +15,32 @@ import { cn } from 'cn'
  * mobile form gave the two common cases a sixth of the space each.
  *
  * A `radiogroup`, not a `<select>`, and not six independent buttons: the six
- * are mutually exclusive, so the radio role is the honest one and it brings
- * arrow-key navigation with it. `aria-checked` and the visible fill both carry
- * the state, so nothing depends on seeing colour.
+ * are mutually exclusive, so the radio role is the honest one. This
+ * implements the WAI-ARIA Radio Group pattern in full (spec §14 fix round 1,
+ * finding 3), not just the role/`aria-checked` shell a first pass had:
+ *
+ *  - roving `tabIndex` — only the checked radio is a tab stop (`0`), every
+ *    other one is `-1`, so Tab moves PAST the group in one stop, matching how
+ *    a native `<input type="radio">` group behaves;
+ *  - ←/↑ and →/↓ move to the previous/next radio AND check it (the native
+ *    convention — a `radiogroup`'s arrow keys are not mere focus movement);
+ *  - Home/End jump to the first/last radio in the currently visible set;
+ *  - Space/Enter on the focused radio checks it — free from the native
+ *    `<button>` element underneath, no extra handler needed.
+ *
+ * The "Khác" disclosure `<button>` is a SIBLING of the `role="radiogroup"`
+ * element, not a child of it: an ARIA radiogroup's only required owned role
+ * is `radio`, and a first pass nested the disclosure button inside the same
+ * container the two primary radios were in. The four "other" radios are
+ * rendered (or not) INSIDE the one radiogroup alongside the two primary ones,
+ * so collapsing the disclosure genuinely removes them from the roving set —
+ * there is exactly one `role="radiogroup"` for all six types, always.
+ *
+ * `useId()` (spec §14 fix round 1, finding 2) makes the legend's id — and
+ * therefore `aria-labelledby` — unique per mounted instance: the sticky panel
+ * and the mobile sheet can each hold their own `TransactionTypeField`, and a
+ * hard-coded id would make the second instance's `aria-labelledby` dangle or
+ * collide with the first's.
  *
  * This is NOT `components/common/segmented-control.tsx`: that primitive is
  * link-based (the address bar owns which segment is showing, which is right for
@@ -46,58 +69,85 @@ export function TransactionTypeField({
   otherLabel: string
   disabled?: boolean
 }) {
+  const legendId = `transaction-type-legend-${useId().replace(/:/g, '')}`
   // Open when an "other" type is already chosen, so an edit or a rejected
   // submit never hides the field that holds the current value.
   const [showOther, setShowOther] = useState(() => OTHER_TYPES.includes(value))
+  const buttonRefs = useRef(new Map<TransactionType, HTMLButtonElement>())
+  const visibleTypes = showOther ? [...PRIMARY_TYPES, ...OTHER_TYPES] : PRIMARY_TYPES
+
+  function focusAndCheck(type: TransactionType) {
+    onChange(type)
+    buttonRefs.current.get(type)?.focus()
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const currentIndex = visibleTypes.indexOf(value)
+    let nextIndex: number
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIndex = (currentIndex + 1 + visibleTypes.length) % visibleTypes.length
+        break
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIndex = (currentIndex - 1 + visibleTypes.length) % visibleTypes.length
+        break
+      case 'Home':
+        nextIndex = 0
+        break
+      case 'End':
+        nextIndex = visibleTypes.length - 1
+        break
+      default:
+        return
+    }
+    // Arrow/Home/End are the radiogroup's own keys — the page must never
+    // scroll or the browser's native Home/End text-navigation fire instead.
+    event.preventDefault()
+    focusAndCheck(visibleTypes[nextIndex])
+  }
 
   return (
     <div className="flex flex-col gap-2">
-      <p id="transaction-type-legend" className="text-[0.8125rem]/[1.125rem] font-medium">
-        {legend}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p id={legendId} className="text-[0.8125rem]/[1.125rem] font-medium">
+          {legend}
+        </p>
+        {/* Outside `role="radiogroup"` below — see the file doc comment. */}
+        <button
+          type="button"
+          aria-expanded={showOther}
+          disabled={disabled}
+          onClick={() => setShowOther((open) => !open)}
+          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          {otherLabel}
+          {/* Flipped, not animated: the design system does not animate, so
+              the chevron simply IS the other way up while the panel is open. */}
+          <ChevronDown aria-hidden="true" className={cn('size-4', showOther && 'rotate-180')} />
+        </button>
+      </div>
       <div
         role="radiogroup"
-        aria-labelledby="transaction-type-legend"
-        className="flex flex-col gap-2"
+        aria-labelledby={legendId}
+        onKeyDown={handleKeyDown}
+        className="grid grid-cols-2 gap-2"
       >
-        <div className="flex gap-2">
-          {PRIMARY_TYPES.map((type) => (
-            <TypeButton
-              key={type}
-              type={type}
-              label={labels[type]}
-              checked={value === type}
-              onSelect={onChange}
-              disabled={disabled}
-            />
-          ))}
-          <button
-            type="button"
-            aria-expanded={showOther}
+        {visibleTypes.map((type) => (
+          <TypeButton
+            key={type}
+            type={type}
+            label={labels[type]}
+            checked={value === type}
+            onSelect={onChange}
             disabled={disabled}
-            onClick={() => setShowOther((open) => !open)}
-            className="flex min-h-11 items-center gap-1 rounded-md border border-border px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            {otherLabel}
-            {/* Flipped, not animated: the design system does not animate, so
-                the chevron simply IS the other way up while the panel is open. */}
-            <ChevronDown aria-hidden="true" className={cn('size-4', showOther && 'rotate-180')} />
-          </button>
-        </div>
-        {showOther && (
-          <div className="grid grid-cols-2 gap-2">
-            {OTHER_TYPES.map((type) => (
-              <TypeButton
-                key={type}
-                type={type}
-                label={labels[type]}
-                checked={value === type}
-                onSelect={onChange}
-                disabled={disabled}
-              />
-            ))}
-          </div>
-        )}
+            buttonRef={(el) => {
+              if (el) buttonRefs.current.set(type, el)
+              else buttonRefs.current.delete(type)
+            }}
+          />
+        ))}
       </div>
     </div>
   )
@@ -109,24 +159,28 @@ function TypeButton({
   checked,
   onSelect,
   disabled,
+  buttonRef,
 }: {
   type: TransactionType
   label: string
   checked: boolean
   onSelect: (type: TransactionType) => void
   disabled?: boolean
+  buttonRef: (el: HTMLButtonElement | null) => void
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       role="radio"
       aria-checked={checked}
+      // Roving tabindex: exactly one radio in the group is a tab stop.
+      tabIndex={checked ? 0 : -1}
       disabled={disabled}
       onClick={() => onSelect(type)}
       className={cn(
-        // `min-h-11` is the 44 px touch target; `flex-1` so the two primary
-        // types share the row evenly.
-        'min-h-11 flex-1 rounded-md border px-3 text-sm',
+        // `min-h-11` is the 44 px touch target.
+        'min-h-11 rounded-md border px-3 text-sm',
         checked
           ? 'border-brand bg-brand/10 font-medium text-brand dark:bg-brand/18'
           : 'border-border text-foreground hover:bg-muted',

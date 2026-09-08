@@ -66,7 +66,11 @@ export function AccountSelect({
         id={id}
         aria-describedby={aria['aria-describedby']}
         aria-invalid={aria['aria-invalid']}
-        className="flex h-11 w-full items-center justify-between rounded-md border border-input bg-[var(--input-bg)] px-3 py-2 text-base outline-none md:h-10 md:text-sm"
+        // No `outline-none`: the global `:focus-visible` rule (`app/globals.css`)
+        // is this app's ONLY keyboard focus ring, and a first pass here
+        // silenced it on this control specifically (spec §14 fix round 1,
+        // finding 7).
+        className="flex h-11 w-full items-center justify-between rounded-md border border-input bg-[var(--input-bg)] px-3 py-2 text-base md:h-10 md:text-sm"
       >
         <Select.Value placeholder={placeholder} />
         <Select.Icon>

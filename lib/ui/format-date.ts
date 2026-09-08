@@ -23,7 +23,14 @@ import { INTL_LOCALE, type Locale } from '@/lib/i18n/locale'
  * hard-codes one language's order into every language.
  */
 export type DateStyle =
-  'date' | 'dateTime' | 'monthYear' | 'weekday' | 'dayMonth' | 'monthShort' | 'monthYearShort'
+  | 'date'
+  | 'dateTime'
+  | 'monthYear'
+  | 'weekday'
+  | 'dayMonth'
+  | 'monthShort'
+  | 'monthYearShort'
+  | 'time'
 
 const CARRIER_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
@@ -49,6 +56,12 @@ const OPTIONS: Record<DateStyle, Intl.DateTimeFormatOptions> = {
   // 2026") — same reasoning, with the year so two different Augusts a year
   // apart could never look identical.
   monthYearShort: { month: 'short', year: 'numeric' },
+  // The transactions ledger's row meta (spec §14 fix round 1, finding 5): the
+  // day header already carries the date ("Hôm nay" / "Hôm qua" / a weekday
+  // date), so repeating it on every row crowded out the account name at
+  // narrow widths. `hourCycle: 'h23'` below is forced regardless of locale,
+  // same as `dateTime` — a clock reading is not itself a language.
+  time: { hour: '2-digit', minute: '2-digit' },
 }
 
 /**
