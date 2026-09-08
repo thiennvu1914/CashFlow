@@ -2,12 +2,15 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   acknowledgeOccurrenceAction,
   dismissOccurrenceAction,
 } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_MESSAGE, REMINDER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { OccurrenceDto } from '@/lib/ui/reminder-view-model'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -28,7 +31,7 @@ import { Button } from '@/components/ui/button'
  * either: nothing is destroyed, no money moves, and the state is visible in the
  * history afterwards.
  *
- * Takes a whole `OccurrenceDto` — already strings and booleans only
+ * Takes a whole `OccurrenceDto` — already strings, enums and booleans only
  * (`lib/ui/reminder-view-model.ts` and its DTO-boundary case), because a
  * `Prisma.Decimal` or a `Date` cannot cross into this component.
  *
@@ -38,38 +41,35 @@ import { Button } from '@/components/ui/button'
  */
 export function OccurrenceActions({ occurrence }: { occurrence: OccurrenceDto }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
+  /** Spec §9: one in-flight lock shared by every row action (Acknowledge,
+   *  Dismiss, Pause/Resume) — not to guard the write (the service is
+   *  idempotent and never flips one answer into the other, so a double click
+   *  is harmless) but so the row cannot be told two different things at once
+   *  and leave the user unsure which one landed. */
+  const submit = useSubmitState()
 
-  /**
-   * Both buttons, one handler.
-   *
-   * `pending` disables both while either is in flight — not to guard the write
-   * (the service is idempotent and never flips one answer into the other, so a
-   * double click is harmless) but so the row cannot be told two different
-   * things at once and leave the user unsure which one landed.
-   */
   async function answer(kind: 'acknowledge' | 'dismiss') {
     setError(null)
-    setPending(true)
-    try {
-      const result =
-        kind === 'acknowledge'
-          ? await acknowledgeOccurrenceAction(occurrence.id)
-          : await dismissOccurrenceAction(occurrence.id)
-      if (!result.ok) {
-        setError(REMINDER_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result =
+          kind === 'acknowledge'
+            ? await acknowledgeOccurrenceAction(occurrence.id)
+            : await dismissOccurrenceAction(occurrence.id)
+        if (!result.ok) {
+          setError(t(REMINDER_ERROR_KEYS[result.error]))
+          return
+        }
+        // The answered occurrence leaves the pending list on the next render, so
+        // the refresh *is* the confirmation.
+        router.refresh()
+      } catch {
+        console.error(`OccurrenceActions: ${kind} failed`)
+        setError(t(GENERIC_ERROR_KEY))
       }
-      // The answered occurrence leaves the pending list on the next render, so
-      // the refresh *is* the confirmation.
-      router.refresh()
-    } catch {
-      console.error(`OccurrenceActions: ${kind} failed`)
-      setError(GENERIC_ERROR_MESSAGE)
-    } finally {
-      setPending(false)
-    }
+    })
   }
 
   /**
@@ -77,9 +77,12 @@ export function OccurrenceActions({ occurrence }: { occurrence: OccurrenceDto })
    * occurrence from last month *and* one due this month, both listed on this
    * page, so a label of "Acknowledge Internet bill" would name two different
    * buttons. The due date is what tells them apart — for a screen reader and
-   * for a test.
+   * for a test. Collapsing (spec §6.7) makes this *more* true, not less: the
+   * row the user sees names only the next occurrence, but every occurrence in
+   * the disclosure gets its own pair of buttons from this same component, and
+   * each of THOSE needs the same disambiguation.
    */
-  const rowName = `${occurrence.title} due ${occurrence.dueDate}`
+  const rowName = `${occurrence.title} · ${occurrence.dueDate}`
 
   return (
     <div className="flex w-full flex-col items-end gap-2">
@@ -88,28 +91,24 @@ export function OccurrenceActions({ occurrence }: { occurrence: OccurrenceDto })
           type="button"
           variant="outline"
           size="sm"
-          disabled={pending}
-          aria-label={`Acknowledge ${rowName}`}
+          disabled={submit.locked}
+          aria-label={`${t('reminders.acknowledgeAction')} ${rowName}`}
           onClick={() => answer('acknowledge')}
         >
-          Acknowledge
+          {t('reminders.acknowledgeAction')}
         </Button>
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          disabled={pending}
-          aria-label={`Dismiss ${rowName}`}
+          disabled={submit.locked}
+          aria-label={`${t('reminders.dismissAction')} ${rowName}`}
           onClick={() => answer('dismiss')}
         >
-          Dismiss
+          {t('reminders.dismissAction')}
         </Button>
       </div>
-      {error && (
-        <p role="alert" className="text-sm text-negative">
-          {error}
-        </p>
-      )}
+      {error && <InlineAlert tone="negative">{error}</InlineAlert>}
     </div>
   )
 }
