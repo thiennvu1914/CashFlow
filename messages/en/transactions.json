@@ -30,6 +30,6 @@
   "emptyBody": "Add your first transaction to start tracking cash flow.",
   "noAccountTitle": "You need an account first",
   "noAccountBody": "You need an account before you can add a transaction.",
-  "noAccountAction": "Go to Accounts",
+  "noAccountAction": "Manage accounts",
   "openCreate": "Add transaction"
 }

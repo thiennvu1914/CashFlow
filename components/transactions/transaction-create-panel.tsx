@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
@@ -9,42 +9,58 @@ import { Button } from '@/components/ui/button'
 import { TransactionForm, type AccountOption, type CategoryOption } from './transaction-form'
 
 /**
- * The create form's two homes (spec §6.2, §14 decision 2).
+ * The create form's homes (spec §6.2, §14 decision 2; breakpoints revised at
+ * §14 fix round 1, finding 1).
  *
- * At ≥ 1280 (Tailwind `xl`) it is ALWAYS VISIBLE in a sticky 5/12 column, because
- * recording a transaction is the highest-frequency thing anyone does in this app
- * and a sheet would put a click in front of every single one. Below that — and
- * on every phone — it is a bottom sheet, opened by the header's primary button
- * or by the bottom bar's `+`.
+ * Three pieces, one shared Context, because the trigger lives in
+ * `PageHeader`'s `actions` slot — a different branch of the page's JSX tree
+ * from the panel/sheet — and both need the SAME "open the sheet" state:
  *
- * The `+` navigates to `/transactions#new` (the shell's `ADD_TRANSACTION_HREF`,
- * unchanged since Phase 4), so this component opens the sheet when the hash is
- * `#new` on mount and clears it afterwards — the alternative was making the
- * shell aware of a page's internal state.
+ *  - `TransactionCreatePanelProvider` owns `sheetOpen` and the sheet itself
+ *    (mounted once, wherever this is rendered — Base UI's Dialog portals its
+ *    content to `document.body` regardless), and wraps the WHOLE page body so
+ *    both consumers below are its descendants;
+ *  - `TransactionCreateTrigger` is the header's button, `md:hidden` — visible
+ *    only below `md` (768 px), because that is the only range with no
+ *    always-mounted form to submit through instead;
+ *  - `TransactionCreatePanelBody` is the inline/sticky form: `hidden` below
+ *    `md`, a plain full-width block from `md` to `< xl` (the tablet
+ *    composition: below the list, full width — nothing else needed, since a
+ *    single-column grid already stacks it there), and `xl:sticky` beside the
+ *    list from `xl` (1280 px) up.
  *
- * TWO mounted copies of `TransactionForm` would be two react-hook-form
- * instances fighting over one submit, so only one renders at a time: the
- * `xl:flex` panel and the sheet are mutually exclusive by breakpoint, and the
- * sheet's copy mounts on open (spec §9: "Edit/instalment/payment forms open in
- * Dialog or Sheet and mount on open — no SSR defaults problem").
- *
- * The `#new` anchor and the sheet's hash trigger share one id, and BOTH exist
- * at every width — the `<aside>` is merely `hidden` below `xl`, not absent —
- * so the effect below is gated on `matchMedia('(min-width: 1280px)')`: below
- * that width the anchor cannot scroll to a hidden element, so opening the
- * sheet is correct; at or above it, the always-visible panel is already the
- * destination, and opening the sheet too would show the form twice.
+ * A first pass mounted the sticky panel's `TransactionForm` AND the sheet's
+ * `TransactionForm` at the same time below `xl` (the sticky `<aside>` was
+ * only CSS-`hidden`, not absent), and both used hard-coded field ids — so a
+ * `<label for="transaction-account">` in the mobile sheet could bind to the
+ * OTHER, invisible instance's control. Two fixes, together: `TransactionForm`
+ * now derives every id from `useId()` (unique per mount, so two instances can
+ * never collide), and — the point of this file's redesign — the sheet is
+ * relevant only below `md`, where NOTHING else is mounted, so only one
+ * `TransactionForm` is ever mounted at a time in practice.
  */
-export function TransactionCreatePanel({
+interface TransactionCreateContextValue {
+  accounts: AccountOption[]
+  categories: CategoryOption[]
+  timezone: string
+  locale: Locale
+  openSheet: () => void
+}
+
+const TransactionCreateContext = createContext<TransactionCreateContextValue | null>(null)
+
+export function TransactionCreatePanelProvider({
   accounts,
   categories,
   timezone,
   locale,
+  children,
 }: {
   accounts: AccountOption[]
   categories: CategoryOption[]
   timezone: string
   locale: Locale
+  children: React.ReactNode
 }) {
   const t = useTranslations()
   const pathname = usePathname()
@@ -54,8 +70,12 @@ export function TransactionCreatePanel({
   // navigation: `window.location.hash` is not reactive, and `pathname` changing
   // is the only thing that can bring a new hash to this page.
   useEffect(() => {
-    const isDesktop = window.matchMedia('(min-width: 1280px)').matches
-    if (window.location.hash !== '#new' || isDesktop) return
+    // Below `md` the sheet is the only home the form has; at `md` and up the
+    // inline/sticky panel (`id="new"`, in `TransactionCreatePanelBody`) is
+    // already on the page, so the browser's own anchor scroll is enough and
+    // opening the sheet too would show the form twice.
+    const isMdUp = window.matchMedia('(min-width: 768px)').matches
+    if (window.location.hash !== '#new' || isMdUp) return
     // `react-hooks/set-state-in-effect` (enforced in this repo, see
     // `lib/ui/use-hydrated.ts`) refuses a `setState` called synchronously in an
     // effect body — it is reasoned about as "force a re-render to sync with an
@@ -70,14 +90,14 @@ export function TransactionCreatePanel({
     history.replaceState(null, '', window.location.pathname + window.location.search)
   }, [pathname])
 
-  return (
-    <>
-      {/* Mobile/tablet: the trigger. `xl:hidden` so the desktop panel below is
-          the only copy at ≥ 1280. */}
-      <Button type="button" className="xl:hidden" onClick={() => setSheetOpen(true)}>
-        {t('transactions.openCreate')}
-      </Button>
+  const value = useMemo<TransactionCreateContextValue>(
+    () => ({ accounts, categories, timezone, locale, openSheet: () => setSheetOpen(true) }),
+    [accounts, categories, timezone, locale],
+  )
 
+  return (
+    <TransactionCreateContext.Provider value={value}>
+      {children}
       <Sheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
@@ -92,24 +112,42 @@ export function TransactionCreatePanel({
           onCreated={() => setSheetOpen(false)}
         />
       </Sheet>
+    </TransactionCreateContext.Provider>
+  )
+}
 
-      {/* Desktop: the always-visible sticky panel. `id="new"` keeps the shell's
-          `/transactions#new` anchor working for a user who lands on it at a
-          desktop width, where there is no sheet to open. */}
-      <aside
-        id="new"
-        className="sticky top-6 hidden h-fit scroll-mt-6 flex-col gap-4 rounded-lg border border-border bg-surface p-4 xl:flex"
-      >
-        <h2 className="text-[1.125rem]/[1.625rem] font-semibold">
-          {t('transactions.createTitle')}
-        </h2>
-        <TransactionForm
-          accounts={accounts}
-          categories={categories}
-          timezone={timezone}
-          locale={locale}
-        />
-      </aside>
-    </>
+/** The header's primary action — visible only below `md` (spec §14 fix round
+ *  1, finding 1): from `md` up, `TransactionCreatePanelBody` is already on the
+ *  page, so a second way to open the (now-empty) sheet would be redundant. */
+export function TransactionCreateTrigger() {
+  const t = useTranslations()
+  const ctx = useContext(TransactionCreateContext)
+  if (!ctx) return null
+  return (
+    <Button type="button" className="md:hidden" onClick={ctx.openSheet}>
+      {t('transactions.openCreate')}
+    </Button>
+  )
+}
+
+/** The inline (`md`–`xl`) / sticky (`xl` and up) form. Absent below `md` —
+ *  the sheet is that range's only home for it. */
+export function TransactionCreatePanelBody() {
+  const t = useTranslations()
+  const ctx = useContext(TransactionCreateContext)
+  if (!ctx) return null
+  return (
+    <div
+      id="new"
+      className="hidden scroll-mt-6 flex-col gap-4 rounded-lg border border-border bg-surface p-4 md:flex xl:sticky xl:top-6 xl:col-span-5 xl:h-fit"
+    >
+      <h2 className="text-[1.125rem]/[1.625rem] font-semibold">{t('transactions.createTitle')}</h2>
+      <TransactionForm
+        accounts={ctx.accounts}
+        categories={ctx.categories}
+        timezone={ctx.timezone}
+        locale={ctx.locale}
+      />
+    </div>
   )
 }

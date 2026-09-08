@@ -1,3 +1,4 @@
+import { Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
@@ -10,8 +11,13 @@ import { listActiveFinancialAccounts } from '@/lib/server/services/financial-acc
 import { listTransactions } from '@/lib/server/services/transaction'
 import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
+import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
-import { TransactionCreatePanel } from '@/components/transactions/transaction-create-panel'
+import {
+  TransactionCreatePanelBody,
+  TransactionCreatePanelProvider,
+  TransactionCreateTrigger,
+} from '@/components/transactions/transaction-create-panel'
 import { TransactionList } from '@/components/transactions/transaction-list'
 
 /** One day, in milliseconds — for computing "yesterday" from "now". */
@@ -41,6 +47,36 @@ export default async function TransactionsPage() {
     getActivitySummary(user.id, displayCurrency, getPeriodBounds(timezone, 'month', now)),
   ])
 
+  const monthTotalDescription = t('transactions.monthTotal', {
+    amount: formatMoney(monthly.expense, displayCurrency, locale),
+    currency: displayCurrency,
+  })
+
+  /**
+   * Zero active accounts (spec §14 fix round 1, finding 6): the page itself
+   * — not just `TransactionForm` — replaces its whole body with ONE notice.
+   * A first pass left the list's own "Chưa có giao dịch" empty state and the
+   * create panel's own no-account notice as two SEPARATE things, reachable
+   * only after opening the sheet on a phone — so a brand-new user's very
+   * first visit read as "nothing to see here" until they went looking. No
+   * header/mobile create trigger is rendered in this branch either: there is
+   * nothing yet for it to create a transaction against.
+   */
+  if (accounts.length === 0) {
+    return (
+      <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+        <PageHeader title={t('transactions.title')} description={monthTotalDescription} />
+        <EmptyState
+          icon={Wallet}
+          size="page"
+          title={t('transactions.noAccountTitle')}
+          description={t('transactions.noAccountBody')}
+          action={{ label: t('transactions.noAccountAction'), href: '/accounts' }}
+        />
+      </div>
+    )
+  }
+
   // The account picker shows each account's balance (spec §2), so it needs one
   // batched read — never one query per account.
   const balances = await getCurrentAccountBalances(
@@ -64,58 +100,54 @@ export default async function TransactionsPage() {
   })
 
   return (
-    // max-w 1200 because the two-column desktop layout needs it.
-    <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
-      <PageHeader
-        title={t('transactions.title')}
-        description={t('transactions.monthTotal', {
-          amount: formatMoney(monthly.expense, displayCurrency, locale),
-          currency: displayCurrency,
-        })}
-      />
+    <TransactionCreatePanelProvider
+      accounts={accountOptions}
+      categories={[...expenseCategories, ...incomeCategories].map((category) => ({
+        id: category.id,
+        name: category.name,
+        type: category.type,
+      }))}
+      timezone={timezone}
+      locale={locale}
+    >
+      {/* max-w 1200 because the two-column desktop layout needs it. */}
+      <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+        <PageHeader
+          title={t('transactions.title')}
+          description={monthTotalDescription}
+          actions={<TransactionCreateTrigger />}
+        />
 
-      {/* 7/12 + 5/12 at ≥ 1280 (spec §6.2). Below that the panel component
-          renders only its trigger and its sheet, so the list gets the row. */}
-      <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-        <div className="xl:col-span-7">
-          <TransactionList
-            transactions={transactions.map((tx) => ({
-              id: tx.id,
-              type: tx.type,
-              // A `Prisma.Decimal` cannot cross the server-to-client-component
-              // boundary, so the amount crosses as a fixed-2-decimal string and
-              // is formatted for display only — no arithmetic on the client.
-              amount: tx.amount.toFixed(2),
-              currency: tx.currency,
-              date: tx.date,
-              note: tx.note,
-              fxRateSource: tx.fxRateSource,
-              account: { name: tx.account.name },
-              category: tx.category ? { name: tx.category.name } : null,
-            }))}
-            timezone={timezone}
-            locale={locale}
-            today={today}
-            yesterday={yesterday}
-          />
-        </div>
-        <div className="flex flex-col xl:col-span-5">
-          {/* `listActiveFinancialAccounts` above is what keeps archived accounts
-              out of the picker; `TransactionForm` itself owns the
-              no-account-yet notice, so a user with none never meets an empty
-              selector no matter which caller renders the form. */}
-          <TransactionCreatePanel
-            accounts={accountOptions}
-            categories={[...expenseCategories, ...incomeCategories].map((category) => ({
-              id: category.id,
-              name: category.name,
-              type: category.type,
-            }))}
-            timezone={timezone}
-            locale={locale}
-          />
+        {/* 7/12 + 5/12 at ≥ 1280 (spec §6.2); below that, one column, the
+            create panel's own `md:flex`/`xl:sticky` classes give it the
+            tablet composition (full width, below the list) and the sheet
+            (below `md`) needs no grid cell at all. */}
+        <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
+          <div className="xl:col-span-7">
+            <TransactionList
+              transactions={transactions.map((tx) => ({
+                id: tx.id,
+                type: tx.type,
+                // A `Prisma.Decimal` cannot cross the server-to-client-component
+                // boundary, so the amount crosses as a fixed-2-decimal string and
+                // is formatted for display only — no arithmetic on the client.
+                amount: tx.amount.toFixed(2),
+                currency: tx.currency,
+                date: tx.date,
+                note: tx.note,
+                fxRateSource: tx.fxRateSource,
+                account: { name: tx.account.name },
+                category: tx.category ? { name: tx.category.name } : null,
+              }))}
+              timezone={timezone}
+              locale={locale}
+              today={today}
+              yesterday={yesterday}
+            />
+          </div>
+          <TransactionCreatePanelBody />
         </div>
       </div>
-    </div>
+    </TransactionCreatePanelProvider>
   )
 }

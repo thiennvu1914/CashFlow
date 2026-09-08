@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Controller, useForm, useWatch, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -67,9 +67,15 @@ function mergeDateTime(values: FormInput): CreateTransactionFormInput {
  * field the user can actually see.
  *
  * The schema owns `date`; no control does. So a schema error keyed `date`
- * would land on nothing and the user would be told nothing — hence the remap
- * onto `datePart`, which is the field a bad date comes from (a time cannot be
- * out of range: `<input type="time">` will not emit one).
+ * would land on nothing and the user would be told nothing — hence the remap.
+ * But WHICH visible field the message belongs under is not always `datePart`:
+ * an emptied Giờ merges into an unparseable string (`"2026-09-08T"`) exactly
+ * as readily as a bad Ngày does, and the schema's single `date` error cannot
+ * tell the two apart on its own. `values.timePart` empty is the tell — a
+ * native `<input type="time">` emits `''` only when cleared, never a
+ * malformed value — so an empty Giờ is what it is, and anything else lands on
+ * Ngày (the field an out-of-range calendar date, e.g. 30 February, actually
+ * comes from).
  */
 const resolver: Resolver<FormInput> = async (values, context, options) => {
   const merged = mergeDateTime(values as FormInput)
@@ -80,10 +86,17 @@ const resolver: Resolver<FormInput> = async (values, context, options) => {
   )
   const errors = result.errors as Record<string, unknown>
   if (errors.date) {
-    errors.datePart = errors.date
+    const target = (values as FormInput).timePart ? 'datePart' : 'timePart'
+    errors[target] = errors.date
     delete errors.date
   }
-  return { values: (result.values ? values : {}) as FormInput, errors } as never
+  // `zodResolver` returns `values: {}` on failure, never `undefined` or a
+  // falsy `values` — the merged object is spread INTO the result either way,
+  // so `result.values` alone can never distinguish success from failure (an
+  // empty object is still truthy). Whether `errors` has any key is the real
+  // signal, and it is what RHF itself checks.
+  const succeeded = Object.keys(errors).length === 0
+  return { values: (succeeded ? values : {}) as FormInput, errors } as never
 }
 
 export type AccountOption = { id: string; name: string; currency: Currency; balance: string }
@@ -141,6 +154,17 @@ export function TransactionForm({
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
+  /**
+   * A per-instance prefix (spec §14 fix round 1, finding 2): the sticky panel
+   * and the mobile sheet can each mount their own `TransactionForm`, and a
+   * hard-coded `id="transaction-account"` on both would make `<label for>`
+   * bind to WHICHEVER instance's control happens to match first — an
+   * unlabelled control on whichever path it does not bind to. Colons stripped
+   * only for a tidier id string; both `:`-bearing and bare forms are valid
+   * HTML ids.
+   */
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `transaction-${name}-${uid}`
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
@@ -334,7 +358,7 @@ export function TransactionForm({
             inside the field)"). The code is a suffix inside the field, not a
             separate span, so the figure and its unit read as one value. */}
         <FormField
-          id="transaction-amount"
+          id={fieldId('amount')}
           label={t('transactions.amount')}
           error={errors.amount?.message}
         >
@@ -357,7 +381,7 @@ export function TransactionForm({
         </FormField>
 
         <FormField
-          id="transaction-account"
+          id={fieldId('account')}
           label={t('transactions.account')}
           error={errors.accountId?.message}
         >
@@ -415,7 +439,7 @@ export function TransactionForm({
 
         {needsCategory && (
           <FormField
-            id="transaction-category"
+            id={fieldId('category')}
             label={t('transactions.category')}
             error={errors.categoryId?.message}
           >
@@ -470,7 +494,7 @@ export function TransactionForm({
             resolver wrapper above. */}
         <div className="grid grid-cols-2 gap-3">
           <FormField
-            id="transaction-date"
+            id={fieldId('date')}
             label={t('transactions.date')}
             error={errors.datePart?.message}
           >
@@ -490,7 +514,7 @@ export function TransactionForm({
             )}
           </FormField>
           <FormField
-            id="transaction-time"
+            id={fieldId('time')}
             label={t('transactions.time')}
             error={errors.timePart?.message}
           >
@@ -506,7 +530,7 @@ export function TransactionForm({
         </div>
 
         <FormField
-          id="transaction-note"
+          id={fieldId('note')}
           label={t('transactions.note')}
           helper={t('transactions.noteHelper')}
           error={errors.note?.message}
