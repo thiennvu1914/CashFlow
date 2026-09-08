@@ -469,7 +469,12 @@ export default async function DashboardPage() {
             <EmptyState
               icon={BellRing}
               title={t('dashboard.emptyRemindersTitle', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
-              action={{ label: t('dashboard.emptyRemindersAction'), href: '/reminders#new' }}
+              // The old `#new` anchor pointed at an inline create form that no
+              // longer exists (Task 9 moved reminder creation behind the
+              // Reminders page's header action/sheet, same as goals/debts/
+              // loans) — so this links at the page itself, whose header
+              // carries "Thêm nhắc nhở".
+              action={{ label: t('dashboard.emptyRemindersAction'), href: '/reminders' }}
             />
           ) : (
             <div className="flex flex-col gap-2">
@@ -484,9 +489,18 @@ export default async function DashboardPage() {
                   </span>
                 </p>
               )}
-              {/* Only the props this component takes TODAY: Task 9 adds
-                  `locale`/`timeZone` to it and updates this call site. */}
-              <OccurrenceList occurrences={vm.upcomingReminders} compact />
+              {/* `collapse` is deliberately omitted (default `false`, per the
+                  prop's own doc on `OccurrenceList`): the widget shows at most
+                  five rows in total, and a "+n kỳ" badge here would explain a
+                  list the user cannot expand. No inner card border either — a
+                  card inside `ChartContainer`'s own card would be a
+                  card-in-card. */}
+              <OccurrenceList
+                occurrences={vm.upcomingReminders}
+                locale={locale}
+                timeZone={timezone}
+                compact
+              />
             </div>
           )}
         </ChartContainer>
