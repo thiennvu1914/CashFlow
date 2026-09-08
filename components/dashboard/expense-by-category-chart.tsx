@@ -46,7 +46,11 @@ export function ExpenseByCategoryChart({
               Recharts' `index`, so passing the function itself no longer
               type-checks. The wrapper drops `index` and keeps this chart's
               behaviour (the `vi` default) unchanged. */}
-          <XAxis type="number" {...AXIS_PROPS} tickFormatter={(value) => formatCompactAmount(value)} />
+          <XAxis
+            type="number"
+            {...AXIS_PROPS}
+            tickFormatter={(value) => formatCompactAmount(value)}
+          />
           <YAxis type="category" dataKey="name" {...AXIS_PROPS} width={104} />
           <Tooltip
             cursor={BAR_CURSOR}

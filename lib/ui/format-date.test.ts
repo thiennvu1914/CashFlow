@@ -48,7 +48,11 @@ describe('formatDate', () => {
     )
     // Node v24.16.0's ICU separates `vi-VN` day/month with a dash, not a
     // slash, at this option set — observed, not hand-built.
-    expect(formatDate('2026-09-09', { locale: 'vi', timeZone: HCM, style: 'dayMonth' })).toBe('09-09')
-    expect(formatDate('2026-09-09', { locale: 'en', timeZone: HCM, style: 'dayMonth' })).toBe('Sep 9')
+    expect(formatDate('2026-09-09', { locale: 'vi', timeZone: HCM, style: 'dayMonth' })).toBe(
+      '09-09',
+    )
+    expect(formatDate('2026-09-09', { locale: 'en', timeZone: HCM, style: 'dayMonth' })).toBe(
+      'Sep 9',
+    )
   })
 })

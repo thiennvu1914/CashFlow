@@ -1,6 +1,8 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { cn } from 'cn'
+import { validationMessageKey } from '@/lib/ui/validation-messages'
 
 /**
  * One labelled field (spec §2, §8): a visible `<label htmlFor>` above the
@@ -19,11 +21,6 @@ import { cn } from 'cn'
  * file. Every form in this app is already a client component, so the boundary
  * costs nothing; a server page that wants a labelled read-only field uses
  * `Label` directly.
- *
- * Ordering note (Task 1b/2c): Task 2c's `lib/ui/validation-messages.ts` has not
- * landed yet, so `FieldError` below renders its `children` verbatim and does
- * not yet call `useTranslations()` — see its own doc comment for the wiring
- * Task 2c adds.
  */
 export function FormField({
   id,
@@ -100,31 +97,37 @@ export const SELECT_CLASS =
   'h-11 w-full min-w-0 appearance-none rounded-md border border-input bg-[var(--input-bg)] px-3 py-2 pr-9 text-base transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-50 md:h-10 md:text-sm'
 
 /**
- * A field's error — and, eventually, the render boundary where a Zod message
- * becomes Vietnamese (spec §4).
+ * A field's error — and the render boundary where a Zod message becomes
+ * Vietnamese (spec §4).
  *
  * The schemas in `lib/validation/**` keep their English literals: Phase 2–6
  * tests assert them, the server re-produces them, and changing them would be a
- * validation-semantics change this phase forbids. So the translation is meant
- * to happen HERE, keyed by the literal itself — `t('validation.Enter an
- * amount')` — with the literal as its own fallback, so a message that somehow
- * has no entry degrades to readable English rather than to a key path.
+ * validation-semantics change this phase forbids. So the translation happens
+ * HERE, keyed by the literal itself via `validationMessageKey` — e.g.
+ * `t('validation.Enter an amount')`.
  *
- * Task 1b ran before Task 2c: `lib/ui/validation-messages.ts` and
- * `validationMessageKey` do not exist yet, so this renders `children` verbatim
- * for now. Task 2c wires `const t = useTranslations(); const message =
- * typeof children === 'string' ? t(validationMessageKey(children), { ... })
- * : children` here (checking `next-intl`'s actual missing-key behaviour first —
- * v4.14's `useTranslations` return type has no `fallback` option, so Task 2c
- * must use `t.has` or a try/catch instead, per the brief).
+ * next-intl 4.14's `useTranslations()` return type has no `fallback` option —
+ * calling `t()` on a key with no entry throws/logs `MISSING_MESSAGE` — so a
+ * message with no dictionary entry is checked with `t.has()` first and shown
+ * verbatim (readable English) rather than crashing or rendering a raw key
+ * path. `children` is only ever run through the translator when it is a
+ * plain string: a caller that already hands `FieldError` rich content (none
+ * does today) passes through untouched.
  */
 export function FieldError({ id, children }: { id: string; children: React.ReactNode }) {
+  const t = useTranslations()
+  const message =
+    typeof children === 'string'
+      ? t.has(validationMessageKey(children))
+        ? t(validationMessageKey(children))
+        : children
+      : children
   return (
     // `role="alert"` so a validation message that appears on submit is
     // announced, and `aria-describedby` (wired by `FormField`) so a screen
     // reader also reads it when focus lands back on the field.
     <p id={id} role="alert" className="text-xs/[1rem] text-negative">
-      {children}
+      {message}
     </p>
   )
 }

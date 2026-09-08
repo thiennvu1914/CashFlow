@@ -42,7 +42,14 @@ const CASES: [string, string[]][] = [
   [
     'transactionType',
     (
-      ['INCOME', 'EXPENSE', 'CASH_IN', 'CASH_OUT', 'ADJUSTMENT_INCREASE', 'ADJUSTMENT_DECREASE'] as const
+      [
+        'INCOME',
+        'EXPENSE',
+        'CASH_IN',
+        'CASH_OUT',
+        'ADJUSTMENT_INCREASE',
+        'ADJUSTMENT_DECREASE',
+      ] as const
     ).map(transactionTypeLabelKey),
   ],
   ['categoryType', (['INCOME', 'EXPENSE'] as const).map(categoryTypeLabelKey)],
