@@ -40,7 +40,13 @@ export function AccountDistributionChart({
       <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
-          <XAxis type="number" {...AXIS_PROPS} tickFormatter={formatCompactAmount} />
+          {/* Wrapped rather than passed directly: Recharts calls a
+              `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s
+              new optional `locale` second parameter is a different type than
+              Recharts' `index`, so passing the function itself no longer
+              type-checks. The wrapper drops `index` and keeps this chart's
+              behaviour (the `vi` default) unchanged. */}
+          <XAxis type="number" {...AXIS_PROPS} tickFormatter={(value) => formatCompactAmount(value)} />
           <YAxis type="category" dataKey="name" {...AXIS_PROPS} width={104} />
           <Tooltip
             cursor={BAR_CURSOR}

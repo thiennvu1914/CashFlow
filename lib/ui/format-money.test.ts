@@ -103,3 +103,33 @@ describe('formatCompactAmount', () => {
     expect(formatCompactAmount(-2_500_000)).toBe('-2,5\u00a0Tr')
   })
 })
+
+describe('locale-aware formatting', () => {
+  it('groups with commas in English and dots in Vietnamese', () => {
+    expect(formatMoney(25_000_000, 'VND', 'en')).toBe('25,000,000')
+    expect(formatMoney(25_000_000, 'VND', 'vi')).toBe('25.000.000')
+    expect(formatMoney(25_000_000, 'VND')).toBe('25.000.000')
+  })
+
+  it('keeps currency precision independent of the reader\u2019s locale', () => {
+    expect(formatMoney(1234.5, 'USD', 'en')).toBe('1,234.50')
+    expect(formatMoney(1234.5, 'USD', 'vi')).toBe('1.234,50')
+  })
+
+  it('formats a rate per locale', () => {
+    expect(formatRate('25969.5', 'en')).toBe('25,969.5')
+    expect(formatRate('25969.5', 'vi')).toBe('25.969,5')
+  })
+
+  it('formats a chart tooltip value per locale and still refuses a non-number', () => {
+    expect(formatChartValue(1_500_000, 'VND', 'en')).toBe('1,500,000 VND')
+    expect(formatChartValue(null, 'VND', 'en')).toBe('\u2014')
+  })
+
+  it('abbreviates an axis label in each locale\u2019s own short scale', () => {
+    expect(formatCompactAmount(25_000_000, 'en')).toBe('25M')
+    // Vietnamese compact notation is ICU-dependent; this is what this Node
+    // emits. If it changes, change the expectation and note the version.
+    expect(formatCompactAmount(25_000_000, 'vi')).toBe('25 Tr')
+  })
+})
