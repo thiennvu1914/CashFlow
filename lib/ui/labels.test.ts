@@ -82,6 +82,27 @@ const CASES: [string, string[]][] = [
   ['currency', (['VND', 'USD'] as const).map(currencyLabelKey)],
 ]
 
+describe('recurrenceLabelKey', () => {
+  it('picks the singular key at interval 1 and the _N key above it, per frequency', () => {
+    // The choice itself, not just that both keys exist (the CASES table above
+    // already covers existence): interval 1 reads as the cadence's own idiom
+    // ("hàng tuần"/"Every week"), and anything else needs the count named
+    // ("mỗi {count} tuần"/"Every {count} weeks") — the same distinction the
+    // deleted `recurrenceLabel` used to make with a ternary, preserved here as
+    // a two-key mapping instead of a hard-coded English string.
+    expect(recurrenceLabelKey('WEEKLY', 1)).toBe('labels.recurrence.WEEKLY')
+    expect(recurrenceLabelKey('WEEKLY', 2)).toBe('labels.recurrence.WEEKLY_N')
+    expect(recurrenceLabelKey('MONTHLY', 1)).toBe('labels.recurrence.MONTHLY')
+    expect(recurrenceLabelKey('MONTHLY', 3)).toBe('labels.recurrence.MONTHLY_N')
+    expect(recurrenceLabelKey('YEARLY', 1)).toBe('labels.recurrence.YEARLY')
+    expect(recurrenceLabelKey('YEARLY', 2)).toBe('labels.recurrence.YEARLY_N')
+    // ONE_TIME ignores the interval entirely — both keys resolve the same,
+    // because ONE_TIME has no second occurrence for an interval to space out.
+    expect(recurrenceLabelKey('ONE_TIME', 1)).toBe('labels.recurrence.ONE_TIME')
+    expect(recurrenceLabelKey('ONE_TIME', 3)).toBe('labels.recurrence.ONE_TIME')
+  })
+})
+
 describe('label keys', () => {
   for (const [family, keys] of CASES) {
     it(`${family}: every member resolves to a non-empty label in vi and en`, () => {

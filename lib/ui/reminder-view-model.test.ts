@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { OccurrenceRow, ReminderRow } from '@/lib/server/services/reminder'
-import {
-  REMINDER_TYPE_LABELS,
-  recurrenceLabel,
-  toOccurrenceDto,
-  toReminderDto,
-} from './reminder-view-model'
+import { toOccurrenceDto, toReminderDto } from './reminder-view-model'
 
 /**
  * Pure mapping — no database, no session, no renderer.
@@ -19,14 +14,19 @@ import {
  *    stored `2026-04-14T17:00:00.000Z` is the 15th in `Asia/Ho_Chi_Minh` and
  *    the 14th in UTC. A `toISOString().slice(0, 10)` here would tell a
  *    Vietnamese user their bill was due yesterday.
- * 2. **`dueLabel` counts calendar days, not milliseconds.** "In 5 days" has to
- *    survive a month boundary and a DST shift, so the difference is taken
+ * 2. **`daysToDue` counts calendar days, not milliseconds.** "3 days out" has
+ *    to survive a month boundary and a DST shift, so the difference is taken
  *    between two UTC-midnight carriers built from the two calendar strings —
- *    never `(dueAt - now) / 86_400_000`, which answers "In 0 days" for a bill
- *    due tomorrow morning.
+ *    never `(dueAt - now) / 86_400_000`, which answers "0 days" for a bill due
+ *    tomorrow morning.
  *
- * Nothing here is alarmist: an overdue occurrence gets the word "Overdue" and a
- * boolean the row can style on, and that is all — no count of how late it is.
+ * Nothing here is alarmist: an overdue occurrence gets a boolean the row can
+ * style on and a `daysToDue` that is merely negative — no pre-baked "Overdue"
+ * string, and no count of how late it is. The component
+ * (`components/reminders/occurrence-list.tsx`) is what turns `daysToDue` into
+ * one of `reminders.overdue`/`dueToday`/`dueTomorrow`/`dueInDays`, and the enum
+ * type/frequency into a label through `reminderTypeLabelKey`/
+ * `recurrenceLabelKey` (`lib/ui/labels.ts`) — this module never renders English.
  */
 
 const CREATED_AT = new Date('2026-03-01T04:05:06.000Z')
@@ -144,38 +144,6 @@ function expectOnlyPrimitiveLeaves(dto: unknown, requiredPaths: string[]): void 
   }
 }
 
-describe('recurrenceLabel', () => {
-  it('says "One time" for a one-off, whatever the stored interval', () => {
-    // The schema refuses anything but 1 and the service stores 1, so the second
-    // case is defence in depth for a row written around them: a one-off has no
-    // second occurrence for an interval to space out, so naming one would be a
-    // schedule the reminder does not have.
-    expect(recurrenceLabel('ONE_TIME', 1)).toBe('One time')
-    expect(recurrenceLabel('ONE_TIME', 3)).toBe('One time')
-  })
-
-  it("names the cadence in the user's words at interval 1, not the enum's", () => {
-    expect(recurrenceLabel('WEEKLY', 1)).toBe('Every week')
-    expect(recurrenceLabel('MONTHLY', 1)).toBe('Monthly')
-    expect(recurrenceLabel('YEARLY', 1)).toBe('Yearly')
-  })
-
-  it('counts the periods when the interval is more than one', () => {
-    expect(recurrenceLabel('WEEKLY', 2)).toBe('Every 2 weeks')
-    expect(recurrenceLabel('MONTHLY', 3)).toBe('Every 3 months')
-    expect(recurrenceLabel('YEARLY', 2)).toBe('Every 2 years')
-    expect(recurrenceLabel('WEEKLY', 99)).toBe('Every 99 weeks')
-  })
-})
-
-describe('REMINDER_TYPE_LABELS', () => {
-  it('calls an expense a Bill, because that is what the user is being reminded of', () => {
-    // "Expense" is the ledger's word for a recorded transaction; a reminder is
-    // a bill that has not been paid yet, and the page must not imply otherwise.
-    expect(REMINDER_TYPE_LABELS).toEqual({ INCOME: 'Income', EXPENSE: 'Bill' })
-  })
-})
-
 describe('toOccurrenceDto', () => {
   it('maps a bill due today: own currency, whole dong, no category or account', () => {
     const dto = toOccurrenceDto(occurrence(), TIMEZONE, TODAY)
@@ -184,13 +152,13 @@ describe('toOccurrenceDto', () => {
     expect(dto.reminderId).toBe('rem_1')
     expect(dto.title).toBe('Internet bill')
     expect(dto.type).toBe('EXPENSE')
-    expect(dto.typeLabel).toBe('Bill')
     expect(dto.amount).toBe('350.000')
     expect(dto.currency).toBe('VND')
     expect(dto.dueDate).toBe(TODAY)
-    expect(dto.dueLabel).toBe('Today')
+    expect(dto.daysToDue).toBe(0)
     expect(dto.overdue).toBe(false)
-    expect(dto.recurrenceLabel).toBe('Monthly')
+    expect(dto.frequency).toBe('MONTHLY')
+    expect(dto.interval).toBe(1)
     expect(dto.categoryName).toBeNull()
     expect(dto.accountName).toBeNull()
     expect(dto.status).toBe('PENDING')
@@ -215,7 +183,19 @@ describe('toOccurrenceDto', () => {
     expect(dto.amount).toBe('1.250,50')
     expect(dto.currency).toBe('USD')
     expect(dto.type).toBe('INCOME')
-    expect(dto.typeLabel).toBe('Income')
+  })
+
+  it("formats with English grouping when the reader's locale is en", () => {
+    const dto = toOccurrenceDto(
+      occurrence({
+        reminder: reminder({ expectedAmount: new Prisma.Decimal('1250000') }),
+      }),
+      TIMEZONE,
+      TODAY,
+      'en',
+    )
+
+    expect(dto.amount).toBe('1,250,000')
   })
 
   it("reads the due instant as the day it falls on in the USER's zone", () => {
@@ -232,54 +212,57 @@ describe('toOccurrenceDto', () => {
     const row = occurrence({ dueAt: new Date('2026-04-14T17:00:00.000Z') })
 
     // Same instant, same `today`, two zones: due today for the user it belongs
-    // to, a day late for a reader in UTC. The label follows the zone because it
-    // is computed from `dueDate`, which is already in it.
-    expect(toOccurrenceDto(row, TIMEZONE, TODAY).dueLabel).toBe('Today')
-    expect(toOccurrenceDto(row, 'UTC', TODAY).dueLabel).toBe('Overdue')
+    // to, a day late for a reader in UTC. `daysToDue` follows the zone because
+    // it is computed from `dueDate`, which is already in it.
+    expect(toOccurrenceDto(row, TIMEZONE, TODAY).daysToDue).toBe(0)
+    expect(toOccurrenceDto(row, 'UTC', TODAY).daysToDue).toBe(-1)
     expect(toOccurrenceDto(row, 'UTC', TODAY).overdue).toBe(true)
   })
 
-  it('labels yesterday Overdue, and marks it rather than shouting about it', () => {
+  it('marks yesterday overdue with a negative daysToDue, and nothing more', () => {
     const dto = toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-14') }), TIMEZONE, TODAY)
 
     expect(dto.dueDate).toBe('2026-04-14')
-    expect(dto.dueLabel).toBe('Overdue')
+    expect(dto.daysToDue).toBe(-1)
     expect(dto.overdue).toBe(true)
   })
 
-  it('says Overdue and nothing more for a bill months late', () => {
+  it('keeps daysToDue exact for a bill months late — no pre-baked "Overdue" string here', () => {
     // The upcoming list is unbounded by design — an unanswered bill from
-    // January is still the user's to deal with — but the label does not count
-    // the days: "Overdue" is the fact, and a number of days late would only
-    // make the page shout.
+    // January is still the user's to deal with. This module reports the exact
+    // count; the component decides whether to show it (spec §6.7: "Overdue"
+    // carries no count, on purpose).
     const dto = toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-01-05') }), TIMEZONE, TODAY)
 
-    expect(dto.dueLabel).toBe('Overdue')
+    expect(dto.daysToDue).toBeLessThan(-1)
     expect(dto.overdue).toBe(true)
   })
 
-  it('labels tomorrow Tomorrow', () => {
+  it('reports tomorrow as daysToDue 1', () => {
     const dto = toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-16') }), TIMEZONE, TODAY)
 
-    expect(dto.dueLabel).toBe('Tomorrow')
+    expect(dto.daysToDue).toBe(1)
     expect(dto.overdue).toBe(false)
   })
 
   it('counts calendar days from two days out', () => {
     expect(
-      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-17') }), TIMEZONE, TODAY).dueLabel,
-    ).toBe('In 2 days')
+      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-17') }), TIMEZONE, TODAY)
+        .daysToDue,
+    ).toBe(2)
     expect(
-      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-20') }), TIMEZONE, TODAY).dueLabel,
-    ).toBe('In 5 days')
+      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-04-20') }), TIMEZONE, TODAY)
+        .daysToDue,
+    ).toBe(5)
     expect(
-      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-05-15') }), TIMEZONE, TODAY).dueLabel,
-    ).toBe('In 30 days')
+      toOccurrenceDto(occurrence({ dueAt: localMidnight('2026-05-15') }), TIMEZONE, TODAY)
+        .daysToDue,
+    ).toBe(30)
   })
 
   it('counts across a month boundary rather than subtracting day numbers', () => {
-    // 30 April + 1 is 1 May, not "31 April". A label built from the day numbers
-    // would read "In -29 days" here; the difference is taken between two
+    // 30 April + 1 is 1 May, not "31 April". A count built from the day
+    // numbers would answer -29 here; the difference is taken between two
     // UTC-midnight carriers, where a day is exactly 24 hours.
     const dto = toOccurrenceDto(
       occurrence({ dueAt: localMidnight('2026-05-01') }),
@@ -287,19 +270,19 @@ describe('toOccurrenceDto', () => {
       '2026-04-30',
     )
 
-    expect(dto.dueLabel).toBe('Tomorrow')
+    expect(dto.daysToDue).toBe(1)
   })
 
   it("counts across a DST change in the reader's zone", () => {
     // `America/Los_Angeles` springs forward on 8 March 2026, so 7 March to 10
-    // March is 71 hours and three calendar days. Milliseconds would answer "In
-    // 2 days" for the second of these.
+    // March is 71 hours and three calendar days. Milliseconds would answer 2
+    // days for the second of these.
     const zone = 'America/Los_Angeles'
     const dueAt = new Date('2026-03-10T08:00:00.000Z') // local midnight, PDT
 
     expect(toOccurrenceDto(occurrence({ dueAt }), zone, '2026-03-07').dueDate).toBe('2026-03-10')
-    expect(toOccurrenceDto(occurrence({ dueAt }), zone, '2026-03-07').dueLabel).toBe('In 3 days')
-    expect(toOccurrenceDto(occurrence({ dueAt }), zone, '2026-03-09').dueLabel).toBe('Tomorrow')
+    expect(toOccurrenceDto(occurrence({ dueAt }), zone, '2026-03-07').daysToDue).toBe(3)
+    expect(toOccurrenceDto(occurrence({ dueAt }), zone, '2026-03-09').daysToDue).toBe(1)
   })
 
   it('carries the category and account names the row already brought with it', () => {
@@ -333,14 +316,15 @@ describe('toOccurrenceDto', () => {
     expect(dismissed.status).toBe('DISMISSED')
   })
 
-  it('describes the schedule the occurrence came from', () => {
+  it('describes the schedule the occurrence came from as an enum, not a label', () => {
     const dto = toOccurrenceDto(
       occurrence({ reminder: reminder({ frequency: 'WEEKLY', interval: 2, dayOfMonth: null }) }),
       TIMEZONE,
       TODAY,
     )
 
-    expect(dto.recurrenceLabel).toBe('Every 2 weeks')
+    expect(dto.frequency).toBe('WEEKLY')
+    expect(dto.interval).toBe(2)
   })
 
   it('lets nothing but strings, numbers, booleans and nulls cross to a client component', () => {
@@ -362,8 +346,9 @@ describe('toOccurrenceDto', () => {
     expectOnlyPrimitiveLeaves(dto, [
       'dto.amount',
       'dto.dueDate',
-      'dto.dueLabel',
-      'dto.recurrenceLabel',
+      'dto.daysToDue',
+      'dto.frequency',
+      'dto.interval',
       'dto.categoryName',
       'dto.accountName',
       'dto.status',
@@ -378,10 +363,10 @@ describe('toReminderDto', () => {
     expect(dto.id).toBe('rem_1')
     expect(dto.title).toBe('Internet bill')
     expect(dto.type).toBe('EXPENSE')
-    expect(dto.typeLabel).toBe('Bill')
     expect(dto.amount).toBe('350.000')
     expect(dto.currency).toBe('VND')
-    expect(dto.recurrenceLabel).toBe('Monthly')
+    expect(dto.frequency).toBe('MONTHLY')
+    expect(dto.interval).toBe(1)
     expect(dto.startDate).toBe('2026-03-15')
     expect(dto.active).toBe(true)
     expect(dto.note).toBeNull()
@@ -409,10 +394,10 @@ describe('toReminderDto', () => {
     // so the definition still reads in full.
     expect(dto.active).toBe(false)
     expect(dto.note).toBe('Cancelled after the move')
-    expect(dto.recurrenceLabel).toBe('One time')
+    expect(dto.frequency).toBe('ONE_TIME')
   })
 
-  it('carries the category and account names, and an income label', () => {
+  it('carries the category and account names, and an income type', () => {
     const dto = toReminderDto(
       reminder({
         type: 'INCOME',
@@ -426,10 +411,20 @@ describe('toReminderDto', () => {
       TIMEZONE,
     )
 
-    expect(dto.typeLabel).toBe('Income')
+    expect(dto.type).toBe('INCOME')
     expect(dto.amount).toBe('25.000.000')
     expect(dto.categoryName).toBe('Salary')
     expect(dto.accountName).toBe('Vietcombank')
+  })
+
+  it("formats with English grouping when the reader's locale is en", () => {
+    const dto = toReminderDto(
+      reminder({ expectedAmount: new Prisma.Decimal('25000000') }),
+      TIMEZONE,
+      'en',
+    )
+
+    expect(dto.amount).toBe('25,000,000')
   })
 
   it('lets nothing but strings, numbers, booleans and nulls cross to a client component', () => {
@@ -447,10 +442,42 @@ describe('toReminderDto', () => {
     expectOnlyPrimitiveLeaves(dto, [
       'dto.amount',
       'dto.startDate',
-      'dto.recurrenceLabel',
+      'dto.frequency',
+      'dto.interval',
       'dto.note',
       'dto.categoryName',
       'dto.accountName',
     ])
+  })
+})
+
+describe('DTOs carry no pre-baked English literal (owner requirement N)', () => {
+  it('rejects any Today/Tomorrow/In N days/Overdue/Bill/Income/Weekly/Monthly/Yearly/Active/Paused literal, and no *Label key', () => {
+    const occurrenceDto = toOccurrenceDto(
+      occurrence({
+        reminder: reminder({
+          category: { name: 'Utilities' },
+          account: { name: 'Techcombank' },
+        }),
+      }),
+      TIMEZONE,
+      TODAY,
+    )
+    const reminderDto = toReminderDto(
+      reminder({ category: { name: 'Salary' }, account: { name: 'Vietcombank' } }),
+      TIMEZONE,
+    )
+
+    const forbidden =
+      /Today|Tomorrow|In \d+ days|Overdue|Bill|Income|Weekly|Monthly|Yearly|Active|Paused/
+
+    for (const dto of [occurrenceDto, reminderDto]) {
+      for (const [key, value] of Object.entries(dto)) {
+        expect(key.endsWith('Label'), `${key} is a *Label key`).toBe(false)
+        if (typeof value === 'string') {
+          expect(value, `dto.${key} = ${JSON.stringify(value)}`).not.toMatch(forbidden)
+        }
+      }
+    }
   })
 })

@@ -378,7 +378,7 @@ export function buildDashboardViewModel(
   // R6-7). Re-deriving it here to save formatting the rows the widget will not
   // show would be a second definition of "late", which is the one thing this
   // page must not have; the Reminders page maps the same list in full.
-  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today))
+  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today, locale))
   const overdueOccurrences = allOccurrences.filter((occurrence) => occurrence.overdue)
   // Both halves keep the service's `dueAt asc` order — oldest overdue first,
   // soonest upcoming first — exactly as the Reminders page groups them.

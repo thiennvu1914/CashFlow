@@ -782,15 +782,15 @@ describe('buildDashboardViewModel', () => {
       )
 
       expect(
-        vm.upcomingReminders.map((o) => [o.id, o.title, o.dueDate, o.dueLabel, o.overdue]),
+        vm.upcomingReminders.map((o) => [o.id, o.title, o.dueDate, o.daysToDue, o.overdue]),
       ).toEqual([
-        ['o1', 'Rent', '2026-09-10', 'Overdue', true],
-        ['o2', 'Salary', '2026-09-16', 'Tomorrow', false],
+        ['o1', 'Rent', '2026-09-10', -5, true],
+        ['o2', 'Salary', '2026-09-16', 1, false],
       ])
       // Each in its reminder's own currency, never converted.
-      expect(vm.upcomingReminders.map((o) => [o.amount, o.currency, o.typeLabel])).toEqual([
-        ['500.000', 'VND', 'Bill'],
-        ['1.200,00', 'USD', 'Income'],
+      expect(vm.upcomingReminders.map((o) => [o.amount, o.currency, o.type])).toEqual([
+        ['500.000', 'VND', 'EXPENSE'],
+        ['1.200,00', 'USD', 'INCOME'],
       ])
     })
 
@@ -860,9 +860,9 @@ describe('buildDashboardViewModel', () => {
         }),
       )
 
-      expect(vm.upcomingReminders.map((o) => [o.id, o.dueLabel])).toEqual([
-        ['late', 'Overdue'],
-        ['soon', 'Tomorrow'],
+      expect(vm.upcomingReminders.map((o) => [o.id, o.daysToDue])).toEqual([
+        ['late', -5],
+        ['soon', 1],
       ])
       expect(vm.overdueReminderCount).toBe(1)
     })
