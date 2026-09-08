@@ -23,52 +23,72 @@ export default async function TransfersPage() {
     listTransfers(user.id),
   ])
 
+  // Fewer than two ACTIVE accounts (spec §6.3, owner requirement): a transfer
+  // needs a genuine FROM and TO, so this `EmptyState` replaces whatever it
+  // would otherwise sit next to — the form always (there is nothing it could
+  // usefully submit), and the LIST too when there is no history yet (Task 5b
+  // fix round 1, promoted minor): the two used to stack ("Chưa có lệnh
+  // chuyển nào" over "Cần ít nhất hai tài khoản…"), which read as two
+  // different problems instead of one. `listActiveFinancialAccounts` already
+  // excludes archived accounts, so an archived second account cannot
+  // silently make this branch pass.
+  const needsTwoAccounts = accounts.length < 2
+  const needTwoAccountsNotice = (
+    <EmptyState
+      icon={Wallet}
+      size="page"
+      title={t('transfers.needTwoAccountsTitle')}
+      description={t('transfers.needTwoAccountsBody')}
+      action={{ label: t('transfers.needTwoAccountsAction'), href: '/accounts' }}
+    />
+  )
+
   return (
     <div className="mx-auto flex max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
       <PageHeader title={t('transfers.title')} />
 
-      <TransferList
-        transfers={transfers.map((transfer) => ({
-          id: transfer.id,
-          date: transfer.date,
-          // Display strings only — Decimal math already happened in the
-          // service; nothing here feeds back into any calculation.
-          fromAmount: transfer.fromAmount.toFixed(2),
-          toAmount: transfer.toAmount.toFixed(2),
-          exchangeRateUsed: transfer.exchangeRateUsed ? transfer.exchangeRateUsed.toString() : null,
-          fromAccount: { name: transfer.fromAccount.name, currency: transfer.fromAccount.currency },
-          toAccount: { name: transfer.toAccount.name, currency: transfer.toAccount.currency },
-        }))}
-        timezone={timezone}
-        locale={locale}
-      />
-
-      <div className="flex flex-col gap-4">
-        <SectionHeader title={t('transfers.createTitle')} />
-        {/**
-         * Fewer than two ACTIVE accounts (spec §6.3, owner requirement): a
-         * transfer needs a genuine FROM and TO, so an `EmptyState` replaces the
-         * form rather than offering two selects with nothing (or the same one
-         * account) to choose between. `listActiveFinancialAccounts` already
-         * excludes archived accounts, so an archived second account cannot
-         * silently make this branch pass.
-         */}
-        {accounts.length < 2 ? (
-          <EmptyState
-            icon={Wallet}
-            size="page"
-            title={t('transfers.needTwoAccountsTitle')}
-            description={t('transfers.needTwoAccountsBody')}
-            action={{ label: t('transfers.needTwoAccountsAction'), href: '/accounts' }}
-          />
-        ) : (
-          <TransferForm
-            accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
+      {needsTwoAccounts && transfers.length === 0 ? (
+        needTwoAccountsNotice
+      ) : (
+        <>
+          <TransferList
+            transfers={transfers.map((transfer) => ({
+              id: transfer.id,
+              date: transfer.date,
+              // Display strings only — Decimal math already happened in the
+              // service; nothing here feeds back into any calculation.
+              fromAmount: transfer.fromAmount.toFixed(2),
+              toAmount: transfer.toAmount.toFixed(2),
+              exchangeRateUsed: transfer.exchangeRateUsed
+                ? transfer.exchangeRateUsed.toString()
+                : null,
+              fromAccount: {
+                name: transfer.fromAccount.name,
+                currency: transfer.fromAccount.currency,
+              },
+              toAccount: { name: transfer.toAccount.name, currency: transfer.toAccount.currency },
+            }))}
             timezone={timezone}
             locale={locale}
           />
-        )}
-      </div>
+
+          <div className="flex flex-col gap-4">
+            <SectionHeader title={t('transfers.createTitle')} />
+            {/* History already showed above (or there was none to hide), but
+                the form itself is still not usable with fewer than two
+                accounts — this narrower notice replaces only the form. */}
+            {needsTwoAccounts ? (
+              needTwoAccountsNotice
+            ) : (
+              <TransferForm
+                accounts={accounts.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))}
+                timezone={timezone}
+                locale={locale}
+              />
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

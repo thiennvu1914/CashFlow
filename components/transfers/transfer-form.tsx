@@ -11,7 +11,7 @@ import type { Locale } from '@/lib/i18n/locale'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 import { createTransferAction } from '@/lib/server/actions/transfer-actions'
 import { GENERIC_ERROR_KEY, TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
-import { formatRate } from '@/lib/ui/format-money'
+import { formatReadableRate } from '@/lib/ui/format-money'
 import { useHydrated } from '@/lib/ui/use-hydrated'
 import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { nowInZone } from '@/lib/datetime/local-date-time'
@@ -46,6 +46,23 @@ type Account = { id: string; name: string; currency: Currency }
 function defaultToAccountId(accounts: Account[]): string {
   return accounts[1]?.id ?? accounts[0]?.id ?? ''
 }
+
+/**
+ * The shared chrome for BOTH amount inputs — same height and size whether the
+ * field is the sole "Amount" (same-currency) or one half of an "Amount
+ * sent"/"Amount received" pair (cross-currency): a visual mismatch between
+ * the two legs of one transfer used to read as an error, not a design choice
+ * (Task 5b fix round 1, finding 4 — "Amount received" was a plain, smaller
+ * `Input` with no spinner suppression while "Amount sent" was the dominant
+ * size). The three `appearance`-suppressing classes remove `type="number"`'s
+ * native spin buttons, which Chrome renders by default — the ASYMMETRY
+ * actually flagged was one field showing a spinner and the other not;
+ * suppressing it on both is simpler and safer than moving either field off
+ * `type="number"` (which `valueAsNumber` and the schema both still validate
+ * against).
+ */
+const AMOUNT_INPUT_CLASS =
+  'h-14 pr-16 text-[1.75rem]/[2.125rem] font-semibold tabular-nums md:h-14 md:text-[1.75rem] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'
 
 function defaultValues(accounts: Account[], timezone: string): FormInput {
   return {
@@ -127,22 +144,21 @@ export function TransferForm({
 
   /**
    * A preview only — the rate implied by what the user has typed into BOTH
-   * legs so far, always quoted USD-per-1 like `TransferList`'s `readableRate`.
-   * Nothing here is submitted or read back into the payload: the server
-   * derives the real, FX-policy-sourced rate independently, and this figure
-   * exists only so the person can sanity-check the two numbers they just
-   * typed before they hit submit.
+   * legs so far, formatted by the SAME `formatReadableRate` helper
+   * `TransferList` uses on the persisted `exchangeRateUsed`, so the two can
+   * never quote the same pair in different directions. `toAmount / fromAmount`
+   * is handed over as destination-per-source — the exact shape the server
+   * will eventually persist as `exchangeRateUsed` (see `lib/server/services/
+   * transfer.ts`) — never a rate this component derives its own way; the
+   * helper does the USD-per-1 normalisation once, in one place. Nothing here
+   * is submitted or read back into the payload: the server derives the real,
+   * FX-policy-sourced rate independently, and this figure exists only so the
+   * person can sanity-check the two numbers they just typed before they hit
+   * submit.
    */
-  const rate =
+  const rateLine =
     !sameCurrency && fromAccount && toAccount && fromAmount > 0 && toAmount > 0
-      ? {
-          from: 'USD',
-          rate: formatRate(
-            fromAccount.currency === 'USD' ? toAmount / fromAmount : fromAmount / toAmount,
-            locale,
-          ),
-          to: 'VND',
-        }
+      ? formatReadableRate(fromAccount.currency, toAccount.currency, toAmount / fromAmount, locale)
       : null
 
   async function onSubmit(values: FormInput) {
@@ -276,7 +292,7 @@ export function TransferForm({
                   {...aria}
                   type="number"
                   step="0.01"
-                  className="h-14 pr-16 text-[1.75rem]/[2.125rem] font-semibold tabular-nums md:h-14 md:text-[1.75rem]"
+                  className={AMOUNT_INPUT_CLASS}
                   {...register('fromAmount', { valueAsNumber: true })}
                 />
                 {/* Read-only: currency always follows the selected account, so
@@ -296,7 +312,7 @@ export function TransferForm({
                     {...aria}
                     type="number"
                     step="0.01"
-                    className="pr-16"
+                    className={AMOUNT_INPUT_CLASS}
                     {...register('toAmount', { valueAsNumber: true })}
                   />
                   <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm font-medium text-muted-foreground">
@@ -308,9 +324,7 @@ export function TransferForm({
           )}
         </div>
 
-        {rate && (
-          <p className="text-xs/[1rem] text-muted-foreground">{t('common.rateLine', rate)}</p>
-        )}
+        {rateLine && <p className="text-xs/[1rem] text-muted-foreground">{rateLine}</p>}
 
         {/* Rendered regardless of `sameCurrency` so a validation error on this
             field is never silently hidden by the field itself being hidden —

@@ -96,7 +96,11 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
 
     const row = page.getByRole('listitem').filter({ hasText: '50.000' })
     await expect(row).toHaveCount(1)
-    await expect(row).toContainText(`${CASH} → ${BANK}`)
+    // The route is now composed markup (FROM name, an `aria-hidden` arrow
+    // icon, TO name) rather than one string with a literal "→" character —
+    // see the 375 test below — so each name is asserted on its own.
+    await expect(row.getByText(CASH, { exact: true })).toBeVisible()
+    await expect(row.getByText(BANK, { exact: true })).toBeVisible()
     // Same-currency: no second figure and no rate line on this row.
     await expect(row).not.toContainText('USD')
   })
@@ -118,8 +122,12 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
     await page.getByLabel(/^Số tiền nhận$|^Amount received$/).fill('100')
     await page.getByRole('button', { name: /^Chuyển tiền$|^Transfer$/ }).click()
 
-    const row = page.getByRole('listitem').filter({ hasText: `${CASH} → ${USD_SAVINGS}` })
+    // `USD_SAVINGS` alone is enough to pick out this row: the only other row
+    // at this point (from the previous test) is Cash → Bank, all VND.
+    const row = page.getByRole('listitem').filter({ hasText: USD_SAVINGS })
     await expect(row).toHaveCount(1)
+    await expect(row.getByText(CASH, { exact: true })).toBeVisible()
+    await expect(row.getByText(USD_SAVINGS, { exact: true })).toBeVisible()
     // Both legs' figures are on the row.
     await expect(row).toContainText('2.500.000')
     await expect(row).toContainText('100')
@@ -129,7 +137,9 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
     await expect(row).toContainText(/1 USD = 25[.,]000 VND/)
   })
 
-  test('375: no horizontal overflow', async ({ page }) => {
+  test('375: no horizontal overflow, and the route/rate are still legible (not lost to truncation)', async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/transfers')
 
@@ -137,6 +147,22 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
       () => document.documentElement.scrollWidth <= window.innerWidth,
     )
     expect(overflow).toBe(true)
+
+    // Task 5b fix round 1, IMPORTANT finding: at 375 the single-string title
+    // and the meta both used to ellipsise, silently deleting the TO account,
+    // the arrow, and the rate line ("USD Savings …" with nothing else). Every
+    // one of those must still be READABLE at this width, not merely present
+    // in the DOM — hence `toBeVisible()`, scoped to each row so a same-named
+    // element elsewhere on the page (the form's own selects) cannot satisfy
+    // the assertion by accident.
+    const sameCurrencyRow = page.getByRole('listitem').filter({ hasText: '50.000' })
+    await expect(sameCurrencyRow.getByText(CASH, { exact: true })).toBeVisible()
+    await expect(sameCurrencyRow.getByText(BANK, { exact: true })).toBeVisible()
+
+    const crossCurrencyRow = page.getByRole('listitem').filter({ hasText: USD_SAVINGS })
+    await expect(crossCurrencyRow.getByText(CASH, { exact: true })).toBeVisible()
+    await expect(crossCurrencyRow.getByText(USD_SAVINGS, { exact: true })).toBeVisible()
+    await expect(crossCurrencyRow.getByText(/1 USD = 25[.,]000 VND/)).toBeVisible()
   })
 
   test('delete: Cancel keeps the row; Confirm removes it and both balances move back', async ({
@@ -206,19 +232,25 @@ test.describe('Phase 7 Task 5b — fewer than two active accounts', () => {
     await context.close()
   })
 
-  test('shows the EmptyState with a CTA to /accounts, and no <select> anywhere on the page', async ({
+  test('shows ONE page-level EmptyState with a CTA to /accounts — no stacked "no transfers yet" card, no <select> anywhere', async ({
     page,
   }) => {
     await page.goto('/transfers')
 
     await expect(
       page.getByText(
-        /Cần ít nhất hai tài khoản đang hoạt động|You need at least two active accounts/,
+        /Cần ít nhất hai tài khoản đang hoạt động để chuyển tiền\.|You need at least two active accounts to transfer money\./,
       ),
     ).toBeVisible()
-    const cta = page.getByRole('link', { name: /^Đến Tài khoản$|^Go to Accounts$/ })
+    const cta = page.getByRole('link', { name: /^Quản lý tài khoản$|^Manage accounts$/ })
     await expect(cta).toBeVisible()
     await expect(cta).toHaveAttribute('href', '/accounts')
+
+    // Task 5b fix round 1, promoted minor: with no transfer history AND fewer
+    // than two accounts, the list's own "no transfers yet" card used to stack
+    // on top of this one — two different-sounding empty messages instead of
+    // one. Only the ONE page-level notice above may render.
+    await expect(page.getByText(/Chưa có lệnh chuyển nào|No transfers yet/)).toHaveCount(0)
 
     // The defect this replaces: two selects with nothing (or the same one
     // account) to choose between. With the form gone, neither exists.

@@ -148,6 +148,25 @@ describe('TransferForm', () => {
     expect(fromLabel?.[1]).toBe('Số tiền gửi')
     expect(toLabel?.[1]).toBe('Số tiền nhận')
   })
+
+  it('gives "Amount sent" and "Amount received" the identical class set — a matched pair, no chrome asymmetry', () => {
+    // Task 5b fix round 1, finding 4: "Amount received" used to be a plain,
+    // smaller `Input` with no spinner suppression while "Amount sent" was the
+    // dominant size — a visual mismatch between the two legs of one transfer.
+    const html = render([CASH, USD_SAVINGS])
+
+    const inputMatches = [
+      ...html.matchAll(/<input[^>]*id="transfer-(?:fromAmount|toAmount)-[^"]*"[^>]*>/g),
+    ]
+    expect(inputMatches).toHaveLength(2)
+    const classOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]
+    expect(classOf(inputMatches[0][0])).toBe(classOf(inputMatches[1][0]))
+    // And the native spinner is suppressed on both, not asymmetrically on one
+    // (react-dom HTML-escapes the `&` in the Tailwind arbitrary selector).
+    for (const [tag] of inputMatches) {
+      expect(tag).toContain('[&amp;::-webkit-outer-spin-button]:appearance-none')
+    }
+  })
 })
 
 describe('TransferForm with fewer than two accounts', () => {

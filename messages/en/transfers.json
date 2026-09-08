@@ -5,8 +5,6 @@
   "createPending": "Transferring…",
   "from": "From",
   "to": "To",
-  "fromPlaceholder": "Select the source account",
-  "toPlaceholder": "Select the destination account",
   "amount": "Amount",
   "amountSent": "Amount sent",
   "amountReceived": "Amount received",
@@ -20,7 +18,7 @@
   "deletePending": "Deleting…",
   "emptyTitle": "No transfers yet",
   "emptyBody": "Move money between two of your accounts.",
-  "needTwoAccountsTitle": "You need at least two active accounts",
+  "needTwoAccountsTitle": "You need at least two active accounts to transfer money.",
   "needTwoAccountsBody": "A transfer moves money between two of your accounts.",
-  "needTwoAccountsAction": "Go to Accounts"
+  "needTwoAccountsAction": "Manage accounts"
 }

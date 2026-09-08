@@ -5,8 +5,6 @@
   "createPending": "Đang chuyển…",
   "from": "Từ",
   "to": "Đến",
-  "fromPlaceholder": "Chọn tài khoản nguồn",
-  "toPlaceholder": "Chọn tài khoản đích",
   "amount": "Số tiền",
   "amountSent": "Số tiền gửi",
   "amountReceived": "Số tiền nhận",
@@ -20,7 +18,7 @@
   "deletePending": "Đang xóa…",
   "emptyTitle": "Chưa có lệnh chuyển nào",
   "emptyBody": "Chuyển tiền giữa hai tài khoản của bạn.",
-  "needTwoAccountsTitle": "Cần ít nhất hai tài khoản đang hoạt động",
+  "needTwoAccountsTitle": "Cần ít nhất hai tài khoản đang hoạt động để chuyển tiền.",
   "needTwoAccountsBody": "Chuyển tiền là chuyển giữa hai tài khoản của bạn.",
-  "needTwoAccountsAction": "Đến Tài khoản"
+  "needTwoAccountsAction": "Quản lý tài khoản"
 }
