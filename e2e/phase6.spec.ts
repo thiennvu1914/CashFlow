@@ -938,8 +938,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     ).toBeVisible()
 
     // The tabs and the chip row both live in the URL, so a filtered page is
-    // bookmarkable — and the chip filters BOTH views (spec §6.7): the due list
-    // on `?view=due` and the definitions on `?view=schedule`.
+    // bookmarkable — and the chip is SECONDARY, filtering the due list only
+    // (spec §6.7, fix round 1 finding 3): "Lịch nhắc" always lists every
+    // definition and does not even render the chip row, so a `?type=` left
+    // over from the due tab has no effect there.
     await page.goto('/reminders?view=due&type=bills')
     await expect(
       page.getByRole('link', { name: eitherLocale('Hóa đơn', 'Bills') }),
@@ -947,8 +949,9 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(namedRow(page, upcoming, 'Internet')).toBeVisible()
     await expect(namedRow(page, upcoming, 'Salary')).toHaveCount(0)
     await page.goto('/reminders?view=schedule&type=bills')
+    await expect(page.getByRole('link', { name: eitherLocale('Hóa đơn', 'Bills') })).toHaveCount(0)
     await expect(namedRow(page, page, 'Internet')).toBeVisible()
-    await expect(namedRow(page, page, 'Salary')).toHaveCount(0)
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
 
     await page.goto('/reminders?view=due&type=income')
     await expect(
@@ -958,7 +961,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
     await page.goto('/reminders?view=schedule&type=income')
     await expect(namedRow(page, page, 'Salary')).toBeVisible()
-    await expect(namedRow(page, page, 'Internet')).toHaveCount(0)
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
 
     // Back to the unfiltered due tab to answer both occurrences. Each button
     // names its row by title AND due date, because a monthly reminder can have
@@ -966,11 +969,15 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // one row, and the visible Acknowledge/Dismiss always act on the NEXT
     // (soonest) one, which is today's.
     await page.goto('/reminders?view=due&type=all')
-    const acknowledgeInternet = new RegExp(`(Ghi nhận|Acknowledge).*Internet.*${TODAY}`)
+    // The accessible name reads the row's own VISIBLE date (fix round 1,
+    // finding 5 — `formatDate`, not the bare `yyyy-MM-dd` carrier), so the
+    // regex matches the same locale-formatted pattern `displayDate` builds.
+    const todayPattern = displayDate(TODAY).source
+    const acknowledgeInternet = new RegExp(`(Ghi nhận|Acknowledge).*Internet.*${todayPattern}`)
     await page.getByRole('button', { name: acknowledgeInternet }).click()
     await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
 
-    const dismissSalary = new RegExp(`(Bỏ qua|Dismiss).*Salary.*${TODAY}`)
+    const dismissSalary = new RegExp(`(Bỏ qua|Dismiss).*Salary.*${todayPattern}`)
     await page.getByRole('button', { name: dismissSalary }).click()
     await expect(page.getByRole('button', { name: dismissSalary })).toHaveCount(0)
 

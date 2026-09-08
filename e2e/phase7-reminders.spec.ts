@@ -2,7 +2,8 @@ import os from 'os'
 import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
-import { registerNewUser, todayInZone } from './helpers'
+import { formatDate } from '@/lib/ui/format-date'
+import { eitherLocale, registerNewUser, todayInZone } from './helpers'
 
 /**
  * Phase 7 Task 9: owner requirement S — coverage the Reminders rebuild adds on
@@ -41,6 +42,18 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000
  *  uses — never by adding milliseconds to an instant. */
 function offsetFromToday(days: number): string {
   return formatCalendarDate(new Date(calendarDateToUtcCarrier(TODAY).getTime() + days * MS_PER_DAY))
+}
+
+/** A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,
+ *  'date')` actually displays it on a row — in either locale. Never the raw
+ *  carrier string, which is only what an `<input type="date">`'s VALUE holds,
+ *  not what a row's rendered TEXT (or an action button's accessible name)
+ *  reads — same helper as `phase6.spec.ts`'s. */
+function displayDate(carrier: string): RegExp {
+  return eitherLocale(
+    formatDate(carrier, { locale: 'vi', timeZone: TIMEZONE, style: 'date' }),
+    formatDate(carrier, { locale: 'en', timeZone: TIMEZONE, style: 'date' }),
+  )
 }
 
 /** The `<li>` row `OccurrenceList`/`ReminderList` renders for one record,
@@ -130,7 +143,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
 
     await page.goto('/reminders?view=due&type=all')
 
-    await expect(page.getByRole('heading', { name: 'Quá hạn', level: 3 })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Quá hạn', level: 2 })).toBeVisible()
     await expect(page.getByText('1 quá hạn', { exact: true })).toBeVisible()
 
     const overdue = sectionFor(page, 'Quá hạn')
@@ -142,9 +155,13 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
 
     // No raw literal anywhere on the page — the regression this task's owner
     // requirement N covers at the view-model layer, restated here on the
-    // rendered DOM.
+    // rendered DOM. The second regex (fix round 1, finding 8) is the raw-enum
+    // half of the same guard: `type`/`frequency` are enums on the DTO, and a
+    // missed `t()` call would leak the bare Prisma value instead of
+    // `labels.reminderType.*`/`labels.recurrence.*`.
     const bodyText = await page.locator('main').innerText()
     expect(bodyText).not.toMatch(/\bToday\b|\bTomorrow\b|\bOverdue\b|\bIn \d+ days\b/)
+    expect(bodyText).not.toMatch(/\b(WEEKLY|MONTHLY|YEARLY|ONE_TIME|EXPENSE|INCOME|BILL)\b/)
   })
 
   test('en (via Settings): the same three rows read in English', async ({ page }) => {
@@ -155,7 +172,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
 
     await page.goto('/reminders?view=due&type=all')
 
-    await expect(page.getByRole('heading', { name: 'Overdue', level: 3 })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Overdue', level: 2 })).toBeVisible()
     await expect(page.getByText('1 overdue', { exact: true })).toBeVisible()
 
     const overdue = sectionFor(page, 'Overdue')
@@ -193,6 +210,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
 
     const widgetText = await widget.innerText()
     expect(widgetText).not.toMatch(/\bToday\b|\bTomorrow\b|\bOverdue\b|\bIn \d+ days\b/)
+    expect(widgetText).not.toMatch(/\b(WEEKLY|MONTHLY|YEARLY|ONE_TIME|EXPENSE|INCOME|BILL)\b/)
   })
 
   test('acknowledge and dismiss each remove their own occurrence from Sắp đến hạn', async ({
@@ -214,13 +232,18 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
     })
 
     await page.goto('/reminders?view=due&type=all')
+    // The accessible name reads the row's own VISIBLE date (fix round 1,
+    // finding 5 — `formatDate`, not the bare `yyyy-MM-dd` carrier).
+    const todayPattern = displayDate(TODAY).source
     await page
-      .getByRole('button', { name: new RegExp(`Ghi nhận.*Streaming subscription.*${TODAY}`) })
+      .getByRole('button', {
+        name: new RegExp(`Ghi nhận.*Streaming subscription.*${todayPattern}`),
+      })
       .click()
     await expect(namedRow(page, page, 'Streaming subscription')).toHaveCount(0)
 
     await page
-      .getByRole('button', { name: new RegExp(`Bỏ qua.*Freelance payment.*${TODAY}`) })
+      .getByRole('button', { name: new RegExp(`Bỏ qua.*Freelance payment.*${todayPattern}`) })
       .click()
     await expect(namedRow(page, page, 'Freelance payment')).toHaveCount(0)
 
