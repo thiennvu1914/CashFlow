@@ -236,7 +236,8 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     // than navigate. Reports is the tab that occupies it.
     await bar.getByRole('link', { name: /^(Báo cáo|Reports)$/ }).click()
     await expect(page).toHaveURL(/\/reports/)
-    await expect(page.getByRole('heading', { name: 'Reports', level: 1 })).toBeVisible()
+    // Now translated (Task 10): "Báo cáo" by default, "Reports" in English.
+    await expect(page.getByRole('heading', { name: /^Báo cáo$|^Reports$/, level: 1 })).toBeVisible()
 
     await bar.getByRole('link', { name: /^(Tổng quan|Dashboard)$/ }).click()
     await expect(page).toHaveURL(/\/dashboard/)
@@ -267,29 +268,38 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
   test('reports: default month period shows the seeded totals', async ({ page }) => {
     await page.goto('/reports')
 
-    await expect(page.getByRole('link', { name: 'month', exact: true })).toHaveAttribute(
+    // Raw lowercase period names ('month') are gone: the segments are now
+    // translated ("Tháng"/"Month") by `PeriodFilter` (Task 10).
+    await expect(page.getByRole('link', { name: /^Tháng$|^Month$/ })).toHaveAttribute(
       'aria-current',
       'page',
     )
 
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    async function kpiValue(label: RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       const text = await cell.locator('dd span.tabular-nums').first().textContent()
       return digitsOnly(text ?? '')
     }
 
-    expect(await kpiValue('Income')).toBe('500000')
-    expect(await kpiValue('Expense')).toBe('200000')
-    expect(await kpiValue('Net Income')).toBe('300000')
+    // Anchored: "Thu nhập" (Income) is a strict prefix of "Thu nhập ròng" (Net
+    // Income), so an unanchored regex would match the wrong cell first.
+    expect(await kpiValue(/^Thu nhập$|^Income$/)).toBe('500000')
+    expect(await kpiValue(/^Chi tiêu$|^Expense$/)).toBe('200000')
+    expect(await kpiValue(/^Thu nhập ròng$|^Net Income$/)).toBe('300000')
   })
 
   test('reports: custom range via the form updates the URL and keeps totals', async ({ page }) => {
     await page.goto('/reports')
     const today = todayInZone(TIMEZONE)
 
-    await page.getByLabel('From', { exact: true }).fill(today)
-    await page.getByLabel('To', { exact: true }).fill(today)
-    await page.getByRole('button', { name: 'Apply' }).click()
+    // The From/To pair now appears only once the "Tùy chọn"/"Custom" segment
+    // is selected (Task 10) — clicking it with no from/to yet lands on the
+    // resolver's own invalid-range branch, which still renders the same
+    // `PeriodFilter` (with `activeKind="custom"`) and its form.
+    await page.getByRole('link', { name: /^Tùy chọn$|^Custom$/ }).click()
+    await page.getByLabel(/^Từ ngày$|^From$/).fill(today)
+    await page.getByLabel(/^Đến ngày$|^To$/).fill(today)
+    await page.getByRole('button', { name: /^Áp dụng$|^Apply$/ }).click()
 
     await expect(page).toHaveURL(/\/reports\?/)
     const url = new URL(page.url())
@@ -297,15 +307,29 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     expect(url.searchParams.get('from')).toBe(today)
     expect(url.searchParams.get('to')).toBe(today)
 
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    // The pre-flight finding: a custom range must leave the "Tùy chọn" segment
+    // itself selected, not none of the six.
+    await expect(page.getByRole('link', { name: /^Tùy chọn$|^Custom$/ })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    // One export control, whose menu holds both items now that a resolvable
+    // range makes the "this range" item available.
+    const exportButton = page.getByRole('button', { name: /Xuất Excel|Export Excel/ })
+    await expect(exportButton).toBeVisible()
+    await exportButton.click()
+    await expect(page.getByRole('menuitem')).toHaveCount(2)
+    await page.keyboard.press('Escape')
+
+    async function kpiValue(label: RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       const text = await cell.locator('dd span.tabular-nums').first().textContent()
       return digitsOnly(text ?? '')
     }
 
-    expect(await kpiValue('Income')).toBe('500000')
-    expect(await kpiValue('Expense')).toBe('200000')
-    expect(await kpiValue('Net Income')).toBe('300000')
+    expect(await kpiValue(/^Thu nhập$|^Income$/)).toBe('500000')
+    expect(await kpiValue(/^Chi tiêu$|^Expense$/)).toBe('200000')
+    expect(await kpiValue(/^Thu nhập ròng$|^Net Income$/)).toBe('300000')
   })
 
   test('reports: an unknown named period renders an inline alert, not a crash', async ({
