@@ -33,11 +33,17 @@ import { TransactionForm, type AccountOption, type CategoryOption } from './tran
  * `TransactionForm` at the same time below `xl` (the sticky `<aside>` was
  * only CSS-`hidden`, not absent), and both used hard-coded field ids — so a
  * `<label for="transaction-account">` in the mobile sheet could bind to the
- * OTHER, invisible instance's control. Two fixes, together: `TransactionForm`
- * now derives every id from `useId()` (unique per mount, so two instances can
- * never collide), and — the point of this file's redesign — the sheet is
- * relevant only below `md`, where NOTHING else is mounted, so only one
- * `TransactionForm` is ever mounted at a time in practice.
+ * OTHER, invisible instance's control.
+ *
+ * `TransactionCreatePanelBody` below is STILL always mounted — `page.tsx`
+ * renders it unconditionally, and its own `hidden md:flex` is a CSS rule, not
+ * a React one, so its `TransactionForm` is a real, live instance below `md`
+ * too, simply not painted. So is the sheet's, whenever it is open. Two
+ * `TransactionForm`s being mounted at once below `md` is therefore the
+ * NORMAL case, not an edge case to avoid — what actually fixes the label
+ * mis-binding is `useId()`: every field id is unique per mounted instance, so
+ * a `<label for>` can never resolve to the OTHER one's control regardless of
+ * how many instances happen to share the page at once.
  */
 interface TransactionCreateContextValue {
   accounts: AccountOption[]
@@ -130,8 +136,11 @@ export function TransactionCreateTrigger() {
   )
 }
 
-/** The inline (`md`–`xl`) / sticky (`xl` and up) form. Absent below `md` —
- *  the sheet is that range's only home for it. */
+/** The inline (`md`–`xl`) / sticky (`xl` and up) form. Rendered — and its
+ *  `TransactionForm` mounted — at every width; `hidden` (a CSS rule) is what
+ *  keeps it off-screen below `md`, where the sheet is the form's visible
+ *  home. See the file doc comment above for why a second, invisible,
+ *  mounted instance below `md` is fine rather than something to prevent. */
 export function TransactionCreatePanelBody() {
   const t = useTranslations()
   const ctx = useContext(TransactionCreateContext)

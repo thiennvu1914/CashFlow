@@ -36,6 +36,23 @@ import { cn } from 'cn'
  * so collapsing the disclosure genuinely removes them from the roving set —
  * there is exactly one `role="radiogroup"` for all six types, always.
  *
+ * The disclosure may never hide the CHECKED radio (spec §14 fix round 2
+ * regression): a first pass let the user collapse "Khác" while an Other-type
+ * value (e.g. `ADJUSTMENT_INCREASE`) was checked, which dropped it out of
+ * `visibleTypes` entirely — no rendered radio was checked, so every one got
+ * `tabIndex=-1` and the group had zero tab stops, breaking the one WAI-ARIA
+ * invariant this whole rewrite exists to satisfy. Two fixes, together:
+ *
+ *  (a) `showOther` is now `otherOpenedByUser || isOtherChecked` — an
+ *      Other-type value being checked always wins over a collapsed
+ *      preference, and the toggle button is itself `disabled` while that is
+ *      true, so there is no control that could re-close it out from under
+ *      the checked value;
+ *  (b) `tabStopIndex` falls back to the FIRST visible radio whenever the
+ *      checked value is not among `visibleTypes` (structurally unreachable
+ *      after (a), but the invariant matters more than trusting that it always
+ *      will be) — the safety net, not the primary defence.
+ *
  * `useId()` (spec §14 fix round 1, finding 2) makes the legend's id — and
  * therefore `aria-labelledby` — unique per mounted instance: the sticky panel
  * and the mobile sheet can each hold their own `TransactionTypeField`, and a
@@ -70,11 +87,23 @@ export function TransactionTypeField({
   disabled?: boolean
 }) {
   const legendId = `transaction-type-legend-${useId().replace(/:/g, '')}`
-  // Open when an "other" type is already chosen, so an edit or a rejected
-  // submit never hides the field that holds the current value.
-  const [showOther, setShowOther] = useState(() => OTHER_TYPES.includes(value))
+  const isOtherChecked = OTHER_TYPES.includes(value)
+  // The user's OWN toggle preference — but `showOther` below is what the
+  // group actually renders from, and an Other-type value being checked
+  // always overrides a collapsed preference. Open by default when an "other"
+  // type is already chosen, so an edit or a rejected submit never hides the
+  // field that holds the current value.
+  const [otherOpenedByUser, setOtherOpenedByUser] = useState(() => isOtherChecked)
+  const showOther = otherOpenedByUser || isOtherChecked
   const buttonRefs = useRef(new Map<TransactionType, HTMLButtonElement>())
   const visibleTypes = showOther ? [...PRIMARY_TYPES, ...OTHER_TYPES] : PRIMARY_TYPES
+  const checkedIndex = visibleTypes.indexOf(value)
+  // Safety net (b): if the checked value is somehow not among the currently
+  // visible radios — unreachable given (a) above, but the WAI-ARIA "exactly
+  // one tab stop" invariant matters more than trusting that it always will
+  // be — the FIRST visible radio becomes the tab stop instead of leaving
+  // zero, and arrow-key navigation starts from it too.
+  const tabStopIndex = checkedIndex === -1 ? 0 : checkedIndex
 
   function focusAndCheck(type: TransactionType) {
     onChange(type)
@@ -82,16 +111,15 @@ export function TransactionTypeField({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const currentIndex = visibleTypes.indexOf(value)
     let nextIndex: number
     switch (event.key) {
       case 'ArrowRight':
       case 'ArrowDown':
-        nextIndex = (currentIndex + 1 + visibleTypes.length) % visibleTypes.length
+        nextIndex = (tabStopIndex + 1) % visibleTypes.length
         break
       case 'ArrowLeft':
       case 'ArrowUp':
-        nextIndex = (currentIndex - 1 + visibleTypes.length) % visibleTypes.length
+        nextIndex = (tabStopIndex - 1 + visibleTypes.length) % visibleTypes.length
         break
       case 'Home':
         nextIndex = 0
@@ -114,13 +142,18 @@ export function TransactionTypeField({
         <p id={legendId} className="text-[0.8125rem]/[1.125rem] font-medium">
           {legend}
         </p>
-        {/* Outside `role="radiogroup"` below — see the file doc comment. */}
+        {/* Outside `role="radiogroup"` below — see the file doc comment.
+            Disabled (not just visually inert) while an Other-type value is
+            checked: collapsing is exactly the action that used to strand the
+            radiogroup with zero tab stops (fix round 2's regression), so the
+            one control that could re-close it is itself turned off for as
+            long as the checked value needs it open. */}
         <button
           type="button"
           aria-expanded={showOther}
-          disabled={disabled}
-          onClick={() => setShowOther((open) => !open)}
-          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          disabled={disabled || isOtherChecked}
+          onClick={() => setOtherOpenedByUser((open) => !open)}
+          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
           {otherLabel}
           {/* Flipped, not animated: the design system does not animate, so
@@ -134,12 +167,18 @@ export function TransactionTypeField({
         onKeyDown={handleKeyDown}
         className="grid grid-cols-2 gap-2"
       >
-        {visibleTypes.map((type) => (
+        {visibleTypes.map((type, index) => (
           <TypeButton
             key={type}
             type={type}
             label={labels[type]}
             checked={value === type}
+            // `index === tabStopIndex`, not `checked`: identical whenever the
+            // checked value is actually visible (the normal case), but this
+            // is what makes the (b) safety net real — the first visible
+            // radio still gets `tabIndex=0` even in the edge case where NO
+            // radio is checked.
+            isTabStop={index === tabStopIndex}
             onSelect={onChange}
             disabled={disabled}
             buttonRef={(el) => {
@@ -157,6 +196,7 @@ function TypeButton({
   type,
   label,
   checked,
+  isTabStop,
   onSelect,
   disabled,
   buttonRef,
@@ -164,6 +204,7 @@ function TypeButton({
   type: TransactionType
   label: string
   checked: boolean
+  isTabStop: boolean
   onSelect: (type: TransactionType) => void
   disabled?: boolean
   buttonRef: (el: HTMLButtonElement | null) => void
@@ -174,8 +215,10 @@ function TypeButton({
       type="button"
       role="radio"
       aria-checked={checked}
-      // Roving tabindex: exactly one radio in the group is a tab stop.
-      tabIndex={checked ? 0 : -1}
+      // Roving tabindex: exactly one radio in the group is a tab stop —
+      // `isTabStop`, not `checked` (see the call site and the file doc
+      // comment's fix (b)).
+      tabIndex={isTabStop ? 0 : -1}
       disabled={disabled}
       onClick={() => onSelect(type)}
       className={cn(
