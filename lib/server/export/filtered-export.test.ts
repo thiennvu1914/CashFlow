@@ -7,6 +7,7 @@ import {
   TEST_TIMEZONE,
   cleanupExportUsers,
   createExportUser,
+  expectNoEmptyStrings,
   fakeFxProvider,
   makeExportContext,
   seedTransaction,
@@ -103,6 +104,12 @@ describe('buildFilteredWorkbook', () => {
     expect(labelledRow(summary, 'Expense').getCell(2).value).toBe(3_000)
     expect(labelledRow(summary, 'Income').getCell(2).value).toBe(0)
     expect(labelledRow(summary, 'Net Income').getCell(2).value).toBe(-3_000)
+
+    // None of these rows carries a note, and the shared Transactions sheet is
+    // the same one the full export writes: an absent note is an empty cell, so
+    // the file holds no empty shared string for Excel to render as its index.
+    expect(transactions.getRow(2).getCell(13).value).toBeNull()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('writes the date as the user local wall clock, not the stored UTC instant', async () => {

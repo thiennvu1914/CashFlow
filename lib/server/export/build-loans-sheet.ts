@@ -2,7 +2,15 @@ import type ExcelJS from 'exceljs'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getLoansWithOutstanding } from '@/lib/server/services/loan'
 import { LOAN_FREQUENCY_LABELS, LOAN_STATUS_LABELS } from '@/lib/ui/loan-view-model'
-import { DATE_FMT, DATE_TIME_FMT, localDateCell, moneyCell, moneyFmt, writeHeader } from './cells'
+import {
+  DATE_FMT,
+  DATE_TIME_FMT,
+  localDateCell,
+  moneyCell,
+  moneyFmt,
+  textCell,
+  writeHeader,
+} from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -110,7 +118,7 @@ export async function buildLoansSheet(
       loan.nextDueDate,
       loan.termMonths,
       LOAN_STATUS_LABELS[displayStatus],
-      loan.notes ?? '',
+      textCell(loan.notes),
       // `createdAt` IS an instant, so it goes through `localDateCell`.
       localDateCell(loan.createdAt, ctx.timezone),
     ])

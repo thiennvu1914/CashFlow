@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
+// Value imports, not `import type`: the workbook assertion below reloads a
+// buffer with ExcelJS, reads its `ValueType` enum, and unzips the same bytes
+// with JSZip (which ships inside ExcelJS and produces the .xlsx container).
+import ExcelJS from 'exceljs'
+import JSZip from 'jszip'
+import { expect } from 'vitest'
 import { prisma } from '@/lib/prisma'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { loadExportProfile, resolveExportFx } from './export-context'
@@ -223,5 +229,121 @@ export async function cleanupExportUsers(userIds: string[]) {
     await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
   } finally {
     await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+  }
+}
+
+/** The bytes `workbook.xlsx.writeBuffer()` produces — the very thing the export
+ *  route hands the browser, and the only form Excel ever sees. */
+export type ExportWorkbookBuffer = Awaited<ReturnType<ExcelJS.Xlsx['writeBuffer']>>
+
+/**
+ * Every optional-text column of every sheet in the two workbooks, 1-indexed.
+ *
+ * These are the cells whose value is absent for some rows and a string for
+ * others. Each must come back either as a non-empty string or as a genuinely
+ * *empty* cell — see `expectNoEmptyStrings` for why the middle ground (an empty
+ * string) is a bug Excel renders as a number.
+ */
+const OPTIONAL_TEXT_COLUMNS: Record<string, readonly number[]> = {
+  Summary: [3],
+  Transactions: [4, 13],
+  Transfers: [9],
+  Budgets: [4, 10],
+  'Savings Goals': [9],
+  Debts: [9, 10],
+  'Debt Payments': [6],
+  Loans: [14],
+  'Loan Payments': [7],
+  Reminders: [11, 12, 13],
+}
+
+/**
+ * The optional-text columns of `worksheet`, or none.
+ *
+ * A plain name lookup, with one wrinkle: BOTH workbooks have a sheet called
+ * Summary and the two are different shapes. The full export's is a
+ * Metric/Value/Note table whose third column is the optional note; the filtered
+ * one is a bare label/value sheet whose third column carries an account's
+ * expense figure. So the Summary entry applies only to a sheet whose header row
+ * reads `Metric`, which only the full export's Summary writes.
+ */
+function optionalTextColumns(worksheet: ExcelJS.Worksheet): readonly number[] {
+  if (worksheet.name === 'Summary' && worksheet.getRow(1).getCell(1).value !== 'Metric') return []
+  return OPTIONAL_TEXT_COLUMNS[worksheet.name] ?? []
+}
+
+/**
+ * The `<si>` indexes in a `sharedStrings.xml` whose text is empty.
+ *
+ * An `<si>` may hold one `<t>` or a run of `<r><t>…</t></r>` fragments, so the
+ * item's text is the concatenation of every `<t>` in it; a self-closing `<t/>`
+ * and an item with no `<t>` at all both contribute nothing. Anything that ends
+ * up empty is the defect this module's assertion exists to catch.
+ */
+function emptySharedStringIndexes(xml: string): number[] {
+  const items = xml.matchAll(/<si\b[^>]*(?:\/>|>([\s\S]*?)<\/si>)/g)
+  const empty: number[] = []
+  let index = 0
+  for (const item of items) {
+    const body = item[1] ?? ''
+    let text = ''
+    for (const fragment of body.matchAll(/<t\b[^>]*(?:\/>|>([\s\S]*?)<\/t>)/g)) {
+      text += fragment[1] ?? ''
+    }
+    if (text === '') empty.push(index)
+    index += 1
+  }
+  return empty
+}
+
+/**
+ * Asserts that no cell in `workbookBuffer` is the empty string — in the file
+ * Excel opens, not merely in the object model ExcelJS kept in memory.
+ *
+ * ExcelJS 4.4.0 stores `''` as a *shared string*: `xl/sharedStrings.xml` gains
+ * an `<si><t></t></si>` and the cell becomes `<c t="s"><v>N</v></c>`. Excel
+ * treats an empty shared-string item as missing and renders the raw index `N`
+ * as the cell's text, so every absent note in a workbook shows the same stray
+ * number (a literal "4", in the report that found this). A `null` writes no
+ * `<c>` element at all, which is the blank the reader expects.
+ *
+ * The check therefore has to happen on the serialized bytes: ExcelJS reloads
+ * `''` faithfully as `''`, so an in-memory `expect(cell.value).toBe('')` passes
+ * on a workbook Excel renders wrongly. Two halves:
+ *
+ * 1. the shared-string table carries no empty item, whatever wrote it;
+ * 2. reloaded, no cell of any sheet is `''`, and every column listed in
+ *    `OPTIONAL_TEXT_COLUMNS` holds either a non-empty string or a truly empty
+ *    cell (`ValueType.Null`) — never a `0`, a `''` or an `undefined`.
+ */
+export async function expectNoEmptyStrings(workbookBuffer: ExportWorkbookBuffer): Promise<void> {
+  const zip = await JSZip.loadAsync(workbookBuffer)
+  const sharedStrings = zip.file('xl/sharedStrings.xml')
+  // Absent only for a workbook with no strings at all, which neither export can
+  // produce (every sheet writes a header row).
+  if (sharedStrings === null) throw new Error('the workbook has no xl/sharedStrings.xml')
+  const xml = await sharedStrings.async('string')
+  expect(
+    emptySharedStringIndexes(xml),
+    'xl/sharedStrings.xml has empty <si> items; Excel renders their index as the cell text',
+  ).toEqual([])
+
+  const reloaded = new ExcelJS.Workbook()
+  await reloaded.xlsx.load(workbookBuffer)
+  for (const worksheet of reloaded.worksheets) {
+    const optional = optionalTextColumns(worksheet)
+    worksheet.eachRow((row, rowNumber) => {
+      row.eachCell({ includeEmpty: true }, (cell, column) => {
+        const where = `${worksheet.name}!${cell.address}`
+        expect(cell.value, where).not.toBe('')
+        if (rowNumber === 1 || !optional.includes(column)) return
+        if (typeof cell.value === 'string') {
+          expect(cell.value, where).not.toBe('')
+          return
+        }
+        expect(cell.value, where).toBeNull()
+        expect(cell.type, where).toBe(ExcelJS.ValueType.Null)
+      })
+    })
   }
 }

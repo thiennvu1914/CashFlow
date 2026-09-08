@@ -1,6 +1,6 @@
 import type ExcelJS from 'exceljs'
 import { prisma } from '@/lib/prisma'
-import { DATE_FMT, moneyCell, moneyFmt, writeHeader } from './cells'
+import { DATE_FMT, moneyCell, moneyFmt, textCell, writeHeader } from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -75,7 +75,7 @@ export async function buildLoanPaymentsSheet(
       moneyCell(payment.principalAmount),
       moneyCell(payment.interestAmount),
       payment.loan.currency,
-      payment.note ?? '',
+      textCell(payment.note),
     ])
     written.getCell(1).numFmt = DATE_FMT
     written.getCell(3).numFmt = moneyFormat

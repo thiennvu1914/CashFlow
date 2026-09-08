@@ -23,6 +23,7 @@ import {
   TEST_TIMEZONE,
   cleanupExportUsers,
   createExportUser,
+  expectNoEmptyStrings,
   failingFxProvider,
   fakeFxProvider,
   makeExportContext,
@@ -374,6 +375,8 @@ describe('full export workbook', () => {
     })
     expect(notes).toEqual(['opening float', 'closed out'])
     expect(await prisma.transaction.count({ where: { accountId: archived.id } })).toBe(2)
+
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('writes every transaction — 205 rows, no 200-row truncation', async () => {
@@ -688,7 +691,9 @@ describe('full export workbook', () => {
     expect(overallRow.getCell(1).value).toBe(2026)
     expect(overallRow.getCell(2).value).toBe(3)
     expect(overallRow.getCell(3).value).toBe('OVERALL')
-    expect(overallRow.getCell(4).value).toBe('')
+    // An OVERALL budget has no category — blank, never an empty string, which
+    // Excel would render as a shared-string index.
+    expect(overallRow.getCell(4).value).toBeNull()
     expect(overallRow.getCell(5).value).toBe(1_000_000)
     expect(overallRow.getCell(6).value).toBe('VND')
     // 300,000 + 10 × 25,500 — the USD row at ITS OWN snapshot rate. Today's
@@ -727,6 +732,8 @@ describe('full export workbook', () => {
     expect(labelledRow(summary, 'Transactions').getCell(2).value).toBe(3)
     expect(labelledRow(summary, 'Transfers').getCell(2).value).toBe(0)
     expect(labelledRow(summary, 'Active accounts').getCell(2).value).toBe(2)
+
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('scans the ledger once per distinct budgeted month, never once per budget', async () => {
@@ -848,7 +855,8 @@ describe('full export workbook', () => {
       providerOverride: fakeFxProvider(30_000),
     })
 
-    const goals = sheet(await buildFullWorkbook(ctx), 'Savings Goals')
+    const workbook = await buildFullWorkbook(ctx)
+    const goals = sheet(workbook, 'Savings Goals')
 
     // Header plus both goals — the archived one is not dropped.
     expect(goals.actualRowCount).toBe(3)
@@ -882,12 +890,15 @@ describe('full export workbook', () => {
     expect(laptop.getCell(7).value).toBeNull()
     // Archived, with its state on the row rather than implied by its absence.
     expect(laptop.getCell(8).value).toBe('Archived')
-    expect(laptop.getCell(9).value).toBe('')
+    // No note: blank, never an empty string, which Excel would render as a
+    // shared-string index.
+    expect(laptop.getCell(9).value).toBeNull()
     // Cents, in a workbook whose display currency is VND.
     expect(laptop.getCell(2).numFmt).toBe('#,##0.00')
     expect(laptop.getCell(4).numFmt).toBe('#,##0.00')
 
     expect(fetchSpy).not.toHaveBeenCalled()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('writes every debt with its derived outstanding, written-off ones included', async () => {
@@ -898,7 +909,8 @@ describe('full export workbook', () => {
       providerOverride: fakeFxProvider(),
     })
 
-    const debts = sheet(await buildFullWorkbook(ctx), 'Debts')
+    const workbook = await buildFullWorkbook(ctx)
+    const debts = sheet(workbook, 'Debts')
 
     // Header plus all three, the written-off one included.
     expect(debts.actualRowCount).toBe(4)
@@ -937,6 +949,7 @@ describe('full export workbook', () => {
     expect(chi.getCell(8).value).toBe('Paid')
 
     expect(fetchSpy).not.toHaveBeenCalled()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('lists every debt payment in its parent debt currency', async () => {
@@ -988,7 +1001,8 @@ describe('full export workbook', () => {
       providerOverride: fakeFxProvider(),
     })
 
-    const loans = sheet(await buildFullWorkbook(ctx), 'Loans')
+    const workbook = await buildFullWorkbook(ctx)
+    const loans = sheet(workbook, 'Loans')
 
     // Header plus both loans — the closed one included.
     expect(loans.actualRowCount).toBe(3)
@@ -1026,11 +1040,14 @@ describe('full export workbook', () => {
     // An interest-free loan from family is a real loan, and 0 is a rate.
     expect(family.getCell(7).value).toBe(0)
     expect(family.getCell(13).value).toBe('Closed')
-    expect(family.getCell(14).value).toBe('')
+    // No notes: blank, never an empty string, which Excel would render as a
+    // shared-string index.
+    expect(family.getCell(14).value).toBeNull()
     // Cents, in a workbook whose display currency is VND.
     expect(family.getCell(5).numFmt).toBe('#,##0.00')
 
     expect(fetchSpy).not.toHaveBeenCalled()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('lists every loan instalment in its parent loan currency, split three ways', async () => {
@@ -1084,7 +1101,8 @@ describe('full export workbook', () => {
       providerOverride: fakeFxProvider(),
     })
 
-    const reminders = sheet(await buildFullWorkbook(ctx), 'Reminders')
+    const workbook = await buildFullWorkbook(ctx)
+    const reminders = sheet(workbook, 'Reminders')
 
     // Header plus both reminders, the paused one included.
     expect(reminders.actualRowCount).toBe(3)
@@ -1122,9 +1140,10 @@ describe('full export workbook', () => {
     expect(passport.getCell(8).value).toBe(0)
     expect(passport.getCell(9).value).toBe(1)
     expect(passport.getCell(10).value).toBe(0)
-    // Neither a category nor an account: blank, not a guess.
-    expect(passport.getCell(11).value).toBe('')
-    expect(passport.getCell(12).value).toBe('')
+    // Neither a category nor an account: blank, not a guess — and a truly empty
+    // cell, never an empty string, which Excel renders as a shared-string index.
+    expect(passport.getCell(11).value).toBeNull()
+    expect(passport.getCell(12).value).toBeNull()
     // Cents, in a workbook whose display currency is VND.
     expect(passport.getCell(3).numFmt).toBe('#,##0.00')
 
@@ -1133,6 +1152,7 @@ describe('full export workbook', () => {
     expect(await prisma.reminderOccurrence.count({ where: { userId: s.userId } })).toBe(3)
 
     expect(fetchSpy).not.toHaveBeenCalled()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('fills all six planning sheets even when no usable rate exists', async () => {
@@ -1183,5 +1203,178 @@ describe('full export workbook', () => {
 
     // And nothing went looking for a rate of its own.
     expect(fetchSpy).not.toHaveBeenCalled()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
+  })
+
+  /**
+   * A record on every sheet with each of its optional text fields left unset —
+   * the shape that used to fill a workbook with the literal string "4".
+   *
+   * ExcelJS stores `''` as a shared string, and Excel renders an *empty*
+   * shared-string item as its own index, so one absent note anywhere put a
+   * stray number in every absent-text cell of the file. Nothing on these rows
+   * is exotic: an OVERALL budget, a debt with no description, an interest-only
+   * instalment. The point is that all of them are absent at once, so a single
+   * builder still writing `''` fails the whole-file check below.
+   */
+  async function seedSparseOptionalText(s: Awaited<ReturnType<typeof setup>>) {
+    const transaction = await seedTransaction(s.userId, {
+      accountId: s.vndAccountId,
+      // Neither a category nor a note — two optional text columns at once.
+      categoryId: null,
+      amount: 12_000,
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    await prisma.transfer.create({
+      data: {
+        userId: s.userId,
+        fromAccountId: s.vndAccountId,
+        toAccountId: s.usdAccountId,
+        fromAmount: new Prisma.Decimal(26_000),
+        toAmount: new Prisma.Decimal(1),
+        exchangeRateUsed: new Prisma.Decimal(1).div(26_000),
+        date: new Date('2026-03-11T05:00:00Z'),
+      },
+    })
+    // OVERALL, so the Category column has nothing to say.
+    await prisma.budget.create({
+      data: {
+        userId: s.userId,
+        year: 2026,
+        month: 3,
+        scope: 'OVERALL',
+        amount: new Prisma.Decimal(1_000_000),
+        currency: 'VND',
+      },
+    })
+    // No note, and nothing saved yet: the two zero cells of assertion 8.
+    const goal = await createSavingsGoal(s.userId, {
+      name: 'Untouched fund',
+      targetAmount: 5_000_000,
+      currency: 'VND',
+      currentProgress: 0,
+    })
+    // No description, no notes, no due date.
+    const debt = await createDebt(s.userId, {
+      direction: 'RECEIVABLE',
+      person: 'Duc',
+      originalAmount: 500_000,
+      currency: 'VND',
+    })
+    // And a repayment with no note of its own.
+    await recordDebtPayment(s.userId, debt.id, { amount: 50_000, date: '2026-03-06' })
+    // No notes.
+    const loan = await createLoan(s.userId, {
+      lender: 'Agribank',
+      principal: 1_000_000,
+      currency: 'VND',
+      interestRate: 6.5,
+      startDate: '2026-01-01',
+      termMonths: 12,
+      paymentFrequency: 'MONTHLY',
+      scheduledPaymentAmount: 90_000,
+      nextDueDate: '2026-03-01',
+    })
+    // An interest-only instalment and a principal-only one, both note-free:
+    // a zero here is a fact about the split and must stay a numeric 0.
+    await recordLoanPayment(s.userId, loan.id, {
+      totalAmount: 5_000,
+      principalAmount: 0,
+      interestAmount: 5_000,
+      paymentDate: '2026-03-01',
+    })
+    await recordLoanPayment(s.userId, loan.id, {
+      totalAmount: 80_000,
+      principalAmount: 80_000,
+      interestAmount: 0,
+      paymentDate: '2026-03-02',
+    })
+    // No category, no account, no note.
+    const reminder = await createReminder(s.userId, TEST_TIMEZONE, {
+      title: 'Water bill',
+      type: 'EXPENSE',
+      expectedAmount: 300_000,
+      currency: 'VND',
+      frequency: 'MONTHLY',
+      interval: 1,
+      startDate: '2026-03-01',
+    })
+    return { transaction, goal, debt, loan, reminder }
+  }
+
+  it('leaves an absent optional text blank instead of an empty shared string', async () => {
+    const s = await setup()
+    const seeded = await seedSparseOptionalText(s)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const workbook = await buildFullWorkbook(ctx)
+
+    // (1) The Summary's third column is a note only some rows have.
+    const summary = sheet(workbook, 'Summary')
+    expect(labelledRow(summary, 'Timezone').getCell(3).value).toBeNull()
+    expect(labelledRow(summary, 'Active accounts').getCell(3).value).toBeNull()
+    // A rate WAS available, so the two current figures carry no "unavailable"
+    // note either — and the cell is empty rather than an empty string.
+    expect(labelledRow(summary, 'Total account balance').getCell(3).value).toBeNull()
+
+    // (2) A transaction with no category and no note.
+    const transaction = rowBy(sheet(workbook, 'Transactions'), 1, seeded.transaction.id)
+    expect(transaction.getCell(4).value).toBeNull()
+    expect(transaction.getCell(13).value).toBeNull()
+
+    // A transfer with no note.
+    expect(sheet(workbook, 'Transfers').getRow(2).getCell(9).value).toBeNull()
+
+    // (3) An OVERALL budget has no category.
+    const budget = rowBy(sheet(workbook, 'Budgets'), 3, 'OVERALL')
+    expect(budget.getCell(4).value).toBeNull()
+
+    // (4) A savings goal with no note.
+    const goals = sheet(workbook, 'Savings Goals')
+    const goal = rowBy(goals, 1, 'Untouched fund')
+    expect(goal.getCell(9).value).toBeNull()
+
+    // (5) A debt with neither a description nor notes.
+    const debt = rowBy(sheet(workbook, 'Debts'), 2, 'Duc')
+    expect(debt.getCell(9).value).toBeNull()
+    expect(debt.getCell(10).value).toBeNull()
+    // And its repayment, which carries no note.
+    expect(rowBy(sheet(workbook, 'Debt Payments'), 2, 'Duc').getCell(6).value).toBeNull()
+
+    // (6) A loan with no notes.
+    const loans = sheet(workbook, 'Loans')
+    expect(rowBy(loans, 1, 'Agribank').getCell(14).value).toBeNull()
+
+    // (7) A reminder with no category, no account and no note.
+    const reminder = rowBy(sheet(workbook, 'Reminders'), 1, 'Water bill')
+    expect(reminder.getCell(11).value).toBeNull()
+    expect(reminder.getCell(12).value).toBeNull()
+    expect(reminder.getCell(13).value).toBeNull()
+
+    // (8) A numeric zero is a fact, and stays a number — never blanked by the
+    // same change that blanked the absent text.
+    const archived = labelledRow(summary, 'Archived accounts').getCell(2)
+    expect(archived.value).toBe(0)
+    expect(typeof archived.value).toBe('number')
+    const instalments = sheet(workbook, 'Loan Payments')
+    const interestOnly = rowBy(instalments, 3, 5_000)
+    // Nothing paid down, and the split says so with a 0 rather than a blank.
+    expect(interestOnly.getCell(4).value).toBe(0)
+    expect(typeof interestOnly.getCell(4).value).toBe('number')
+    expect(interestOnly.getCell(7).value).toBeNull()
+    const principalOnly = rowBy(instalments, 3, 80_000)
+    expect(principalOnly.getCell(5).value).toBe(0)
+    expect(typeof principalOnly.getCell(5).value).toBe('number')
+    // Nothing saved yet: 0 of the target, and 0 % of it.
+    expect(goal.getCell(3).value).toBe(0)
+    expect(typeof goal.getCell(3).value).toBe('number')
+    expect(goal.getCell(5).value).toBe(0)
+    expect(typeof goal.getCell(5).value).toBe('number')
+
+    // And, in the bytes Excel actually opens, not one empty shared string.
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 })

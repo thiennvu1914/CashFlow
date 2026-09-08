@@ -3,7 +3,15 @@ import type ExcelJS from 'exceljs'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getDebtsWithOutstanding } from '@/lib/server/services/debt'
 import { DEBT_STATUS_LABELS } from '@/lib/ui/debt-view-model'
-import { DATE_FMT, DATE_TIME_FMT, localDateCell, moneyCell, moneyFmt, writeHeader } from './cells'
+import {
+  DATE_FMT,
+  DATE_TIME_FMT,
+  localDateCell,
+  moneyCell,
+  moneyFmt,
+  textCell,
+  writeHeader,
+} from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -97,8 +105,8 @@ export async function buildDebtsSheet(
       // agreed date — never today's.
       debt.dueDate,
       DEBT_STATUS_LABELS[displayStatus],
-      debt.description ?? '',
-      debt.notes ?? '',
+      textCell(debt.description),
+      textCell(debt.notes),
       // `createdAt` IS an instant, so it goes through `localDateCell`.
       localDateCell(debt.createdAt, ctx.timezone),
     ])

@@ -9,6 +9,7 @@ import {
   moneyCell,
   moneyFmt,
   percentCell,
+  textCell,
   writeHeader,
 } from './cells'
 import type { ExportContext } from './sheet-registry'
@@ -103,13 +104,18 @@ export async function buildBudgetsSheet(
       budget.year,
       budget.month,
       budget.scope,
-      // An archived category keeps its budget and its history; the row says so
-      // rather than being dropped or losing the name it was filed under.
-      budget.category === null
-        ? ''
-        : budget.category.status === 'ARCHIVED'
-          ? `${budget.category.name} (archived)`
-          : budget.category.name,
+      // An OVERALL budget has no category at all, so the cell is left blank —
+      // never `''`, which Excel renders as a shared-string index (`cells.ts`).
+      // An archived category, on the other hand, keeps its budget and its
+      // history; the row says so rather than being dropped or losing the name
+      // it was filed under.
+      textCell(
+        budget.category === null
+          ? null
+          : budget.category.status === 'ARCHIVED'
+            ? `${budget.category.name} (archived)`
+            : budget.category.name,
+      ),
       moneyCell(budget.amount),
       budget.currency,
       progress === undefined ? null : moneyCell(progress.spent),
@@ -117,7 +123,7 @@ export async function buildBudgetsSheet(
       // `Status` comes from the band the service classified on the `Decimal`
       // itself, never from this widened number.
       progress === undefined ? null : percentCell(progress.ratio),
-      progress === undefined ? '' : BUDGET_STATUS_LABELS[progress.status],
+      progress === undefined ? null : BUDGET_STATUS_LABELS[progress.status],
       localDateCell(budget.createdAt, ctx.timezone),
     ])
     // Formatted by the BUDGET's currency, not the user's display currency.

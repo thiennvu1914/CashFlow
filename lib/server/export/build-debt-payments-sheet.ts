@@ -1,7 +1,7 @@
 import type ExcelJS from 'exceljs'
 import { prisma } from '@/lib/prisma'
 import { DEBT_DIRECTION_EXPORT_LABELS } from './build-debts-sheet'
-import { DATE_FMT, moneyCell, moneyFmt, writeHeader } from './cells'
+import { DATE_FMT, moneyCell, moneyFmt, textCell, writeHeader } from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -70,7 +70,7 @@ export async function buildDebtPaymentsSheet(
       DEBT_DIRECTION_EXPORT_LABELS[payment.debt.direction],
       moneyCell(payment.amount),
       payment.debt.currency,
-      payment.note ?? '',
+      textCell(payment.note),
     ])
     written.getCell(1).numFmt = DATE_FMT
     // The PARENT debt's currency decides the format — a payment has none of its

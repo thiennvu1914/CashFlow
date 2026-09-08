@@ -10,6 +10,7 @@ import {
   moneyCell,
   moneyFmt,
   percentCell,
+  textCell,
   writeHeader,
 } from './cells'
 import type { ExportContext } from './sheet-registry'
@@ -90,7 +91,7 @@ export async function buildSavingsGoalsSheet(
       // UTC. Blank when the goal has no deadline — never today's date.
       goal.deadline,
       SAVINGS_GOAL_STATUS_LABELS[goal.status],
-      goal.note ?? '',
+      textCell(goal.note),
       // `createdAt` IS an instant, so it goes through `localDateCell`: the row
       // says when the user set the goal by their own clock.
       localDateCell(goal.createdAt, ctx.timezone),

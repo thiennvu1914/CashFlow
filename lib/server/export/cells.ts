@@ -26,6 +26,17 @@ import type { Currency } from '@/lib/currency/provider'
  * components *are* the user's local wall clock, so the spreadsheet displays the
  * time the user actually entered. Such a value is a display carrier, never an
  * instant — nothing may do date arithmetic with it.
+ *
+ * **Absences.** Excel has no empty string. ExcelJS stores one as a *shared
+ * string*: `xl/sharedStrings.xml` gains an `<si><t></t></si>` and the cell
+ * becomes `<c t="s"><v>N</v></c>`. Excel treats an empty shared-string item as
+ * missing and renders the raw index `N` as the cell's text — so an absent note
+ * written as `''` shows up in the spreadsheet as a stray number, the same one
+ * in every such cell of the file, and ExcelJS itself reloads `''` faithfully so
+ * nothing short of reading the XML notices. `textCell` (for text that may be
+ * absent) and `optionalMoneyCell` (for a figure that may be) therefore both
+ * answer `null`, which writes no `<c>` element at all and is the only thing
+ * Excel renders as a blank.
  */
 
 /** Date + time of day, for a transaction or transfer's own moment. */
@@ -97,12 +108,33 @@ export function percentCell(ratio: Prisma.Decimal): number {
  * The same, for a figure that may genuinely have no value — a balance whose
  * conversion needs an exchange rate we do not have.
  *
- * `null` leaves the cell empty. A zero would read as "this account holds
- * nothing" and a `1` rate would be a fabricated number; an empty cell is the
- * only honest answer, and the sheet says why in a neighbouring column.
+ * `null` is what writes no cell at all, and therefore the only thing Excel
+ * renders as a blank (see the module comment's third rule). A zero would read
+ * as "this account holds nothing" and a `1` rate would be a fabricated number;
+ * an empty cell is the only honest answer, and the sheet says why in a
+ * neighbouring column.
  */
 export function optionalMoneyCell(value: Prisma.Decimal | null): number | null {
   return value === null ? null : moneyCell(value)
+}
+
+/**
+ * Optional text as a cell value: absent → `null` (no cell is written), so Excel
+ * shows a blank instead of the shared-string index.
+ *
+ * The boundary for every column that some rows fill and others do not — a
+ * transaction note, a debt's description, a reminder's category. All three
+ * flavours of absence collapse to the same blank: `null` and `undefined`
+ * because that is how the row stores "not set", and `''` because a note the
+ * user cleared to nothing is not text either, and passing it through would put
+ * the very empty shared string this exists to prevent back into the file.
+ *
+ * Only for *text*. A numeric zero is a fact about a row — nothing spent, no
+ * interest on this instalment — and belongs in a numeric cell; it must never be
+ * routed through here.
+ */
+export function textCell(value: string | null | undefined): string | null {
+  return value === null || value === undefined || value === '' ? null : value
 }
 
 /** One column's header text and rendered width. */

@@ -3,7 +3,15 @@ import type ExcelJS from 'exceljs'
 import { prisma } from '@/lib/prisma'
 import { listReminders } from '@/lib/server/services/reminder'
 import { REMINDER_TYPE_LABELS, recurrenceLabel } from '@/lib/ui/reminder-view-model'
-import { DATE_FMT, DATE_TIME_FMT, localDateCell, moneyCell, moneyFmt, writeHeader } from './cells'
+import {
+  DATE_FMT,
+  DATE_TIME_FMT,
+  localDateCell,
+  moneyCell,
+  moneyFmt,
+  textCell,
+  writeHeader,
+} from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /** One reminder's occurrences, tallied by what the user did about them. A fresh
@@ -134,9 +142,9 @@ export async function buildRemindersSheet(
       tally.DISMISSED,
       // Both optional on a reminder, and the account is only where the user
       // *expects* to pay from — a label, never a link that debits anything.
-      reminder.category?.name ?? '',
-      reminder.account?.name ?? '',
-      reminder.note ?? '',
+      textCell(reminder.category?.name),
+      textCell(reminder.account?.name),
+      textCell(reminder.note),
       localDateCell(reminder.createdAt, ctx.timezone),
       // The IANA zone the schedule is anchored to, verbatim — not the viewer's.
       reminder.timezone,
