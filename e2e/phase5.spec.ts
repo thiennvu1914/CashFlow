@@ -71,9 +71,9 @@ test.describe.serial('Phase 5 — budgets', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
-    await expect(rail.getByRole('link', { name: /Ngân sách|Budgets/ })).toBeVisible()
-    await rail.getByRole('link', { name: /Ngân sách|Budgets/ }).click()
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
+    await expect(rail.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
+    await rail.getByRole('link', { name: /^(Ngân sách|Budgets)$/ }).click()
 
     await expect(page).toHaveURL(/\/budgets/)
     await expect(page.getByRole('heading', { name: 'Budgets', level: 1 })).toBeVisible()
@@ -304,11 +304,11 @@ test.describe.serial('Phase 5 — budgets', () => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
 
-    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
-    const morePanel = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
+    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
-    await expect(morePanel.getByRole('link', { name: /Ngân sách|Budgets/ })).toBeVisible()
-    await morePanel.getByRole('link', { name: /Ngân sách|Budgets/ }).click()
+    await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
+    await morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ }).click()
 
     await expect(page).toHaveURL(/\/budgets/)
     await expect(budgetRow(page, page, 'Overall')).toBeVisible()

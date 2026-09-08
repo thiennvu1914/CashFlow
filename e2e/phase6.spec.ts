@@ -392,7 +392,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeVisible()
 
     // The rail's own DOM order, so "after Budgets, in this order" is asserted
@@ -403,39 +403,42 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // `rail` already does) still yields exactly the twelve destination labels,
     // and the icon-rail's `sr-only` span still carries the label text at 1280.
     const labels = await rail.getByRole('link').allTextContents()
-    const budgetsIndex = labels.findIndex((label) => /Ngân sách|Budgets/.test(label))
+    const budgetsIndex = labels.findIndex((label) => /^(Ngân sách|Budgets)$/.test(label))
     expect(budgetsIndex).toBeGreaterThanOrEqual(0)
     const nextFour = labels.slice(budgetsIndex + 1, budgetsIndex + 5)
-    expect(nextFour).toEqual(
-      nextFour.filter((label) =>
-        /Tiết kiệm|Savings|Công nợ|Debts|Khoản vay|Loans|Nhắc nhở|Reminders/.test(label),
-      ),
-    )
-    expect(nextFour).toHaveLength(4)
+    // Position, not just membership: each of the four must be the SPECIFIC
+    // label at that index, not merely one of the four somewhere in the slice
+    // — a `toEqual(slice.filter(...))` comparison would let a duplicate
+    // through (e.g. two "Công nợ" and no "Tiết kiệm" would still pass a
+    // membership check).
+    expect(nextFour[0]).toMatch(/^(Tiết kiệm|Savings)$/)
+    expect(nextFour[1]).toMatch(/^(Công nợ|Debts)$/)
+    expect(nextFour[2]).toMatch(/^(Khoản vay|Loans)$/)
+    expect(nextFour[3]).toMatch(/^(Nhắc nhở|Reminders)$/)
 
     // Each link lands on its own page, and each page states what it has:
     // Savings is `/goals`' h1 (the route and the label differ on purpose).
     const destinations = [
       {
-        label: /Tiết kiệm|Savings/,
+        label: /^(Tiết kiệm|Savings)$/,
         url: /\/goals/,
         heading: 'Savings',
         empty: 'No savings goals yet — add one below.',
       },
       {
-        label: /Công nợ|Debts/,
+        label: /^(Công nợ|Debts)$/,
         url: /\/debts/,
         heading: 'Debts',
         empty: 'No debts yet — add one below.',
       },
       {
-        label: /Khoản vay|Loans/,
+        label: /^(Khoản vay|Loans)$/,
         url: /\/loans/,
         heading: 'Loans',
         empty: 'No loans yet — add one below.',
       },
       {
-        label: /Nhắc nhở|Reminders/,
+        label: /^(Nhắc nhở|Reminders)$/,
         url: /\/reminders/,
         heading: 'Reminders',
         empty: 'No reminders yet — add one below.',
@@ -871,26 +874,28 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // accessible name, rather than reading every `<a span>`'s text, because the
     // bar's fifth target, "Thêm giao dịch"/"Add transaction", is an icon with
     // an `aria-label` and no text at all.
-    const bar = page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ })
+    const bar = page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ })
     await expect(bar).toBeVisible()
     for (const label of [
-      /Tổng quan|Dashboard/,
-      /Giao dịch|Transactions/,
-      /Tài khoản|Accounts/,
-      /Báo cáo|Reports/,
+      /^(Tổng quan|Dashboard)$/,
+      /^(Giao dịch|Transactions)$/,
+      /^(Tài khoản|Accounts)$/,
+      /^(Báo cáo|Reports)$/,
     ]) {
       await expect(bar.getByRole('link', { name: label })).toBeVisible()
     }
-    await expect(bar.getByRole('link', { name: /Thêm giao dịch|Add transaction/ })).toBeVisible()
+    await expect(
+      bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
+    ).toBeVisible()
 
-    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
-    const morePanel = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
+    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     for (const label of [
-      /Tiết kiệm|Savings/,
-      /Công nợ|Debts/,
-      /Khoản vay|Loans/,
-      /Nhắc nhở|Reminders/,
+      /^(Tiết kiệm|Savings)$/,
+      /^(Công nợ|Debts)$/,
+      /^(Khoản vay|Loans)$/,
+      /^(Nhắc nhở|Reminders)$/,
     ]) {
       await expect(morePanel.getByRole('link', { name: label })).toBeVisible()
     }

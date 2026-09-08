@@ -38,7 +38,7 @@ test.describe.serial('Phase 7 — app shell', () => {
   })
 
   test('the rail is 240 px at 1280, 64 px at 1024 and 768, and absent at 375', async ({ page }) => {
-    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
 
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto('/dashboard')
@@ -55,7 +55,7 @@ test.describe.serial('Phase 7 — app shell', () => {
     await expect(rail).toBeVisible()
     expect((await page.locator('aside').first().boundingBox())!.width).toBe(64)
     await expect(
-      page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ }),
+      page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ }),
     ).toBeHidden()
 
     await page.setViewportSize({ width: 768, height: 1024 })
@@ -63,14 +63,14 @@ test.describe.serial('Phase 7 — app shell', () => {
     await expect(rail).toBeVisible()
     expect((await page.locator('aside').first().boundingBox())!.width).toBe(64)
     await expect(
-      page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ }),
+      page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ }),
     ).toBeHidden()
 
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
     await expect(rail).toBeHidden()
     await expect(
-      page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ }),
+      page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ }),
     ).toBeVisible()
   })
 
@@ -78,19 +78,19 @@ test.describe.serial('Phase 7 — app shell', () => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await page.goto('/dashboard')
     await page.keyboard.press('Tab')
-    const skip = page.getByRole('link', { name: /Đến nội dung|Skip to content/ })
+    const skip = page.getByRole('link', { name: /^(Đến nội dung|Skip to content)$/ })
     await expect(skip).toBeFocused()
     await skip.press('Enter')
-    await expect(page.locator('#main')).toBeVisible()
+    await expect(page.locator('#main')).toBeFocused()
   })
 
   test('the More sheet traps focus and Escape returns it to the trigger', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    const trigger = page.getByRole('button', { name: /^Thêm$|^More$/ })
+    const trigger = page.getByRole('button', { name: /^(Khác|More)$/ })
     await trigger.click()
 
-    const sheet = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
+    const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
     await expect(sheet).toBeVisible()
     // Adaptation: the installed Base UI (`node_modules/@base-ui/react/dialog/popup/DialogPopup.js`)
     // does not stamp `aria-modal` on the popup — only its Toast root does.
@@ -126,11 +126,11 @@ test.describe.serial('Phase 7 — app shell', () => {
   test('the More sheet closes on its own button and on an overlay tap', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    const trigger = page.getByRole('button', { name: /^Thêm$|^More$/ })
+    const trigger = page.getByRole('button', { name: /^(Khác|More)$/ })
 
     await trigger.click()
-    const sheet = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
-    await sheet.getByRole('button', { name: /^Đóng$|^Close$/ }).click()
+    const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
+    await sheet.getByRole('button', { name: /^(Đóng|Close)$/ }).click()
     await expect(sheet).toBeHidden()
     await expect(trigger).toBeFocused()
 
@@ -140,6 +140,7 @@ test.describe.serial('Phase 7 — app shell', () => {
     // viewport is the backdrop.
     await page.mouse.click(5, 5)
     await expect(sheet).toBeHidden()
+    await expect(trigger).toBeFocused()
   })
 
   test('the More sheet closes on navigation and lists the eight non-tab routes', async ({
@@ -147,23 +148,23 @@ test.describe.serial('Phase 7 — app shell', () => {
   }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
-    const sheet = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
+    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     for (const label of [
-      /Chuyển tiền|Transfers/,
-      /Danh mục|Categories/,
-      /Ngân sách|Budgets/,
-      /Tiết kiệm|Savings/,
-      /Công nợ|Debts/,
-      /Khoản vay|Loans/,
-      /Nhắc nhở|Reminders/,
-      /Cài đặt|Settings/,
+      /^(Chuyển tiền|Transfers)$/,
+      /^(Danh mục|Categories)$/,
+      /^(Ngân sách|Budgets)$/,
+      /^(Tiết kiệm|Savings)$/,
+      /^(Công nợ|Debts)$/,
+      /^(Khoản vay|Loans)$/,
+      /^(Nhắc nhở|Reminders)$/,
+      /^(Cài đặt|Settings)$/,
     ]) {
       await expect(sheet.getByRole('link', { name: label })).toBeVisible()
     }
 
-    await sheet.getByRole('link', { name: /Chuyển tiền|Transfers/ }).click()
+    await sheet.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ }).click()
     await expect(page).toHaveURL(/\/transfers/)
     await expect(sheet).toBeHidden()
   })

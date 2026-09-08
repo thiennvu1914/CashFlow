@@ -79,21 +79,21 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
 
     await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible()
 
-    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeVisible()
     for (const label of [
-      /Tổng quan|Dashboard/,
-      /Giao dịch|Transactions/,
-      /Chuyển tiền|Transfers/,
-      /Tài khoản|Accounts/,
-      /Ngân sách|Budgets/,
-      /Tiết kiệm|Savings/,
-      /Công nợ|Debts/,
-      /Khoản vay|Loans/,
-      /Nhắc nhở|Reminders/,
-      /Danh mục|Categories/,
-      /Báo cáo|Reports/,
-      /Cài đặt|Settings/,
+      /^(Tổng quan|Dashboard)$/,
+      /^(Giao dịch|Transactions)$/,
+      /^(Chuyển tiền|Transfers)$/,
+      /^(Tài khoản|Accounts)$/,
+      /^(Ngân sách|Budgets)$/,
+      /^(Tiết kiệm|Savings)$/,
+      /^(Công nợ|Debts)$/,
+      /^(Khoản vay|Loans)$/,
+      /^(Nhắc nhở|Reminders)$/,
+      /^(Danh mục|Categories)$/,
+      /^(Báo cáo|Reports)$/,
+      /^(Cài đặt|Settings)$/,
     ]) {
       await expect(rail.getByRole('link', { name: label })).toBeVisible()
     }
@@ -168,19 +168,21 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
 
-    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeHidden()
 
-    const bar = page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ })
+    const bar = page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ })
     await expect(bar).toBeVisible()
-    await expect(bar.getByRole('link', { name: /Thêm giao dịch|Add transaction/ })).toBeVisible()
+    await expect(
+      bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
+    ).toBeVisible()
 
-    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
-    const morePanel = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
-    await expect(morePanel.getByRole('link', { name: /Chuyển tiền|Transfers/ })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: /Ngân sách|Budgets/ })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: /Danh mục|Categories/ })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: /Cài đặt|Settings/ })).toBeVisible()
+    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
+    await expect(morePanel.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Danh mục|Categories)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Cài đặt|Settings)$/ })).toBeVisible()
 
     await page.keyboard.press('Escape')
     await expect(morePanel).toBeHidden()
@@ -192,24 +194,22 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     // through it. The "a route change closes an open sheet" guarantee is
     // instead proven in `e2e/phase7-shell.spec.ts`, via a link INSIDE the
     // sheet, which is the only navigation a modal dialog actually permits.
-    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
+    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
     await expect(morePanel).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(morePanel).toBeHidden()
-    await bar.getByRole('link', { name: /Tài khoản|Accounts/ }).click()
+    await bar.getByRole('link', { name: /^(Tài khoản|Accounts)$/ }).click()
     await expect(page).toHaveURL(/\/accounts/)
-    await expect(morePanel).toBeHidden()
 
     // The rightmost tab specifically: the bottom-right corner is where a
     // floating dev overlay would land, and it would swallow this tap rather
     // than navigate. Reports is the tab that occupies it.
-    await bar.getByRole('link', { name: /Báo cáo|Reports/ }).click()
+    await bar.getByRole('link', { name: /^(Báo cáo|Reports)$/ }).click()
     await expect(page).toHaveURL(/\/reports/)
     await expect(page.getByRole('heading', { name: 'Reports', level: 1 })).toBeVisible()
 
-    await bar.getByRole('link', { name: /Tổng quan|Dashboard/ }).click()
+    await bar.getByRole('link', { name: /^(Tổng quan|Dashboard)$/ }).click()
     await expect(page).toHaveURL(/\/dashboard/)
-    await expect(morePanel).toBeHidden()
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -221,9 +221,11 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await page.setViewportSize({ width: 768, height: 1024 })
     await page.goto('/dashboard')
 
-    await expect(page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })).toBeVisible()
     await expect(
-      page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ }),
+      page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ }),
     ).toBeHidden()
 
     const overflow = await page.evaluate(
