@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
-import { formatChartValue, formatCompactAmount, formatMoney, formatRate } from './format-money'
+import {
+  formatChartValue,
+  formatCompactAmount,
+  formatMoney,
+  formatRate,
+  formatReadableRate,
+} from './format-money'
 
 /**
  * Pure formatting — no database, no session. Every expectation is the literal
@@ -50,6 +56,36 @@ describe('formatRate', () => {
   it('groups a stored Decimal(18, 6) rate and trims it to two decimals', () => {
     expect(formatRate(new Prisma.Decimal('25000.500000'))).toBe('25.000,5')
     expect(formatRate(new Prisma.Decimal('26123.000000'))).toBe('26.123')
+  })
+})
+
+describe('formatReadableRate', () => {
+  it('quotes USD→VND as-is: the stored rate is already VND per 1 USD', () => {
+    expect(formatReadableRate('USD', 'VND', new Prisma.Decimal('25000'), 'vi')).toBe(
+      '1 USD = 25.000 VND',
+    )
+  })
+
+  it('quotes VND→USD in the SAME readable direction — the reciprocal of the stored rate', () => {
+    // Stored destination-per-source: 1 VND buys 0.00004 USD. Nobody reads a
+    // rate that way, so the reciprocal (25.000 VND per 1 USD) is what renders
+    // — identical copy to the USD→VND case above, proving the direction
+    // never depends on which account the money actually left from.
+    expect(formatReadableRate('VND', 'USD', new Prisma.Decimal('0.00004'), 'vi')).toBe(
+      '1 USD = 25.000 VND',
+    )
+  })
+
+  it('returns null for a same-currency transfer (no exchange rate at all)', () => {
+    expect(formatReadableRate('VND', 'VND', null, 'vi')).toBeNull()
+  })
+
+  it('formats per locale, same as formatRate', () => {
+    expect(formatReadableRate('USD', 'VND', '25000', 'en')).toBe('1 USD = 25,000 VND')
+  })
+
+  it('accepts a plain-number ratio — TransferForm’s live preview, not a stored Decimal', () => {
+    expect(formatReadableRate('VND', 'USD', 100 / 2_500_000, 'vi')).toBe('1 USD = 25.000 VND')
   })
 })
 

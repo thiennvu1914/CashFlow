@@ -1,6 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import type { Currency } from '@/lib/currency/provider'
 import { DEFAULT_LOCALE, INTL_LOCALE, type Locale } from '@/lib/i18n/locale'
+import enCommon from '@/messages/en/common.json'
+import viCommon from '@/messages/vi/common.json'
 
 /**
  * The presentation boundary for money.
@@ -125,6 +127,49 @@ export function formatRate(
   locale: Locale = DEFAULT_LOCALE,
 ): string {
   return RATE_FORMATTERS[locale].format(Number(String(rate)))
+}
+
+/**
+ * `common.rateLine`'s own template ("1 {from} = {rate} {to}"), read directly
+ * off the message files rather than duplicated as a literal here — the two
+ * can never drift apart, and this module has no `next-intl` context to call
+ * `t()` with (it is imported by both server and client code, `TransferList`
+ * and `TransferForm` alike).
+ */
+const RATE_LINE_TEMPLATES: Record<Locale, string> = { vi: viCommon.rateLine, en: enCommon.rateLine }
+
+/**
+ * A transfer's rate, quoted the way a person reads it — always USD-per-1,
+ * e.g. "1 USD = 25.000 VND", never "1 VND = 0,00004 USD" — regardless of
+ * which currency the transfer actually moved FROM.
+ *
+ * `exchangeRateUsed` (or, for `TransferForm`'s live preview, the ratio of the
+ * two amounts the user has typed so far) is stored/derived destination-per-
+ * source: a VND→USD transfer's rate is USD-per-VND, e.g. 0.00004. Printing
+ * that verbatim is technically true and useless — nobody quotes the dong
+ * that way — so the pair is normalised to USD-per-1 and the reciprocal is
+ * taken whenever the source account is NOT USD. This function only
+ * reformats that stored/derived figure for display; it never computes a new
+ * rate, and nothing it returns is read back into a calculation.
+ *
+ * Shared by `TransferList` (the historical `exchangeRateUsed`) and
+ * `TransferForm` (a live preview ratio, same shape) so the two can never
+ * quote the same pair in different directions.
+ */
+export function formatReadableRate(
+  fromCurrency: Currency,
+  toCurrency: Currency,
+  rateUsed: Prisma.Decimal | string | number | null,
+  locale: Locale = DEFAULT_LOCALE,
+): string | null {
+  if (rateUsed === null) return null
+  const sourceIsUsd = fromCurrency === 'USD'
+  const rate = sourceIsUsd ? Number(String(rateUsed)) : 1 / Number(String(rateUsed))
+  const [from, to] = sourceIsUsd ? [fromCurrency, toCurrency] : [toCurrency, fromCurrency]
+  return RATE_LINE_TEMPLATES[locale]
+    .replace('{from}', from)
+    .replace('{rate}', formatRate(rate, locale))
+    .replace('{to}', to)
 }
 
 /**

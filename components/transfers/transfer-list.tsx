@@ -3,13 +3,13 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ArrowLeftRight } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight } from 'lucide-react'
 import type { Currency } from '@/lib/currency/provider'
 import type { Locale } from '@/lib/i18n/locale'
 import { deleteTransferAction } from '@/lib/server/actions/transfer-actions'
 import { GENERIC_ERROR_KEY, TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
-import { formatMoney, formatRate } from '@/lib/ui/format-money'
+import { formatMoney, formatReadableRate } from '@/lib/ui/format-money'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { EmptyState } from '@/components/common/empty-state'
 import { FinancialListRow } from '@/components/common/financial-list-row'
@@ -35,27 +35,6 @@ export interface TransferRow {
   exchangeRateUsed: string | null
   fromAccount: { name: string; currency: string }
   toAccount: { name: string; currency: string }
-}
-
-/**
- * The rate, always quoted in the direction a person reads it: VND per one USD.
- *
- * `exchangeRateUsed` is stored as destination-per-source, so a VND→USD transfer
- * carries 0.00004. Printing that is technically true and useless — nobody
- * quotes the dong that way — so the pair is normalised to USD-per-1 and the
- * reciprocal is taken when the source is VND. The figure is `formatRate`'s, and
- * nothing reads it back into a calculation: `Number()` here is display-only,
- * downstream of the service's `Decimal` arithmetic, and the reciprocal is a
- * presentation choice — the stored rate itself is untouched.
- */
-function readableRate(
-  row: TransferRow,
-  locale: Locale,
-): { from: string; rate: string; to: string } | null {
-  if (row.exchangeRateUsed === null) return null
-  const sourceIsUsd = row.fromAccount.currency === 'USD'
-  const rate = sourceIsUsd ? Number(row.exchangeRateUsed) : 1 / Number(row.exchangeRateUsed)
-  return { from: 'USD', rate: formatRate(rate, locale), to: 'VND' }
 }
 
 export function TransferList({
@@ -116,7 +95,19 @@ export function TransferList({
         <ul className="divide-y divide-border">
           {transfers.map((row, rowIndex) => {
             const crossCurrency = row.fromAccount.currency !== row.toAccount.currency
-            const rate = crossCurrency ? readableRate(row, locale) : null
+            const rateLine = crossCurrency
+              ? formatReadableRate(
+                  row.fromAccount.currency as Currency,
+                  row.toAccount.currency as Currency,
+                  row.exchangeRateUsed,
+                  locale,
+                )
+              : null
+            // The accessible NAME for the row's `…` menu — a plain string, used
+            // nowhere else. The VISIBLE title below is structured markup, not
+            // this string, precisely so the arrow can be `aria-hidden` and the
+            // route can wrap instead of losing the destination account to an
+            // ellipsis (Task 5b fix round 1, IMPORTANT finding).
             const rowName = t('transfers.route', {
               from: row.fromAccount.name,
               to: row.toAccount.name,
@@ -125,17 +116,42 @@ export function TransferList({
             return (
               <FinancialListRow
                 key={row.id}
-                title={rowName}
+                wrapTitle
+                wrapMeta
+                title={
+                  // `flex-wrap`, not one string: at 375 px `Cash → USD
+                  // Savings` no longer fits one line, and a single
+                  // `t('transfers.route', …)` string handed to a `truncate`d
+                  // container used to render "USD Savings …" — the arrow AND
+                  // the source account silently gone. Composing FROM/arrow/TO
+                  // as separate nodes lets the group wrap onto two lines
+                  // instead, so every word survives regardless of width.
+                  <span className="flex flex-wrap items-center gap-x-1">
+                    <span>{row.fromAccount.name}</span>
+                    <ArrowRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                    {/* The visible arrow is decorative; a screen reader gets
+                        the direction from this word instead, same as
+                        `rowName` above says it in the menu's accessible name. */}
+                    <span className="sr-only">{t('transfers.to')}</span>
+                    <span>{row.toAccount.name}</span>
+                  </span>
+                }
                 meta={
-                  <>
-                    {formatDate(row.date, { locale, timeZone: timezone, style: 'dateTime' })}
-                    {rate && (
-                      <>
-                        {' · '}
-                        {t('common.rateLine', rate)}
-                      </>
+                  <span className="flex flex-wrap items-baseline gap-x-1">
+                    <span>
+                      {formatDate(row.date, { locale, timeZone: timezone, style: 'dateTime' })}
+                    </span>
+                    {rateLine && (
+                      // `basis-full` forces the rate onto its own line below
+                      // `sm` (where the date/time already fills the row);
+                      // `sm:basis-auto` lets it sit inline once there is
+                      // room, rather than ALWAYS forcing a second line.
+                      <span className="basis-full sm:basis-auto">
+                        {'· '}
+                        {rateLine}
+                      </span>
                     )}
-                  </>
+                  </span>
                 }
                 amount={
                   <div className="flex flex-col items-end gap-0.5">

@@ -33,4 +33,31 @@ describe('FinancialListRow', () => {
     expect(html).not.toContain('title="')
     expect(html).not.toContain('undefined')
   })
+
+  it('defaults title and meta to a single ellipsised line — unchanged for existing callers', () => {
+    const html = renderToStaticMarkup(
+      <FinancialListRow title="Cash → Bank" meta="21:20 · rate" amount={<span>1</span>} />,
+    )
+    // Two `truncate`s: one for the title, one for the meta. Neither `wrapTitle`
+    // nor `wrapMeta` was passed, so both keep the one-line-with-ellipsis
+    // behaviour Transactions and the Dashboard already rely on.
+    expect(html.split('truncate').length - 1).toBe(2)
+    expect(html).not.toContain('break-words')
+  })
+
+  it('wrapTitle/wrapMeta opt out of truncation so a route or a rate line is never silently deleted', () => {
+    const html = renderToStaticMarkup(
+      <FinancialListRow
+        title="Cash → USD Savings"
+        meta="21:20 08/09/2026 · 1 USD = 25.000 VND"
+        amount={<span>1</span>}
+        wrapTitle
+        wrapMeta
+      />,
+    )
+    expect(html).not.toContain('truncate')
+    expect(html.split('break-words').length - 1).toBe(2)
+    expect(html).toContain('Cash → USD Savings')
+    expect(html).toContain('1 USD = 25.000 VND')
+  })
 })
