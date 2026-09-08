@@ -154,8 +154,10 @@ function detailsFor(page: Page, summary: string): Locator {
 
 /** The `<section>` a Dashboard widget (or a Reminders page group) renders under
  *  `heading`. `exact` because "Due" is a substring of "Overdue", and accessible
- *  names match as substrings by default. */
-function sectionFor(page: Page, heading: string): Locator {
+ *  names match as substrings by default — ignored by Playwright when `heading`
+ *  is a `RegExp` (a dashboard widget's translated title), which is why the
+ *  three dashboard call sites below pass one instead of a literal string. */
+function sectionFor(page: Page, heading: string | RegExp): Locator {
   return page
     .locator('section')
     .filter({ has: page.getByRole('heading', { name: heading, exact: true }) })
@@ -781,22 +783,27 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Widget order, read out of the DOM: the three planning sections sit after
     // Budget Progress and before Recent Transactions, which is last by design
     // (the ledger is what the user scrolls to in order to check the widgets
-    // above it).
-    const headings = await page.locator('section > h2').allTextContents()
-    expect(headings.slice(-5)).toEqual([
-      'Budget Progress',
-      'Savings Goals',
-      'Debt / Loan Overview',
-      'Upcoming Reminders',
-      'Recent Transactions',
-    ])
+    // above it). `section h2` (a descendant selector), not `section > h2`:
+    // `ChartContainer`'s `h2` now sits inside a nested `<div>`, not directly
+    // under the `<section>`.
+    const headings = await page.locator('section h2').allTextContents()
+    const lastFive = headings.slice(-5)
+    ;[
+      /Tiến độ ngân sách|Budget Progress/,
+      /Mục tiêu tiết kiệm|Savings Goals/,
+      /Công nợ và khoản vay|Debt \/ Loan Overview/,
+      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /Giao dịch gần đây|Recent Transactions/,
+    ].forEach((pattern, index) => expect(lastFive[index]).toMatch(pattern))
 
-    const goalsWidget = sectionFor(page, 'Savings Goals')
+    const goalsWidget = sectionFor(page, /Mục tiêu tiết kiệm|Savings Goals/)
     await expect(namedRow(page, goalsWidget, 'Laptop')).toBeVisible()
     await expect(namedRow(page, goalsWidget, 'Emergency fund 2')).toHaveCount(0)
 
-    const overview = sectionFor(page, 'Debt / Loan Overview')
-    await expect(overview.getByText('Included in Net Worth', { exact: true })).toBeVisible()
+    const overview = sectionFor(page, /Công nợ và khoản vay|Debt \/ Loan Overview/)
+    await expect(
+      overview.getByText(/Đã tính trong tài sản ròng|Included in Net Worth/),
+    ).toBeVisible()
 
     /**
      * One row of the overview's three-row `<dl>`, as digits.
@@ -806,28 +813,30 @@ test.describe.serial('Phase 6 — planning modules', () => {
      * refresh to race — the same reasoning `phase4.spec.ts` gives for its own
      * KPI reads.
      */
-    async function overviewValue(label: string): Promise<string> {
-      const pair = overview
-        .locator('dl > div')
-        .filter({ has: page.getByText(label, { exact: true }) })
+    async function overviewValue(label: string | RegExp): Promise<string> {
+      const pair = overview.locator('dl > div').filter({ has: page.getByText(label) })
       return digitsOnly((await pair.locator('dd span.tabular-nums').first().textContent()) ?? '')
     }
 
-    /** One KPI cell of the strip, as digits. */
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    /** One cell of the summary panel's `<dl>`, as digits. */
+    async function kpiValue(label: string | RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       return digitsOnly((await cell.locator('dd span.tabular-nums').first().textContent()) ?? '')
     }
 
     // Everything the earlier tests created has left the position: Minh is
     // repaid in full, Landlord is written off, and the Bank loan is closed —
     // so all three aggregates are a real zero rather than a missing figure.
-    expect(await overviewValue('Receivables')).toBe('0')
-    expect(await overviewValue('Payables')).toBe('0')
-    expect(await overviewValue('Outstanding loans')).toBe('0')
+    expect(await overviewValue(/Khoản phải thu|Receivables/)).toBe('0')
+    expect(await overviewValue(/Khoản phải trả|Payables/)).toBe('0')
+    expect(await overviewValue(/Dư nợ gốc|Outstanding loans/)).toBe('0')
     // Accounts only, and nothing else moving it: Net Worth equals the balance.
-    expect(await kpiValue('Total Account Balance')).toBe('5000000')
-    expect(await kpiValue('Net Worth')).toBe('5000000')
+    // "Total Balance", not "Total Account Balance" (spec §6.1): the KPI moved
+    // from a flat five-card strip to the summary panel, where it sits directly
+    // under Net Worth rather than beside it, and the shorter label is the
+    // deliberate wording change Task 4's brief calls out.
+    expect(await kpiValue(/Tổng số dư|Total Balance/)).toBe('5000000')
+    expect(await kpiValue(/Tài sản ròng|Net Worth/)).toBe('5000000')
 
     // A fresh receivable and a fresh loan, created AFTER the settlements above
     // so the expected figures cannot depend on which of them the services
@@ -851,15 +860,15 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     await page.goto('/dashboard')
 
-    expect(await overviewValue('Receivables')).toBe('500000')
-    expect(await overviewValue('Payables')).toBe('0')
-    expect(await overviewValue('Outstanding loans')).toBe('3000000')
+    expect(await overviewValue(/Khoản phải thu|Receivables/)).toBe('500000')
+    expect(await overviewValue(/Khoản phải trả|Payables/)).toBe('0')
+    expect(await overviewValue(/Dư nợ gốc|Outstanding loans/)).toBe('3000000')
     // 5.000.000 accounts + 500.000 receivable − 0 payable − 3.000.000 loan
     // principal. Interest is not part of it: it repays nothing.
-    expect(await kpiValue('Total Account Balance')).toBe('5000000')
-    expect(await kpiValue('Net Worth')).toBe('2500000')
+    expect(await kpiValue(/Tổng số dư|Total Balance/)).toBe('5000000')
+    expect(await kpiValue(/Tài sản ròng|Net Worth/)).toBe('2500000')
 
-    const remindersWidget = sectionFor(page, 'Upcoming Reminders')
+    const remindersWidget = sectionFor(page, /Nhắc nhở sắp tới|Upcoming Reminders/)
     const rentRow = namedRow(page, remindersWidget, 'Rent')
     await expect(rentRow).toBeVisible()
     await expect(rentRow).toContainText(`Tomorrow · ${TOMORROW}`)

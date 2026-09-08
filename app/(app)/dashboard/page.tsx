@@ -1,9 +1,22 @@
 import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  HandCoins,
+  LineChart,
+  PieChart,
+  PiggyBank,
+  Target,
+  Wallet,
+} from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getCalendarMonth } from '@/lib/datetime/calendar-month'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
+import { resolveLocale } from '@/lib/i18n/config'
 import { getAccountBalanceOverTime } from '@/lib/server/services/account-balance-history'
 import { getActivitySummary, getCashFlowTrend } from '@/lib/server/services/activity'
 import { getBudgetProgressForMonth } from '@/lib/server/services/budget'
@@ -12,26 +25,42 @@ import { listUpcomingOccurrences, OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/server
 import { listSavingsGoals } from '@/lib/server/services/savings-goal'
 import { listTransactions } from '@/lib/server/services/transaction'
 import { buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
+import { formatDate } from '@/lib/ui/format-date'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
 import { AccountBalanceHistoryChart } from '@/components/dashboard/account-balance-history-chart'
 import { AccountDistributionChart } from '@/components/dashboard/account-distribution-chart'
 import { CashFlowTrendChart } from '@/components/dashboard/cash-flow-trend-chart'
-import { DashboardEmpty, DashboardSection } from '@/components/dashboard/dashboard-section'
+import { CHART_HEIGHT } from '@/components/dashboard/chart-theme'
 import { DebtLoanOverview } from '@/components/dashboard/debt-loan-overview'
 import { ExpenseByCategoryChart } from '@/components/dashboard/expense-by-category-chart'
 import { FxRateStatus } from '@/components/dashboard/fx-rate-status'
 import { IncomeVsExpenseChart } from '@/components/dashboard/income-vs-expense-chart'
-import { KpiStrip } from '@/components/dashboard/kpi-strip'
 import { RecentTransactions } from '@/components/dashboard/recent-transactions'
+import { SummaryPanel } from '@/components/dashboard/summary-panel'
+import { ChartContainer } from '@/components/common/chart-container'
+import { EmptyState } from '@/components/common/empty-state'
+import { PageHeader } from '@/components/common/page-header'
 import { GoalList } from '@/components/goals/goal-list'
 import { OccurrenceList } from '@/components/reminders/occurrence-list'
 
 /** How many months the two trend charts look back over. */
 const TREND_MONTHS = 6
 
-/** How many entries the Recent Transactions widget shows. */
-const RECENT_TRANSACTION_COUNT = 5
+/**
+ * How many entries the Recent Transactions widget fetches.
+ *
+ * Spec §6.1 row 7: the ledger is full width on desktop and shows eight rows.
+ * The mobile stack shows five — sliced in the component's own render, not
+ * fetched twice.
+ */
+const RECENT_TRANSACTION_COUNT = 8
+
+/**
+ * Spec §6.1: each of the three row-5 planning widgets shows at most three rows
+ * and a link — a widget is a glance, and its page has the full list.
+ */
+const WIDGET_ROWS = 3
 
 /**
  * Degrades a *current-position* read to `null` when — and only when — no usable
@@ -160,151 +189,297 @@ export default async function DashboardPage() {
     occurrences,
   })
 
+  const t = await getTranslations()
+  const locale = await resolveLocale()
+
+  /** Every summary label and hint, translated once for the panel. */
+  const summaryLabels = {
+    'dashboard.netWorth': t('dashboard.netWorth'),
+    'dashboard.netWorthNote': t('dashboard.netWorthNote'),
+    'dashboard.totalBalance': t('dashboard.totalBalance'),
+    'dashboard.monthlyIncome': t('dashboard.monthlyIncome'),
+    'dashboard.monthlyExpense': t('dashboard.monthlyExpense'),
+    'dashboard.netIncome': t('dashboard.netIncome'),
+  }
+  const summaryHints = { 'dashboard.fxUnavailableHint': t('dashboard.fxUnavailableHint') }
+
   return (
-    <div className="flex flex-col gap-6 p-4 md:p-6">
-      <header className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">{vm.subtitle}</p>
-        </div>
-        <FxRateStatus status={vm.fxStatus} />
-      </header>
+    // max-w 1200 (spec §2), page padding 16/24/32, section gap 24 at the grid's
+    // gutter and 32 between the header and the grid.
+    <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('dashboard.title')}
+        description={t('dashboard.subtitle', {
+          month: formatDate(vm.monthStart, { locale, timeZone: timezone, style: 'monthYear' }),
+          currency: vm.displayCurrency,
+        })}
+        meta={<FxRateStatus status={vm.fxStatus} />}
+      />
 
-      <KpiStrip kpis={vm.kpis} currency={vm.displayCurrency} />
+      <SummaryPanel
+        variant="dashboard"
+        kpis={vm.kpis}
+        currency={vm.displayCurrency}
+        labels={summaryLabels}
+        hints={summaryHints}
+      />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <DashboardSection title="Cash Flow Trend">
-          <CashFlowTrendChart data={vm.cashFlowTrend} currency={vm.displayCurrency} />
-        </DashboardSection>
-
-        <DashboardSection title="Income vs Expense">
-          <IncomeVsExpenseChart data={vm.incomeVsExpense} currency={vm.displayCurrency} />
-        </DashboardSection>
-
-        <DashboardSection
-          title="Account Balance Over Time"
-          caption="Account balances only — historical Net Worth is not modelled"
+      {/* The spec's 12-column grid (§6.1), 24 px gutters. `order-*` below xl is
+          what produces the mobile stacking order the spec fixes — which is NOT
+          the desktop reading order: on a phone the ledger and the planning
+          widgets come before the charts, because a phone is where the user
+          checks something rather than studies it. */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
+        {/* Row 3: trend 8/12 h300 + expense breakdown 4/12 h300 */}
+        <ChartContainer
+          title={t('dashboard.cashFlowTrend')}
+          height={CHART_HEIGHT.tall}
+          className="order-1 md:col-span-2 xl:col-span-8"
         >
-          <AccountBalanceHistoryChart data={vm.balanceOverTime} currency={vm.displayCurrency} />
-        </DashboardSection>
-
-        <DashboardSection title="Expense by Category">
-          <ExpenseByCategoryChart data={vm.expenseByCategory} currency={vm.displayCurrency} />
-        </DashboardSection>
-
-        <DashboardSection title="Account Balance Distribution">
-          {vm.distribution === null ? (
-            <DashboardEmpty>FX unavailable — account balances cannot be compared</DashboardEmpty>
+          {/* Ruling #6 (never a flat zero line for insufficient data) applies
+              here too, though the brief's own Step 8 code omits it: six
+              months of a genuinely new account is six zero points, and a line
+              flat at zero across all of them is the same "measurement nobody
+              took" the balance-history widget below guards against. */}
+          {vm.cashFlowTrend.every((point) => point.income === 0 && point.expense === 0) ? (
+            <EmptyState icon={Activity} title={t('dashboard.emptyCashFlowTitle')} />
           ) : (
-            <AccountDistributionChart data={vm.distribution} currency={vm.displayCurrency} />
+            <CashFlowTrendChart
+              data={vm.cashFlowTrend}
+              currency={vm.displayCurrency}
+              locale={locale}
+              height={CHART_HEIGHT.tall}
+            />
           )}
-        </DashboardSection>
+        </ChartContainer>
 
-        {/* The caption is not decoration: every other figure on this page is in
-            the display currency, and these are not — a budget is compared
-            against its own currency, never restated (ruling R5-3). */}
-        <DashboardSection
-          title="Budget Progress"
-          caption="This month · each budget in its own currency"
+        <ChartContainer
+          title={t('dashboard.expenseByCategory')}
+          height={CHART_HEIGHT.tall}
+          className="order-5 md:col-span-1 xl:order-2 xl:col-span-4"
+        >
+          {vm.expenseByCategory.length === 0 ? (
+            <EmptyState icon={PieChart} title={t('dashboard.emptyExpenseTitle')} />
+          ) : (
+            <ExpenseByCategoryChart
+              data={vm.expenseByCategory.map((row) => ({
+                ...row,
+                name: row.nameKey ? t(row.nameKey) : row.name,
+              }))}
+              currency={vm.displayCurrency}
+              locale={locale}
+              height={CHART_HEIGHT.tall}
+            />
+          )}
+        </ChartContainer>
+
+        {/* Row 4: balance history 8/12 h260 + income vs expense 4/12 h260 */}
+        <ChartContainer
+          title={t('dashboard.balanceOverTime')}
+          caption={t('dashboard.balanceOverTimeCaption')}
+          height={CHART_HEIGHT.medium}
+          className="order-10 md:col-span-2 xl:order-3 xl:col-span-8"
+        >
+          {/* The spec is explicit: an empty balance history shows the EMPTY
+              STATE, not a flat zero line — a line at zero across six months is
+              a measurement nobody took. `every(point => balance === null)` is
+              the honest test for an FX gap; a user with literally no accounts
+              yet (`vm.distribution` — already computed for the widget below —
+              comes back `[]`, never `null`, when there is simply nothing to
+              list) gets a real `0` at every point instead of a gap, and a flat
+              line at zero for an empty portfolio is the same "measurement
+              nobody took" the gap case guards against, so it takes the same
+              empty state. */}
+          {vm.balanceOverTime.every((point) => point.balance === null) ||
+          (vm.distribution !== null && vm.distribution.length === 0) ? (
+            <EmptyState
+              icon={LineChart}
+              title={t('dashboard.emptyBalanceHistoryTitle')}
+              description={t('dashboard.emptyBalanceHistoryBody')}
+            />
+          ) : (
+            <AccountBalanceHistoryChart
+              data={vm.balanceOverTime}
+              currency={vm.displayCurrency}
+              locale={locale}
+              height={CHART_HEIGHT.medium}
+            />
+          )}
+        </ChartContainer>
+
+        <ChartContainer
+          title={t('dashboard.incomeVsExpense')}
+          height={CHART_HEIGHT.medium}
+          className="order-9 md:col-span-1 xl:order-4 xl:col-span-4"
+        >
+          {/* Same reasoning as Cash Flow Trend above: two zero months is
+              nothing to compare, not a comparison of nothing. */}
+          {vm.incomeVsExpense.every((row) => row.income === 0 && row.expense === 0) ? (
+            <EmptyState icon={BarChart3} title={t('dashboard.emptyIncomeVsExpenseTitle')} />
+          ) : (
+            <IncomeVsExpenseChart
+              data={vm.incomeVsExpense}
+              currency={vm.displayCurrency}
+              locale={locale}
+              height={CHART_HEIGHT.medium}
+            />
+          )}
+        </ChartContainer>
+
+        {/* Row 5: three planning widgets, 4/12 each, h ≤ 240, ≤ 3 rows + a link */}
+        <ChartContainer
+          title={t('dashboard.accountDistribution')}
+          className="order-11 md:col-span-1 xl:order-5 xl:col-span-4"
+        >
+          {vm.distribution === null ? (
+            <EmptyState icon={Wallet} title={t('dashboard.distributionFxUnavailable')} />
+          ) : vm.distribution.length === 0 ? (
+            <EmptyState
+              icon={Wallet}
+              title={t('dashboard.emptyDistributionTitle')}
+              action={{ label: t('dashboard.emptyDistributionAction'), href: '/accounts' }}
+            />
+          ) : (
+            <AccountDistributionChart
+              data={vm.distribution}
+              currency={vm.displayCurrency}
+              locale={locale}
+              height={CHART_HEIGHT.short}
+            />
+          )}
+        </ChartContainer>
+
+        <ChartContainer
+          title={t('dashboard.budgetProgress')}
+          caption={t('dashboard.budgetProgressCaption')}
+          right={
+            vm.budgets.length > 0 ? (
+              <Link
+                href="/budgets"
+                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+              >
+                {t('dashboard.viewAllBudgets')}
+              </Link>
+            ) : undefined
+          }
+          className="order-3 md:col-span-1 xl:order-6 xl:col-span-4"
         >
           {vm.budgets.length === 0 ? (
-            <DashboardEmpty>
-              {/* One `span`, as in `RecentTransactions`: `DashboardEmpty`'s `p` is
-                  a flex container, so bare text and a link would be two flex
-                  items and the space between them would be dropped. */}
-              <span>
-                No budgets for this month —{' '}
-                <Link href="/budgets" className="text-brand underline-offset-4 hover:underline">
-                  set one up
-                </Link>
-              </span>
-            </DashboardEmpty>
+            <EmptyState
+              icon={Target}
+              title={t('dashboard.emptyBudgetsTitle')}
+              action={{ label: t('dashboard.emptyBudgetsAction'), href: '/budgets' }}
+            />
           ) : (
-            <BudgetProgressList budgets={vm.budgets} compact />
+            <BudgetProgressList budgets={vm.budgets.slice(0, WIDGET_ROWS)} compact />
           )}
-        </DashboardSection>
+        </ChartContainer>
 
-        {/* Same caption reasoning as the budgets above, and the same ruling: a
-            goal is a target in its own currency and is never restated. */}
-        <DashboardSection
-          title="Savings Goals"
-          caption="Manual targets · each goal in its own currency"
+        <ChartContainer
+          title={t('dashboard.savingsGoals')}
+          caption={t('dashboard.savingsGoalsCaption')}
+          right={
+            vm.savingsGoals.length > 0 ? (
+              <Link
+                href="/goals"
+                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+              >
+                {t('dashboard.viewAllGoals')}
+              </Link>
+            ) : undefined
+          }
+          className="order-7 md:col-span-1 xl:order-7 xl:col-span-4"
         >
           {vm.savingsGoals.length === 0 ? (
-            <DashboardEmpty>
-              <span>
-                No savings goals —{' '}
-                <Link href="/goals" className="text-brand underline-offset-4 hover:underline">
-                  set one up
-                </Link>
-              </span>
-            </DashboardEmpty>
+            <EmptyState
+              icon={PiggyBank}
+              title={t('dashboard.emptyGoalsTitle')}
+              action={{ label: t('dashboard.emptyGoalsAction'), href: '/goals' }}
+            />
           ) : (
-            // The Savings page's own rows, compact: one visual language for a
-            // goal wherever it appears.
-            <GoalList goals={vm.savingsGoals} compact />
+            <GoalList goals={vm.savingsGoals.slice(0, WIDGET_ROWS)} compact />
           )}
-        </DashboardSection>
+        </ChartContainer>
 
-        {/* The one widget here that IS in the display currency, so it says so:
-            these three are converted aggregates and part of the Net Worth card
-            above, which is exactly why they may be compared with each other. */}
-        <DashboardSection
-          title="Debt / Loan Overview"
-          caption={`Outstanding today · ${vm.displayCurrency}`}
+        {/* Row 6: debt/loan 4/12 + reminders 8/12 */}
+        <ChartContainer
+          title={t('dashboard.debtLoanOverview')}
+          caption={t('dashboard.debtLoanOverviewCaption', { currency: vm.displayCurrency })}
+          className="order-8 md:col-span-1 xl:order-8 xl:col-span-4"
         >
           {vm.debtLoanOverview === null ? (
-            <DashboardEmpty>FX unavailable — outstanding amounts cannot be compared</DashboardEmpty>
+            <EmptyState icon={HandCoins} title={t('dashboard.debtLoanFxUnavailable')} />
           ) : (
-            <DebtLoanOverview data={vm.debtLoanOverview} currency={vm.displayCurrency} />
+            <DebtLoanOverview
+              data={vm.debtLoanOverview}
+              currency={vm.displayCurrency}
+              labels={{
+                'dashboard.receivables': t('dashboard.receivables'),
+                'dashboard.payables': t('dashboard.payables'),
+                'dashboard.loanOutstanding': t('dashboard.loanOutstanding'),
+              }}
+              footnote={t('dashboard.debtLoanIncluded')}
+            />
           )}
-        </DashboardSection>
+        </ChartContainer>
 
-        {/* The window comes from the service's own exported constant, so this
-            copy and what materialization actually looks ahead cannot drift
-            apart — the Reminders page says it the same way. "Overdue and"
-            because the list genuinely contains both: an unanswered bill from
-            three months ago is outside the 30 days and is still shown (ruling
-            R6-23), so a caption naming only the window would be wrong about
-            the rows underneath it. */}
-        <DashboardSection
-          title="Upcoming Reminders"
-          caption={`Overdue and the next ${OCCURRENCE_LOOKAHEAD_DAYS} days`}
+        <ChartContainer
+          title={t('dashboard.upcomingReminders')}
+          caption={t('dashboard.upcomingRemindersCaption', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
+          right={
+            vm.upcomingReminders.length > 0 ? (
+              <Link
+                href="/reminders"
+                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+              >
+                {t('dashboard.viewAllReminders')}
+              </Link>
+            ) : undefined
+          }
+          className="order-4 md:col-span-2 xl:order-9 xl:col-span-8"
         >
           {vm.upcomingReminders.length === 0 ? (
-            // One interpolated string, not text either side of `{…}`:
-            // `DashboardEmpty`'s `p` is a flex container, so three children
-            // would be three flex items and the spaces around the number would
-            // be dropped (the same trap the budgets empty state notes above).
-            //
-            // Reached only when NOTHING is pending: the widget no longer fills
-            // itself from the overdue end of the list, so "nothing due" and
-            // "nothing shown" are the same state again.
-            <DashboardEmpty>{`Nothing due in the next ${OCCURRENCE_LOOKAHEAD_DAYS} days.`}</DashboardEmpty>
+            <EmptyState
+              icon={BellRing}
+              title={t('dashboard.emptyRemindersTitle', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
+              action={{ label: t('dashboard.emptyRemindersAction'), href: '/reminders#new' }}
+            />
           ) : (
-            <>
-              {/* A muted count, not a banner — the same line the Reminders
-                  page puts over its Overdue group, for the same reason: the
-                  user needs to know how much of it there is (the list shows at
-                  most two of them) without being shouted at. Only the number
-                  carries colour. */}
+            <div className="flex flex-col gap-2">
+              {/* A muted count, not a banner — the user needs to know how much
+                  of it there is (the list shows at most two) without being
+                  shouted at. Only the number carries colour, and the word
+                  carries the meaning. */}
               {vm.overdueReminderCount > 0 && (
-                <p className="mb-2 text-xs text-muted-foreground">
-                  <span className="text-negative tabular-nums">{vm.overdueReminderCount}</span>{' '}
-                  overdue
+                <p className="text-xs/[1rem] text-muted-foreground">
+                  <span className="text-negative tabular-nums">
+                    {t('dashboard.overdueCount', { count: vm.overdueReminderCount })}
+                  </span>
                 </p>
               )}
+              {/* Only the props this component takes TODAY: Task 9 adds
+                  `locale`/`timeZone` to it and updates this call site. */}
               <OccurrenceList occurrences={vm.upcomingReminders} compact />
-            </>
+            </div>
           )}
-        </DashboardSection>
+        </ChartContainer>
 
-        {/* Last, deliberately: the widgets above are what the user came to
-            decide something from, and the ledger is what they scroll to when
-            they want to check one of them. */}
-        <DashboardSection title="Recent Transactions">
-          <RecentTransactions transactions={vm.recentTransactions} />
-        </DashboardSection>
+        {/* Row 7: the ledger, full width and LAST on desktop — the widgets
+            above are what the user came to decide something from, and the
+            ledger is what they scroll to when they want to check one of them.
+            On a phone it is second (order-2), because checking one entry is
+            what a phone is for. */}
+        <ChartContainer
+          title={t('dashboard.recentTransactions')}
+          className="order-2 md:col-span-2 xl:order-10 xl:col-span-12"
+        >
+          <RecentTransactions
+            transactions={vm.recentTransactions}
+            locale={locale}
+            timeZone={timezone}
+            mobileLimit={5}
+          />
+        </ChartContainer>
       </div>
     </div>
   )

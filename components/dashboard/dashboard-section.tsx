@@ -1,6 +1,11 @@
 import { cn } from 'cn'
 
 /**
+ * Superseded by `ChartContainer`/`SummaryPanel` (Phase 7 Task 4); the only
+ * remaining caller is `/reports`, and Task 10 deletes this file.
+ */
+
+/**
  * One widget's frame: a small-caps muted heading, a hairline border, no shadow.
  *
  * Every widget on the dashboard uses it, which is what makes the page read as

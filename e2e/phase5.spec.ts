@@ -289,10 +289,12 @@ test.describe.serial('Phase 5 — budgets', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    await expect(page.getByRole('heading', { name: 'Budget Progress' })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: /Tiến độ ngân sách|Budget Progress/ }),
+    ).toBeVisible()
     const section = page
       .locator('section')
-      .filter({ has: page.getByRole('heading', { name: 'Budget Progress' }) })
+      .filter({ has: page.getByRole('heading', { name: /Tiến độ ngân sách|Budget Progress/ }) })
 
     const overallRow = budgetRow(page, section, 'Overall')
     await expect(overallRow).toBeVisible()

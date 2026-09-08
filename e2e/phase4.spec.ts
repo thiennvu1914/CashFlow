@@ -77,7 +77,9 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: /Tổng quan|^Dashboard$/, level: 1 }),
+    ).toBeVisible()
 
     const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeVisible()
@@ -98,59 +100,65 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       await expect(rail.getByRole('link', { name: label })).toBeVisible()
     }
 
-    // Scoped to the KPI strip's <dl>: "Net Income" (and, on other pages,
+    // Scoped to the summary panel's <dl>: "Net Income" (and, on other pages,
     // "Income"/"Expense") also appear as recharts legend text elsewhere on
     // this page, which a page-wide getByText would ambiguously match too.
-    const kpiStrip = page.locator('dl')
+    // `getByText` with a regex, not `{ exact: true }`, because "Thu nhập ròng"
+    // and "Thu nhập tháng" share a prefix and the exact-match form no longer
+    // applies to a regex.
+    const summary = page.locator('dl').first()
     for (const label of [
-      'Total Account Balance',
-      'Net Worth',
-      'Monthly Income',
-      'Monthly Expense',
-      'Net Income',
+      /Tài sản ròng|Net Worth/,
+      /Tổng số dư|Total Balance/,
+      /Thu nhập tháng|Monthly Income/,
+      /Chi tiêu tháng|Monthly Expense/,
+      /Thu nhập ròng|Net Income/,
     ]) {
-      await expect(kpiStrip.getByText(label, { exact: true })).toBeVisible()
+      await expect(summary.getByText(label)).toBeVisible()
     }
 
     for (const heading of [
-      'Cash Flow Trend',
-      'Income vs Expense',
-      'Account Balance Over Time',
-      'Expense by Category',
-      'Account Balance Distribution',
+      /Dòng tiền theo tháng|Cash Flow Trend/,
+      /Thu và chi|Income vs Expense/,
+      /Số dư theo thời gian|Account Balance Over Time/,
+      /Chi tiêu theo danh mục|Expense by Category/,
+      /Phân bổ số dư|Account Balance Distribution/,
       // The planning widgets, in the order the page renders them, with Recent
       // Transactions kept last (directive Z's hierarchy).
-      'Budget Progress',
-      'Savings Goals',
-      'Debt / Loan Overview',
-      'Upcoming Reminders',
-      'Recent Transactions',
+      /Tiến độ ngân sách|Budget Progress/,
+      /Mục tiêu tiết kiệm|Savings Goals/,
+      /Công nợ và khoản vay|Debt \/ Loan Overview/,
+      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /Giao dịch gần đây|Recent Transactions/,
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     }
 
     const recentSection = page
       .locator('section')
-      .filter({ has: page.getByRole('heading', { name: 'Recent Transactions' }) })
+      .filter({ has: page.getByRole('heading', { name: /Giao dịch gần đây|Recent Transactions/ }) })
     await expect(recentSection.getByText('Salary')).toBeVisible()
     await expect(recentSection.getByText('Food & Dining')).toBeVisible()
 
-    // FX status region: the component renders exactly one <p> after the
-    // subtitle <p>, in one of four exhaustive shapes. Scoped to `main`'s own
+    // FX status region: `FxRateStatus` renders one <span> inside `PageHeader`'s
+    // `meta` slot, in one of four exhaustive shapes. Scoped to `main`'s own
     // header — the mobile top bar is a second, hidden-but-present `<header>`
-    // earlier in the DOM (`md:hidden` only hides it visually) with no <p> at
-    // all, so a bare `page.locator('header')` picks the wrong one.
-    const fxStatusText = await page.locator('main header p').last().textContent()
+    // earlier in the DOM (`md:hidden` only hides it visually) with no such
+    // span at all, so a bare `page.locator('header')` picks the wrong one.
+    const fxStatusText = await page
+      .locator('main header')
+      .getByText(/USD = |Chưa có tỷ giá|FX rate unavailable|Không cần quy đổi|No conversion needed/)
+      .first()
+      .textContent()
     expect(fxStatusText).toMatch(
-      /cached rate|FX rate unavailable|USD = .* VND|No conversion needed/,
+      /tỷ giá lưu tạm|cached rate|Chưa có tỷ giá|FX rate unavailable|USD = .* VND|Không cần quy đổi|No conversion needed/,
     )
 
-    // Total Account Balance must be a formatted number or the "unknown"
-    // placeholder — never a raw NaN/undefined leaking through the
-    // FX-unavailable fallback.
+    // Total Balance must be a formatted number or the "unknown" placeholder —
+    // never a raw NaN/undefined leaking through the FX-unavailable fallback.
     const totalBalanceCell = page
       .locator('dl > div')
-      .filter({ has: page.getByText('Total Account Balance', { exact: true }) })
+      .filter({ has: page.getByText(/Tổng số dư|Total Balance/) })
     const totalBalanceValue = (
       await totalBalanceCell.locator('dd span.tabular-nums').first().textContent()
     )?.trim()
@@ -162,6 +170,24 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       () => document.documentElement.scrollWidth <= window.innerWidth,
     )
     expect(overflow).toBe(true)
+
+    // The spec's 12-column grid (§6.1): Cash Flow Trend is 8/12 (≈ 66.7 %) and
+    // Recent Transactions is 12/12 (full width) at 1440. `boundingBox()` reads
+    // the rendered geometry directly, so this pins the grid rather than the
+    // class names that produce it.
+    const trendSection = page
+      .locator('section')
+      .filter({ has: page.getByRole('heading', { name: /Dòng tiền theo tháng|Cash Flow Trend/ }) })
+    const gridBox = await page.locator('main > div > div').last().boundingBox()
+    const trendBox = await trendSection.boundingBox()
+    const recentBox = await recentSection.boundingBox()
+    if (gridBox && trendBox && recentBox) {
+      const trendFraction = trendBox.width / gridBox.width
+      const recentFraction = recentBox.width / gridBox.width
+      expect(trendFraction).toBeGreaterThan(0.6)
+      expect(trendFraction).toBeLessThan(0.7)
+      expect(recentFraction).toBeGreaterThan(0.95)
+    }
   })
 
   test('dashboard (mobile, 375x812): compact nav, More menu, tab navigation', async ({ page }) => {

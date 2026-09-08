@@ -11,6 +11,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { Currency } from '@/lib/currency/provider'
+import type { Locale } from '@/lib/i18n/locale'
 import type { ComparisonBarDto } from '@/lib/ui/dashboard-view-model'
 import { formatChartValue, formatCompactAmount } from '@/lib/ui/format-money'
 import {
@@ -18,11 +19,9 @@ import {
   BAR_CURSOR,
   BAR_PROPS,
   CHART_COLORS,
-  CHART_HEIGHT,
   TOOLTIP_CONTENT_STYLE,
   TOOLTIP_LABEL_STYLE,
 } from './chart-theme'
-import { DashboardEmpty } from './dashboard-section'
 
 /**
  * This month against last, side by side.
@@ -34,15 +33,14 @@ import { DashboardEmpty } from './dashboard-section'
 export function IncomeVsExpenseChart({
   data,
   currency,
+  locale,
+  height,
 }: {
   data: ComparisonBarDto[]
   currency: Currency
+  locale: Locale
+  height: number
 }) {
-  const hasActivity = data.some((row) => row.income !== 0 || row.expense !== 0)
-  if (!hasActivity) {
-    return <DashboardEmpty>No income or expenses in either month</DashboardEmpty>
-  }
-
   return (
     <div
       role="img"
@@ -50,22 +48,24 @@ export function IncomeVsExpenseChart({
         .map((row) => row.period)
         .join(' and ')}`}
     >
-      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+      <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="period" {...AXIS_PROPS} />
           {/* Wrapped rather than passed directly: Recharts calls a
               `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s
-              new optional `locale` second parameter is a different type than
-              Recharts' `index`, so passing the function itself no longer
-              type-checks. The wrapper drops `index` and keeps this chart's
-              behaviour (the `vi` default) unchanged. */}
-          <YAxis {...AXIS_PROPS} tickFormatter={(value) => formatCompactAmount(value)} width={52} />
+              `locale` second parameter is a different type than Recharts'
+              `index`, so passing the function itself does not type-check. */}
+          <YAxis
+            {...AXIS_PROPS}
+            tickFormatter={(value) => formatCompactAmount(value, locale)}
+            width={52}
+          />
           <Tooltip
             cursor={BAR_CURSOR}
             contentStyle={TOOLTIP_CONTENT_STYLE}
             labelStyle={TOOLTIP_LABEL_STYLE}
-            formatter={(value) => formatChartValue(value, currency)}
+            formatter={(value) => formatChartValue(value, currency, locale)}
           />
           <Legend wrapperStyle={{ fontSize: '0.7rem' }} />
           <Bar {...BAR_PROPS} dataKey="income" name="Income" fill={CHART_COLORS.income} />
