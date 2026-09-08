@@ -368,6 +368,20 @@ async function createLoanViaUi(
   await expect(sheet).toBeHidden()
 }
 
+/**
+ * Creates one reminder through the `/reminders` page's header action ("Thêm
+ * nhắc nhở") and its create `Sheet` (spec §6.7) — creation lives behind that
+ * button, not inline on the page any more (Task 9 moved it off the page body,
+ * the same treatment `createDebtViaUi`/`createLoanViaUi` already give theirs).
+ *
+ * Every label here is one of the eleven visible `<label for>`s Task 9 added
+ * (`components/reminders/reminder-form.tsx`) — `aria-label`-only lookups no
+ * longer apply. `exact` is not needed on `Type`/`Frequency` any more either:
+ * scoped to `sheet`, there is no longer a same-named `Reminder type` filter nav
+ * for "Type" to collide with (that filter is now `reminders.filter`, read
+ * outside the sheet), and `^…$`-anchored regexes on both selects keep the
+ * lookup unambiguous regardless.
+ */
 async function createReminderViaUi(
   page: Page,
   opts: {
@@ -380,23 +394,38 @@ async function createReminderViaUi(
   },
 ): Promise<void> {
   await page.goto('/reminders')
-  const titleInput = page.getByLabel('Title')
-  await titleInput.fill(opts.title)
-  // `exact` on both selects: an accessible name matches as a substring by
-  // default, and this page's tab strip is a `<nav aria-label="Reminder type">`
-  // — which "Type" would otherwise also match.
-  await page.getByLabel('Type', { exact: true }).selectOption(opts.type)
-  await page.getByLabel('Expected amount').fill(String(opts.amount))
+  await page.getByRole('button', { name: /Thêm nhắc nhở|Add reminder/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm nhắc nhở|Add reminder/ })
+  await sheet.getByLabel(/^Tiêu đề$|^Title$/).fill(opts.title)
+  // By VALUE, not by the option's own wording (`labels.reminderType.*`, which
+  // differs by locale) — the value is stable across both.
+  await sheet.getByLabel(/^Loại$|^Type$/).selectOption(opts.type)
+  await sheet.getByLabel(/Số tiền dự kiến|Expected amount/).fill(String(opts.amount))
   // Before `dayOfMonth`, never after: the frequency's `onChange` clears both
   // recurrence anchors on every change (react-hook-form keeps the value of an
   // unmounted field), so a day typed first would be wiped by the switch.
-  await page.getByLabel('Frequency', { exact: true }).selectOption(opts.frequency)
+  await sheet.getByLabel(/^Tần suất$|^Frequency$/).selectOption(opts.frequency)
   if (opts.dayOfMonth !== undefined) {
-    await page.getByLabel('Day of month').fill(String(opts.dayOfMonth))
+    await sheet.getByLabel(/Ngày trong tháng|Day of month/).fill(String(opts.dayOfMonth))
   }
-  await page.getByLabel('Start date').fill(opts.startDate)
-  await page.getByRole('button', { name: 'Add reminder' }).click()
-  await expect(titleInput).toHaveValue('')
+  await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(opts.startDate)
+  await sheet.getByRole('button', { name: /Thêm nhắc nhở|Add reminder/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // reminder was created.
+  await expect(sheet).toBeHidden()
+}
+
+/**
+ * The occurrence row's due line (`reminders.dueLine`, "{due} · {date}"), in
+ * either locale — e.g. "Hôm nay · 09/09/2026" / "Today · Sep 9, 2026".
+ * `dueWordVi`/`dueWordEn` are the fixed pair from `messages/{vi,en}/reminders.json`
+ * (`dueToday`/`dueTomorrow`/`overdue`) — `dueInDays` is not needed by any case
+ * in this file and is left to `e2e/phase7-reminders.spec.ts`.
+ */
+function occurrenceDueLine(dueWordVi: string, dueWordEn: string, dateCarrier: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const datePattern = displayDate(dateCarrier).source
+  return new RegExp(`(${escape(dueWordVi)}|${escape(dueWordEn)}) · (${datePattern})`)
 }
 
 /* ------------------------------------------------------------------------- *
@@ -404,40 +433,12 @@ async function createReminderViaUi(
  *
  * The same technique as `e2e/transaction-form-hydration.spec.ts` — a
  * `page.request.get` with the context's session cookies, asserted on the bytes
- * the browser paints first, with no timing involved at all. Kept local (a
- * near-copy of that file's `selectMarkup`) rather than hoisted into
- * `e2e/helpers.ts`, because hoisting would mean editing an existing spec, which
- * this task does not do.
+ * the browser paints first, with no timing involved at all.
  * ------------------------------------------------------------------------- */
 
-/**
- * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- * nest, so the first `</select>` after the opening tag closes it. Scoping is
- * what makes a `selected=""` assertion mean anything on a page with several
- * selects.
- */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
-  const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
-  return html.slice(start, end + '</select>'.length)
-}
-
-/** The opening tag of one `<input>`, found by its `aria-label`. `<input>` is a
- *  void element, so the tag is all there is. */
-function inputMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<input', labelIndex)
-  const end = html.indexOf('>', labelIndex)
-  if (start === -1 || end === -1) throw new Error(`No <input> labelled "${ariaLabel}"`)
-  return html.slice(start, end + 1)
-}
-
-/** Every `<fieldset …>` opening tag in the document, so "exactly one gated
- *  form" can be asserted as a count rather than as a substring. */
+/** Every `<fieldset …>` opening tag in the document — so "no operable form
+ *  leaked into the initial HTML" can be asserted as a count (zero) rather than
+ *  as a substring search. */
 function fieldsetOpeningTags(html: string): string[] {
   return [...html.matchAll(/<fieldset[^>]*>/g)].map((match) => match[0])
 }
@@ -557,8 +558,13 @@ test.describe.serial('Phase 6 — planning modules', () => {
       {
         label: /^(Nhắc nhở|Reminders)$/,
         url: /\/reminders/,
-        heading: 'Reminders',
-        empty: 'No reminders yet — add one below.',
+        heading: /Nhắc nhở|^Reminders$/,
+        // The page opens on "Sắp đến hạn"/"Due" (spec §6.7's default tab), so
+        // this is the DUE empty message — the "Lịch nhắc"/"Schedule" tab's own
+        // ("Chưa có nhắc nhở"/"No reminders yet") is no longer visible
+        // simultaneously the way the old single-page layout showed both at
+        // once, so there is no longer a second empty state to check here.
+        empty: /Không có gì đến hạn trong 30 ngày tới|Nothing due in the next 30 days/,
       },
     ]
 
@@ -568,12 +574,6 @@ test.describe.serial('Phase 6 — planning modules', () => {
       await expect(page.getByRole('heading', { name: destination.heading, level: 1 })).toBeVisible()
       await expect(page.getByText(destination.empty, { exact: true })).toBeVisible()
     }
-
-    // `/reminders` has a second empty state — the Due list's — whose wording
-    // comes from the service's own lookahead constant.
-    await expect(
-      sectionFor(page, 'Due').getByText('Nothing due in the next 30 days.', { exact: true }),
-    ).toBeVisible()
   })
 
   test('2. savings goal: create, progress to achieved, rename, archive', async ({ page }) => {
@@ -901,13 +901,21 @@ test.describe.serial('Phase 6 — planning modules', () => {
       startDate: TODAY,
     })
 
-    const due = sectionFor(page, 'Due')
-    const definitions = sectionFor(page, 'Your reminders')
+    // Neither reminder created in this test is overdue, so both land in the
+    // Upcoming group (spec §6.7's Overdue/Upcoming split) — `sectionFor(page,
+    // 'Due')` no longer exists: the page has two TABS now (Sắp đến hạn / Lịch
+    // nhắc), not a single "Due" section, so this is scoped to the Upcoming
+    // group's own heading instead. The "Lịch nhắc" tab is a separate view with
+    // no wrapping `<section>` of its own, so its rows are found directly on
+    // `page`.
+    const upcoming = sectionFor(page, eitherLocale('Sắp tới', 'Upcoming'))
 
-    const internetDue = namedRow(page, due, 'Internet')
+    const internetDue = namedRow(page, upcoming, 'Internet')
     await expect(internetDue).toBeVisible()
-    await expect(internetDue).toContainText(`Today · ${TODAY}`)
-    await expect(internetDue.getByText('Bill', { exact: true })).toBeVisible()
+    await expect(internetDue).toContainText(occurrenceDueLine('Hôm nay', 'Today', TODAY))
+    await expect(
+      internetDue.getByText(eitherLocale('Hóa đơn', 'Bill'), { exact: true }),
+    ).toBeVisible()
 
     await createReminderViaUi(page, {
       title: 'Salary',
@@ -918,58 +926,113 @@ test.describe.serial('Phase 6 — planning modules', () => {
       startDate: TODAY,
     })
 
-    const salaryDue = namedRow(page, due, 'Salary').first()
+    // Collapsed to ONE row (spec §6.7): a monthly reminder anchored to today
+    // can already have next month's instance materialized inside the 30-day
+    // lookahead, and `clusterByReminder` is what keeps that a single row
+    // rather than two — `.first()` is defensive, not load-bearing here.
+    const salaryDue = namedRow(page, upcoming, 'Salary').first()
     await expect(salaryDue).toBeVisible()
-    await expect(salaryDue).toContainText('Monthly')
-    await expect(salaryDue.getByText('Income', { exact: true })).toBeVisible()
+    await expect(salaryDue).toContainText(eitherLocale('Hàng tháng', 'Monthly'))
+    await expect(
+      salaryDue.getByText(eitherLocale('Thu nhập', 'Income'), { exact: true }),
+    ).toBeVisible()
 
-    // The tabs live in the URL, so a filtered page is bookmarkable — and they
-    // filter the WHOLE page, both the due list and the definitions below it.
-    await page.goto('/reminders?tab=bills')
-    await expect(page.getByRole('link', { name: 'Bills' })).toHaveAttribute('aria-current', 'page')
-    await expect(namedRow(page, due, 'Internet')).toBeVisible()
-    await expect(namedRow(page, due, 'Salary')).toHaveCount(0)
-    await expect(namedRow(page, definitions, 'Internet')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Salary')).toHaveCount(0)
+    // The tabs and the chip row both live in the URL, so a filtered page is
+    // bookmarkable — and the chip filters BOTH views (spec §6.7): the due list
+    // on `?view=due` and the definitions on `?view=schedule`.
+    await page.goto('/reminders?view=due&type=bills')
+    await expect(
+      page.getByRole('link', { name: eitherLocale('Hóa đơn', 'Bills') }),
+    ).toHaveAttribute('aria-current', 'page')
+    await expect(namedRow(page, upcoming, 'Internet')).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Salary')).toHaveCount(0)
+    await page.goto('/reminders?view=schedule&type=bills')
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
+    await expect(namedRow(page, page, 'Salary')).toHaveCount(0)
 
-    await page.goto('/reminders?tab=income')
-    await expect(page.getByRole('link', { name: 'Income' })).toHaveAttribute('aria-current', 'page')
-    await expect(namedRow(page, due, 'Salary').first()).toBeVisible()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
-    await expect(namedRow(page, definitions, 'Salary')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Internet')).toHaveCount(0)
+    await page.goto('/reminders?view=due&type=income')
+    await expect(
+      page.getByRole('link', { name: eitherLocale('Thu nhập', 'Income') }),
+    ).toHaveAttribute('aria-current', 'page')
+    await expect(namedRow(page, upcoming, 'Salary').first()).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
+    await page.goto('/reminders?view=schedule&type=income')
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
+    await expect(namedRow(page, page, 'Internet')).toHaveCount(0)
 
-    // Back to the unfiltered page to answer both occurrences. Each button
+    // Back to the unfiltered due tab to answer both occurrences. Each button
     // names its row by title AND due date, because a monthly reminder can have
-    // more than one unanswered occurrence on this page at once — which is
-    // exactly the case here: `Salary` is anchored to today and the 30-day
-    // lookahead can already have materialized next month's instance too.
-    await page.goto('/reminders')
-    await page.getByRole('button', { name: `Acknowledge Internet due ${TODAY}` }).click()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
+    // more than one unanswered occurrence — but collapsing groups those under
+    // one row, and the visible Acknowledge/Dismiss always act on the NEXT
+    // (soonest) one, which is today's.
+    await page.goto('/reminders?view=due&type=all')
+    const acknowledgeInternet = new RegExp(`(Ghi nhận|Acknowledge).*Internet.*${TODAY}`)
+    await page.getByRole('button', { name: acknowledgeInternet }).click()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
 
-    await page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` }).click()
-    await expect(page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` })).toHaveCount(0)
+    const dismissSalary = new RegExp(`(Bỏ qua|Dismiss).*Salary.*${TODAY}`)
+    await page.getByRole('button', { name: dismissSalary }).click()
+    await expect(page.getByRole('button', { name: dismissSalary })).toHaveCount(0)
 
     // Materialization is idempotent and only ever inserts, so an answered
     // occurrence never comes back — an `upsert` there would silently reset it.
     await page.reload()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` })).toHaveCount(0)
-    // Both definitions are still there: answering an occurrence is not a delete.
-    await expect(namedRow(page, definitions, 'Internet')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Salary')).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: dismissSalary })).toHaveCount(0)
+
+    // Both definitions are still there: answering an occurrence is not a
+    // delete. The "Lịch nhắc" tab is a separate view now, so it is visited
+    // rather than found on the same page as the due list.
+    await page.goto('/reminders?view=schedule&type=all')
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
 
     // Pausing stops NEW occurrences and nothing else — the definition stays
     // listed, dimmed and labelled, because one the user cannot see is one they
     // cannot resume.
-    await page.getByRole('button', { name: 'Pause Salary' }).click()
-    const salaryDefinition = namedRow(page, definitions, 'Salary')
-    await expect(salaryDefinition.getByText('Paused', { exact: true })).toBeVisible()
-    await expect(salaryDefinition.getByRole('button', { name: 'Resume Salary' })).toBeVisible()
+    await page.getByRole('button', { name: new RegExp(`(Tạm dừng|Pause).*Salary`) }).click()
+    const salaryDefinition = namedRow(page, page, 'Salary')
     await expect(
-      namedRow(page, definitions, 'Internet').getByText('Active', { exact: true }),
+      salaryDefinition.getByText(eitherLocale('Tạm dừng', 'Paused'), { exact: true }),
     ).toBeVisible()
+    await expect(
+      salaryDefinition.getByRole('button', { name: new RegExp(`(Tiếp tục|Resume).*Salary`) }),
+    ).toBeVisible()
+    await expect(
+      namedRow(page, page, 'Internet').getByText(eitherLocale('Đang hoạt động', 'Active'), {
+        exact: true,
+      }),
+    ).toBeVisible()
+  })
+
+  test('a weekly reminder collapses to one row with a +n badge that expands', async ({ page }) => {
+    // A WEEKLY reminder starting today materializes ~5 occurrences in the
+    // 30-day window, so the list must show one row and a "+4 kỳ"/"+4 periods"
+    // badge (spec §6.7's headline change).
+    await createReminderViaUi(page, {
+      title: 'Gym membership',
+      type: 'EXPENSE',
+      amount: 500_000,
+      frequency: 'WEEKLY',
+      startDate: TODAY,
+    })
+    await page.goto('/reminders?view=due&type=all')
+    const rows = page.getByRole('listitem').filter({ hasText: 'Gym membership' })
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toContainText(/\+\d+ (kỳ|periods?)/)
+
+    // The disclosure — a `<summary>` naming the reminder and the count — opens
+    // to reveal every remaining occurrence, each with its own dated row.
+    const summary = rows.first().locator('summary')
+    await expect(summary).toContainText('Gym membership')
+    const firstRestRow = rows.first().locator('details ul li').first()
+    // Closed by default: present in the DOM but not visible, the same
+    // "nothing hidden, just collapsed" contract every other `<details>` on
+    // this page (goals/debts history) already keeps.
+    await expect(firstRestRow).not.toBeVisible()
+    await summary.click()
+    await expect(firstRestRow).toBeVisible()
+    await expect(rows.first().locator('details ul li')).not.toHaveCount(0)
   })
 
   test('7. dashboard: the three planning sections and Net Worth (desktop)', async ({ page }) => {
@@ -1072,7 +1135,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     const remindersWidget = sectionFor(page, /Nhắc nhở sắp tới|Upcoming Reminders/)
     const rentRow = namedRow(page, remindersWidget, 'Rent')
     await expect(rentRow).toBeVisible()
-    await expect(rentRow).toContainText(`Tomorrow · ${TOMORROW}`)
+    await expect(rentRow).toContainText(occurrenceDueLine('Ngày mai', 'Tomorrow', TOMORROW))
   })
 
   test('8. mobile (375x812): tab bar unchanged, More menu, no overflow', async ({ page }) => {
@@ -1125,45 +1188,33 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Deterministic by construction: raw response bodies, no timing at all —
     // the same technique as `e2e/transaction-form-hydration.spec.ts`.
     //
-    // `/goals`, `/debts` and `/loans` are deliberately NOT among these any
-    // more (Task 7, and now this task): each create form lives inside a
-    // `Sheet` opened from the header action, and a closed `Sheet` renders no
-    // popup content at all in the initial HTML — so there is no longer a
-    // gated `<fieldset>` (or an `aria-label`-only `<select>`) to find on the
-    // raw page. `components/goals/goal-form.test.tsx`,
-    // `components/debts/debt-form.test.tsx` and
-    // `components/loans/loan-form.test.tsx` are what now pin each form's
-    // server markup, mounted directly rather than through a closed dialog,
-    // the same way `AccountForm`'s equivalent Wave 2 form — also Sheet-gated —
-    // has never had a raw-HTML check in this suite either.
-    const pages = ['/reminders'] as const
-    const bodies = new Map<string, string>()
+    // `/goals`, `/debts` and `/loans` were dropped from this test in Task 7/8,
+    // and `/reminders` joins them now (this task): all four create forms live
+    // inside a `Sheet` opened from the header action, and a closed `Sheet`
+    // renders no popup content at all in the initial HTML — so there is no
+    // longer a gated `<fieldset>` (or a labelled `<select>` with a
+    // server-rendered selection) to probe on any of the four raw pages.
+    // `components/goals/goal-form.test.tsx`, `components/debts/debt-form.test.tsx`,
+    // `components/loans/loan-form.test.tsx` and (this task)
+    // `components/reminders/reminder-form.test.tsx` are what pin each form's
+    // own server markup now, mounted directly via `renderToStaticMarkup`
+    // rather than through a closed dialog — the same way `AccountForm`'s
+    // equivalent Wave 2 form, also Sheet-gated, has never had a raw-HTML
+    // check in this suite either.
+    //
+    // What is still worth asserting HERE, on the real rendered page rather
+    // than a mounted component, is the other half of that same claim: that a
+    // CLOSED `Sheet` truly emits nothing operable into the initial HTML at
+    // all — not a `<fieldset>` a CSS class merely hides visually, which a
+    // component-level test that only ever mounts an OPEN form would never
+    // catch.
+    const pages = ['/goals', '/debts', '/loans', '/reminders'] as const
     for (const url of pages) {
       const response = await page.request.get(url)
       expect(response.status(), url).toBe(200)
-      bodies.set(url, await response.text())
+      const html = await response.text()
+      expect(fieldsetOpeningTags(html), url).toHaveLength(0)
     }
-
-    // 1. The gate itself, in the bytes the browser paints first: each page has
-    //    exactly one form, nothing in it is operable, and assistive tech is
-    //    told the group is busy. Asserted as a count rather than a substring so
-    //    a second, ungated form could not hide behind a passing `toContain`.
-    for (const url of pages) {
-      const html = bodies.get(url)!
-      const tags = fieldsetOpeningTags(html)
-      expect(tags, url).toHaveLength(1)
-      expect(tags[0], url).toMatch(/\sdisabled=""/)
-      expect(tags[0], url).toMatch(/\saria-busy="true"/)
-    }
-
-    // 2. `/reminders` — MONTHLY is the frequency select's third option (a
-    //    second-vs-third-option hazard, the same shape `LoanForm`'s own test
-    //    now covers directly), and the start date IS pre-filled.
-    const reminders = bodies.get('/reminders')!
-    expect(selectMarkup(reminders, 'Frequency')).toMatch(
-      /<option[^>]*\svalue="MONTHLY"[^>]*\sselected=""/,
-    )
-    expect(inputMarkup(reminders, 'Start date')).toContain(`value="${TODAY}"`)
   })
 
   test('10. full export: eleven sheets, planning history included; filtered unchanged', async ({
@@ -1233,9 +1284,11 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     // Reminders — the paused definition is listed with Active "No" (words, not
     // TRUE/FALSE: "paused" is a state the user set), and its answered
-    // occurrences are tallied rather than dropped.
+    // occurrences are tallied rather than dropped. Four rows, not three: the
+    // collapse test added earlier in this file (spec §6.7's headline change)
+    // creates a fourth, "Gym membership".
     const remindersRows = dataRows(sheetOf(fullWorkbook, 'Reminders'))
-    expect(remindersRows).toHaveLength(3)
+    expect(remindersRows).toHaveLength(4)
     const salary = rowWhere(remindersRows, 0, 'Salary')
     expect(salary[1]).toBe('Income')
     expect(salary[4]).toBe('Monthly')
@@ -1246,6 +1299,15 @@ test.describe.serial('Phase 6 — planning modules', () => {
     expect(internet[6]).toBe('Yes')
     expect(internet[8]).toBe(1)
     expect(rowWhere(remindersRows, 0, 'Rent')[6]).toBe('Yes')
+    // The collapsed weekly reminder is still one DEFINITION on this sheet
+    // (the export has no notion of "collapse" at all — that is a UI-only
+    // concept — it tallies every occurrence WEEKLY materialized, five of
+    // them, none yet answered).
+    const gym = rowWhere(remindersRows, 0, 'Gym membership')
+    expect(gym[1]).toBe('Bill')
+    expect(gym[4]).toBe('Every week')
+    expect(gym[6]).toBe('Yes')
+    expect(gym[7]).toBe(5) // Pending — none of its five occurrences answered
 
     // The filtered workbook is historical end to end and gains none of the six:
     // every one of them is denominated in its record's own currency, so there is
