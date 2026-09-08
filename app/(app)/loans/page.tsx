@@ -8,10 +8,11 @@ import { loanSubtotalsByCurrency, toLoanDto, type LoanDto } from '@/lib/ui/loan-
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { LoanCreateButton } from '@/components/loans/loan-create-button'
 import { LoanList } from '@/components/loans/loan-list'
-import { LoanRowActions } from '@/components/loans/loan-row-actions'
+import { LoanPaymentButton, LoanRowMenu } from '@/components/loans/loan-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { MoneyText } from '@/components/common/money-text'
 import { PageHeader } from '@/components/common/page-header'
+import { SectionHeader } from '@/components/common/section-header'
 
 /**
  * Loans (spec §4.10, §6.6): money the user owes a lender, and the instalments
@@ -115,20 +116,36 @@ export default async function LoansPage() {
           description={t('loans.emptyBody')}
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
-          <LoanList
-            loans={active}
-            locale={locale}
-            timeZone={timezone}
-            renderActions={(loan) => <LoanRowActions loan={loan} today={today} />}
-          />
+        <div className="flex flex-col gap-3">
+          {/* One `h2` for the main list (spec a11y AC: "one h2 on Loans"),
+              paralleling `debts.json`'s two section headings and the closed
+              section's own `h2` below. */}
+          <SectionHeader title={t('loans.activeSection')} />
+          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+            <LoanList
+              loans={active}
+              locale={locale}
+              timeZone={timezone}
+              renderActions={(loan) => ({
+                inlineAction: <LoanPaymentButton loan={loan} today={today} locale={locale} />,
+                actions: <LoanRowMenu loan={loan} />,
+              })}
+            />
+          </div>
         </div>
       )}
 
       {closed.length > 0 && (
         <details className="rounded-lg border border-border bg-surface">
-          <summary className="cursor-pointer px-4 py-3 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
-            {t('loans.closedSection', { count: closed.length })}
+          {/* A heading element as a `<summary>`'s label is explicit content
+              model (a `<summary>` may include one `h1`–`h6` as its label),
+              which is what gives this disclosure's own section a real
+              heading rather than a clickable paragraph — spec a11y AC: "h2 on
+              each `<details>`". */}
+          <summary className="cursor-pointer px-4 py-3">
+            <h2 className="inline text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+              {t('loans.closedSection', { count: closed.length })}
+            </h2>
           </summary>
           {/* Read-only, like the written-off debts on `/debts`: a closed loan
               refuses every write (`LoanNotActiveError`), so no actions are

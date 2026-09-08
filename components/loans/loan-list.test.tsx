@@ -38,12 +38,18 @@ function dto(overrides: Partial<LoanDto> = {}): LoanDto {
 }
 
 describe('LoanList', () => {
-  it('renders the outstanding principal as the dominant figure, via loans.outstandingLine', async () => {
+  it('renders a muted caption via loans.outstandingLabel plus the dominant figure, at two sizes for two breakpoints', async () => {
     const html = renderToStaticMarkup(
       await LoanList({ loans: [dto()], locale: 'vi', timeZone: 'Asia/Ho_Chi_Minh' }),
     )
-    expect(html).toContain('loans.outstandingLine')
-    expect(html).toContain('&quot;outstanding&quot;:&quot;236.500.000&quot;')
+    expect(html).toContain('loans.outstandingLabel')
+    expect(html).toContain('236.500.000')
+    // Two `MoneyText`s, one per breakpoint (fix round 1, finding 6) — never
+    // the whole label+figure+currency sentence forced through `MoneyText`'s
+    // own `whitespace-nowrap`, which clips at narrow widths.
+    expect(html).toMatch(/text-\[1\.5rem\][^"]*"[^>]*>236\.500\.000/) // sm:hidden, size="lg"
+    expect(html).toMatch(/sm:hidden/)
+    expect(html).toMatch(/hidden sm:inline-flex/)
     // The dominant-figure size class from `MoneyText`'s `kpi` variant.
     expect(html).toMatch(/text-\[1\.625rem\]/)
   })
@@ -129,6 +135,30 @@ describe('LoanList', () => {
     expect(html).toContain('bg-positive')
     expect(html).toContain('aria-valuenow="100"')
     expect(html).toContain('aria-valuetext="120 %"')
+  })
+
+  it('names the progress bar with the bare lender, never a hard-coded English suffix (fix round 1, finding 2)', async () => {
+    const html = renderToStaticMarkup(
+      await LoanList({
+        loans: [dto({ lender: 'Techcombank' })],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      }),
+    )
+    expect(html).toContain('aria-label="Techcombank"')
+    expect(html).not.toContain('principal repaid')
+  })
+
+  it('renders loans.principalOfLine with the original principal beside the outstanding figure', async () => {
+    const html = renderToStaticMarkup(
+      await LoanList({
+        loans: [dto({ principal: '240.000.000', currency: 'VND' })],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      }),
+    )
+    expect(html).toContain('loans.principalOfLine')
+    expect(html).toContain('&quot;principal&quot;:&quot;240.000.000&quot;')
   })
 
   it('compact renders only the lender and the outstanding principal', async () => {

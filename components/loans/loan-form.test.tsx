@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { NextIntlClientProvider } from 'next-intl'
 import { loadMessages } from '@/lib/i18n/messages'
 import viLabels from '@/messages/vi/labels.json'
+import viLoans from '@/messages/vi/loans.json'
 
 /**
  * A markup test, exactly like `components/debts/debt-form.test.tsx` —
@@ -91,12 +92,27 @@ describe('LoanForm', () => {
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
   })
 
-  it('renders a visible <label for> on every field', () => {
+  it('renders a visible <label for> naming every field, against the vi strings themselves', () => {
     const html = render()
     // lender, principal, currency, interest rate, start date, term months,
     // payment frequency, scheduled payment, next due date, notes.
     const labelCount = (html.match(/<label for="/g) ?? []).length
     expect(labelCount).toBe(10)
+
+    for (const label of [
+      viLoans.lender,
+      viLoans.principal,
+      viLoans.currency,
+      viLoans.interestRate,
+      viLoans.startDate,
+      viLoans.termMonths,
+      viLoans.paymentFrequency,
+      viLoans.scheduledPayment,
+      viLoans.nextDueDate,
+      viLoans.notes,
+    ]) {
+      expect(html).toContain(`>${label}</label>`)
+    }
   })
 
   it('server-renders MONTHLY as the selected frequency, though it is not the first option', () => {
