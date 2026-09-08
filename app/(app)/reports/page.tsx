@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { PieChart, Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
@@ -45,6 +46,14 @@ import { PeriodFilter } from '@/components/reports/period-filter'
 type ReportsSearchParams = Record<string, string | string[] | undefined>
 
 /**
+ * The invalid-range `InlineAlert`'s id (fix round 1, promoted minor) — both
+ * date inputs in `PeriodFilter`'s custom-range form point `aria-describedby`
+ * at it, so a screen-reader user tabbing into From/To hears why the range
+ * they typed did not apply.
+ */
+const RANGE_ERROR_ID = 'report-range-error'
+
+/**
  * A raw `from`/`to` echoed back into the form after a rejected range, so the
  * user can correct one field instead of retyping both. Only a value that is
  * already a real calendar date is echoed: there is nothing to preserve about
@@ -52,6 +61,23 @@ type ReportsSearchParams = Record<string, string | string[] | undefined>
  */
 function echoableDate(value: string | string[] | undefined): string {
   return typeof value === 'string' && isRealCalendarDate(value) ? value : ''
+}
+
+/**
+ * A category's share of total expense, as a rounded percent string.
+ *
+ * Explicitly guarded (fix round 1, promoted minor) rather than the previous
+ * `expenseTotal.isZero() ? total : expenseTotal` fallback, which still
+ * reached `0/0` — a literal "NaN %" — whenever a zero-total row somehow
+ * appeared alongside zero total expense. `getActivitySummary`'s aggregation
+ * should never produce a zero-total category row in practice (a category
+ * only enters the map when a transaction adds to it), but this is the number
+ * a screen reader announces for `CategoryBars`' now-decorative bar, so it
+ * does not get to rely on an implicit invariant elsewhere.
+ */
+function categoryPercentLabel(total: Prisma.Decimal, expenseTotal: Prisma.Decimal): string {
+  if (expenseTotal.isZero()) return '0 %'
+  return `${total.div(expenseTotal).mul(100).toDecimalPlaces(0).toString()} %`
 }
 
 export default async function ReportsPage({
@@ -96,12 +122,15 @@ export default async function ReportsPage({
           activeKind="custom"
           from={echoableDate(params.from)}
           to={echoableDate(params.to)}
+          errorId={RANGE_ERROR_ID}
         />
         {/* `error.message` comes from `InvalidReportRangeError` and is English
             (`lib/reports/report-range.ts`) — a resolver message about a
             hand-typed URL, not product copy, so it is left untranslated
             rather than touching `lib/reports/`, which this phase does not. */}
-        <InlineAlert tone="negative">{error.message}</InlineAlert>
+        <InlineAlert id={RANGE_ERROR_ID} tone="negative">
+          {error.message}
+        </InlineAlert>
       </div>
     )
   }
@@ -137,11 +166,7 @@ export default async function ReportsPage({
     name: row.name,
     amount: formatMoney(row.total, displayCurrency, locale),
     percent: largest && !largest.isZero() ? row.total.div(largest).mul(100).toNumber() : 0,
-    percentLabel: `${row.total
-      .div(summary.expense.isZero() ? row.total : summary.expense)
-      .mul(100)
-      .toDecimalPlaces(0)
-      .toString()} %`,
+    percentLabel: categoryPercentLabel(row.total, summary.expense),
   }))
 
   const accountRows = summary.byAccount.map((row) => ({

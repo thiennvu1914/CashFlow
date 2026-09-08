@@ -22,10 +22,13 @@ import { Input } from '@/components/ui/input'
  */
 export interface PeriodFilterProps {
   /**
-   * The resolved range's kind, or `null` when the URL could not be resolved —
-   * in which case nothing is highlighted, because nothing is being shown.
+   * The resolved range's kind. Never `null`: an unresolved URL still passes
+   * `'custom'` here (`app/(app)/reports/page.tsx`'s invalid-range branch) so
+   * the segment the user needs to correct — "Tùy chọn", with its echoed
+   * From/To values — is the one actually highlighted, rather than leaving
+   * every segment unselected while the page shows an error.
    */
-  activeKind: ReportRange['kind'] | null
+  activeKind: ReportRange['kind']
   /**
    * `yyyy-MM-dd` carriers for the custom inputs' `defaultValue`, or `''` when
    * there is none — never a display label: an `<input type="date">` cannot
@@ -33,6 +36,15 @@ export interface PeriodFilterProps {
    */
   from: string
   to: string
+  /**
+   * The id of the page's `InlineAlert` explaining a rejected range (fix round
+   * 1, promoted minor) — set only when the resolver actually rejected the
+   * URL. Both date inputs get `aria-describedby` pointing at it and
+   * `aria-invalid`, so a screen-reader user tabbing into From/To hears WHY
+   * the range they typed did not apply, not just that a message exists
+   * somewhere on the page. `undefined` on every ordinary render.
+   */
+  errorId?: string
 }
 
 /**
@@ -50,7 +62,7 @@ const PERIOD_LABEL_KEYS: Record<(typeof PERIODS)[number], string> = {
 // `async`, because it now translates its own six segment labels. Still a
 // SERVER component with no state: the address bar remains the single source
 // of truth for which period is showing.
-export async function PeriodFilter({ activeKind, from, to }: PeriodFilterProps) {
+export async function PeriodFilter({ activeKind, from, to, errorId }: PeriodFilterProps) {
   const t = await getTranslations()
   const customActive = activeKind === 'custom'
 
@@ -77,11 +89,19 @@ export async function PeriodFilter({ activeKind, from, to }: PeriodFilterProps) 
   ]
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Six segments do not fit at 375, so the TRACK scrolls (the primitive's
-          own `overflow-x-auto`). Spec §7's ban on horizontal scrolling is about
-          core METRICS — a number the user must see must not be hidden — and a
-          filter is not a metric. */}
+    // `items-start` (fix round 1, promoted minor): without it, the flex-column
+    // wrapper's default `align-items: stretch` sized the SegmentedControl's
+    // track to the wrapper's full cross-axis width once the track itself
+    // could wrap onto two rows (see `SegmentedControl`'s own `flex-wrap`
+    // below `sm`) — stretching a control that should hug its own content, not
+    // fill the page's `max-w-[75rem]` container.
+    <div className="flex flex-col items-start gap-3">
+      {/* Six segments do not fit at 375, so the TRACK wraps to a second row
+          rather than clipping or relying only on its own `overflow-x-auto`
+          fallback scroll (fix round 1, promoted minor — see
+          `SegmentedControl`'s own doc comment). Spec §7's ban on horizontal
+          scrolling is about core METRICS — a number the user must see must
+          not be hidden — and a filter is not a metric. */}
       <SegmentedControl label={t('reports.period')} segments={segments} activeId={activeKind} />
 
       {/* The From/To pair appears only when the custom segment is selected
@@ -105,14 +125,36 @@ export async function PeriodFilter({ activeKind, from, to }: PeriodFilterProps) 
               other half of what `FormField` is for. Plain `<label htmlFor>` +
               `Input` is also the pattern this file already had here before
               this rewrite, and the one the accessibility criteria calls out
-              as already correct. */}
-          <div className="flex flex-1 flex-col gap-1.5">
+              as already correct.
+
+              `sm:w-44`, not `flex-1` (fix round 1, promoted minor): a date
+              input never needs more than a fixed compact width, and letting
+              the pair grow to fill the row's remaining space read as loose
+              rather than a compact control — the same reasoning the brief
+              gives for the export control not dominating the header. */}
+          <div className="flex flex-col gap-1.5 sm:w-44">
             <Label htmlFor="report-from">{t('reports.from')}</Label>
-            <Input id="report-from" name="from" type="date" required defaultValue={from} />
+            <Input
+              id="report-from"
+              name="from"
+              type="date"
+              required
+              defaultValue={from}
+              aria-describedby={errorId}
+              aria-invalid={errorId ? true : undefined}
+            />
           </div>
-          <div className="flex flex-1 flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 sm:w-44">
             <Label htmlFor="report-to">{t('reports.to')}</Label>
-            <Input id="report-to" name="to" type="date" required defaultValue={to} />
+            <Input
+              id="report-to"
+              name="to"
+              type="date"
+              required
+              defaultValue={to}
+              aria-describedby={errorId}
+              aria-invalid={errorId ? true : undefined}
+            />
           </div>
           <Button type="submit" variant="secondary" className="sm:mb-0">
             {t('reports.apply')}

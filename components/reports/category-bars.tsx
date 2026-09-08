@@ -10,9 +10,18 @@ import type { Currency } from '@/lib/currency/provider'
  * the LARGEST row, not to the total: a chart in which the biggest slice is 30 %
  * wide is a chart of empty space.
  *
- * `--color-accent` via `Progress`'s brand tone is deliberate — a spending
- * breakdown is a neutral fact, not a good/bad judgement, which is the same
- * choice `chart-theme.ts` makes for the account distribution.
+ * `tone="accent"` (`--color-accent` via `Progress`) is deliberate — a
+ * spending breakdown is a neutral fact, not a good/bad judgement, which is
+ * the same choice `chart-theme.ts` makes for the account distribution.
+ *
+ * `decorative` (fix round 1, promoted minor): the bar's width is a share of
+ * the LARGEST row, but `row.percentLabel` beside it is a share of the TOTAL —
+ * two different percentages of the same row. `Progress`'s real
+ * `role="progressbar"` contract assumes one quantity whose fill and announced
+ * value agree, which these two numbers do not, and a zero-total denominator
+ * could reach it as a literal "NaN %" announcement. The bar is a picture here;
+ * the row's own visible name, amount and percent — already real text — carry
+ * the meaning.
  */
 export function CategoryBars({
   rows,
@@ -27,13 +36,22 @@ export function CategoryBars({
         <li key={row.id} className="flex flex-col gap-1">
           <div className="flex items-baseline justify-between gap-3">
             <span className="min-w-0 truncate text-sm">{row.name}</span>
-            <MoneyText value={row.amount} currency={currency} />
+            <div className="flex items-baseline gap-2">
+              {/* The share-of-total percent, as real visible text — not only
+                  `Progress`'s (now decorative, fix round 1) `aria-valuetext`,
+                  which nobody sighted or not could otherwise read. */}
+              <span className="text-xs/[1rem] tabular-nums text-muted-foreground">
+                {row.percentLabel}
+              </span>
+              <MoneyText value={row.amount} currency={currency} />
+            </div>
           </div>
           <Progress
             percent={row.percent}
             valueText={row.percentLabel}
             label={row.name}
-            tone="brand"
+            tone="accent"
+            decorative
           />
         </li>
       ))}

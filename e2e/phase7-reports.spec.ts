@@ -129,9 +129,31 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
     await fromInput.fill(today)
     await toInput.fill('2020-01-01')
     await page.getByRole('button', { name: 'Áp dụng' }).click()
-    await expect(page.locator('p[role="alert"]')).toBeVisible()
+    const alert = page.locator('p[role="alert"]')
+    await expect(alert).toBeVisible()
     await expect(page.getByLabel('Từ ngày', { exact: true })).toHaveValue(today)
     await expect(page.getByLabel('Đến ngày', { exact: true })).toHaveValue('2020-01-01')
+    // Both date inputs point aria-describedby at the alert's own id and carry
+    // aria-invalid (fix round 1, promoted minor) — the alert's id is real, so
+    // a screen-reader user tabbing into either field hears why it failed.
+    const alertId = await alert.getAttribute('id')
+    expect(alertId).toBeTruthy()
+    await expect(page.getByLabel('Từ ngày', { exact: true })).toHaveAttribute(
+      'aria-describedby',
+      alertId!,
+    )
+    await expect(page.getByLabel('Từ ngày', { exact: true })).toHaveAttribute(
+      'aria-invalid',
+      'true',
+    )
+    await expect(page.getByLabel('Đến ngày', { exact: true })).toHaveAttribute(
+      'aria-describedby',
+      alertId!,
+    )
+    await expect(page.getByLabel('Đến ngày', { exact: true })).toHaveAttribute(
+      'aria-invalid',
+      'true',
+    )
 
     // Now a valid range: the header's range text updates and the alert is gone.
     await page.getByLabel('Đến ngày', { exact: true }).fill(today)
@@ -142,10 +164,15 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
     expect(url.searchParams.get('period')).toBe('custom')
     expect(url.searchParams.get('from')).toBe(today)
     expect(url.searchParams.get('to')).toBe(today)
-    // The header's range description mentions the currency once the range is
-    // resolved — proof the description switched from "choose a range" to the
-    // real window rather than staying on the error copy.
-    await expect(page.getByText('VND', { exact: true }).first()).toBeVisible()
+    // The header's description switched from "choose a range" to the real
+    // resolved window — scoped to the header's own paragraph (not a bare
+    // "VND" text search, which now also matches the summary panel's
+    // responsive-duplicate — see SummaryPanel's flat `lg` split, fix round
+    // 1 — currency spans, one of which is legitimately CSS-hidden at this
+    // viewport).
+    const rangeDescription = page.locator('header p').first()
+    await expect(rangeDescription).not.toContainText('Chọn khoảng thời gian')
+    await expect(rangeDescription).toContainText('VND')
   })
 
   test('vi: the summary is three figures in one tabular-aligned card', async ({ page }) => {
@@ -155,8 +182,12 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
     await expect(panel.locator('dt')).toHaveCount(3)
     await expect(panel.locator('dd')).toHaveCount(3)
     // Right-aligned tabular numerals — the DOM shape the brief requires,
-    // never a pixel measurement.
-    await expect(panel.locator('span.tabular-nums')).toHaveCount(3)
+    // never a pixel measurement. `:visible`, not a bare count: each figure
+    // now renders as TWO responsive copies (fix round 1 — SummaryPanel's
+    // flat variant splits at `lg` to fix a 768 clipping bug), one of which
+    // is legitimately CSS-hidden at any given width, so exactly 3 are ever
+    // visible at once even though 6 exist in the DOM.
+    await expect(panel.locator('span.tabular-nums:visible')).toHaveCount(3)
 
     async function kpiValue(label: string): Promise<string> {
       const cell = panel.locator('div').filter({ has: page.getByText(label, { exact: true }) })
