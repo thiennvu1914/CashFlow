@@ -5,6 +5,8 @@ import ExcelJS from 'exceljs'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { DEBT_ERROR_MESSAGES, LOAN_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { formatDate } from '@/lib/ui/format-date'
+import viErrors from '@/messages/vi/errors.json'
 import {
   createAccountViaUi,
   digitsOnly,
@@ -110,6 +112,36 @@ const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
 
 /** The day of the month the MONTHLY income reminder is anchored to. */
 const TODAY_DAY_OF_MONTH = Number(TODAY.slice(8, 10))
+
+/** The OVERPAYMENT server error, in both locales — the InlineAlert now renders
+ *  `t(DEBT_ERROR_KEYS.OVERPAYMENT)`/`t(LOAN_ERROR_KEYS.OVERPAYMENT)`, never the
+ *  raw English literal `DEBT_ERROR_MESSAGES`/`LOAN_ERROR_MESSAGES` alone still
+ *  carry. No `NEXT_LOCALE` cookie is ever set in this file, so every page
+ *  renders in the app's default locale (vi) — `eitherLocale` is what lets
+ *  these assertions hold in either locale without pinning which one is
+ *  rendering. */
+const DEBT_OVERPAYMENT_MESSAGE = eitherLocale(
+  viErrors.debt.OVERPAYMENT,
+  DEBT_ERROR_MESSAGES.OVERPAYMENT,
+)
+const LOAN_OVERPAYMENT_MESSAGE = eitherLocale(
+  viErrors.loan.OVERPAYMENT,
+  LOAN_ERROR_MESSAGES.OVERPAYMENT,
+)
+
+/**
+ * A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,
+ * 'date')` actually displays it on a row — in either locale, since no
+ * `NEXT_LOCALE` cookie is ever set in this file. Never the raw carrier
+ * string itself, which is only what an `<input type="date">`'s VALUE holds,
+ * not what a row's rendered TEXT reads.
+ */
+function displayDate(carrier: string): RegExp {
+  return eitherLocale(
+    formatDate(carrier, { locale: 'vi', timeZone: TIMEZONE, style: 'date' }),
+    formatDate(carrier, { locale: 'en', timeZone: TIMEZONE, style: 'date' }),
+  )
+}
 
 /**
  * Spec §12's full workbook, complete as of Phase 6 — the exact list, in sheet
@@ -243,23 +275,62 @@ async function openRowMenu(page: Page, row: Locator, name: string, enName = name
     .click()
 }
 
+/**
+ * The debt row's figure line (`debts.figureLine`), in either locale: vi reads
+ * "còn {outstanding} / {original} VND", en reads "{outstanding} of {original}
+ * VND" — two different templates for the same pair of figures, so a single
+ * alternation on the whole line (rather than one word) is what proves the
+ * right template rendered with the right numbers together.
+ */
+function debtFigureLine(outstanding: string, original: string): RegExp {
+  return new RegExp(`^(còn )?${outstanding} (/|of) ${original} VND$`)
+}
+
+/**
+ * The loan row's dominant figure (`loans.outstandingLine`), in either locale:
+ * vi reads "Dư nợ gốc {outstanding} VND", en reads "Principal outstanding
+ * {outstanding} VND" — a single self-contained `<span>`'s text, so this is
+ * safe to assert as one alternation despite the row's other lines sitting in
+ * sibling elements with no text-node separator between them.
+ */
+function loanOutstandingLine(outstanding: string): RegExp {
+  return new RegExp(`(Dư nợ gốc|Principal outstanding) ${outstanding} VND`)
+}
+
+/**
+ * Creates one debt through the `/debts` page's header action ("Thêm công nợ")
+ * and its create `Sheet` (spec §6.6) — creation lives behind that button, not
+ * inline on the page.
+ */
 async function createDebtViaUi(
   page: Page,
   opts: { direction: 'RECEIVABLE' | 'PAYABLE'; person: string; amount: number },
 ): Promise<void> {
   await page.goto('/debts')
+  await page.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm công nợ|Add debt/ })
   // Selected explicitly even for RECEIVABLE, which is already the form's
   // default: the two options are the only place the user states which way the
   // money goes (`direction` is absent from `updateDebtSchema` and can never be
-  // corrected), so the wording is worth exercising in both directions.
-  await page.getByLabel('Direction').selectOption(opts.direction)
-  const personInput = page.getByLabel('Person', { exact: true })
+  // corrected), so the wording is worth exercising in both directions. By
+  // VALUE, not by the option's label: the row's own wording
+  // (`labels.debtDirection.*`) differs by locale, but the value is stable
+  // across both.
+  await sheet.getByLabel(/^Chiều$|^Direction$/).selectOption(opts.direction)
+  const personInput = sheet.getByLabel(/^Người$|^Person$/)
   await personInput.fill(opts.person)
-  await page.getByLabel('Original amount').fill(String(opts.amount))
-  await page.getByRole('button', { name: 'Add debt' }).click()
-  await expect(personInput).toHaveValue('')
+  await sheet.getByLabel(/Số tiền ban đầu|Original amount/).fill(String(opts.amount))
+  await sheet.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // debt was created.
+  await expect(sheet).toBeHidden()
 }
 
+/**
+ * Creates one loan through the `/loans` page's header action ("Thêm khoản
+ * vay") and its create `Sheet` (spec §6.6) — creation lives behind that
+ * button, not inline on the page.
+ */
 async function createLoanViaUi(
   page: Page,
   opts: {
@@ -271,22 +342,26 @@ async function createLoanViaUi(
   },
 ): Promise<void> {
   await page.goto('/loans')
-  const lenderInput = page.getByLabel('Lender', { exact: true })
-  await lenderInput.fill(opts.lender)
-  await page.getByLabel('Principal', { exact: true }).fill(String(opts.principal))
-  await page.getByLabel('Interest rate (%)').fill(String(opts.interestRate))
-  await page.getByLabel('Start date').fill(TODAY)
-  await page.getByLabel('Term (months)').fill(String(opts.termMonths))
+  await page.getByRole('button', { name: /Thêm khoản vay|Add loan/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm khoản vay|Add loan/ })
+  await sheet.getByLabel(/^Bên cho vay$|^Lender$/).fill(opts.lender)
+  await sheet.getByLabel(/^Số tiền vay$|^Principal$/).fill(String(opts.principal))
+  await sheet.getByLabel(/Lãi suất|Interest rate/).fill(String(opts.interestRate))
+  await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(TODAY)
+  await sheet.getByLabel(/Kỳ hạn|Term \(months\)/).fill(String(opts.termMonths))
   // MONTHLY is the *second* option, so the form carries an explicit
   // `defaultValue` for it; selecting it here exercises the same value the
-  // server HTML claims (test 9 asserts that claim in the bytes).
-  await page.getByLabel('Payment frequency').selectOption('MONTHLY')
-  await page.getByLabel('Scheduled payment').fill(String(opts.scheduledPayment))
+  // server HTML claims (`loan-form.test.tsx` asserts that claim in the bytes).
+  // By value, which is stable across both locales.
+  await sheet.getByLabel(/Tần suất trả|Payment frequency/).selectOption('MONTHLY')
+  await sheet.getByLabel(/Số tiền mỗi kỳ|Scheduled payment/).fill(String(opts.scheduledPayment))
   // Left at its pre-filled default rather than typed: the loan's whole schedule
   // anchor comes from this field, and "today" is what the page seeded it with.
-  await expect(page.getByLabel('Next due date')).toHaveValue(TODAY)
-  await page.getByRole('button', { name: 'Add loan' }).click()
-  await expect(lenderInput).toHaveValue('')
+  await expect(sheet.getByLabel(/^Kỳ tới$|^Next due date$/)).toHaveValue(TODAY)
+  await sheet.getByRole('button', { name: /Thêm khoản vay|Add loan/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // loan was created.
+  await expect(sheet).toBeHidden()
 }
 
 async function createReminderViaUi(
@@ -466,14 +541,14 @@ test.describe.serial('Phase 6 — planning modules', () => {
       {
         label: /^(Công nợ|Debts)$/,
         url: /\/debts/,
-        heading: 'Debts',
-        empty: 'No debts yet — add one below.',
+        heading: /Công nợ|^Debts$/,
+        empty: /Chưa có công nợ|No debts yet/,
       },
       {
         label: /^(Khoản vay|Loans)$/,
         url: /\/loans/,
-        heading: 'Loans',
-        empty: 'No loans yet — add one below.',
+        heading: /Khoản vay|^Loans$/,
+        empty: /Chưa có khoản vay|No loans yet/,
       },
       {
         label: /^(Nhắc nhở|Reminders)$/,
@@ -571,86 +646,133 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Minh')
     await expect(row).toBeVisible()
-    await expect(row.getByText('Owes you', { exact: true })).toBeVisible()
-    await expect(row.getByText('Open', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^1.000.000 of 1.000.000 VND$/,
+    await expect(
+      row.getByText(eitherLocale('Họ nợ bạn', 'Owes you'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('1.000.000', '1.000.000'),
     )
 
-    // The per-currency subtotal strip — one row per currency, never a total.
-    const subtotal = page.locator('li').filter({ hasText: 'Owed to you' })
-    await expect(subtotal.locator('span.text-positive')).toHaveText(/^1.000.000$/)
-    await expect(subtotal.locator('span.text-negative')).toHaveText(/^0$/)
+    // The per-currency subtotal strip — one row per currency, never a total,
+    // now split across the two directional sections (spec §6.6): only the
+    // relevant half is shown under each direction's SectionHeader.
+    const receivableSubtotal = page
+      .locator('li')
+      .filter({ hasText: eitherLocale('Khoản phải thu', 'Owed to you') })
+    await expect(receivableSubtotal).toContainText('1.000.000')
 
-    // 400.000 back → partly paid, and the history opens under the row.
-    await row.getByRole('button', { name: 'Record payment' }).click()
-    await page.getByLabel('Payment amount for Minh').fill('400000')
-    await expect(page.getByLabel('Payment date for Minh')).toHaveValue(TODAY)
-    await page.getByRole('button', { name: 'Save' }).click()
+    // 400.000 back → partly paid, in the payment Dialog scoped by its title.
+    const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
+    await row.getByRole('button', { name: paymentAction }).click()
+    const dialog = page.getByRole('dialog', { name: paymentAction })
+    await dialog.getByLabel(/^Số tiền$|^Amount$/).fill('400000')
+    await expect(dialog.getByLabel(/Ngày thanh toán|Payment date/)).toHaveValue(TODAY)
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    await expect(row.getByText('Partly paid', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^600.000 of 1.000.000 VND$/)
+    await expect(
+      row.getByText(eitherLocale('Trả một phần', 'Partly paid'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('600.000', '1.000.000'),
+    )
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(
+      row.getByText(eitherLocale('Lần thanh toán (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // 700.000 against 600.000 outstanding → refused inline, nothing recorded.
-    await row.getByRole('button', { name: 'Record payment' }).click()
-    const amount = page.getByLabel('Payment amount for Minh')
+    // 700.000 against 600.000 outstanding → the friendly OVERPAYMENT message,
+    // not a raw server error, and nothing recorded.
+    await row.getByRole('button', { name: paymentAction }).click()
+    const amount = dialog.getByLabel(/^Số tiền$|^Amount$/)
     await amount.fill('700000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText(DEBT_ERROR_MESSAGES.OVERPAYMENT)).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^600.000 of 1.000.000 VND$/)
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(DEBT_OVERPAYMENT_MESSAGE)).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('600.000', '1.000.000'),
+    )
+    await expect(
+      row.getByText(eitherLocale('Lần thanh toán (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // Exactly what is left, in the pane the refusal left open → settled.
+    // Exactly what is left, in the dialog the refusal left open → settled.
     await amount.fill('600000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    await expect(row.getByText('Paid', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^0 of 1.000.000 VND$/)
-    await expect(row.getByText('Payments (2)', { exact: true })).toBeVisible()
+    await expect(
+      row.getByText(eitherLocale('Đã thanh toán', 'Paid'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('0', '1.000.000'),
+    )
+    // The payment history, inspectable through the row's own disclosure
+    // without permanently expanding it.
+    const historyToggle = row.getByText(eitherLocale('Lần thanh toán (2)', 'Payments (2)'), {
+      exact: true,
+    })
+    await expect(historyToggle).toBeVisible()
+    await historyToggle.click()
+    await expect(row.getByText('400.000')).toBeVisible()
+    await expect(row.getByText('600.000')).toBeVisible()
   })
 
-  test('4. payable: written off, out of the subtotals, history kept', async ({ page }) => {
+  test('4. payable: written off via ConfirmDialog, out of the subtotals, history kept', async ({
+    page,
+  }) => {
     await createDebtViaUi(page, { direction: 'PAYABLE', person: 'Landlord', amount: 2_000_000 })
 
     const row = namedRow(page, page, 'Landlord')
     await expect(row).toBeVisible()
-    await expect(row.getByText('You owe', { exact: true })).toBeVisible()
-    await expect(row.getByText('Open', { exact: true })).toBeVisible()
+    await expect(row.getByText(eitherLocale('Bạn nợ họ', 'You owe'), { exact: true })).toBeVisible()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
 
-    const subtotal = page.locator('li').filter({ hasText: 'Owed to you' })
-    // Minh is settled, so it contributes nothing: the strip's receivable side
-    // is 0 and the payable side is the new debt.
-    await expect(subtotal.locator('span.text-positive')).toHaveText(/^0$/)
-    await expect(subtotal.locator('span.text-negative')).toHaveText(/^2.000.000$/)
+    // Minh is settled, so its currency contributes nothing to the receivable
+    // side any more — no subtotal row is shown there at all, never a zero.
+    await expect(
+      page.locator('li').filter({ hasText: eitherLocale('Khoản phải thu', 'Owed to you') }),
+    ).toHaveCount(0)
+    const payableSubtotal = page
+      .locator('li')
+      .filter({ hasText: eitherLocale('Khoản phải trả', 'You owe') })
+    await expect(payableSubtotal).toContainText('2.000.000')
 
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Write off this debt? Payments already recorded stay in the history.',
-      )
-      return dialog.accept()
-    })
-    await row.getByRole('button', { name: 'Write off' }).click()
+    // Write off: `…` menu item behind a `ConfirmDialog`, never a native
+    // `window.confirm`. Cancel first, to prove it keeps the debt untouched.
+    await openRowMenu(page, row, 'Landlord')
+    await page.getByRole('menuitem', { name: eitherLocale('Xóa nợ', 'Write off') }).click()
+    const confirmDialog = page.getByRole('dialog')
+    await confirmDialog.getByRole('button', { name: eitherLocale('Hủy', 'Cancel') }).click()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
 
-    const writtenOff = detailsFor(page, 'Written-off debts (1)')
+    await openRowMenu(page, row, 'Landlord')
+    await page.getByRole('menuitem', { name: eitherLocale('Xóa nợ', 'Write off') }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: eitherLocale('Xóa nợ', 'Write off') })
+      .click()
+
+    const writtenOff = detailsFor(page, eitherLocale('Công nợ đã xóa (1)', 'Written-off debts (1)'))
     await expect(writtenOff).toBeVisible()
     await openDetails(writtenOff)
     const writtenOffRow = namedRow(page, writtenOff, 'Landlord')
     await expect(writtenOffRow).toBeVisible()
-    await expect(writtenOffRow.getByText('Written off', { exact: true })).toBeVisible()
-    // A written-off debt refuses every write, so it carries no actions.
-    for (const action of ['Record payment', 'Edit', 'Write off']) {
-      await expect(writtenOffRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    await expect(
+      writtenOffRow.getByText(eitherLocale('Đã xóa nợ', 'Written off'), { exact: true }),
+    ).toBeVisible()
+    // A written-off debt refuses every write, so it carries no actions at all.
+    await expect(writtenOffRow.getByRole('button')).toHaveCount(0)
 
-    // Nothing is outstanding in any currency any more, so the strip is gone
-    // entirely rather than left behind as a row of zeroes.
-    await expect(page.getByText('Owed to you')).toHaveCount(0)
+    // Nothing is outstanding in any currency any more, so both subtotal strips
+    // are gone entirely rather than left behind as rows of zeroes.
+    await expect(
+      page.locator('li').filter({ hasText: eitherLocale('Khoản phải trả', 'You owe') }),
+    ).toHaveCount(0)
   })
 
-  test('5. loan: instalment split, advanced schedule, refused overpayment, closed', async ({
+  test('5. loan: instalment dialog with a live Tổng, advanced schedule, refused overpayment, closed via ConfirmDialog', async ({
     page,
   }) => {
     await createLoanViaUi(page, {
@@ -663,77 +785,109 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Bank')
     await expect(row).toBeVisible()
-    await expect(row.getByText('Active', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^12.000.000 of 12.000.000 VND$/,
-    )
+    await expect(row.getByText(eitherLocale('Đang trả', 'Active'), { exact: true })).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('12.000.000'))
     // Due today, so the schedule line is the "due soon" wording; the instalment
     // and cadence are on the same line.
-    await expect(row).toContainText(`Due soon — ${TODAY}`)
-    await expect(row).toContainText('Monthly')
-    await expect(row).toContainText('12 months from ' + TODAY)
-    for (const action of ['Record payment', 'Edit', 'Close loan']) {
-      await expect(row.getByRole('button', { name: action, exact: true })).toBeVisible()
-    }
+    await expect(row).toContainText(eitherLocale('Sắp đến hạn', 'Due soon'))
+    await expect(row).toContainText(displayDate(TODAY))
+    await expect(row).toContainText(eitherLocale('Hàng tháng', 'Monthly'))
+    await expect(row).toContainText(/12 (tháng từ|months from)/)
+    await expect(
+      row.getByRole('button', {
+        name: eitherLocale('Ghi nhận thanh toán', 'Record payment'),
+        exact: true,
+      }),
+    ).toBeVisible()
+    await openRowMenu(page, row, 'Bank')
+    await expect(page.getByRole('menuitem', { name: eitherLocale('Sửa', 'Edit') })).toBeVisible()
+    await expect(
+      page.getByRole('menuitem', { name: eitherLocale('Đóng khoản vay', 'Close loan') }),
+    ).toBeVisible()
+    await page.keyboard.press('Escape')
 
-    // The split: the user types the two parts and the total is derived — the
+    // The split: the user types the two parts and Tổng is derived — the
     // read-only field has to show it BEFORE the instalment is saved, because
-    // that figure is the one the resolver then submits.
-    await row.getByRole('button', { name: 'Record payment', exact: true }).click()
-    const total = page.getByLabel('Total payment for Bank')
-    await expect(total).toHaveValue('—')
-    await page.getByLabel('Principal for Bank').fill('1000000')
-    await page.getByLabel('Interest for Bank').fill('85000')
-    await expect(total).toHaveValue(/^1.085.000 VND$/)
-    await expect(page.getByLabel('Payment date for Bank')).toHaveValue(TODAY)
-    await page.getByRole('button', { name: 'Save' }).click()
+    // that figure is the one the resolver then submits, and it must be a
+    // FIGURE, never an em dash, at every point along the way.
+    const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
+    await row.getByRole('button', { name: paymentAction, exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: paymentAction })
+    const principal = dialog.getByLabel(/^Gốc$|^Principal$/)
+    const interest = dialog.getByLabel(/^Lãi$|^Interest$/)
+    const total = dialog.getByLabel(/^Tổng$|^Total$/)
+
+    // Both parts blank: Tổng reads a computed zero, never "—".
+    await expect(total).toHaveValue(/^0(,00)?\s?VND$/)
+    await expect(total).not.toHaveValue('—')
+
+    await principal.fill('1000000')
+    await interest.fill('85000')
+    await expect(total).toHaveValue(/1.085.000/)
+    await expect(total).not.toHaveValue('—')
+
+    // Clearing Gốc shows the interest alone rather than a dash — a blank part
+    // counts as zero for DISPLAY only (`displayTotal`); the schema still
+    // requires the real field before submitting.
+    await principal.fill('')
+    await expect(total).toHaveValue(/85.000/)
+    await expect(total).not.toHaveValue('—')
+    await principal.fill('1000000')
+
+    await expect(dialog.getByLabel(/Ngày trả|Payment date/)).toHaveValue(TODAY)
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
     // Principal came off the loan; interest is reported beside it and pays
     // nothing down; the schedule advanced exactly one calendar month.
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^11.000.000 of 12.000.000 VND$/,
-    )
-    await expect(row).toContainText(/85.000 VND paid so far/)
-    await expect(row).toContainText(`Next due ${NEXT_DUE_AFTER_ONE_PAYMENT}`)
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('11.000.000'))
+    await expect(row).toContainText(eitherLocale('đã trả lãi 85.000', '85.000 VND paid so far'))
+    await expect(row).toContainText(displayDate(NEXT_DUE_AFTER_ONE_PAYMENT))
+    await expect(
+      row.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // One dong more principal than is outstanding → refused inline. Interest 0
-    // is legitimate (a final sweep of the principal carries none), so the only
-    // thing wrong with this instalment is the part the service checks.
-    await row.getByRole('button', { name: 'Record payment', exact: true }).click()
-    await page.getByLabel('Principal for Bank').fill('11000001')
-    await page.getByLabel('Interest for Bank').fill('0')
-    await page.getByRole('button', { name: 'Save' }).click()
+    // One dong more principal than is outstanding → the friendly OVERPAYMENT
+    // message, not a raw server error. Interest 0 is legitimate (a final
+    // sweep of the principal carries none), so the only thing wrong with this
+    // instalment is the part the service checks.
+    await row.getByRole('button', { name: paymentAction, exact: true }).click()
+    await principal.fill('11000001')
+    await interest.fill('0')
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText(LOAN_ERROR_MESSAGES.OVERPAYMENT)).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^11.000.000 of 12.000.000 VND$/,
-    )
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(LOAN_OVERPAYMENT_MESSAGE)).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('11.000.000'))
+    await expect(
+      row.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
+    await dialog.getByRole('button', { name: /^Hủy$|^Cancel$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Close this loan? Its payment history stays visible under Closed loans.',
-      )
-      return dialog.accept()
-    })
-    // `exact` because the open payment pane's toggle now reads "Close", and an
-    // accessible name matches as a substring by default.
-    await row.getByRole('button', { name: 'Close loan', exact: true }).click()
+    // Close: `…` menu item behind a `ConfirmDialog`, never a native
+    // `window.confirm`.
+    await openRowMenu(page, row, 'Bank')
+    await page.getByRole('menuitem', { name: eitherLocale('Đóng khoản vay', 'Close loan') }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: eitherLocale('Đóng khoản vay', 'Close loan') })
+      .click()
 
-    await expect(page.getByText('No loans yet — add one below.')).toBeVisible()
+    await expect(page.getByText(eitherLocale('Chưa có khoản vay', 'No loans yet'))).toBeVisible()
 
-    const closed = detailsFor(page, 'Closed loans (1)')
+    const closed = detailsFor(page, eitherLocale('Khoản vay đã đóng (1)', 'Closed loans (1)'))
     await expect(closed).toBeVisible()
     await openDetails(closed)
     const closedRow = namedRow(page, closed, 'Bank')
     await expect(closedRow).toBeVisible()
-    await expect(closedRow.getByText('Closed', { exact: true })).toBeVisible()
+    await expect(
+      closedRow.getByText(eitherLocale('Đã đóng', 'Closed'), { exact: true }),
+    ).toBeVisible()
     // The instalment really was paid, so closing the loan does not undo it.
-    await expect(closedRow.getByText('Payments (1)', { exact: true })).toBeVisible()
-    for (const action of ['Record payment', 'Edit', 'Close loan']) {
-      await expect(closedRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    await expect(
+      closedRow.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
+    await expect(closedRow.getByRole('button')).toHaveCount(0)
   })
 
   test('6. reminders: due list, tabs, acknowledge, dismiss, pause', async ({ page }) => {
@@ -969,15 +1123,18 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Deterministic by construction: raw response bodies, no timing at all —
     // the same technique as `e2e/transaction-form-hydration.spec.ts`.
     //
-    // `/goals` is deliberately NOT one of these any more (Task 7): its create
-    // form now lives inside a `Sheet` opened from the header action, and a
-    // closed `Sheet` renders no popup content at all in the initial HTML — so
-    // there is no longer a gated `<fieldset>` (or an `aria-label`-only
-    // `<select>`) to find on the raw page. `components/goals/goal-form.test.tsx`
-    // is what now pins its server markup, mounted directly rather than through
-    // a closed dialog, the same way `AccountForm`'s equivalent Wave 2 form —
-    // also Sheet-gated — has never had a raw-HTML check in this suite either.
-    const pages = ['/debts', '/loans', '/reminders'] as const
+    // `/goals`, `/debts` and `/loans` are deliberately NOT among these any
+    // more (Task 7, and now this task): each create form lives inside a
+    // `Sheet` opened from the header action, and a closed `Sheet` renders no
+    // popup content at all in the initial HTML — so there is no longer a
+    // gated `<fieldset>` (or an `aria-label`-only `<select>`) to find on the
+    // raw page. `components/goals/goal-form.test.tsx`,
+    // `components/debts/debt-form.test.tsx` and
+    // `components/loans/loan-form.test.tsx` are what now pin each form's
+    // server markup, mounted directly rather than through a closed dialog,
+    // the same way `AccountForm`'s equivalent Wave 2 form — also Sheet-gated —
+    // has never had a raw-HTML check in this suite either.
+    const pages = ['/reminders'] as const
     const bodies = new Map<string, string>()
     for (const url of pages) {
       const response = await page.request.get(url)
@@ -997,34 +1154,14 @@ test.describe.serial('Phase 6 — planning modules', () => {
       expect(tags[0], url).toMatch(/\saria-busy="true"/)
     }
 
-    // 2. `/loans` — MONTHLY is the frequency select's SECOND option, so without
-    //    the explicit `defaultValue` the server HTML would select WEEKLY (a
-    //    `<select>`'s browser fallback) while `useForm` held MONTHLY, and a
-    //    submission before hydration would file a monthly loan as weekly.
-    const loans = bodies.get('/loans')!
-    expect(selectMarkup(loans, 'Payment frequency')).toMatch(
-      /<option[^>]*\svalue="MONTHLY"[^>]*\sselected=""/,
-    )
-    // The next due date is the schedule's anchor, so the server states it.
-    expect(inputMarkup(loans, 'Next due date')).toContain(`value="${TODAY}"`)
-    // And the start date is deliberately NOT pre-filled — asserted rather than
-    // skipped, so a `defaultValue` added to the wrong input would be caught.
-    expect(inputMarkup(loans, 'Start date')).not.toContain(`value="${TODAY}"`)
-
-    // 3. `/reminders` — same second-vs-third-option hazard on frequency
-    //    (MONTHLY is third here), and the start date IS pre-filled.
+    // 2. `/reminders` — MONTHLY is the frequency select's third option (a
+    //    second-vs-third-option hazard, the same shape `LoanForm`'s own test
+    //    now covers directly), and the start date IS pre-filled.
     const reminders = bodies.get('/reminders')!
     expect(selectMarkup(reminders, 'Frequency')).toMatch(
       /<option[^>]*\svalue="MONTHLY"[^>]*\sselected=""/,
     )
     expect(inputMarkup(reminders, 'Start date')).toContain(`value="${TODAY}"`)
-
-    // 4. `/debts` has no date default at all (a debt's due date is optional),
-    //    and its select defaults to its own first option — so the marker must
-    //    be on the value the form actually holds and on nothing else.
-    expect(selectMarkup(bodies.get('/debts')!, 'Direction')).toMatch(
-      /<option[^>]*\svalue="RECEIVABLE"[^>]*\sselected=""/,
-    )
   })
 
   test('10. full export: eleven sheets, planning history included; filtered unchanged', async ({
