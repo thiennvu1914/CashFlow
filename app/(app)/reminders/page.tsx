@@ -114,19 +114,6 @@ function dueEmptyKey(filter: TypeFilter, anyPending: boolean): string {
   return filter === 'income' ? 'reminders.emptyDueIncome' : 'reminders.emptyDueBills'
 }
 
-/**
- * The same distinction for the "Lịch nhắc" tab. "Chưa có nhắc nhở" points at
- * the header's create action, which is the right answer for a user who has
- * none; it is the wrong answer for a user with three income reminders looking
- * at the Bills filter, who has plenty and is one click from seeing them.
- */
-function scheduleEmptyKey(filter: TypeFilter, anyReminders: boolean): string {
-  if (!anyReminders) return 'reminders.emptyDefinitionsTitle'
-  return filter === 'income'
-    ? 'reminders.emptyDefinitionsIncome'
-    : 'reminders.emptyDefinitionsBills'
-}
-
 export default async function RemindersPage({
   searchParams,
 }: {
@@ -177,9 +164,12 @@ export default async function RemindersPage({
   const overdue = occurrences.filter((occurrence) => occurrence.overdue)
   const upcoming = occurrences.filter((occurrence) => !occurrence.overdue)
 
-  const reminders = reminderRows
-    .filter((row) => filterType === null || row.type === filterType)
-    .map((row) => toReminderDto(row, timezone, locale))
+  // The type chip is a secondary filter INSIDE the due tab only (spec §6.7,
+  // fix round 1 finding 3): "Lịch nhắc" always lists every definition,
+  // regardless of `?type=`, and does not render the chip row at all — a
+  // reminder the user cannot see under a filter they did not mean to apply
+  // to this tab is one they cannot pause or resume.
+  const reminders = reminderRows.map((row) => toReminderDto(row, timezone, locale))
 
   return (
     <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
@@ -214,33 +204,39 @@ export default async function RemindersPage({
         ]}
       />
 
-      {/* The type filter is SECONDARY (spec §6.7), so it is a scrollable chip
-          row rather than a second segmented control competing with the tabs
-          above — and spec §7 permits horizontal scrolling for exactly this and
-          forbids it for core metrics. */}
-      <nav aria-label={t('reminders.filter')} className="-mx-1 flex gap-1 overflow-x-auto px-1">
-        {TYPE_FILTERS.map((id) => (
-          <Link
-            key={id}
-            href={`/reminders?view=${view}&type=${id}`}
-            aria-current={filter === id ? 'page' : undefined}
-            className={cn(
-              'rounded-full px-3 py-1.5 text-[0.8125rem]/[1.125rem] whitespace-nowrap',
-              filter === id
-                ? 'bg-muted font-medium text-brand'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-            )}
-          >
-            {t(
-              id === 'all'
-                ? 'reminders.filterAll'
-                : id === 'bills'
-                  ? 'reminders.filterBills'
-                  : 'reminders.filterIncome',
-            )}
-          </Link>
-        ))}
-      </nav>
+      {/* The type filter is SECONDARY (spec §6.7) AND scoped to the "due" tab
+          only (fix round 1, finding 3): rendering it on "Lịch nhắc" too — and
+          filtering the definitions by it — made the chips read as if they
+          applied to the whole page, which contradicts their own "secondary,
+          inside the due tab" framing. `?type=` still round-trips in the tab
+          links below so a filter chosen on "due" survives a visit to
+          "schedule" and back, but the chip row itself, and any effect on
+          which definitions are listed, exists only here. */}
+      {view === 'due' && (
+        <nav aria-label={t('reminders.filter')} className="-mx-1 flex gap-1 overflow-x-auto px-1">
+          {TYPE_FILTERS.map((id) => (
+            <Link
+              key={id}
+              href={`/reminders?view=due&type=${id}`}
+              aria-current={filter === id ? 'page' : undefined}
+              className={cn(
+                'rounded-full px-3 py-1.5 text-[0.8125rem]/[1.125rem] whitespace-nowrap',
+                filter === id
+                  ? 'bg-muted font-medium text-brand'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {t(
+                id === 'all'
+                  ? 'reminders.filterAll'
+                  : id === 'bills'
+                    ? 'reminders.filterBills'
+                    : 'reminders.filterIncome',
+              )}
+            </Link>
+          ))}
+        </nav>
+      )}
 
       {view === 'due' ? (
         overdue.length === 0 && upcoming.length === 0 ? (
@@ -257,8 +253,15 @@ export default async function RemindersPage({
           <div className="flex flex-col gap-6">
             {overdue.length > 0 && (
               <section className="flex flex-col gap-2">
+                {/* Both Overdue and Upcoming are `h2` (fix round 1, finding
+                    2): Overdue renders FIRST on the page, so giving it `h3`
+                    while Upcoming — which follows it — stayed `h2` produced
+                    an actual h1 → h3 → h2 sequence, not merely an out-of-order
+                    "sub-group" reading. Two siblings at the same level is
+                    what spec §8's "nothing skipped" order actually requires
+                    here; the count in `right` is what still marks Overdue as
+                    the more urgent of the two. */}
                 <SectionHeader
-                  as="h3"
                   title={t('reminders.groupOverdue')}
                   right={
                     // A muted count rather than a banner: the list can be long
@@ -275,20 +278,19 @@ export default async function RemindersPage({
                     locale={locale}
                     timeZone={timezone}
                     collapse
-                    renderActions={(occurrence) => <OccurrenceActions occurrence={occurrence} />}
+                    renderActions={(occurrence) => (
+                      <OccurrenceActions
+                        occurrence={occurrence}
+                        locale={locale}
+                        timeZone={timezone}
+                      />
+                    )}
                   />
                 </div>
               </section>
             )}
             {upcoming.length > 0 && (
               <section className="flex flex-col gap-2">
-                {/* `h2`, not `h3` (an intentional departure from the brief's
-                    literal snippet, per the binding a11y acceptance criterion
-                    "each group is an h2, the Overdue sub-group an h3"): the
-                    heading hierarchy is h1 → h2 "Sắp tới" → h3 "Quá hạn", so
-                    Upcoming — the ordinary group — keeps `SectionHeader`'s own
-                    default rather than being demoted to the Overdue group's
-                    level. */}
                 <SectionHeader title={t('reminders.groupUpcoming')} />
                 <div className="overflow-hidden rounded-lg border border-border bg-surface">
                   <OccurrenceList
@@ -296,7 +298,13 @@ export default async function RemindersPage({
                     locale={locale}
                     timeZone={timezone}
                     collapse
-                    renderActions={(occurrence) => <OccurrenceActions occurrence={occurrence} />}
+                    renderActions={(occurrence) => (
+                      <OccurrenceActions
+                        occurrence={occurrence}
+                        locale={locale}
+                        timeZone={timezone}
+                      />
+                    )}
                   />
                 </div>
               </section>
@@ -304,13 +312,16 @@ export default async function RemindersPage({
           </div>
         )
       ) : reminders.length === 0 ? (
+        // Unfiltered by construction (fix round 1, finding 3: `reminders`
+        // above no longer drops rows by `?type=`), so there is only one fact
+        // this can mean — the user has no reminders yet at all — and only
+        // one message, never a "no bills yet" the chip row cannot even
+        // produce any more.
         <EmptyState
           icon={BellRing}
           size="page"
-          // `reminderRows`, not `reminders`: a user with income reminders on
-          // the Bills filter HAS reminders and must not be told they have none.
-          title={t(scheduleEmptyKey(filter, reminderRows.length > 0))}
-          description={reminderRows.length === 0 ? t('reminders.emptyDefinitionsBody') : undefined}
+          title={t('reminders.emptyDefinitionsTitle')}
+          description={t('reminders.emptyDefinitionsBody')}
         />
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-surface">

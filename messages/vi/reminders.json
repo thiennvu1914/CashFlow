@@ -18,7 +18,6 @@
   "dueLine": "{due} · {date}",
   "morePeriods": "+{count, plural, other {# kỳ}}",
   "expandPeriods": "Xem {count, plural, other {# kỳ}} còn lại của {name}",
-  "contextLine": "{parts}",
   "acknowledgeAction": "Ghi nhận",
   "dismissAction": "Bỏ qua",
   "pauseAction": "Tạm dừng",
@@ -53,7 +52,5 @@
   "emptyDueBills": "Không có hóa đơn nào đến hạn trong {days} ngày tới",
   "emptyDueIncome": "Không có thu nhập nào đến hạn trong {days} ngày tới",
   "emptyDefinitionsTitle": "Chưa có nhắc nhở",
-  "emptyDefinitionsBody": "Thêm nhắc nhở đầu tiên cho một hóa đơn hoặc một khoản thu.",
-  "emptyDefinitionsBills": "Chưa có hóa đơn nào",
-  "emptyDefinitionsIncome": "Chưa có nhắc nhở thu nhập nào"
+  "emptyDefinitionsBody": "Thêm nhắc nhở đầu tiên cho một hóa đơn hoặc một khoản thu."
 }

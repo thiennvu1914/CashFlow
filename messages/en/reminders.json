@@ -18,7 +18,6 @@
   "dueLine": "{due} · {date}",
   "morePeriods": "+{count, plural, one {# period} other {# periods}}",
   "expandPeriods": "See the remaining {count, plural, one {# period} other {# periods}} of {name}",
-  "contextLine": "{parts}",
   "acknowledgeAction": "Acknowledge",
   "dismissAction": "Dismiss",
   "pauseAction": "Pause",
@@ -53,7 +52,5 @@
   "emptyDueBills": "No bills due in the next {days} days",
   "emptyDueIncome": "No income due in the next {days} days",
   "emptyDefinitionsTitle": "No reminders yet",
-  "emptyDefinitionsBody": "Add your first reminder for a bill or income.",
-  "emptyDefinitionsBills": "No bills yet",
-  "emptyDefinitionsIncome": "No income reminders yet"
+  "emptyDefinitionsBody": "Add your first reminder for a bill or income."
 }
