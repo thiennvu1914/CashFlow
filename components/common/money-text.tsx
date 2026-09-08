@@ -23,13 +23,25 @@ export type MoneyTone = 'default' | 'positive' | 'negative' | 'muted'
  * three monthly metrics `lg` 24/30 beside it. `kpi` 30/36 is Reports' three
  * equal figures. A panel built from one size has no headline, which was the
  * pre-flight finding.
+ *
+ * `kpi`'s larger step waits for `lg:` (1024), not `md:` (768) — a Task 10
+ * browser-check finding: `SummaryPanel`'s `flat` variant switches to its
+ * three-column grid at exactly `md`, the same breakpoint the ORIGINAL
+ * `md:text-[1.875rem]` bump used, so a 13-character VND figure ("17.258.623,41")
+ * grew to 30 px at the very moment its column shrank to a third of the card's
+ * width — measured as real character clipping against the next cell at 768
+ * (no page-level `scrollWidth` growth, since the overflow is a sibling cell's
+ * opaque background painting over the spill, not a wider page). `lg` is where
+ * `ChartContainer`'s own grid already assumes more room; 768–1023 keeps the
+ * smaller step, which was already proven to fit at that width, and 1024+ keeps
+ * exactly the figure this size was designed to show.
  */
 const SIZE_CLASSES: Record<MoneySize, string> = {
   meta: 'text-[0.8125rem]/[1.125rem] font-normal',
   row: 'text-[0.9375rem]/[1.25rem] font-semibold',
   md: 'text-[1.375rem]/[1.75rem] font-semibold',
   lg: 'text-[1.5rem]/[1.875rem] font-semibold',
-  kpi: 'text-[1.625rem]/[2rem] font-semibold md:text-[1.875rem]/[2.25rem]',
+  kpi: 'text-[1.625rem]/[2rem] font-semibold lg:text-[1.875rem]/[2.25rem]',
   hero: 'text-[1.875rem]/[2.25rem] font-semibold md:text-4xl/[2.5rem]',
 }
 
