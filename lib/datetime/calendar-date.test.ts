@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CALENDAR_DATE_RE,
   calendarDateToUtcCarrier,
+  calendarDaysBetween,
   compareCalendarDates,
   formatCalendarDate,
   isRealCalendarDate,
@@ -131,5 +132,24 @@ describe('compareCalendarDates', () => {
 
   it('does not require either day to exist — ordering is not a reality check', () => {
     expect(compareCalendarDates('2026-02-30', '2026-03-01')).toBe(-1)
+  })
+})
+
+describe('calendarDaysBetween', () => {
+  it('counts forward', () => {
+    expect(calendarDaysBetween('2026-09-08', '2026-09-11')).toBe(3)
+  })
+
+  it('counts backward as negative', () => {
+    expect(calendarDaysBetween('2026-09-11', '2026-09-08')).toBe(-3)
+  })
+
+  it('is exact across a DST boundary — carrier arithmetic, never instant arithmetic', () => {
+    // 2026-03-28 to 2026-03-30 spans the (northern-hemisphere) spring-forward
+    // transition in most zones that observe DST; the whole point of computing
+    // this on UTC-midnight carriers rather than on the instants the dates came
+    // from is that a real two-day gap can never measure anything else, even in
+    // a zone where the clock itself skipped an hour that week.
+    expect(calendarDaysBetween('2026-03-28', '2026-03-30')).toBe(2)
   })
 })

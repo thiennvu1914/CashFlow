@@ -1,7 +1,7 @@
 import type { OccurrenceStatus, RecurrenceFrequency, ReminderType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
-import { calendarDateToUtcCarrier, compareCalendarDates } from '@/lib/datetime/calendar-date'
+import { calendarDaysBetween, compareCalendarDates } from '@/lib/datetime/calendar-date'
 import type { OccurrenceRow, ReminderRow } from '@/lib/server/services/reminder'
 import { formatMoney } from './format-money'
 
@@ -37,12 +37,8 @@ import { formatMoney } from './format-money'
  */
 
 /** `yyyy-MM-dd` in the user's zone, the format both DTOs' date fields carry and
- *  `compareCalendarDates`/`calendarDateToUtcCarrier` both take. */
+ *  `compareCalendarDates`/`calendarDaysBetween` both take. */
 const CALENDAR_DATE_FORMAT = 'yyyy-MM-dd'
-
-/** Milliseconds in a day — exact between two UTC-midnight carriers, where no
- *  DST shift can shorten one. Never applied to an instant. */
-const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
  * Fixed English copy (Phase 7 replaces these literals with i18n keys, same as
@@ -82,25 +78,6 @@ export function recurrenceLabel(frequency: RecurrenceFrequency, interval: number
     case 'YEARLY':
       return interval === 1 ? 'Yearly' : `Every ${interval} years`
   }
-}
-
-/**
- * How many calendar days there are from `from` to `to`, both `yyyy-MM-dd`.
- *
- * Computed between two UTC-midnight carriers rather than from the instants the
- * dates came from, and that is the whole point: `(dueAt - now) / 86_400_000`
- * answers "0" for a bill due at midnight tomorrow when it is 09:00 today, and a
- * zone with a DST change makes a real three-day gap measure 71 hours. Carrier
- * arithmetic in UTC has neither problem — and `calendarDateToUtcCarrier` also
- * refuses a date that does not exist, so "31 April" cannot silently roll over.
- *
- * `Math.round` rather than a bare divide: both operands are exact multiples of
- * a day by construction, so this only guards against a future caller handing in
- * something that is not.
- */
-function calendarDaysBetween(from: string, to: string): number {
-  const span = calendarDateToUtcCarrier(to).getTime() - calendarDateToUtcCarrier(from).getTime()
-  return Math.round(span / MS_PER_DAY)
 }
 
 /**
