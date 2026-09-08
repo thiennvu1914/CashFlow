@@ -21,7 +21,7 @@ function dto(overrides: Partial<BudgetProgressDto> = {}): BudgetProgressDto {
     remaining: '16.280.000',
     over: false,
     percent: 19,
-    percentLabel: '19 %',
+    percentLabel: '19 %',
     status: 'ok',
     editable: { amount: '20000000.00', currency: 'VND' },
     ...overrides,
@@ -35,14 +35,14 @@ describe('BudgetProgressList', () => {
     expect(html).toContain('3.720.000')
     expect(html).toContain('20.000.000')
     expect(html).toContain('16.280.000')
-    expect(html).toContain('19 %')
+    expect(html).toContain('19 %')
   })
 
   it('switches to the over-budget wording rather than a negative "remaining"', async () => {
     const html = renderToStaticMarkup(
       await BudgetProgressList({
         budgets: [
-          dto({ over: true, remaining: '2.000.000', status: 'exceeded', percentLabel: '110 %' }),
+          dto({ over: true, remaining: '2.000.000', status: 'exceeded', percentLabel: '110 %' }),
         ],
         locale: 'vi',
       }),
@@ -73,12 +73,12 @@ describe('BudgetProgressList', () => {
   it('announces the true percentage even when the bar is clamped', async () => {
     const html = renderToStaticMarkup(
       await BudgetProgressList({
-        budgets: [dto({ percent: 100, percentLabel: '120 %', status: 'exceeded', over: true })],
+        budgets: [dto({ percent: 100, percentLabel: '120 %', status: 'exceeded', over: true })],
         locale: 'vi',
       }),
     )
     expect(html).toContain('aria-valuenow="100"')
-    expect(html).toContain('aria-valuetext="120 %"')
+    expect(html).toContain('aria-valuetext="120 %"')
   })
 
   it('labels an OVERALL budget from the enum key, never the word "Overall"', async () => {
@@ -90,5 +90,26 @@ describe('BudgetProgressList', () => {
     )
     expect(html).toContain('labels.budgetScope.OVERALL')
     expect(html).not.toContain('>Overall<')
+  })
+
+  it('gives the OVERALL row a brand rule and a distinct surface tint, never the track colour (fix round 1, finding 3)', async () => {
+    const html = renderToStaticMarkup(
+      await BudgetProgressList({
+        budgets: [dto({ scope: 'OVERALL', categoryName: null, percent: 40 })],
+        locale: 'vi',
+      }),
+    )
+    // The row's own <li>, not the whole markup — `Progress`'s track (a
+    // sibling div inside the row) legitimately uses `bg-muted` on every row,
+    // so asserting against the whole HTML string would always find it there.
+    const liStart = html.indexOf('<li')
+    const liOpenTag = html.slice(liStart, html.indexOf('>', liStart) + 1)
+    expect(liOpenTag).toContain('border-l-2')
+    expect(liOpenTag).toContain('border-brand')
+    expect(liOpenTag).toContain('bg-surface-2')
+    // `bg-muted` is `Progress`'s own track colour — an Overall row tinted
+    // with it would make a below-100 % bar invisible against its own row
+    // background, which is exactly what this finding flagged.
+    expect(liOpenTag).not.toContain('bg-muted')
   })
 })

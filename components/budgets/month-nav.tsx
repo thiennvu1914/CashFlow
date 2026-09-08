@@ -15,10 +15,12 @@ import { SegmentedControl, type Segment } from '@/components/common/segmented-co
  * state: "Previous"/"This month"/"Next" are ordinary links to
  * `/budgets?month=yyyy-MM`, rendered through the shared `SegmentedControl`.
  *
- * "Previous" is disabled at `MIN_BUDGET_YEAR`-01 and "Next" at
- * `MAX_BUDGET_YEAR`-12 — the ends of the range `Budget.year` can actually
- * hold — so this component can never link the page outside the range the
- * create form would then silently reject (see `app/(app)/budgets/page.tsx`).
+ * "Previous" is OMITTED (not disabled — `SegmentedControl` has no disabled
+ * concept; every segment it renders is a live link) at `MIN_BUDGET_YEAR`-01,
+ * and "Next" likewise at `MAX_BUDGET_YEAR`-12 — the ends of the range
+ * `Budget.year` can actually hold — so this component can never link the
+ * page outside the range the create form would then silently reject (see
+ * `app/(app)/budgets/page.tsx`).
  */
 export async function MonthNav({
   selected,

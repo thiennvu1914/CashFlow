@@ -3,6 +3,7 @@
   "description": "Manual targets — nothing here moves money",
   "figureLine": "{progress} / {target} {currency} · {percent}",
   "deadlineMeta": "{count, plural, one {# day} other {# days}} left ({date})",
+  "deadlineToday": "Due today",
   "deadlinePassed": "Deadline passed {date}",
   "achieved": "Achieved",
   "remaining": "{amount} {currency} to go",

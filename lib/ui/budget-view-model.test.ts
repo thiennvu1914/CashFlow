@@ -69,7 +69,7 @@ describe('toBudgetProgressDto', () => {
       remaining: '700.000',
       over: false,
       percent: 30,
-      percentLabel: '30 %',
+      percentLabel: '30 %',
       status: 'ok',
       editable: { amount: '1000000.00', currency: 'VND' },
     })
@@ -86,7 +86,7 @@ describe('toBudgetProgressDto', () => {
     )
 
     expect(dto.percent).toBe(100)
-    expect(dto.percentLabel).toBe('120 %')
+    expect(dto.percentLabel).toBe('120 %')
     expect(dto.over).toBe(true)
     // Absolute value — the sign is conveyed by `over`, not a leading minus.
     expect(dto.remaining).toBe('200.000')
@@ -98,10 +98,10 @@ describe('toBudgetProgressDto', () => {
     // rounds ties away from zero (13), where `ROUND_HALF_EVEN` would answer
     // 12: this pins the rounding mode the code comment calls out, so a future
     // change to it fails here rather than only in a code-review re-read.
-    expect(toBudgetProgressDto(makeProgress({ ratio: decimal('0.125') })).percentLabel).toBe('13 %')
+    expect(toBudgetProgressDto(makeProgress({ ratio: decimal('0.125') })).percentLabel).toBe('13 %')
     // 0.115 × 100 = 11.5 exactly — the same tie one step down, confirming the
     // rounding is symmetric rather than a special case at one boundary only.
-    expect(toBudgetProgressDto(makeProgress({ ratio: decimal('0.115') })).percentLabel).toBe('12 %')
+    expect(toBudgetProgressDto(makeProgress({ ratio: decimal('0.115') })).percentLabel).toBe('12 %')
   })
 
   it('formats a USD budget with two decimal places', () => {

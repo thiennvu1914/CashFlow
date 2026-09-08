@@ -40,8 +40,10 @@ export interface BudgetProgressDto {
   over: boolean
   /** Bar fill 0–100, clamped; the one `toNumber()` for this DTO. */
   percent: number
-  /** e.g. "84 %" — whole percent, ratio × 100 rounded half-up at this
-   *  boundary only. */
+  /** e.g. "84 %" — whole percent, ratio × 100 rounded half-up at this
+   *  boundary only, with a NON-BREAKING space before the sign (fix round 1,
+   *  finding 7) — an ordinary space let "84 %" wrap mid-figure at 375, the
+   *  number stranded from its own unit. */
   percentLabel: string
   status: BudgetStatus
   /** Raw values for the edit form (amount as `toFixed(2)` string — a Decimal
@@ -88,7 +90,7 @@ export function toBudgetProgressDto(
     // rather than overflowing it — the status badge/`percentLabel` are what
     // say "120 %", not the bar's width.
     percent: Math.min(100, ratio.mul(100).toNumber()),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
     status,
     editable: { amount: budget.amount.toFixed(2), currency },
   }

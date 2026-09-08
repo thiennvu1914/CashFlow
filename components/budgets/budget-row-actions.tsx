@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { updateBudgetSchema, type UpdateBudgetInput } from '@/lib/validation/budget'
 import { deleteBudgetAction, updateBudgetAction } from '@/lib/server/actions/budget-actions'
 import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
@@ -15,6 +16,7 @@ import { Dialog } from '@/components/common/dialog'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -26,13 +28,19 @@ import { Input } from '@/components/ui/input'
  * `year`/`month`/`scope`/`categoryId` are a budget's identity (see
  * `updateBudget` in `lib/server/services/budget.ts`) and are never editable
  * here — only amount and currency, matching `updateBudgetSchema`.
+ *
+ * The delete failure's error is reported through `useRowError` (fix round 1,
+ * finding 6), not a local `useState`: `BudgetProgressList` renders this
+ * component into `PlanningRow`'s `actions` cell and `RowErrorAlert` into its
+ * `extra` slot (under the row), and only a shared Context can connect the
+ * two.
  */
 export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
   const router = useRouter()
   const t = useTranslations()
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { setError } = useRowError()
   const deleteSubmit = useSubmitState()
 
   const name = budget.categoryName ?? t('labels.budgetScope.OVERALL')
@@ -74,12 +82,6 @@ export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
           },
         ]}
       />
-
-      {error && (
-        <InlineAlert tone="negative" className="mt-2">
-          {error}
-        </InlineAlert>
-      )}
 
       <Dialog
         open={editing}
@@ -170,10 +172,16 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
           error={errors.currency?.message}
         >
           {(aria) => (
-            <select {...aria} {...register('currency')} className={SELECT_CLASS}>
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
+            <div className="relative">
+              <select {...aria} {...register('currency')} className={SELECT_CLASS}>
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
           )}
         </FormField>
 

@@ -68,7 +68,9 @@ describe('BudgetForm', () => {
 
     expect(html).toContain('<fieldset disabled=""')
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('sr-only')
+    // Fix round 1, finding 8: the full vi legend text, not just the class —
+    // `t('budgets.createTitle')` is "Thêm ngân sách".
+    expect(html).toContain('<legend class="sr-only">Thêm ngân sách</legend>')
     // The flex column lives on the fieldset, so nothing re-flows when the gate
     // lifts (same guarantee as `TransactionForm`'s).
     expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
@@ -123,7 +125,11 @@ describe('BudgetForm', () => {
   it('pre-selects the category placeholder, never a category, on the CATEGORY branch', () => {
     const categorySelect = selectMarkupById(render(true), 'budget-category')
 
-    expect(categorySelect).toContain('selected=""')
+    // Fix round 1, finding 8: the full vi placeholder text is what must be
+    // selected, not merely SOME option — `t('budgets.categoryPlaceholder')`
+    // is "Chọn danh mục".
+    expect(categorySelect).toMatch(selectedOption(''))
+    expect(categorySelect).toContain('<option value="" selected="">Chọn danh mục</option>')
     expect(categorySelect).not.toMatch(selectedOption('cat_food'))
   })
 })

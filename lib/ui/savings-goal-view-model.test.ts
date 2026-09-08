@@ -45,7 +45,7 @@ describe('toSavingsGoalDto', () => {
     expect(dto.progress).toBe('20.000.000')
     expect(dto.remaining).toBe('30.000.000')
     expect(dto.percent).toBe(40)
-    expect(dto.percentLabel).toBe('40 %')
+    expect(dto.percentLabel).toBe('40 %')
     expect(dto.deadline).toBeNull()
     expect(dto.deadlinePassed).toBe(false)
     expect(dto.daysToDeadline).toBeNull()
@@ -89,7 +89,7 @@ describe('toSavingsGoalDto', () => {
     // The bar cannot overflow its track…
     expect(dto.percent).toBe(100)
     // …but the figure the user saved is not hidden by that.
-    expect(dto.percentLabel).toBe('120 %')
+    expect(dto.percentLabel).toBe('120 %')
     // Nothing is "remaining" on an over-saved goal — never a negative figure.
     expect(dto.remaining).toBe('0')
     expect(dto.status).toBe('ACHIEVED')
@@ -98,7 +98,7 @@ describe('toSavingsGoalDto', () => {
   it('reports 0 % for an untouched goal and 100 % at exactly the target', () => {
     const untouched = toSavingsGoalDto(goal({ currentProgress: new Prisma.Decimal('0') }), TODAY)
     expect(untouched.percent).toBe(0)
-    expect(untouched.percentLabel).toBe('0 %')
+    expect(untouched.percentLabel).toBe('0 %')
     expect(untouched.remaining).toBe('50.000.000')
 
     const exact = toSavingsGoalDto(
@@ -110,7 +110,7 @@ describe('toSavingsGoalDto', () => {
       TODAY,
     )
     expect(exact.percent).toBe(100)
-    expect(exact.percentLabel).toBe('100 %')
+    expect(exact.percentLabel).toBe('100 %')
     expect(exact.remaining).toBe('0')
   })
 
@@ -124,7 +124,7 @@ describe('toSavingsGoalDto', () => {
       TODAY,
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percent).toBeCloseTo(66.6667, 3)

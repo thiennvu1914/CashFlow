@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { createSavingsGoalSchema, type CreateSavingsGoalInput } from '@/lib/validation/savings-goal'
 import { createSavingsGoalAction } from '@/lib/server/actions/savings-goal-actions'
 import { GENERIC_ERROR_KEY, SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
@@ -140,10 +141,21 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
             // other planning forms, whose defaults are not first, so the
             // server HTML states the form's own default rather than relying
             // on a browser fallback.
-            <select {...aria} {...register('currency')} defaultValue="VND" className={SELECT_CLASS}>
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue="VND"
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
           )}
         </FormField>
 

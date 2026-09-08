@@ -94,7 +94,7 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
 
     const bar = row.getByRole('progressbar')
     await expect(bar).toHaveAttribute('aria-valuenow', '85')
-    await expect(bar).toHaveAttribute('aria-valuetext', '85 %')
+    await expect(bar).toHaveAttribute('aria-valuetext', '85 %')
   })
 
   test('create / edit / delete a budget through the header action, the … menu and a ConfirmDialog (Cancel keeps, Confirm removes)', async ({
@@ -158,9 +158,9 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     await expect(progressDialog).toBeHidden()
 
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
-    // "Đạt mục tiêu" now appears twice (badge + meta) by design — `.first()`
-    // keeps this a single-element match.
-    await expect(row.getByText('Đạt mục tiêu', { exact: true }).first()).toBeVisible()
+    // "Đạt mục tiêu" appears once — the status badge only; an achieved goal's
+    // meta line is omitted entirely (fix round 1, finding 10).
+    await expect(row.getByText('Đạt mục tiêu', { exact: true })).toBeVisible()
 
     // Archive: Cancel keeps the row visible.
     await openRowMenu(page, row, 'Máy ảnh')

@@ -49,7 +49,9 @@ export interface SavingsGoalDto {
   /** Bar fill 0–100, clamped; the one `toNumber()` for this DTO. */
   percent: number
   /** e.g. "120 %" — whole percent, half-up on the `Decimal`, and deliberately
-   *  NOT clamped: the bar's width may not overflow, the figure may. */
+   *  NOT clamped: the bar's width may not overflow, the figure may. A
+   *  NON-BREAKING space before the sign (fix round 1, finding 7) stops the
+   *  figure wrapping away from its own "%" at 375. */
   percentLabel: string
   /** The stored carrier as the calendar date the user picked, or `null`. */
   deadline: string | null
@@ -122,7 +124,7 @@ export function toSavingsGoalDto(
     progress: formatMoney(progress, currency, locale),
     remaining: formatMoney(remaining, currency, locale),
     percent: Math.min(MAX_PERCENT, ratio.mul(100).toNumber()),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
     deadline,
     // A string compare, not an instant one — `compareCalendarDates` documents
     // why. `=== -1` so a deadline of *today* is not yet missed.

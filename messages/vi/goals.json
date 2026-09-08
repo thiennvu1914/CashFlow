@@ -3,6 +3,7 @@
   "description": "Mục tiêu tự nhập — không có gì ở đây làm dịch chuyển tiền",
   "figureLine": "{progress} / {target} {currency} · {percent}",
   "deadlineMeta": "Còn {count, plural, other {# ngày}} ({date})",
+  "deadlineToday": "Đến hạn hôm nay",
   "deadlinePassed": "Đã qua hạn {date}",
   "achieved": "Đạt mục tiêu",
   "remaining": "Còn thiếu {amount} {currency}",

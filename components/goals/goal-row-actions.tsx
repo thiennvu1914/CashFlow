@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import {
   updateSavingsGoalProgressSchema,
   updateSavingsGoalSchema,
@@ -24,40 +25,75 @@ import { Dialog } from '@/components/common/dialog'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Update progress / Edit / Archive for one goal row. Rendered only by the
- * Savings page, through `GoalList`'s `renderActions` slot — the Dashboard's
- * compact list passes no `renderActions`, so this never mounts there, and the
- * page's archived section renders its rows without it (an archived goal
- * refuses every write; offering the actions would be a promise the service
- * breaks).
+ * Update progress / Edit / Archive for one goal row — split into two
+ * independent pieces (fix round 1, findings 4/5/6), rendered by `GoalList`
+ * into two different `PlanningRow` slots:
  *
- * "Cập nhật tiến độ" is the row's one INLINE primary action — the amended
- * spec §6.5 is explicit that it opens a `Dialog` (one amount field, Save/
- * Cancel — the same overlay primitive every other inline action uses) rather
- * than a popover, which would be a fifth overlay behaviour in a product that
- * already has three and would not trap focus. Edit and Archive live in the
- * row's `…` menu: they are less frequent, and archive is destructive.
+ *  - `GoalProgressButton` — the row's one inline primary action, passed as
+ *    `inlineAction`. Fully self-contained (its own `progressOpen` state and
+ *    `Dialog`); it never needs to share anything with the menu, so there is
+ *    no reason for it to live in the same component.
+ *  - `GoalRowMenu` — Edit/Archive, passed as `actions`. Its archive-failure
+ *    error is reported through `useRowError` rather than a local `useState`:
+ *    `GoalList` renders this into `actions` and a `RowErrorAlert` into
+ *    `extra` (under the row), and only a shared Context can connect a menu
+ *    click to an alert that renders elsewhere in the tree.
+ *
+ * Neither ever mounts on the Dashboard's compact list (no `renderActions`
+ * there) or in the page's archived section (an archived goal refuses every
+ * write; offering the actions would be a promise the service breaks).
+ *
+ * "Cập nhật tiến độ" opens a `Dialog` (one amount field, Save/Cancel — the
+ * same overlay primitive every other inline action uses) rather than a
+ * popover, which would be a fifth overlay behaviour in a product that
+ * already has three and would not trap focus.
  *
  * Progress and definition are two forms, not one, because they are two user
- * intents — "I saved another 2 million" and "I actually need 60 million" — and
- * a single form would make either an accidental overwrite of the other.
+ * intents — "I saved another 2 million" and "I actually need 60 million" —
+ * and a single form would make either an accidental overwrite of the other.
  *
- * Both forms mount only while their `Dialog`/`ConfirmDialog` is open, so
+ * All three forms mount only while their `Dialog`/`ConfirmDialog` is open, so
  * `useForm` snapshots the *current* row as its defaults; there is no
  * stale-default problem to gate for, and no `useHydrated` here — a click
  * cannot happen before hydration.
  */
-export function GoalRowActions({ goal }: { goal: SavingsGoalDto }) {
-  const router = useRouter()
+export function GoalProgressButton({ goal }: { goal: SavingsGoalDto }) {
   const t = useTranslations()
   const [progressOpen, setProgressOpen] = useState(false)
+
+  return (
+    <>
+      <Button type="button" variant="outline" size="sm" onClick={() => setProgressOpen(true)}>
+        {t('goals.progressAction')}
+      </Button>
+
+      <Dialog
+        open={progressOpen}
+        onOpenChange={setProgressOpen}
+        title={t('goals.progressTitle', { name: goal.name })}
+        // The same "nothing here moves money" copy the page's subtitle
+        // carries, repeated at the point of action: saving this field records
+        // a number the user typed, never an account balance or a transfer.
+        description={t('goals.description')}
+        closeLabel={t('common.close')}
+      >
+        {progressOpen && <GoalProgressForm goal={goal} onDone={() => setProgressOpen(false)} />}
+      </Dialog>
+    </>
+  )
+}
+
+export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
+  const router = useRouter()
+  const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { setError } = useRowError()
   const archiveSubmit = useSubmitState()
 
   async function confirmArchive() {
@@ -73,7 +109,7 @@ export function GoalRowActions({ goal }: { goal: SavingsGoalDto }) {
         setArchiving(false)
         router.refresh()
       } catch {
-        console.error('GoalRowActions: archive failed')
+        console.error('GoalRowMenu: archive failed')
         setArchiving(false)
         setError(t(GENERIC_ERROR_KEY))
       }
@@ -82,51 +118,21 @@ export function GoalRowActions({ goal }: { goal: SavingsGoalDto }) {
 
   return (
     <>
-      <div className="flex w-full flex-col gap-2 min-[480px]:w-auto min-[480px]:flex-row min-[480px]:items-center">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="w-full min-[480px]:w-auto"
-          onClick={() => setProgressOpen(true)}
-        >
-          {t('goals.progressAction')}
-        </Button>
-        <RowActionsMenu
-          label={t('common.rowActions', { name: goal.name })}
-          actions={[
-            { id: 'edit', label: t('goals.editAction'), onSelect: () => setEditOpen(true) },
-            {
-              id: 'archive',
-              label: t('goals.archiveAction'),
-              tone: 'negative',
-              onSelect: () => {
-                setError(null)
-                setArchiving(true)
-              },
+      <RowActionsMenu
+        label={t('common.rowActions', { name: goal.name })}
+        actions={[
+          { id: 'edit', label: t('goals.editAction'), onSelect: () => setEditOpen(true) },
+          {
+            id: 'archive',
+            label: t('goals.archiveAction'),
+            tone: 'negative',
+            onSelect: () => {
+              setError(null)
+              setArchiving(true)
             },
-          ]}
-        />
-      </div>
-
-      {error && (
-        <InlineAlert tone="negative" className="mt-2">
-          {error}
-        </InlineAlert>
-      )}
-
-      <Dialog
-        open={progressOpen}
-        onOpenChange={setProgressOpen}
-        title={t('goals.progressTitle', { name: goal.name })}
-        // The same "nothing here moves money" copy the page's subtitle
-        // carries, repeated at the point of action: saving this field records
-        // a number the user typed, never an account balance or a transfer.
-        description={t('goals.description')}
-        closeLabel={t('common.close')}
-      >
-        {progressOpen && <GoalProgressForm goal={goal} onDone={() => setProgressOpen(false)} />}
-      </Dialog>
+          },
+        ]}
+      />
 
       <Dialog
         open={editOpen}
@@ -299,15 +305,21 @@ function GoalEditForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => vo
           error={errors.currency?.message}
         >
           {(aria) => (
-            <select
-              {...aria}
-              {...register('currency')}
-              defaultValue={goal.editable.currency}
-              className={SELECT_CLASS}
-            >
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue={goal.editable.currency}
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
           )}
         </FormField>
 

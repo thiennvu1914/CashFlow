@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { budgetFormSchema, type BudgetFormInput } from '@/lib/validation/budget'
 import { createBudgetAction } from '@/lib/server/actions/budget-actions'
 import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
@@ -137,15 +138,21 @@ export function BudgetForm({
             // so the server renders `selected` on whichever option the form
             // state already holds; with an Overall budget already on this
             // month that is CATEGORY, the *second* option.
-            <select
-              {...aria}
-              {...register('scope')}
-              defaultValue={defaultScope(overallExists)}
-              className={SELECT_CLASS}
-            >
-              <option value="OVERALL">{t('labels.budgetScope.OVERALL')}</option>
-              <option value="CATEGORY">{t('labels.budgetScope.CATEGORY')}</option>
-            </select>
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('scope')}
+                defaultValue={defaultScope(overallExists)}
+                className={SELECT_CLASS}
+              >
+                <option value="OVERALL">{t('labels.budgetScope.OVERALL')}</option>
+                <option value="CATEGORY">{t('labels.budgetScope.CATEGORY')}</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
           )}
         </FormField>
 
@@ -156,25 +163,31 @@ export function BudgetForm({
             error={errors.categoryId?.message}
           >
             {(aria) => (
-              <select
-                {...aria}
-                {...register('categoryId', {
-                  // An emptied/untouched select's DOM value is `""` (the
-                  // placeholder option) — converting that to `undefined` here
-                  // is what lets the schema's own "Category is required"
-                  // refine message fire instead of a generic one.
-                  setValueAs: (v: string) => (v === '' ? undefined : v),
-                })}
-                defaultValue=""
-                className={SELECT_CLASS}
-              >
-                <option value="">{t('budgets.categoryPlaceholder')}</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  {...aria}
+                  {...register('categoryId', {
+                    // An emptied/untouched select's DOM value is `""` (the
+                    // placeholder option) — converting that to `undefined`
+                    // here is what lets the schema's own "Category is
+                    // required" refine message fire instead of a generic one.
+                    setValueAs: (v: string) => (v === '' ? undefined : v),
+                  })}
+                  defaultValue=""
+                  className={SELECT_CLASS}
+                >
+                  <option value="">{t('budgets.categoryPlaceholder')}</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                />
+              </div>
             )}
           </FormField>
         )}
@@ -200,10 +213,16 @@ export function BudgetForm({
           error={errors.currency?.message}
         >
           {(aria) => (
-            <select {...aria} {...register('currency')} className={SELECT_CLASS}>
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
+            <div className="relative">
+              <select {...aria} {...register('currency')} className={SELECT_CLASS}>
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
           )}
         </FormField>
 

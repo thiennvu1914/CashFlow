@@ -586,7 +586,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // percent folded into the same figure line. The unescaped `.`s accept
     // whatever thousands separator `formatMoney`'s locale uses.
     await expect(row.locator('.tabular-nums').first()).toHaveText(
-      /^2.500.000 \/ 10.000.000 VND · 25 %$/,
+      /^2.500.000 \/ 10.000.000 VND · 25 %$/,
     )
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
     // No deadline was set, so the meta line is the "still to go" figure.
@@ -598,12 +598,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await progressDialog.getByLabel(/Số tiền hiện có|Current amount/).fill('10000000')
     await progressDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    // "Đạt mục tiêu"/"Achieved" now appears twice on an achieved row — once as
-    // the status badge, once as the meta line replacing the deadline/remaining
-    // text (`goals.achieved` and `labels.goalStatus.ACHIEVED` share the same
-    // wording by design) — so `.first()` is what keeps this a single-element
-    // match rather than a strict-mode violation.
-    await expect(row.getByText(/Đạt mục tiêu|^Achieved$/, { exact: true }).first()).toBeVisible()
+    // "Đạt mục tiêu"/"Achieved" appears once — the status badge only; the meta
+    // line is omitted entirely for an achieved goal (fix round 1, finding 10),
+    // so this is a single-element match.
+    await expect(row.getByText(/Đạt mục tiêu|^Achieved$/, { exact: true })).toBeVisible()
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
     // Edit → the definition, not the progress: two panes, two intents.

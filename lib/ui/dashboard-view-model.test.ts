@@ -352,6 +352,36 @@ describe('buildDashboardViewModel', () => {
     expect(expenseRow.amount).toBe('−250,000')
   })
 
+  it('formats the budget and goal widgets with the reader’s locale too (fix round 1, finding 2)', () => {
+    // The two call sites this finding named directly: `budgets.map(...)` and
+    // `savingsGoals...map(...)` were dropping the `locale` this function
+    // already holds, so an English dashboard still showed Vietnamese-grouped
+    // budget/goal figures. Both DTOs' own locale threading is unit-tested
+    // already (`budget-view-model.test.ts`, `savings-goal-view-model.test.ts`)
+    // — this pins that the DASHBOARD actually passes it through.
+    const vm = buildDashboardViewModel(
+      makeInput({
+        budgets: [
+          budgetProgress({
+            id: 'b1',
+            currency: 'VND',
+            amount: '1000000',
+            spent: '500000',
+            status: 'warning_50',
+          }),
+        ],
+        goals: [savingsGoal({ id: 'g1', target: '1000000', progress: '250000' })],
+      }),
+      'en',
+    )
+
+    // vi would read '1.000.000'/'500.000'/'250.000'.
+    expect(vm.budgets[0].amount).toBe('1,000,000')
+    expect(vm.budgets[0].spent).toBe('500,000')
+    expect(vm.savingsGoals[0].target).toBe('1,000,000')
+    expect(vm.savingsGoals[0].progress).toBe('250,000')
+  })
+
   it('never puts a raw transaction type in a recent-transaction row', () => {
     const vm = buildDashboardViewModel(makeInput())
     for (const row of vm.recentTransactions) {
@@ -611,9 +641,9 @@ describe('buildDashboardViewModel', () => {
       ['b2', 'Food', 'USD', '100,00', '84,50'],
     ])
     expect(vm.budgets.map((b) => [b.percentLabel, b.status, b.over])).toEqual([
-      ['50 %', 'warning_50', false],
+      ['50 %', 'warning_50', false],
       // 84.5 % rounds half-up on the Decimal, before any widening to a float.
-      ['85 %', 'warning_80', false],
+      ['85 %', 'warning_80', false],
     ])
   })
 
@@ -652,8 +682,8 @@ describe('buildDashboardViewModel', () => {
         ['g2', 'New laptop', 'USD', '2.000,00', '2.000,00'],
       ])
       expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.status])).toEqual([
-        [25, '25 %', 'ACTIVE'],
-        [100, '100 %', 'ACHIEVED'],
+        [25, '25 %', 'ACTIVE'],
+        [100, '100 %', 'ACHIEVED'],
       ])
     })
 

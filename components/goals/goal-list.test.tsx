@@ -19,7 +19,7 @@ function dto(overrides: Partial<SavingsGoalDto> = {}): SavingsGoalDto {
     progress: '20.000.000',
     remaining: '30.000.000',
     percent: 42,
-    percentLabel: '42 %',
+    percentLabel: '42 %',
     deadline: '2026-12-31',
     deadlinePassed: false,
     daysToDeadline: 114,
@@ -43,7 +43,7 @@ describe('GoalList', () => {
     expect(html).toContain('goals.figureLine')
     expect(html).toContain('20.000.000')
     expect(html).toContain('50.000.000')
-    expect(html).toContain('42 %')
+    expect(html).toContain('42 %')
   })
 
   it('keeps the bar bg-brand at every status, including ACHIEVED', async () => {
@@ -85,7 +85,7 @@ describe('GoalList', () => {
     expect(html).toContain('text-warning')
   })
 
-  it('shows "achieved" rather than a deadline meta once a goal is ACHIEVED', async () => {
+  it('omits the meta line entirely once a goal is ACHIEVED — the badge alone says so (fix round 1, finding 10)', async () => {
     const html = renderToStaticMarkup(
       await GoalList({
         goals: [dto({ status: 'ACHIEVED', daysToDeadline: 30, deadline: '2026-12-31' })],
@@ -94,19 +94,41 @@ describe('GoalList', () => {
       }),
     )
     expect(html).toContain('labels.goalStatus.ACHIEVED')
-    expect(html).toContain('goals.achieved')
+    // No "goals.achieved" meta any more — repeating the badge's own word right
+    // below it was a pointless duplicate now that the badge alone says so.
+    expect(html).not.toContain('goals.achieved')
+    expect(html).not.toContain('goals.deadlineMeta')
+    expect(html).not.toContain('goals.deadlineToday')
+  })
+
+  it('gives a deadline exactly today its own wording, not "Còn 0 ngày" (fix round 1, finding 10)', async () => {
+    const html = renderToStaticMarkup(
+      await GoalList({
+        goals: [
+          dto({
+            status: 'ACTIVE',
+            daysToDeadline: 0,
+            deadline: '2026-09-09',
+            deadlinePassed: false,
+          }),
+        ],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      }),
+    )
+    expect(html).toContain('goals.deadlineToday')
     expect(html).not.toContain('goals.deadlineMeta')
   })
 
   it('announces the true percentage even when the bar is clamped', async () => {
     const html = renderToStaticMarkup(
       await GoalList({
-        goals: [dto({ percent: 100, percentLabel: '120 %' })],
+        goals: [dto({ percent: 100, percentLabel: '120 %' })],
         locale: 'vi',
         timeZone: 'Asia/Ho_Chi_Minh',
       }),
     )
     expect(html).toContain('aria-valuenow="100"')
-    expect(html).toContain('aria-valuetext="120 %"')
+    expect(html).toContain('aria-valuetext="120 %"')
   })
 })

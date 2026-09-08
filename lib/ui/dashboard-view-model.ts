@@ -460,14 +460,16 @@ export function buildDashboardViewModel(
     // the same `BudgetProgressList` fed by the same function, so a percentage
     // or a status label cannot read one way on one page and another way on the
     // other. `displayCurrency` is deliberately not passed — a budget is shown
-    // in its own currency.
+    // in its own currency; `locale` IS passed (fix round 1, finding 2 — an
+    // earlier comment here claimed staying at the DTO's default `vi` was
+    // intentional, which was wrong: the dashboard has a real reader locale
+    // right here, and there is no reason a budget figure should ignore it
+    // when every other figure on this page does not).
     // Wrapped rather than passed bare: `Array#map` calls its callback with
-    // `(element, index, array)`, and `toBudgetProgressDto` now takes a second
-    // `locale` parameter — passed bare, `map`'s own index would land there as
-    // `locale` for every row after the first. This dashboard call intentionally
-    // stays at the DTO's default locale (`vi`); Task 7's Budgets/Savings pages
-    // are what thread the reader's actual locale through.
-    budgets: budgets.map((progress) => toBudgetProgressDto(progress)),
+    // `(element, index, array)`, and `toBudgetProgressDto`'s second parameter
+    // is `locale` — passed bare, `map`'s own index would land there as
+    // `locale` for every row after the first.
+    budgets: budgets.map((progress) => toBudgetProgressDto(progress, locale)),
     // Delegated to the Savings page's own DTO mapper, for the reason the
     // budgets line gives: the widget's compact rows and the page's full rows
     // are the same `GoalList` fed by the same function, so a percentage or a
@@ -481,7 +483,7 @@ export function buildDashboardViewModel(
     savingsGoals: goals
       .filter((goal) => goal.status !== 'ARCHIVED')
       .slice(0, WIDGET_ROW_LIMIT)
-      .map((goal) => toSavingsGoalDto(goal, today)),
+      .map((goal) => toSavingsGoalDto(goal, today, locale)),
     // The three figures the position already converted, formatted once here.
     // `null` propagates the position's own refusal: three outstanding amounts
     // that could not be restated in one currency cannot be compared, and a

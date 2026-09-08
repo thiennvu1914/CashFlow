@@ -8,7 +8,7 @@ import { toSavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { GoalCreateButton } from '@/components/goals/goal-create-button'
 import { GoalList } from '@/components/goals/goal-list'
-import { GoalRowActions } from '@/components/goals/goal-row-actions'
+import { GoalProgressButton, GoalRowMenu } from '@/components/goals/goal-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
 
@@ -80,7 +80,10 @@ export default async function GoalsPage() {
             goals={active}
             locale={locale}
             timeZone={timezone}
-            renderActions={(goal) => <GoalRowActions goal={goal} />}
+            renderActions={(goal) => ({
+              actions: <GoalRowMenu goal={goal} />,
+              inlineAction: <GoalProgressButton goal={goal} />,
+            })}
           />
         </div>
       )}
