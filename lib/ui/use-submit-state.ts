@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 /**
  * The in-flight lock every mutating form uses (spec §9).
@@ -59,11 +59,31 @@ export function createSubmitRunner(
 }
 
 export function useSubmitState(): SubmitState {
-  const [pending, setPending] = useState(false)
+  const [pending, setPendingState] = useState(false)
+  /**
+   * The re-entry guard's REAL source of truth. `pending` (the `useState`
+   * pair above) exists to trigger a re-render — for the fieldset's `disabled`/
+   * `aria-busy` — but a re-render is not instantaneous: React defers it to the
+   * next flush, so a SECOND `run()` invoked before that flush (two clicks
+   * dispatched back to back with no task boundary between them — verified
+   * against a real browser, not merely a theoretical race) would still read
+   * the STALE closed-over `pending` from the render the first call started
+   * in, and the guard would not fire. A ref has no such delay: writing
+   * `pendingRef.current` is visible to every reader immediately, synchronously,
+   * regardless of whether React has re-rendered yet — which is what makes two
+   * clicks landing in the same tick create exactly one submission rather than
+   * two.
+   */
+  const pendingRef = useRef(false)
+
+  const setPending = useCallback((next: boolean) => {
+    pendingRef.current = next
+    setPendingState(next)
+  }, [])
 
   const run = useCallback(
-    <T>(work: () => Promise<T>) => createSubmitRunner(() => pending, setPending)(work),
-    [pending],
+    <T>(work: () => Promise<T>) => createSubmitRunner(() => pendingRef.current, setPending)(work),
+    [setPending],
   )
 
   return { pending, locked: pending, busy: pending ? true : undefined, run }

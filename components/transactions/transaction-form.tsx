@@ -145,11 +145,18 @@ export function TransactionForm({
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
   const submit = useSubmitState()
-  // Computed once per render and reused for `useForm`'s init, the account
-  // stand-in's option and the date/time inputs' `defaultValue`s below — so
-  // none of the three can read a different instant than the others (each
-  // would otherwise call `nowInZone(timezone)`, i.e. `new Date()`, on its own).
-  const initial = defaultValues(accounts, timezone)
+  // Computed ONCE, at mount — not on every render — and reused for
+  // `useForm`'s init, the account stand-in's option and the date/time
+  // inputs' `defaultValue`s below. `datePart`/`timePart` are passed to
+  // native `<input>`s as `defaultValue` (below), which Base UI's `Input`
+  // treats as an UNCONTROLLED field's one-time initial value; recomputing
+  // `defaultValues(...)` — i.e. calling `nowInZone(timezone)`, `new Date()`
+  // — fresh on every render would occasionally change the MINUTE between
+  // one render and the next, and Base UI logs "a component is changing the
+  // default value state of an uncontrolled FieldControl after being
+  // initialized" the moment it does. The lazy `useState` initializer is what
+  // keeps it the one instant the form actually started from.
+  const [initial] = useState(() => defaultValues(accounts, timezone))
   const {
     register,
     control,
