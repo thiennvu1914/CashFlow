@@ -92,15 +92,17 @@ test.describe.serial('Transactions — no active financial account', () => {
     await createAccountViaUi(page, { name: 'Old', currency: 'VND', initialBalance: 0 })
 
     await page.goto('/accounts')
-    const row = page.locator('li').filter({ has: page.getByText('Old', { exact: true }) })
-    // `AccountList.handleArchive` asks for confirmation via `window.confirm`.
-    // That is Task 6's own screen — unchanged by this task — so it still
-    // works via `window.confirm`, not `ConfirmDialog`.
-    page.once('dialog', (dialog) => dialog.accept())
-    await row.getByRole('button', { name: 'Archive' }).click()
+    // Archive is a `RowActionsMenu` item behind the row's `…` trigger, plus a
+    // `ConfirmDialog` naming the zero-balance rule (spec §6.4, §10) — not
+    // `window.confirm`.
+    await page.getByRole('button', { name: /Tác vụ cho Old|Actions for Old/ }).click()
+    await page.getByRole('menuitem', { name: /Lưu trữ|^Archive$/ }).click()
+    const confirm = page.getByRole('dialog')
+    await confirm.getByRole('button', { name: /Lưu trữ|^Archive$/ }).click()
+    await expect(confirm).toBeHidden()
     // Proof the archive actually landed (a `router.refresh()` away): the row
     // moves out of the active list and into the "Archived accounts" section.
-    await expect(page.getByText('Archived accounts (1)')).toBeVisible()
+    await expect(page.getByText(/Tài khoản đã lưu trữ \(1\)|Archived accounts \(1\)/)).toBeVisible()
 
     await page.goto('/transactions')
     await expect(page.getByText(NOTICE)).toBeVisible()

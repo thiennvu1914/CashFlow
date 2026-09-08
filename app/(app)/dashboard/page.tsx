@@ -12,7 +12,6 @@ import {
   Wallet,
 } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
-import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getCalendarMonth } from '@/lib/datetime/calendar-month'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
@@ -26,6 +25,7 @@ import { listSavingsGoals } from '@/lib/server/services/savings-goal'
 import { listTransactions } from '@/lib/server/services/transaction'
 import { buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
 import { formatDate } from '@/lib/ui/format-date'
+import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
 import { AccountBalanceHistoryChart } from '@/components/dashboard/account-balance-history-chart'
@@ -61,30 +61,6 @@ const RECENT_TRANSACTION_COUNT = 8
  * and a link — a widget is a glance, and its page has the full list.
  */
 const WIDGET_ROWS = 3
-
-/**
- * Degrades a *current-position* read to `null` when — and only when — no usable
- * FX rate exists (spec §6.3).
- *
- * The narrowing matters as much as the catch: `isFxUnavailableError` is the one
- * condition with an honest fallback (show "—", say why), and everything else —
- * a database fault, a bug in the balance maths — is rethrown so it surfaces as
- * an error instead of being disguised as a missing exchange rate.
- *
- * Nothing historical is ever wrapped in this. `getActivitySummary`,
- * `getCashFlowTrend` and `getAccountBalanceOverTime` restate the past from each
- * row's own FX snapshot (or that day's historical rate) and never consult the
- * current-rate policy, so an FX outage cannot reach them and there is nothing
- * for them to degrade to.
- */
-async function orNullIfFxUnavailable<T>(promise: Promise<T>): Promise<T | null> {
-  try {
-    return await promise
-  } catch (error) {
-    if (isFxUnavailableError(error)) return null
-    throw error
-  }
-}
 
 export default async function DashboardPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),

@@ -1,1 +1,25 @@
-{ "title": "Tài khoản" }
+{
+  "title": "Tài khoản",
+  "total": "Tổng {amount} {currency}",
+  "totalUnavailable": "Tổng — (chưa có tỷ giá)",
+  "asOfNow": "Số dư tính đến hiện tại; các bút toán ghi ngày tương lai chưa được tính.",
+  "createTitle": "Thêm tài khoản",
+  "createAction": "Tạo tài khoản",
+  "createPending": "Đang tạo…",
+  "openCreate": "Thêm tài khoản",
+  "name": "Tên tài khoản",
+  "type": "Loại tài khoản",
+  "initialBalance": "Số dư ban đầu",
+  "currency": "Tiền tệ",
+  "description": "Mô tả (tùy chọn)",
+  "lockedNotice": "Không thể đổi tiền tệ và số dư ban đầu vì tài khoản đã có phát sinh.",
+  "editTitle": "Sửa {name}",
+  "editAction": "Sửa",
+  "archiveAction": "Lưu trữ",
+  "archiveConfirmTitle": "Lưu trữ {name}?",
+  "archiveConfirmBody": "Tài khoản phải có số dư bằng 0. Lịch sử giao dịch vẫn được giữ lại.",
+  "archivePending": "Đang lưu trữ…",
+  "archivedSection": "Tài khoản đã lưu trữ ({count})",
+  "emptyTitle": "Chưa có tài khoản",
+  "emptyBody": "Thêm tài khoản đầu tiên để bắt đầu ghi giao dịch."
+}

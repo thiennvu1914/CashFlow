@@ -1,16 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import type { Currency } from '@prisma/client'
 import {
   updateFinancialAccountSchema,
   type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import { updateFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
-import { ACCOUNT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { ACCOUNT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -30,6 +35,11 @@ type AccountType = { id: string; name: string }
  * *carries* either field once the account has activity, regardless of
  * whether the value actually changed, so the locked fields must never be
  * sent at all, not merely sent unchanged.
+ *
+ * Mounted only while its `Dialog` is open (`AccountList`), so it never
+ * exists during SSR/hydration and needs no `useHydrated` gate (spec §9) —
+ * but it still gets `useSubmitState`, so a slow update cannot be
+ * double-submitted.
  */
 export function AccountEditForm({
   accountId,
@@ -51,11 +61,15 @@ export function AccountEditForm({
   onDone?: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `account-edit-${name}-${uid}`
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<UpdateFinancialAccountInput>({
     resolver: zodResolver(updateFinancialAccountSchema),
     defaultValues: {
@@ -77,89 +91,114 @@ export function AccountEditForm({
         }
       : values
 
-    try {
-      const result = await updateFinancialAccountAction(accountId, payload)
-      if (!result.ok) {
-        setError(ACCOUNT_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await updateFinancialAccountAction(accountId, payload)
+        if (!result.ok) {
+          setError(t(ACCOUNT_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone?.()
+      } catch {
+        console.error('AccountEditForm: update failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone?.()
-    } catch {
-      console.error('AccountEditForm: update failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
-      <div>
-        <Input placeholder="Account name" {...register('name')} />
-        {errors.name && <p className="text-sm text-negative">{errors.name.message}</p>}
-      </div>
-      <div>
-        <select
-          {...register('accountTypeId')}
-          aria-label="Account type"
-          className="rounded-md border p-2"
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('accounts.editAction')}</legend>
+
+        <FormField id={fieldId('name')} label={t('accounts.name')} error={errors.name?.message}>
+          {(aria) => <Input {...aria} {...register('name')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('type')}
+          label={t('accounts.type')}
+          error={errors.accountTypeId?.message}
         >
-          {accountTypes.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-        {errors.accountTypeId && (
-          <p className="text-sm text-negative">{errors.accountTypeId.message}</p>
-        )}
-      </div>
-      <div>
-        <Input
-          type="number"
-          step="0.01"
-          placeholder="Initial balance"
-          disabled={locked}
-          aria-label="Initial balance"
-          {...register('initialBalance', { valueAsNumber: true })}
-        />
-        {errors.initialBalance && (
-          <p className="text-sm text-negative">{errors.initialBalance.message}</p>
-        )}
-      </div>
-      <div>
-        <select
-          {...register('currency')}
-          aria-label="Currency"
-          disabled={locked}
-          className="rounded-md border p-2"
+          {(aria) => (
+            <div className="relative">
+              <select {...aria} {...register('accountTypeId')} className={SELECT_CLASS}>
+                {accountTypes.map((accountType) => (
+                  <option key={accountType.id} value={accountType.id}>
+                    {accountType.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('initial-balance')}
+          label={t('accounts.initialBalance')}
+          error={errors.initialBalance?.message}
         >
-          <option value="VND">VND</option>
-          <option value="USD">USD</option>
-        </select>
-        {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-      </div>
-      {locked && (
-        <p className="text-sm text-warning">
-          Currency and initial balance are locked because this account already has activity.
-        </p>
-      )}
-      <div>
-        <Input placeholder="Description (optional)" {...register('description')} />
-        {errors.description && (
-          <p className="text-sm text-negative">{errors.description.message}</p>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" disabled={isSubmitting}>
-          Save
-        </Button>
-        {onDone && (
-          <Button type="button" variant="outline" onClick={onDone}>
-            Cancel
-          </Button>
-        )}
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              disabled={locked}
+              {...register('initialBalance', { valueAsNumber: true })}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('accounts.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('currency')}
+                disabled={locked}
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        {locked && <InlineAlert tone="neutral">{t('accounts.lockedNotice')}</InlineAlert>}
+
+        <FormField
+          id={fieldId('description')}
+          label={t('accounts.description')}
+          error={errors.description?.message}
+        >
+          {(aria) => <Input {...aria} {...register('description')} />}
+        </FormField>
+
+        <div className="flex gap-2">
+          <Button type="submit">{submit.pending ? t('common.saving') : t('common.save')}</Button>
+          {onDone && (
+            <Button type="button" variant="outline" onClick={onDone}>
+              {t('common.cancel')}
+            </Button>
+          )}
+        </div>
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+      </fieldset>
     </form>
   )
 }

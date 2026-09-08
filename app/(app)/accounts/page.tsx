@@ -1,3 +1,4 @@
+import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { prisma } from '@/lib/prisma'
 import {
@@ -7,8 +8,16 @@ import {
 } from '@/lib/server/services/financial-account'
 import { listAccountTypes } from '@/lib/server/services/account-type'
 import { getCurrentAccountBalances } from '@/lib/server/services/balance'
-import { AccountForm } from '@/components/accounts/account-form'
+import { getCurrentPosition } from '@/lib/server/services/position'
+import { resolveLocale } from '@/lib/i18n/config'
+import { formatMoney } from '@/lib/ui/format-money'
+import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
+import { resolveProfileDefaults } from '@/lib/validation/profile'
+import { AccountCreateButton } from '@/components/accounts/account-create-button'
 import { AccountList } from '@/components/accounts/account-list'
+import { FinancialListRow } from '@/components/common/financial-list-row'
+import { PageHeader } from '@/components/common/page-header'
+import { StatusBadge } from '@/components/common/status-badge'
 
 /**
  * How many of this user's entries are dated after `now` — a transaction or
@@ -29,14 +38,23 @@ export default async function AccountsPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own rather than relying on `requireUser`.
   const user = await requireUserOrRedirect()
+  const { baseCurrency: displayCurrency } = resolveProfileDefaults(user)
+  const t = await getTranslations()
+  const locale = await resolveLocale()
   // ONE `now` for the whole request — the page owns it, not a component and not
   // a service reading the clock again mid-render, so every balance below is cut
   // at the same instant.
   const now = new Date()
-  const [accounts, accountTypes, allAccounts] = await Promise.all([
+  const [accounts, accountTypes, allAccounts, position] = await Promise.all([
     listActiveFinancialAccounts(user.id),
     listAccountTypes(user.id),
     listAllFinancialAccounts(user.id),
+    // The base-currency total for the header (spec §6.4), from the same
+    // position read the dashboard uses — so the two pages cannot disagree. It
+    // may consult the CURRENT-rate policy, so it degrades to `null` on an FX
+    // outage exactly as the dashboard's does, and the header then shows "—"
+    // rather than a number nobody can stand behind.
+    orNullIfFxUnavailable(getCurrentPosition(user.id, displayCurrency, { now })),
   ])
   const archivedAccounts = allAccounts.filter((a) => a.status === 'ARCHIVED')
   // One batched call for every account on the page — never one query per
@@ -88,37 +106,38 @@ export default async function AccountsPage() {
   })
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <div className="flex flex-col gap-2">
-        <AccountList accounts={accountsWithBalance} accountTypes={accountTypes} />
-        {futureDatedCount > 0 && (
-          <p className="text-sm text-muted-foreground">
-            Balances are as of now; future-dated entries are excluded until their date.
-          </p>
-        )}
-      </div>
-      <div>
-        <h2 className="mb-3 text-lg font-semibold">Add account</h2>
-        <AccountForm accountTypes={accountTypes} />
-      </div>
+    <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('accounts.title')}
+        description={
+          position === null
+            ? t('accounts.totalUnavailable')
+            : t('accounts.total', {
+                amount: formatMoney(position.totalBalance, displayCurrency, locale),
+                currency: displayCurrency,
+              })
+        }
+        meta={futureDatedCount > 0 ? t('accounts.asOfNow') : undefined}
+        actions={<AccountCreateButton accountTypes={accountTypes} />}
+      />
+
+      <AccountList accounts={accountsWithBalance} accountTypes={accountTypes} locale={locale} />
+
       {archivedAccounts.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-foreground/60">
-            Archived accounts ({archivedAccounts.length})
+        <details className="rounded-lg border border-border bg-surface">
+          <summary className="cursor-pointer px-4 py-3 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+            {t('accounts.archivedSection', { count: archivedAccounts.length })}
           </summary>
-          <ul className="mt-3 flex flex-col gap-2">
+          {/* Read-only, like every other archived section in this app: an
+              archived account refuses every write, so no actions are offered. */}
+          <ul className="divide-y divide-border border-t border-border opacity-70">
             {archivedAccounts.map((account) => (
-              <li
+              <FinancialListRow
                 key={account.id}
-                className="flex items-center justify-between rounded-md border p-3 opacity-70"
-              >
-                <div>
-                  <p className="font-medium">{account.name}</p>
-                  <p className="text-sm text-foreground/60">
-                    {account.accountType.name} · {account.currency}
-                  </p>
-                </div>
-              </li>
+                title={account.name}
+                meta={`${account.accountType.name} · ${account.currency}`}
+                amount={<StatusBadge label={t('labels.recordStatus.ARCHIVED')} tone="muted" />}
+              />
             ))}
           </ul>
         </details>

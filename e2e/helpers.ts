@@ -35,24 +35,33 @@ export async function registerNewUser(
 }
 
 /**
- * Creates one financial account through the `/accounts` page's "Add account"
- * form, and waits for the form to reset (its `name` field clears back to `''`
- * on a successful submit) as proof the account was actually created before
- * the caller moves on.
+ * Creates one financial account through the `/accounts` page's header action
+ * and its create `Sheet` (spec §6.4) — creation lives behind "Thêm tài
+ * khoản", not inline on the page.
+ *
+ * The sheet closing on success is the proof used here, not a cleared field:
+ * `AccountForm.onCreated` closes the sheet, which is the app's own
+ * confirmation that the account was actually created before the caller moves
+ * on.
  */
 export async function createAccountViaUi(
   page: Page,
   opts: { name: string; currency: 'VND' | 'USD'; initialBalance: number },
 ): Promise<void> {
   await page.goto('/accounts')
-  const nameInput = page.getByPlaceholder('Account name')
+  await page.getByRole('button', { name: /Thêm tài khoản|Add account/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm tài khoản|Add account/ })
+  const nameInput = sheet.getByLabel(/Tên tài khoản|Account name/)
   await nameInput.fill(opts.name)
   if (opts.currency !== 'VND') {
-    await page.getByLabel('Currency').selectOption(opts.currency)
+    await sheet.getByLabel(/^Tiền tệ$|^Currency$/).selectOption(opts.currency)
   }
-  await page.getByPlaceholder('Initial balance').fill(String(opts.initialBalance))
-  await page.getByRole('button', { name: 'Create account' }).click()
-  await expect(nameInput).toHaveValue('')
+  await sheet.getByLabel(/Số dư ban đầu|Initial balance/).fill(String(opts.initialBalance))
+  await sheet.getByRole('button', { name: /Tạo tài khoản|Create account/ }).click()
+  // A successful submit resets the form, which clears the name field — and the
+  // sheet closes itself, so wait for that instead: it is the app's own
+  // confirmation that the account was created.
+  await expect(sheet).toBeHidden()
 }
 
 /**

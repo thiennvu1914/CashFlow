@@ -1,31 +1,54 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import {
   createFinancialAccountSchema,
   type CreateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import { createFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
-import { ACCOUNT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { ACCOUNT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 type AccountType = { id: string; name: string }
 
-export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
+export function AccountForm({
+  accountTypes,
+  onCreated,
+}: {
+  accountTypes: AccountType[]
+  /** The create sheet closes itself on success. */
+  onCreated?: () => void
+}) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
+  /** Spec §9: the same fieldset is locked while a mutation is in flight. */
+  const submit = useSubmitState()
+  /**
+   * A per-instance prefix, same reasoning as `TransactionForm`'s `uid`: a
+   * hard-coded id would make `<label for>` bind to whichever instance's
+   * control happens to match first, were this form ever mounted more than
+   * once at a time.
+   */
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `account-${name}-${uid}`
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<CreateFinancialAccountInput>({
     resolver: zodResolver(createFinancialAccountSchema),
     // `accountTypeId` defaults to the first option so the <select>'s visible
@@ -42,18 +65,21 @@ export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
 
   async function onSubmit(values: CreateFinancialAccountInput) {
     setError(null)
-    try {
-      const result = await createFinancialAccountAction(values)
-      if (!result.ok) {
-        setError(ACCOUNT_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await createFinancialAccountAction(values)
+        if (!result.ok) {
+          setError(t(ACCOUNT_ERROR_KEYS[result.error]))
+          return
+        }
+        reset()
+        router.refresh()
+        onCreated?.()
+      } catch {
+        console.error('AccountForm: create failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      reset()
-      router.refresh()
-    } catch {
-      console.error('AccountForm: create failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
@@ -69,59 +95,85 @@ export function AccountForm({ accountTypes }: { accountTypes: AccountType[] }) {
           Every `<select>` here defaults to its own first option, so none needs
           a `defaultValue` to make the server HTML agree with the form. */}
       <fieldset
-        disabled={!hydrated}
-        aria-busy={hydrated ? undefined : true}
+        disabled={!hydrated || submit.locked}
+        aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-3"
       >
-        <legend className="sr-only">Account details</legend>
-        <div>
-          <Input placeholder="Account name" {...register('name')} />
-          {errors.name && <p className="text-sm text-negative">{errors.name.message}</p>}
-        </div>
-        <div>
-          <select
-            {...register('accountTypeId')}
-            aria-label="Account type"
-            className="rounded-md border p-2"
-          >
-            {accountTypes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-          {errors.accountTypeId && (
-            <p className="text-sm text-negative">{errors.accountTypeId.message}</p>
+        <legend className="sr-only">{t('accounts.createTitle')}</legend>
+
+        <FormField id={fieldId('name')} label={t('accounts.name')} error={errors.name?.message}>
+          {(aria) => <Input {...aria} {...register('name')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('type')}
+          label={t('accounts.type')}
+          error={errors.accountTypeId?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              <select {...aria} {...register('accountTypeId')} className={SELECT_CLASS}>
+                {accountTypes.map((accountType) => (
+                  <option key={accountType.id} value={accountType.id}>
+                    {accountType.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
           )}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            placeholder="Initial balance"
-            {...register('initialBalance', { valueAsNumber: true })}
-          />
-          {errors.initialBalance && (
-            <p className="text-sm text-negative">{errors.initialBalance.message}</p>
+        </FormField>
+
+        <FormField
+          id={fieldId('initial-balance')}
+          label={t('accounts.initialBalance')}
+          error={errors.initialBalance?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('initialBalance', { valueAsNumber: true })}
+            />
           )}
-        </div>
-        <div>
-          <select {...register('currency')} aria-label="Currency" className="rounded-md border p-2">
-            <option value="VND">VND</option>
-            <option value="USD">USD</option>
-          </select>
-          {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-        </div>
-        <div>
-          <Input placeholder="Description (optional)" {...register('description')} />
-          {errors.description && (
-            <p className="text-sm text-negative">{errors.description.message}</p>
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('accounts.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              <select {...aria} {...register('currency')} className={SELECT_CLASS}>
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
           )}
-        </div>
-        <Button type="submit" disabled={isSubmitting}>
-          Create account
+        </FormField>
+
+        <FormField
+          id={fieldId('description')}
+          label={t('accounts.description')}
+          error={errors.description?.message}
+        >
+          {(aria) => <Input {...aria} {...register('description')} />}
+        </FormField>
+
+        <Button type="submit" className="self-start">
+          {submit.pending ? t('accounts.createPending') : t('accounts.createAction')}
         </Button>
-        {error && <p className="text-sm text-negative">{error}</p>}
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
       </fieldset>
     </form>
   )
