@@ -888,7 +888,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
       bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
     ).toBeVisible()
 
-    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     for (const label of [

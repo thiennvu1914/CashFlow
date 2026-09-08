@@ -304,7 +304,7 @@ test.describe.serial('Phase 5 — budgets', () => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
 
-    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()

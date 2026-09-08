@@ -87,7 +87,7 @@ test.describe.serial('Phase 7 — app shell', () => {
   test('the More sheet traps focus and Escape returns it to the trigger', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    const trigger = page.getByRole('button', { name: /^(Khác|More)$/ })
+    const trigger = page.getByRole('button', { name: /^(Menu|More)$/ })
     await trigger.click()
 
     const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
@@ -126,7 +126,7 @@ test.describe.serial('Phase 7 — app shell', () => {
   test('the More sheet closes on its own button and on an overlay tap', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    const trigger = page.getByRole('button', { name: /^(Khác|More)$/ })
+    const trigger = page.getByRole('button', { name: /^(Menu|More)$/ })
 
     await trigger.click()
     const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
@@ -148,7 +148,7 @@ test.describe.serial('Phase 7 — app shell', () => {
   }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
-    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     for (const label of [

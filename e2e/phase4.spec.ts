@@ -177,7 +177,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
     ).toBeVisible()
 
-    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
     await expect(morePanel.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ })).toBeVisible()
     await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
@@ -194,7 +194,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     // through it. The "a route change closes an open sheet" guarantee is
     // instead proven in `e2e/phase7-shell.spec.ts`, via a link INSIDE the
     // sheet, which is the only navigation a modal dialog actually permits.
-    await page.getByRole('button', { name: /^(Khác|More)$/ }).click()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     await expect(morePanel).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(morePanel).toBeHidden()
