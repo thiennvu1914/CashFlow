@@ -2,6 +2,7 @@
 
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { X } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { cn } from 'cn'
 import {
   Dialog as DialogRoot,
@@ -57,14 +58,14 @@ export function Dialog({
   children: React.ReactNode
   footer?: React.ReactNode
   /**
-   * The close button's accessible name. Optional and defaulting to `title`
-   * for now — re-announcing the dialog's title beats an unlabelled button,
-   * but Task 2b wires this to the `common.close` message once the message
-   * file exists, at which point every caller keeps working unchanged and
-   * only the fallback stops being used.
+   * The close button's accessible name. Optional: it defaults to
+   * `common.close` (Task 2b), and a caller only needs to pass its own label
+   * when re-announcing the dialog's title reads better than the generic word
+   * — every existing caller keeps working unchanged.
    */
   closeLabel?: string
 }) {
+  const t = useTranslations('common')
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
@@ -109,7 +110,7 @@ export function Dialog({
               )}
             </div>
             <DialogClose
-              aria-label={closeLabel ?? title}
+              aria-label={closeLabel ?? t('close')}
               className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <X aria-hidden="true" className="size-4" />
