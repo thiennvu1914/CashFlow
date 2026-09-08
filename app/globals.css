@@ -39,21 +39,23 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  /* CashFlow-specific tokens (spec §11), exposed as Tailwind utilities
-     (bg-surface, bg-brand, text-positive, text-negative, text-warning, ...) */
+  /* CashFlow-specific tokens (spec §11 + Phase 7 §2), exposed as Tailwind
+     utilities (bg-surface, bg-surface-2, border-border-strong, ...) */
   --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
   --color-brand: var(--brand);
   --color-positive: var(--positive);
   --color-negative: var(--negative);
   --color-warning: var(--warning);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-  --radius-DEFAULT: var(--radius);
+  --color-border-strong: var(--border-strong);
+  --color-focus: var(--focus);
+  --color-input-bg: var(--input-bg);
+  /* Phase 7 trims the scale to exactly three radii (spec §2): 6, 10, 999.
+     `--radius-lg` is the card radius, `--radius-md` the control radius. */
+  --radius-md: 0.375rem;
+  --radius-lg: 0.625rem;
+  --radius-full: 999px;
+  --radius-DEFAULT: var(--radius-md);
 }
 
 /*
@@ -89,6 +91,85 @@
  * was rejected; L=0.55 is the smallest darkening that clears 4.5:1)
  */
 
+/*
+ * Phase 7 §2 Step 5 — measured WCAG contrast ratios for every text/UI pair,
+ * computed with a standalone oklch -> linear-sRGB -> relative-luminance
+ * pipeline (CSS Color 4 math; color-mix() pairs are alpha-composited over
+ * their stated backdrop before measuring). Minimums: 4.5:1 text, 3:1 UI.
+ *
+ * LIGHT
+ *   foreground/background        15.41:1  PASS  (#191F1D on #F5F6F4)
+ *   foreground/surface           16.75:1  PASS  (#191F1D on #FFFFFF)
+ *   foreground/surface-2         15.33:1  PASS  (#191F1D on #F4F5F5)
+ *   foreground/input-bg          16.75:1  PASS  (input-bg = surface in light)
+ *   muted-foreground/background   5.73:1  PASS
+ *   muted-foreground/surface      6.22:1  PASS
+ *   muted-foreground/input-bg     6.22:1  PASS  (placeholder text; input-bg = surface)
+ *   brand/background              5.86:1  PASS
+ *   brand/surface                 6.37:1  PASS
+ *   positive/surface              5.30:1  PASS
+ *   negative/surface              5.20:1  PASS
+ *   warning/surface               4.93:1  PASS
+ *   primary-foreground/brand      6.37:1  PASS
+ *   border-strong/surface         3.27:1  PASS  (nudged, see below)
+ *   input/input-bg                1.45:1  FAIL  (see "Known gaps" below)
+ *   focus/background              5.86:1  PASS
+ *   focus/surface-2               5.83:1  PASS
+ *
+ * DARK
+ *   foreground/background        15.89:1  PASS  (#F5F6F4 on #171C1A)
+ *   foreground/surface           14.56:1  PASS  (#F5F6F4 on #202724)
+ *   foreground/surface-2         12.60:1  PASS  (#F5F6F4 on #29302D)
+ *   foreground/input-bg          16.63:1  PASS  (#F5F6F4 on #1C221F)
+ *   muted-foreground/background   5.01:1  PASS
+ *   muted-foreground/surface      4.59:1  PASS
+ *   muted-foreground/input-bg     5.24:1  PASS  (placeholder text)
+ *   brand/background              4.68:1  PASS
+ *   brand/surface                 4.29:1  FAIL  (see "Known gaps" below)
+ *   positive/surface              4.85:1  PASS
+ *   negative/surface              5.31:1  PASS
+ *   warning/surface               6.70:1  PASS
+ *   primary-foreground/brand      4.68:1  PASS
+ *   border-strong/surface         3.52:1  PASS  (nudged, see below; 3.34:1 on surface-2)
+ *   input/input-bg                1.95:1  FAIL  (see "Known gaps" below)
+ *   focus/background              4.68:1  PASS
+ *   focus/surface-2               3.71:1  PASS
+ *
+ * Nudge applied — --border-strong: unused by any component yet (Task 1c/5a
+ * are the first consumers), so it was safe to raise past the value first
+ * tried. 18%/22% (light/dark) measured 1.45:1 / 1.99:1 against --surface —
+ * nowhere near the 3:1 UI minimum, because a translucent near-black/near-white
+ * tint over pure white (light) or a dark charcoal (dark) barely moves the
+ * relative luminance. Raised to 50% (light) / 40% (dark), which clears 3:1
+ * against --surface AND --surface-2 (its actual usage context, a divider
+ * inside a raised surface) with margin.
+ *
+ * Known gaps (NOT nudged — both endpoints are pinned by an explicit,
+ * protected constraint, so fixing either would break something this task is
+ * required to leave alone):
+ *   - input/input-bg (both themes) measures 1.45:1 (light) / 1.95:1 (dark),
+ *     under the 3:1 UI minimum. --input already ships today at this exact
+ *     alpha (18% light / the spec's 22% dark) in the live `border-input` and
+ *     `dark:bg-input/30` classes of components/ui/button.tsx and
+ *     components/ui/input.tsx — both explicitly out of scope for this task
+ *     ("Task 2a re-skins them"). Raising --input's alpha to clear 3:1 would
+ *     visibly change those two files' rendering today, which this task's
+ *     "nothing renders differently except the focus ring" requirement
+ *     forbids. Left as measured; flagged for Task 2a, which owns the actual
+ *     re-skin of these two components and can choose a border treatment
+ *     that clears 3:1 deliberately.
+ *   - brand/surface (dark) measures 4.29:1, under the 4.5:1 text minimum
+ *     (--brand is used as literal link/nav text, e.g. `text-brand` in
+ *     components/layout/app-shell.tsx and components/dashboard/recent-
+ *     transactions.tsx). Both endpoints are pinned: --brand is in this
+ *     task's explicit "do not change" list, and --surface is pinned to the
+ *     spec's literal #202724 by Step 3. This was already failing before
+ *     Phase 7 (4.02:1 against the old #242926 --surface) — the mandated
+ *     surface change improves it (4.02 -> 4.29) but does not clear it.
+ *     Flagged for the controller; not fixed here since no lever is available
+ *     without violating a protected value.
+ */
+
 :root {
   /* CashFlow base tokens */
   --background: oklch(0.971 0.002 134.839);
@@ -100,6 +181,31 @@
   --negative: oklch(0.55 0.14 25);
   --warning: oklch(0.55 0.11 78);
   --radius: 0.5rem;
+  /* Phase 7 §2. `--surface-2` is the raised surface for popovers, dialogs and
+     sheets — one step further from the background than a card, so a layer
+     above the page reads as above it without a large shadow.
+     `--border-strong` is the divider inside a raised surface, where a 12 %
+     hairline disappears (nudged to 50 % here — see the Step 5 measurement
+     comment immediately below). `--focus` is the ring, and it is the brand
+     colour rather than `--ring` so a future shadcn regeneration of `--ring`
+     cannot silently change the focus indicator. */
+  --surface-2: color-mix(in oklch, var(--foreground) 4%, var(--surface));
+  /* Step 5 measurement: the brief's literal 18% measures 1.45:1 against
+     --surface (well under the 3:1 UI minimum) because --surface is pure
+     white here — a semi-transparent near-black at 18% alpha barely tints it.
+     --border-strong is not consumed anywhere yet (Task 1c/5a are first), so
+     it is safe to nudge; raised to 50% to clear 3:1 (measured 3.27:1, see
+     Step 5 table below). */
+  --border-strong: color-mix(in oklch, var(--foreground) 50%, transparent);
+  --focus: var(--brand);
+  /* The background an input SITS on, rather than a translucent wash over
+     whatever is behind it. In light this is the surface itself — a white field
+     on a white card reads correctly because the 1 px `--input` border is what
+     delimits it. In dark it is a distinct, darker value (see `.dark`), because
+     a translucent `bg-input/30` over `--surface` and the same over
+     `--surface-2` are two different colours, and a field inside a dialog then
+     looked different from the identical field on the page behind it. */
+  --input-bg: var(--surface);
 
   /* shadcn primitives, remapped onto the CashFlow tokens above (no stock
      zinc/neutral values remain) */
@@ -143,6 +249,21 @@
   --positive: oklch(0.635 0.105 160.924);
   --negative: oklch(0.683 0.1 23.252);
   --warning: oklch(0.736 0.1 79.908);
+  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. The
+     existing `--surface` was oklch(0.274 …) (#242926); the spec's ladder needs
+     the middle rung a shade darker so surface-2 is visibly distinct from it. */
+  --surface: oklch(0.253 0.007 164.376); /* #202724 */
+  --surface-2: oklch(0.298 0.007 164.376); /* #29302D */
+  /* Step 5 measurement: the brief's literal 22% measures 1.99:1 against
+     --surface (under the 3:1 UI minimum). Like light, unused elsewhere yet,
+     so raised to 40% to clear 3:1 against both --surface (3.52:1) and
+     --surface-2 (3.34:1), see Step 5 table below. */
+  --border-strong: color-mix(in oklch, var(--foreground) 40%, transparent);
+  --focus: var(--brand);
+  /* Spec §3: "inputs on #1C221F" — one step below `--surface` (#202724), so a
+     field reads as recessed into its card. Fixed rather than translucent, so
+     the same input looks the same on a card and inside a dialog. */
+  --input-bg: oklch(0.2 0.006 170); /* #1C221F */
 
   /* shadcn primitives, remapped onto the CashFlow tokens above */
   --card: var(--surface);
@@ -157,8 +278,8 @@
   --muted-foreground: color-mix(in oklch, var(--foreground) 55%, var(--background));
   --accent-foreground: var(--background);
   --destructive: var(--negative);
-  --border: color-mix(in oklch, var(--foreground) 12%, transparent);
-  --input: color-mix(in oklch, var(--foreground) 18%, transparent);
+  --border: color-mix(in oklch, var(--foreground) 14%, transparent);
+  --input: color-mix(in oklch, var(--foreground) 22%, transparent);
   --ring: var(--brand);
   --chart-1: var(--brand);
   --chart-2: var(--accent);
@@ -177,12 +298,31 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
   }
   html {
     @apply font-sans;
+  }
+  /* Spec §2: 2 px brand ring, 2 px offset, on EVERY interactive element.
+     Declared once here rather than per component so a control added later
+     cannot ship without it. `:focus-visible` (not `:focus`) so a mouse click
+     does not draw it. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  /* Spec §2: no motion beyond 150 ms, and none at all when the user asked for
+     none. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
