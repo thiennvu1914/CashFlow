@@ -35,6 +35,12 @@ import { registerNewUser } from './helpers'
  * captured as `storageState`, reused by every test via `test.use` — the same
  * pattern the other specs use. The suite leaves that user's profile exactly as
  * it found it (see the last test).
+ *
+ * Amended for the amended spec §6.9 (Task 11): the timezone control is now a
+ * grouped native `<select>`, not a free-text `<input>`, and every control has a
+ * visible `<label>` — so selectors moved from placeholders to `getByLabel`, and
+ * `selectOption` replaces `fill` for the timezone. There is exactly ONE Save
+ * for all five fields, so no per-card scoping is needed on that button.
  */
 
 const STORAGE_STATE_PATH = path.join(
@@ -66,15 +72,17 @@ const EDITED = {
   timezone: 'Europe/London',
 } as const
 
-const NAME_PLACEHOLDER = 'Name'
-const TIMEZONE_PLACEHOLDER = 'Timezone (IANA, e.g. Asia/Ho_Chi_Minh)'
+/** `<option value="…" … selected="">` regardless of attribute order — the order
+ *  react-dom happens to emit attributes in is not what is under test. */
+function selectedOption(value: string): RegExp {
+  return new RegExp(
+    `<option[^>]*\\svalue="${value}"[^>]*\\sselected=""|<option[^>]*\\sselected=""[^>]*\\svalue="${value}"`,
+  )
+}
 
 /**
  * The markup of one `<select>`, found by the `name` attribute `register()`
- * emits — these three selects carry no accessible name today, which is out of
- * scope for a hydration patch. `<select>`s cannot nest, so the first
- * `</select>` after the opening tag closes it. Scoping is what makes the
- * `selected` assertions meaningful: three selects render options of their own.
+ * emits.
  */
 function selectMarkup(html: string, name: string): string {
   const nameIndex = html.indexOf(`name="${name}"`)
@@ -95,19 +103,10 @@ function inputMarkup(html: string, name: string): string {
   return html.slice(start, end + 1)
 }
 
-/** `<option value="…" … selected="">` regardless of attribute order — the order
- *  react-dom happens to emit attributes in is not what is under test. */
-function selectedOption(value: string): RegExp {
-  return new RegExp(
-    `<option[^>]*\\svalue="${value}"[^>]*\\sselected=""|<option[^>]*\\sselected=""[^>]*\\svalue="${value}"`,
-  )
-}
-
 /** Asserts the raw `/settings` HTML shows exactly `profile` as its initial state. */
 function expectServerRenderedProfile(html: string, profile: typeof STORED | typeof EDITED): void {
   expect(inputMarkup(html, 'name')).toContain(`value="${profile.name}"`)
-  expect(inputMarkup(html, 'timezone')).toContain(`value="${profile.timezone}"`)
-  for (const field of ['baseCurrency', 'locale', 'theme'] as const) {
+  for (const field of ['baseCurrency', 'locale', 'theme', 'timezone'] as const) {
     const markup = selectMarkup(html, field)
     expect(markup, field).toMatch(selectedOption(profile[field]))
     // Exactly one option is pre-selected, and the <select> is not controlled.
@@ -140,9 +139,8 @@ test.describe.serial('Settings profile form — hydration gate', () => {
     const html = await response.text()
 
     // 1. The gate itself, in the bytes the browser paints first: nothing inside
-    //    the profile form is operable, and assistive tech is told it is busy.
+    //    the profile form is operable.
     expect(html).toContain('<fieldset disabled=""')
-    expect(html).toContain('aria-busy="true"')
 
     // 2. The state the client is about to own is the state the server showed.
     //    Pre-fix this was an empty Name, an empty Timezone and VND/vi/light
@@ -153,11 +151,11 @@ test.describe.serial('Settings profile form — hydration gate', () => {
   test('early edits to every field survive hydration (5 fresh navigations)', async ({ page }) => {
     test.setTimeout(120_000)
 
-    const name = page.getByPlaceholder(NAME_PLACEHOLDER, { exact: true })
-    const timezone = page.getByPlaceholder(TIMEZONE_PLACEHOLDER, { exact: true })
-    const baseCurrency = page.locator('select[name="baseCurrency"]')
-    const locale = page.locator('select[name="locale"]')
-    const theme = page.locator('select[name="theme"]')
+    const name = page.getByLabel(/^Tên$|^Name$/)
+    const timezone = page.getByLabel(/Múi giờ|Time zone/)
+    const baseCurrency = page.getByLabel(/Tiền tệ hiển thị|Display currency/)
+    const locale = page.getByLabel(/Ngôn ngữ|Language/)
+    const theme = page.getByLabel(/Giao diện|^Theme$/)
 
     for (let i = 0; i < 5; i++) {
       // `commit` resolves the moment the response starts, so the very next line
@@ -178,7 +176,7 @@ test.describe.serial('Settings profile form — hydration gate', () => {
       await expect(locale).toHaveValue(EDITED.locale)
       await theme.selectOption(EDITED.theme)
       await expect(theme).toHaveValue(EDITED.theme)
-      await timezone.fill(EDITED.timezone)
+      await timezone.selectOption(EDITED.timezone)
       await expect(timezone).toHaveValue(EDITED.timezone)
 
       // The old failure window: hydration finishing *after* the interaction.
@@ -195,23 +193,45 @@ test.describe.serial('Settings profile form — hydration gate', () => {
     }
   })
 
+  test('early edits to the preference fields survive hydration too (theme select)', async ({
+    page,
+  }) => {
+    // The four preference fields moved into their OWN `<fieldset>` (the
+    // amended spec's second group); a gate applied to only the profile group
+    // would be invisible until a user hit this exact case. `theme` stands in
+    // for the group: it is a `<select>` with a `defaultValues` entry, same
+    // shape as `baseCurrency`/`locale`, already covered by the loop above —
+    // this test isolates it so a regression that gates only the FIRST
+    // fieldset fails here specifically rather than only in the combined loop.
+    await page.goto('/settings', { waitUntil: 'commit' })
+
+    const theme = page.getByLabel(/Giao diện|^Theme$/)
+    await theme.selectOption(EDITED.theme)
+    await expect(theme).toHaveValue(EDITED.theme)
+
+    await page.waitForLoadState('networkidle')
+    await expect(theme).toHaveValue(EDITED.theme)
+  })
+
   test('saving persists every field, and the next server render shows it', async ({ page }) => {
     await page.goto('/settings', { waitUntil: 'commit' })
 
-    const name = page.getByPlaceholder(NAME_PLACEHOLDER, { exact: true })
-    const timezone = page.getByPlaceholder(TIMEZONE_PLACEHOLDER, { exact: true })
-    const baseCurrency = page.locator('select[name="baseCurrency"]')
-    const locale = page.locator('select[name="locale"]')
-    const theme = page.locator('select[name="theme"]')
-    const save = page.getByRole('button', { name: 'Save changes' })
+    const name = page.getByLabel(/^Tên$|^Name$/)
+    const timezone = page.getByLabel(/Múi giờ|Time zone/)
+    const baseCurrency = page.getByLabel(/Tiền tệ hiển thị|Display currency/)
+    const locale = page.getByLabel(/Ngôn ngữ|Language/)
+    const theme = page.getByLabel(/Giao diện|^Theme$/)
+    // ONE Save for all five fields (amended spec §6.9), so it is not scoped
+    // to a card.
+    const save = page.getByRole('button', { name: /^Lưu$|^Save$/ })
 
     await name.fill(EDITED.name)
     await baseCurrency.selectOption(EDITED.baseCurrency)
     await locale.selectOption(EDITED.locale)
     await theme.selectOption(EDITED.theme)
-    await timezone.fill(EDITED.timezone)
+    await timezone.selectOption(EDITED.timezone)
     await save.click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
     // The one render path this patch introduces: after a save the form calls
     // `router.refresh()`, so `ProfileForm` re-renders in place with a NEW
@@ -246,8 +266,8 @@ test.describe.serial('Settings profile form — hydration gate', () => {
     await baseCurrency.selectOption(STORED.baseCurrency)
     await locale.selectOption(STORED.locale)
     await theme.selectOption(STORED.theme)
-    await timezone.fill(STORED.timezone)
+    await timezone.selectOption(STORED.timezone)
     await save.click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
   })
 })

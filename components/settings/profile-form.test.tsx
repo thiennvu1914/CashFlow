@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
+import { loadMessages } from '@/lib/i18n/messages'
 import type { ProfileInput } from '@/lib/validation/profile'
 
 /**
@@ -54,17 +56,29 @@ const APP_DEFAULTS: ProfileInput = {
   timezone: 'Asia/Ho_Chi_Minh',
 }
 
-function render(defaultValues: ProfileInput): string {
-  return renderToStaticMarkup(<ProfileForm defaultValues={defaultValues} />)
+const LABELS = {
+  profileTitle: 'Profile',
+  profileDescription: 'The name shown throughout the app.',
+  preferencesTitle: 'Preferences',
+  preferencesDescription: 'How CashFlow displays your figures.',
+}
+
+const messages = await loadMessages('vi')
+
+function render(defaultValues: ProfileInput = APP_DEFAULTS): string {
+  return renderToStaticMarkup(
+    <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+      <ProfileForm defaultValues={defaultValues} labels={LABELS} />
+    </NextIntlClientProvider>,
+  )
 }
 
 /**
  * The markup of one `<select>`, found by the `name` attribute `register()`
- * emits — these selects carry no accessible name today, and that is out of
- * scope for a hydration patch. `<select>`s cannot nest, so the first
- * `</select>` after the opening tag closes it. Scoping matters: the three
- * selects each render their own options, and an assertion against the whole
- * document could not tell them apart.
+ * emits. `<select>`s cannot nest, so the first `</select>` after the opening
+ * tag closes it. Scoping matters: the four selects each render their own
+ * options, and an assertion against the whole document could not tell them
+ * apart.
  */
 function selectMarkup(html: string, name: string): string {
   const nameIndex = html.indexOf(`name="${name}"`)
@@ -98,23 +112,26 @@ function countOf(html: string, needle: string): number {
 }
 
 describe('ProfileForm hydration gate', () => {
-  it('ships the form gated: a disabled, aria-busy fieldset with an sr-only legend', () => {
-    const html = render(PROBE)
+  it('ships both groups gated: disabled fieldsets with sr-only legends', () => {
+    const html = render()
 
-    expect(html).toContain('<fieldset disabled=""')
-    expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">Profile</legend>')
+    // `aria-busy` tracks the in-flight SUBMIT, not the hydration gate (spec's
+    // accessibility criteria: "disabled + aria-busy while saving") — so on the
+    // very first, pre-submit render it is absent even though both fieldsets
+    // are already `disabled` by the hydration gate.
+    expect(html.match(/<fieldset disabled=""/g)).toHaveLength(2)
+    expect(html).toContain('<legend class="sr-only">Hồ sơ</legend>')
+    expect(html).toContain('<legend class="sr-only">Tùy chọn hiển thị</legend>')
   })
 
-  it('moves the form layout onto the fieldset, so lifting the gate shifts nothing', () => {
-    const html = render(PROBE)
+  it("moves each group's layout onto its fieldset, so lifting the gate shifts nothing", () => {
+    const html = render()
 
-    // The flex column lives on the fieldset (the new flex container), not on
-    // the <form> — a <fieldset> wrapping a flex form's children without taking
+    // The flex column lives on each fieldset (the flex container), not on the
+    // <form> — a <fieldset> wrapping a flex form's children without taking
     // over its layout would re-flow every field the moment the gate lifts.
-    expect(html).toContain('class="flex min-w-0 flex-col gap-4"')
-    expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
-    expect(html).not.toMatch(/<form[^>]*class=/)
+    expect(countOf(html, 'class="flex min-w-0 flex-col gap-4"')).toBe(2)
+    expect(html).toMatch(/<form[^>]*>[\s\S]*?<fieldset/)
   })
 })
 
@@ -127,7 +144,6 @@ describe('ProfileForm server-rendered defaults', () => {
     // `defaultValue` these arrive EMPTY and the user's stored name only
     // appears once hydration has run.
     expect(inputMarkup(html, 'name')).toContain('value="Probe User"')
-    expect(inputMarkup(html, 'timezone')).toContain('value="Europe/London"')
 
     // Selects: without a `defaultValue` the browser shows the FIRST option, so
     // a USD/en/dark profile was displayed as VND/vi/light until hydration.
@@ -144,6 +160,12 @@ describe('ProfileForm server-rendered defaults', () => {
       expect(countOf(markup, 'selected=""'), field).toBe(1)
       expect(markup, field).not.toMatch(/<select[^>]*\svalue=/)
     }
+
+    // Timezone: a grouped native select, so the stored zone is asserted as the
+    // hoisted leading option rather than via `inputMarkup`.
+    const timezoneMarkup = selectMarkup(html, 'timezone')
+    expect(timezoneMarkup).toMatch(selectedOption('Europe/London'))
+    expect(countOf(timezoneMarkup, 'selected=""')).toBe(1)
   })
 
   it('renders the app defaults as the selected options too', () => {
@@ -162,6 +184,46 @@ describe('ProfileForm server-rendered defaults', () => {
       expect(countOf(markup, 'selected=""'), field).toBe(1)
     }
     expect(inputMarkup(html, 'name')).toContain('value="Default User"')
-    expect(inputMarkup(html, 'timezone')).toContain('value="Asia/Ho_Chi_Minh"')
+    const timezoneMarkup = selectMarkup(html, 'timezone')
+    expect(timezoneMarkup).toMatch(selectedOption('Asia/Ho_Chi_Minh'))
+  })
+})
+
+describe('ProfileForm — one form, two groups, one Save', () => {
+  it('renders the server-stored profile in ONE form with two gated fieldsets', () => {
+    const html = render()
+    expect(html.match(/<form/g)).toHaveLength(1)
+    expect(html.match(/<fieldset/g)).toHaveLength(2)
+    // Both gated before hydration, both marked busy-capable.
+    expect(html.match(/<fieldset disabled/g)).toHaveLength(2)
+    expect(html.match(/<legend class="sr-only"/g)).toHaveLength(2)
+  })
+
+  it('has exactly one submit button, outside both fieldsets', () => {
+    const html = render()
+    expect(html.match(/type="submit"/g)).toHaveLength(1)
+    // The button follows the second `</fieldset>`, so it inherits neither
+    // group's `disabled` — which is why it carries its own.
+    expect(html.lastIndexOf('</fieldset>')).toBeLessThan(html.indexOf('type="submit"'))
+  })
+
+  it('gives all five controls a visible label bound to their id', () => {
+    const html = render()
+    for (const id of [
+      'settings-name',
+      'settings-base-currency',
+      'settings-locale',
+      'settings-theme',
+      'settings-timezone',
+    ]) {
+      expect(html).toContain(`for="${id}"`)
+      expect(html).toContain(`id="${id}"`)
+    }
+  })
+
+  it('hoists the stored timezone into the leading optgroup', () => {
+    const html = render()
+    const firstGroup = html.slice(html.indexOf('<optgroup'), html.indexOf('</optgroup>'))
+    expect(firstGroup).toContain('Asia/Ho_Chi_Minh')
   })
 })
