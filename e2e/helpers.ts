@@ -16,10 +16,10 @@ export async function registerNewUser(
   const password = 'correct-horse-battery-staple'
 
   await page.goto('/register')
-  await page.getByPlaceholder('Name').fill('Phase 4 E2E User')
-  await page.getByPlaceholder('Email').fill(email)
-  await page.getByPlaceholder('Password').fill(password)
-  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.getByLabel(/^Tên$|^Name$/).fill('Phase 4 E2E User')
+  await page.getByLabel(/^Email$/).fill(email)
+  await page.getByLabel(/Mật khẩu|^Password$/).fill(password)
+  await page.getByRole('button', { name: /Tạo tài khoản|Create account/ }).click()
   // A wider bound than Playwright's default 5 s, for one reason only: on a
   // freshly started dev server (`CI=1` makes the config start its own) this is
   // the FIRST request that hits the auth API route and `/dashboard`, and
