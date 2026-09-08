@@ -39,8 +39,12 @@ import { StatusBadge, type StatusTone } from '@/components/common/status-badge'
  *
  * `renderActions` returns TWO pieces, not one (fix round 1, findings 4/5/6):
  * `inlineAction` (the row's "Cập nhật tiến độ" button, its own `PlanningRow`
- * slot) and `actions` (the `…` menu). Each row is wrapped in a
- * `RowErrorProvider` so the menu's archive failure — reported via
+ * slot) and `actions` (the `…` menu). `RowErrorProvider` wraps a row ONLY when
+ * `renderActions` is given (fix round 2): the Dashboard's compact widget
+ * passes none at all, so it has nothing that could ever set a row error, and
+ * wrapping it in a Context Provider — a Client Component — regardless would
+ * cost every widget row a needless client boundary for a feature it can never
+ * use. When it IS given, the menu's archive failure — reported via
  * `useRowError`, not a local `useState` — can be shown by `RowErrorAlert` in
  * `extra`, under the row, rather than squeezed into the actions cell.
  */
@@ -95,40 +99,45 @@ export async function GoalList({
                       date: formatDate(deadline, { locale, timeZone, style: 'date' }),
                     })
 
-        const parts = renderActions?.(goal)
+        const rowContent = {
+          title: goal.name,
+          badge: (
+            <StatusBadge
+              label={t(goalStatusLabelKey(goal.status))}
+              tone={STATUS_TONE[goal.status]}
+            />
+          ),
+          figureLine: t('goals.figureLine', {
+            progress: goal.progress,
+            target: goal.target,
+            currency: goal.currency,
+            percent: goal.percentLabel,
+          }),
+          progress: (
+            <Progress
+              percent={goal.percent}
+              valueText={goal.percentLabel}
+              label={goal.name}
+              tone="brand"
+            />
+          ),
+          meta: meta ? (
+            <span className={cn(goal.deadlinePassed && 'text-warning')}>{meta}</span>
+          ) : undefined,
+        }
 
+        if (!renderActions) {
+          return <PlanningRow key={goal.id} {...rowContent} />
+        }
+
+        const parts = renderActions(goal)
         return (
           <RowErrorProvider key={goal.id}>
             <PlanningRow
-              title={goal.name}
-              badge={
-                <StatusBadge
-                  label={t(goalStatusLabelKey(goal.status))}
-                  tone={STATUS_TONE[goal.status]}
-                />
-              }
-              figureLine={t('goals.figureLine', {
-                progress: goal.progress,
-                target: goal.target,
-                currency: goal.currency,
-                percent: goal.percentLabel,
-              })}
-              progress={
-                <Progress
-                  percent={goal.percent}
-                  valueText={goal.percentLabel}
-                  label={goal.name}
-                  tone="brand"
-                />
-              }
-              meta={
-                meta ? (
-                  <span className={cn(goal.deadlinePassed && 'text-warning')}>{meta}</span>
-                ) : undefined
-              }
-              inlineAction={parts?.inlineAction}
-              actions={parts?.actions}
-              extra={renderActions && <RowErrorAlert />}
+              {...rowContent}
+              inlineAction={parts.inlineAction}
+              actions={parts.actions}
+              extra={<RowErrorAlert />}
             />
           </RowErrorProvider>
         )

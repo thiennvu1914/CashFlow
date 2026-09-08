@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { getTranslations } from 'next-intl/server'
-import type { Locale } from '@/lib/i18n/locale'
 import { budgetStatusLabelKey } from '@/lib/ui/labels'
+import type { Locale } from '@/lib/i18n/locale'
 import type { BudgetProgressDto } from '@/lib/ui/budget-view-model'
 import { PlanningRow } from '@/components/common/planning-row'
 import { Progress } from '@/components/common/progress'
@@ -33,6 +33,13 @@ import { StatusBadge, type StatusTone } from '@/components/common/status-badge'
  * is now folded into `figureLine` itself, which is the same string at every
  * width. There is nothing left for this component to trim, so it is not
  * destructured below.
+ *
+ * `RowErrorProvider` (fix round 1, finding 6) wraps a row ONLY when
+ * `renderActions` is given (fix round 2): the Dashboard's compact widget
+ * passes none at all, so it has nothing that could ever set a row error, and
+ * wrapping it in a Context Provider — a Client Component — regardless would
+ * cost every widget row a needless client boundary for a feature it can never
+ * use.
  */
 const STATUS_TONE: Record<
   BudgetProgressDto['status'],
@@ -69,54 +76,59 @@ export async function BudgetProgressList({
         const scopeLabel = budget.categoryName ?? t('labels.budgetScope.OVERALL')
         const tone = STATUS_TONE[budget.status]
 
-        return (
+        // The OVERALL row reads visually stronger than a category budget
+        // (owner requirement) via a 2 px brand rule on the left plus a
+        // bolder title — not a `bg-muted` tint, which is the exact colour
+        // `Progress` already uses for its own track (fix round 1, finding
+        // 3): a below-100 % Overall bar would lose its track against an
+        // identical background, and the tint read as near-invisible in
+        // dark regardless. `bg-surface-2` is a real, distinct token from
+        // both `--surface` and `--muted`, so it tints without colliding
+        // with the bar underneath it.
+        const rowContent = {
+          className:
+            budget.scope === 'OVERALL' ? 'border-l-2 border-brand bg-surface-2' : undefined,
+          title: (
+            <>
+              <span className={budget.scope === 'OVERALL' ? 'font-semibold' : undefined}>
+                {scopeLabel}
+              </span>
+              {budget.categoryArchived && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  {t('budgets.categoryArchived')}
+                </span>
+              )}
+            </>
+          ),
+          badge: <StatusBadge label={t(budgetStatusLabelKey(budget.status))} tone={tone} />,
+          figureLine: t(budget.over ? 'budgets.figureLineOver' : 'budgets.figureLine', {
+            spent: budget.spent,
+            limit: budget.amount,
+            currency: budget.currency,
+            remaining: budget.remaining,
+            over: budget.remaining,
+            percent: budget.percentLabel,
+          }),
+          progress: (
+            <Progress
+              percent={budget.percent}
+              valueText={budget.percentLabel}
+              label={scopeLabel}
+              tone={tone}
+            />
+          ),
+        }
+
+        return renderActions ? (
           <RowErrorProvider key={budget.id}>
             <PlanningRow
-              // The OVERALL row reads visually stronger than a category
-              // budget (owner requirement) via a 2 px brand rule on the left
-              // plus a bolder title — not a `bg-muted` tint, which is the
-              // exact colour `Progress` already uses for its own track (fix
-              // round 1, finding 3): a below-100 % Overall bar would lose its
-              // track against an identical background, and the tint read as
-              // near-invisible in dark regardless. `bg-surface-2` is a real,
-              // distinct token from both `--surface` and `--muted`, so it
-              // tints without colliding with the bar underneath it.
-              className={
-                budget.scope === 'OVERALL' ? 'border-l-2 border-brand bg-surface-2' : undefined
-              }
-              title={
-                <>
-                  <span className={budget.scope === 'OVERALL' ? 'font-semibold' : undefined}>
-                    {scopeLabel}
-                  </span>
-                  {budget.categoryArchived && (
-                    <span className="ml-1 font-normal text-muted-foreground">
-                      {t('budgets.categoryArchived')}
-                    </span>
-                  )}
-                </>
-              }
-              badge={<StatusBadge label={t(budgetStatusLabelKey(budget.status))} tone={tone} />}
-              figureLine={t(budget.over ? 'budgets.figureLineOver' : 'budgets.figureLine', {
-                spent: budget.spent,
-                limit: budget.amount,
-                currency: budget.currency,
-                remaining: budget.remaining,
-                over: budget.remaining,
-                percent: budget.percentLabel,
-              })}
-              progress={
-                <Progress
-                  percent={budget.percent}
-                  valueText={budget.percentLabel}
-                  label={scopeLabel}
-                  tone={tone}
-                />
-              }
-              actions={renderActions?.(budget)}
-              extra={renderActions && <RowErrorAlert />}
+              {...rowContent}
+              actions={renderActions(budget)}
+              extra={<RowErrorAlert />}
             />
           </RowErrorProvider>
+        ) : (
+          <PlanningRow key={budget.id} {...rowContent} />
         )
       })}
     </ul>

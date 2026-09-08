@@ -65,4 +65,32 @@ describe('PlanningRow', () => {
     const html = renderToStaticMarkup(<PlanningRow title="Sửa nhà" figureLine="0" />)
     expect(html).toContain('items-start')
   })
+
+  it('gives the title cell a min-height matching the actions cell only when there IS an actions cell (fix round 2)', () => {
+    const withActions = renderToStaticMarkup(
+      <PlanningRow title="Sửa nhà" figureLine="0" actions={<button type="button">…</button>} />,
+    )
+    expect(withActions).toContain('min-h-11')
+    expect(withActions).toContain('sm:min-h-9')
+
+    // No actions and no inlineAction — an archived/read-only row keeps its
+    // pre-fix-round-1 compactness rather than being inflated to match a
+    // button height it does not have.
+    const withoutActions = renderToStaticMarkup(<PlanningRow title="Sửa nhà" figureLine="0" />)
+    expect(withoutActions).not.toContain('min-h-11')
+    expect(withoutActions).not.toContain('min-h-9')
+  })
+
+  it('restores gap-1 on the actions cell (fix round 2 — round 1 had drifted it to gap-2)', () => {
+    const html = renderToStaticMarkup(
+      <PlanningRow
+        title="Sửa nhà"
+        figureLine="0"
+        inlineAction={<button type="button">Cập nhật tiến độ</button>}
+        actions={<button type="button">…</button>}
+      />,
+    )
+    const actionsCellMatch = html.match(/<div class="ml-auto flex shrink-0 items-center gap-\d">/)
+    expect(actionsCellMatch?.[0]).toContain('gap-1')
+  })
 })
