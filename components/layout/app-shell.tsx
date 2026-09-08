@@ -121,9 +121,22 @@ export function AppShell({ userName, children }: { userName: string; children: R
       <MobileTopBar />
 
       {/* `min-w-0` stops a wide child (a chart, a table) forcing the flex
-          row wider than the viewport; the bottom padding reserves exactly the fixed
-          mobile bar's height so it never covers the last row of content. */}
-      <main id="main" className="min-w-0 flex-1 pb-24 md:pb-0">
+          row wider than the viewport; the bottom padding reserves the fixed
+          mobile bar's 60 px height plus its safe-area inset plus a small gap,
+          so the bar never covers the last row of content (see
+          `mobile-nav.tsx`'s `MobileTabBar` for the matching height).
+          `tabIndex={-1}` makes `#main` a legal target for the skip link above
+          — an element needs to be focusable for `.focus()` (which following
+          a link to a fragment triggers) to actually move focus there, and a
+          bare `<main>` is not; `outline-none` stops that one programmatic
+          focus from drawing a ring around the whole content region (the
+          global focus-ring styling is for interactive elements, not a
+          section landmark). */}
+      <main
+        id="main"
+        tabIndex={-1}
+        className="min-w-0 flex-1 pb-[calc(60px+env(safe-area-inset-bottom)+16px)] outline-none md:pb-0"
+      >
         {children}
       </main>
 

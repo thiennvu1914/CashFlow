@@ -11,8 +11,12 @@ import { ADD_TRANSACTION_HREF, MOBILE_TAB_ITEMS, isActiveNavItem, type NavItem }
 
 /**
  * The phone navigation (spec §5): a top bar carrying the wordmark and the
- * "Thêm" trigger, and a fixed bottom bar with five slots — two destinations, a
- * raised brand `+`, two more destinations.
+ * "Khác" ("More") trigger, and a fixed bottom bar with five slots — two
+ * destinations, a raised brand `+`, two more destinations.
+ *
+ * `nav.more` reads "Khác" rather than a literal translation of "More": the
+ * top bar's other button, right beside it, is "Thêm giao dịch" ("Add
+ * transaction") — "Thêm" alone would read as a second, unrelated "Add".
  *
  * The "More" panel is now the shared `Sheet` primitive rather than the
  * hand-rolled disclosure this file used to contain. That disclosure wired
@@ -50,8 +54,12 @@ export function MobileTopBar() {
 /**
  * The bottom tab bar. Fixed, so it survives scrolling — which is why the shell
  * gives its content bottom padding: the bar must sit beside the page, never on
- * top of its last row. `env(safe-area-inset-bottom)` keeps the targets clear of
- * a home indicator.
+ * top of its last row. `min-h-[60px]` (spec §5's mobile expectation) is the
+ * exact figure `app-shell.tsx`'s content padding adds to
+ * `env(safe-area-inset-bottom)` — declared here explicitly, rather than left
+ * to the row's own content height, so the two stay in step by construction
+ * rather than by two files agreeing on a number neither states.
+ * `env(safe-area-inset-bottom)` keeps the targets clear of a home indicator.
  */
 export function MobileTabBar() {
   const pathname = usePathname()
@@ -63,7 +71,7 @@ export function MobileTabBar() {
       // be able to tell the two navigations apart, and only one of them carries
       // the full set of destinations.
       aria-label={t('nav.compact')}
-      className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="fixed inset-x-0 bottom-0 z-20 min-h-[60px] border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
     >
       <ul className="grid grid-cols-5 items-end">
         {MOBILE_TAB_ITEMS.slice(0, 2).map((item) => (

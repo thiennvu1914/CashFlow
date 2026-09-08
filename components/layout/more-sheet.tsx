@@ -9,8 +9,8 @@ import { Sheet } from '@/components/common/sheet'
 import { MOBILE_MORE_ITEMS, isActiveNavItem } from './nav-items'
 
 /**
- * The phone "Thêm" panel (spec §5): the eight destinations the bottom bar has
- * no room for, as a two-column icon grid, plus Log out.
+ * The phone "Khác" ("More") panel (spec §5): the eight destinations the
+ * bottom bar has no room for, as a two-column icon grid, plus Log out.
  *
  * A `Sheet` — so it closes by its own button, by Escape, by an overlay tap and
  * by a navigation, traps focus while open and hands focus back to the trigger
