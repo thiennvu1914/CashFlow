@@ -20,14 +20,25 @@ import { TransactionForm, type AccountOption, type CategoryOption } from './tran
  *    (mounted once, wherever this is rendered — Base UI's Dialog portals its
  *    content to `document.body` regardless), and wraps the WHOLE page body so
  *    both consumers below are its descendants;
- *  - `TransactionCreateTrigger` is the header's button, `md:hidden` — visible
- *    only below `md` (768 px), because that is the only range with no
- *    always-mounted form to submit through instead;
+ *  - `TransactionCreateTrigger` is the header's button, `xl:hidden` — visible
+ *    everywhere below `xl` (1280 px), because that is the range with no
+ *    ALWAYS-IN-VIEW form to submit through instead (fix round 1, area D: it
+ *    used to be `md:hidden`, so a tablet user — `md` to `< xl` — saw only a
+ *    long ledger with the create panel stranded below it and no visible way
+ *    to reach it, since the panel there is an ordinary in-flow block, not the
+ *    `xl:sticky` one);
  *  - `TransactionCreatePanelBody` is the inline/sticky form: `hidden` below
  *    `md`, a plain full-width block from `md` to `< xl` (the tablet
  *    composition: below the list, full width — nothing else needed, since a
  *    single-column grid already stacks it there), and `xl:sticky` beside the
  *    list from `xl` (1280 px) up.
+ *
+ * Below `md` the trigger opens the sheet, exactly as before. From `md` to
+ * `< xl` the form is already mounted on the page (just scrolled past), so the
+ * trigger instead scrolls `#new` into view and focuses its first field —
+ * opening the sheet there would show a SECOND, empty copy of the same form.
+ * `#new` arriving as a hash (the shell's Add-transaction action) does the
+ * same at those widths, via `focusInlinePanel` below.
  *
  * A first pass mounted the sticky panel's `TransactionForm` AND the sheet's
  * `TransactionForm` at the same time below `xl` (the sticky `<aside>` was
@@ -45,6 +56,27 @@ import { TransactionForm, type AccountOption, type CategoryOption } from './tran
  * a `<label for>` can never resolve to the OTHER one's control regardless of
  * how many instances happen to share the page at once.
  */
+
+/**
+ * Brings the inline/sticky panel (`#new`) into view and focuses its own
+ * first field — the md–`xl` alternative to opening the sheet, which at those
+ * widths would only show a second, empty copy of the same form. Shared by the
+ * header trigger and the `#new` hash effect so both reach the panel the same
+ * way.
+ *
+ * "First field" is whichever the form actually puts first in the DOM — the
+ * Type radiogroup's first button today — found generically rather than
+ * hard-coded to one control, so this keeps working if the form's field order
+ * ever changes.
+ */
+function focusInlinePanel() {
+  const panel = document.getElementById('new')
+  if (!panel) return
+  panel.scrollIntoView({ block: 'start' })
+  const firstField = panel.querySelector<HTMLElement>('input, select, textarea, [role="radio"]')
+  firstField?.focus()
+}
+
 interface TransactionCreateContextValue {
   accounts: AccountOption[]
   categories: CategoryOption[]
@@ -76,12 +108,16 @@ export function TransactionCreatePanelProvider({
   // navigation: `window.location.hash` is not reactive, and `pathname` changing
   // is the only thing that can bring a new hash to this page.
   useEffect(() => {
-    // Below `md` the sheet is the only home the form has; at `md` and up the
-    // inline/sticky panel (`id="new"`, in `TransactionCreatePanelBody`) is
-    // already on the page, so the browser's own anchor scroll is enough and
-    // opening the sheet too would show the form twice.
+    if (window.location.hash !== '#new') return
     const isMdUp = window.matchMedia('(min-width: 768px)').matches
-    if (window.location.hash !== '#new' || isMdUp) return
+    const isXlUp = window.matchMedia('(min-width: 1280px)').matches
+    // Below `md` the sheet is the only home the form has. From `md` to
+    // `< xl` the inline panel is on the page but not scrolled to — bring it
+    // into view and focus its first field (fix round 1, area D), rather than
+    // relying on the browser's own anchor scroll, which moves the viewport
+    // but focuses nothing. At `xl` and up the sticky panel is already always
+    // in view, so there is nothing further to do.
+    //
     // `react-hooks/set-state-in-effect` (enforced in this repo, see
     // `lib/ui/use-hydrated.ts`) refuses a `setState` called synchronously in an
     // effect body — it is reasoned about as "force a re-render to sync with an
@@ -91,8 +127,13 @@ export function TransactionCreatePanelProvider({
     // to a microtask is the same escape hatch React's own effect-cleanup timing
     // relies on and keeps the update out of this synchronous commit, while still
     // running before the next paint — there is no user-visible delay.
-    queueMicrotask(() => setSheetOpen(true))
-    // Clear it so a later reload does not reopen the sheet the user closed.
+    if (!isMdUp) {
+      queueMicrotask(() => setSheetOpen(true))
+    } else if (!isXlUp) {
+      queueMicrotask(focusInlinePanel)
+    }
+    // Clear it so a later reload does not reopen the sheet/refocus the panel
+    // the user has already moved on from.
     history.replaceState(null, '', window.location.pathname + window.location.search)
   }, [pathname])
 
@@ -122,15 +163,31 @@ export function TransactionCreatePanelProvider({
   )
 }
 
-/** The header's primary action — visible only below `md` (spec §14 fix round
- *  1, finding 1): from `md` up, `TransactionCreatePanelBody` is already on the
- *  page, so a second way to open the (now-empty) sheet would be redundant. */
+/** The header's primary action — visible below `xl` (fix round 1, area D;
+ *  originally `md:hidden`, spec §14 fix round 1, finding 1). At `xl` and up,
+ *  `TransactionCreatePanelBody` is sticky beside the list and always in view,
+ *  so the trigger would be redundant; below that it opens the sheet (below
+ *  `md`, the form's only home) or brings the already-mounted inline panel
+ *  into view and focus (`md`–`xl`, where opening the sheet would only show a
+ *  second, empty copy of the same form). */
 export function TransactionCreateTrigger() {
   const t = useTranslations()
   const ctx = useContext(TransactionCreateContext)
   if (!ctx) return null
+
+  function handleClick() {
+    const isMdUp = window.matchMedia('(min-width: 768px)').matches
+    if (isMdUp) {
+      focusInlinePanel()
+    } else {
+      // Narrowed by the `if (!ctx) return null` above, in this same render —
+      // TS does not carry that narrowing into a nested function declaration.
+      ctx!.openSheet()
+    }
+  }
+
   return (
-    <Button type="button" className="md:hidden" onClick={ctx.openSheet}>
+    <Button type="button" className="xl:hidden" onClick={handleClick}>
       {t('transactions.openCreate')}
     </Button>
   )

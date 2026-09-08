@@ -221,6 +221,39 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
     await expect(row).toHaveCount(0)
   })
 
+  test("1024: the header trigger stays visible, and clicking it focuses the inline panel's first field", async ({
+    page,
+  }) => {
+    // Fix round 1, area D: `TransactionCreateTrigger` used to be `md:hidden`,
+    // so between `md` and `xl` a tablet user saw only the ledger with the
+    // create panel stranded below it and no visible way to reach it. It is
+    // now `xl:hidden` and, at this width, scrolls the already-mounted inline
+    // panel into view and focuses its first field instead of opening the
+    // (otherwise duplicate) sheet.
+    await page.setViewportSize({ width: 1024, height: 900 })
+    await page.goto('/transactions')
+
+    const header = page.locator('header')
+    const trigger = header.getByRole('button', { name: /Thêm giao dịch|Add transaction/ })
+    await expect(trigger).toBeVisible()
+    await trigger.click()
+
+    // No sheet opened — a second copy of the same form would be redundant.
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+
+    const focusedTag = await page.evaluate(() => document.activeElement?.tagName ?? null)
+    expect(['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA']).toContain(focusedTag)
+
+    // The focused element is inside the inline panel, not the ledger or the
+    // header — confirming the trigger reached the create form, not something
+    // else on the page.
+    const focusedInsidePanel = await page.evaluate(() => {
+      const panel = document.getElementById('new')
+      return !!panel && !!document.activeElement && panel.contains(document.activeElement)
+    })
+    expect(focusedInsidePanel).toBe(true)
+  })
+
   test('375: /transactions#new opens the sheet, whose labelled fields are its own', async ({
     page,
   }) => {
