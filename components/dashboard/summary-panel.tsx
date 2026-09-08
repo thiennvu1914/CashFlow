@@ -186,7 +186,13 @@ function Cell({
   className?: string
 }) {
   return (
-    <div className={cn('flex flex-col gap-1 bg-surface p-4', className)}>
+    // `xl:justify-center` (fix round 1, finding 4): at xl the three monthly
+    // cells span both of the left column's rows (`xl:row-span-2`), and a
+    // top-aligned flex column left an empty band beneath the shorter content
+    // — noticeable in the Step 12 screenshot's above-the-fold view. Centring
+    // the column's content vertically only matters where a cell is taller
+    // than its content (i.e. those three), and is a no-op everywhere else.
+    <div className={cn('flex flex-col gap-1 bg-surface p-4 xl:justify-center', className)}>
       <dt className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{labels[kpi.labelKey]}</dt>
       <dd className="flex flex-col gap-1">
         <Figure kpi={kpi} currency={currency} hints={hints} size={size} />

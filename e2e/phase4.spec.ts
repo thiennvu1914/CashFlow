@@ -181,13 +181,17 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     const gridBox = await page.locator('main > div > div').last().boundingBox()
     const trendBox = await trendSection.boundingBox()
     const recentBox = await recentSection.boundingBox()
-    if (gridBox && trendBox && recentBox) {
-      const trendFraction = trendBox.width / gridBox.width
-      const recentFraction = recentBox.width / gridBox.width
-      expect(trendFraction).toBeGreaterThan(0.6)
-      expect(trendFraction).toBeLessThan(0.7)
-      expect(recentFraction).toBeGreaterThan(0.95)
-    }
+    // Explicit, not an `if` guard around the assertions: a `null` box (the
+    // element detached or never rendered) must fail this test loudly, not
+    // silently skip the very assertions it exists to make.
+    expect(gridBox, 'grid container bounding box').not.toBeNull()
+    expect(trendBox, 'Cash Flow Trend section bounding box').not.toBeNull()
+    expect(recentBox, 'Recent Transactions section bounding box').not.toBeNull()
+    const trendFraction = trendBox!.width / gridBox!.width
+    const recentFraction = recentBox!.width / gridBox!.width
+    expect(trendFraction).toBeGreaterThan(0.6)
+    expect(trendFraction).toBeLessThan(0.7)
+    expect(recentFraction).toBeGreaterThan(0.95)
   })
 
   test('dashboard (mobile, 375x812): compact nav, More menu, tab navigation', async ({ page }) => {

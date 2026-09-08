@@ -76,9 +76,9 @@ test.describe
     }
   })
 
-  test('no horizontal overflow at 375 and 414', async ({ page }) => {
-    for (const width of [375, 414]) {
-      await page.setViewportSize({ width, height: 812 })
+  test('no horizontal overflow at 375, 414, 768, 1024 or 1280', async ({ page }) => {
+    for (const width of [375, 414, 768, 1024, 1280]) {
+      await page.setViewportSize({ width, height: 900 })
       await page.goto('/dashboard')
       const { scrollWidth, innerWidth } = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
