@@ -1,5 +1,4 @@
-import Link from 'next/link'
-import { cn } from 'cn'
+import { getTranslations } from 'next-intl/server'
 import {
   MAX_BUDGET_YEAR,
   MIN_BUDGET_YEAR,
@@ -7,19 +6,21 @@ import {
   formatCalendarMonth,
   type CalendarMonth,
 } from '@/lib/datetime/calendar-month'
+import { SegmentedControl, type Segment } from '@/components/common/segmented-control'
 
 /**
  * The Budgets page's month picker, with the month itself kept in the URL —
  * the same "the address bar is the source of truth" treatment as
- * `components/reports/period-filter.tsx`. A server component with no state:
- * "Previous"/"This month"/"Next" are ordinary links to `/budgets?month=yyyy-MM`.
+ * `components/reports/period-filter.tsx`. An async server component with no
+ * state: "Previous"/"This month"/"Next" are ordinary links to
+ * `/budgets?month=yyyy-MM`, rendered through the shared `SegmentedControl`.
  *
  * "Previous" is disabled at `MIN_BUDGET_YEAR`-01 and "Next" at
  * `MAX_BUDGET_YEAR`-12 — the ends of the range `Budget.year` can actually
  * hold — so this component can never link the page outside the range the
  * create form would then silently reject (see `app/(app)/budgets/page.tsx`).
  */
-export function MonthNav({
+export async function MonthNav({
   selected,
   current,
 }: {
@@ -28,50 +29,51 @@ export function MonthNav({
    *  what decides its `aria-current`. */
   current: CalendarMonth
 }) {
+  const t = await getTranslations()
   const previous = addCalendarMonths(selected, -1)
   const next = addCalendarMonths(selected, 1)
   const isCurrent = selected.year === current.year && selected.month === current.month
   const atMinYear = selected.year === MIN_BUDGET_YEAR && selected.month === 1
   const atMaxYear = selected.year === MAX_BUDGET_YEAR && selected.month === 12
 
-  function linkClass(active: boolean) {
-    return cn(
-      'rounded-md px-2.5 py-1.5 text-sm',
-      active
-        ? 'bg-muted font-medium text-brand'
-        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-    )
-  }
-
-  const disabledClass = 'rounded-md px-2.5 py-1.5 text-sm text-muted-foreground/50'
+  const segments: Segment[] = [
+    // At the ends of the range the unavailable move is OMITTED rather than
+    // rendered disabled — a segmented control with a dead segment invites a
+    // click that does nothing, where `SegmentedControl` has no `disabled`
+    // concept at all (every segment it renders is a live link).
+    ...(atMinYear
+      ? []
+      : [
+          {
+            id: 'previous',
+            label: t('budgets.monthPrevious'),
+            href: `/budgets?month=${formatCalendarMonth(previous)}`,
+          },
+        ]),
+    {
+      id: 'current',
+      label: t('budgets.monthCurrent'),
+      href: `/budgets?month=${formatCalendarMonth(current)}`,
+    },
+    ...(atMaxYear
+      ? []
+      : [
+          {
+            id: 'next',
+            label: t('budgets.monthNext'),
+            href: `/budgets?month=${formatCalendarMonth(next)}`,
+          },
+        ]),
+  ]
 
   return (
-    <nav aria-label="Budget month" className="flex flex-wrap gap-1">
-      {atMinYear ? (
-        <span aria-disabled="true" className={disabledClass}>
-          ‹ Previous
-        </span>
-      ) : (
-        <Link href={`/budgets?month=${formatCalendarMonth(previous)}`} className={linkClass(false)}>
-          ‹ Previous
-        </Link>
-      )}
-      <Link
-        href={`/budgets?month=${formatCalendarMonth(current)}`}
-        aria-current={isCurrent ? 'page' : undefined}
-        className={linkClass(isCurrent)}
-      >
-        This month
-      </Link>
-      {atMaxYear ? (
-        <span aria-disabled="true" className={disabledClass}>
-          Next ›
-        </span>
-      ) : (
-        <Link href={`/budgets?month=${formatCalendarMonth(next)}`} className={linkClass(false)}>
-          Next ›
-        </Link>
-      )}
-    </nav>
+    <SegmentedControl
+      label={t('budgets.monthNav')}
+      segments={segments}
+      // Only "Tháng này" can be the SELECTED segment: previous/next are moves,
+      // not states, and marking one of them current would claim the user is
+      // "in" a relative month.
+      activeId={isCurrent ? 'current' : null}
+    />
   )
 }

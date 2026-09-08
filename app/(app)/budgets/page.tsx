@@ -1,4 +1,5 @@
-import { formatInTimeZone } from 'date-fns-tz'
+import { getTranslations } from 'next-intl/server'
+import { Target } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import {
   getCalendarMonth,
@@ -7,14 +8,18 @@ import {
   parseCalendarMonth,
   type CalendarMonth,
 } from '@/lib/datetime/calendar-month'
+import { resolveLocale } from '@/lib/i18n/config'
 import { getBudgetProgressForMonth } from '@/lib/server/services/budget'
 import { listCategories } from '@/lib/server/services/category'
 import { toBudgetProgressDto } from '@/lib/ui/budget-view-model'
+import { formatDate } from '@/lib/ui/format-date'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { BudgetForm } from '@/components/budgets/budget-form'
+import { BudgetCreateButton } from '@/components/budgets/budget-create-button'
 import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
 import { BudgetRowActions } from '@/components/budgets/budget-row-actions'
 import { MonthNav } from '@/components/budgets/month-nav'
+import { EmptyState } from '@/components/common/empty-state'
+import { PageHeader } from '@/components/common/page-header'
 
 /**
  * Budgets (spec §4.6, §5.5): one month's targets, each against its own
@@ -60,6 +65,8 @@ export default async function BudgetsPage({
   const user = await requireUserOrRedirect()
   const { timezone } = resolveProfileDefaults(user)
   const now = new Date()
+  const t = await getTranslations()
+  const locale = await resolveLocale()
 
   const params = await searchParams
   const current = getCalendarMonth(timezone, now)
@@ -77,71 +84,59 @@ export default async function BudgetsPage({
 
   // The only place a `Decimal` becomes a string on this page. Every component
   // below renders `BudgetProgressDto`s; none receives a `Prisma.Decimal`.
-  const dtos = progress.map(toBudgetProgressDto)
+  // Wrapped rather than passed bare: `Array#map` calls its callback with
+  // `(element, index, array)`, and `toBudgetProgressDto` takes `locale` as a
+  // second parameter — passed bare, `map`'s own index would land there.
+  const dtos = progress.map((row) => toBudgetProgressDto(row, locale))
   const overallExists = dtos.some((dto) => dto.scope === 'OVERALL')
 
-  // The month's own local start, formatted in the user's zone — an honest
-  // instant rather than a hand-built `Date.UTC`, which for a year below 100
-  // hits JavaScript's legacy two-digit-year mapping (`Date.UTC(1, 0, 1)`
-  // silently becomes 1901, not year 1) even though that year is now
-  // unreachable here (`isBudgetableMonth` bounds it to 2000–2100).
-  const monthLabel = formatInTimeZone(
+  // The month's own local start, formatted in the user's zone and locale.
+  const monthLabel = formatDate(
     getCalendarMonthBounds(timezone, selected.year, selected.month).startUtc,
-    timezone,
-    'LLLL yyyy',
+    { locale, timeZone: timezone, style: 'monthYear' },
   )
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
-          <div>
-            <h1 className="text-xl font-semibold">Budgets</h1>
-            <p className="text-sm text-muted-foreground">{monthLabel}</p>
-          </div>
-          <MonthNav selected={selected} current={current} />
-        </div>
-
-        {isPastMonth(selected, current) && (
-          <p className="text-sm text-muted-foreground">
-            Past month — spending is summed at each transaction&rsquo;s own recorded rate; entering
-            a back-dated expense still counts here.
-          </p>
-        )}
-
-        {dtos.length === 0 ? (
-          <p className="text-sm text-foreground/60">No budgets for {monthLabel} — add one below.</p>
-        ) : (
+    <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('budgets.title')}
+        description={monthLabel}
+        meta={isPastMonth(selected, current) ? t('budgets.pastMonthNote') : undefined}
+        actions={
           <>
+            <MonthNav selected={selected} current={current} />
+            <BudgetCreateButton
+              key={`${selected.year}-${selected.month}`}
+              year={selected.year}
+              month={selected.month}
+              categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+              overallExists={overallExists}
+            />
+          </>
+        }
+      />
+
+      {dtos.length === 0 ? (
+        <EmptyState
+          icon={Target}
+          size="page"
+          title={t('budgets.emptyTitle', { month: monthLabel })}
+          description={t('budgets.emptyBody')}
+        />
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div className="overflow-hidden rounded-lg border border-border bg-surface">
             <BudgetProgressList
               budgets={dtos}
+              locale={locale}
               renderActions={(budget) => <BudgetRowActions budget={budget} />}
             />
-            {/* Only qualifies figures that are actually on screen — the empty
-                state above has none for this note to explain. */}
-            <p className="text-xs text-muted-foreground">
-              Spending counts expense transactions only, converted at each transaction&rsquo;s own
-              recorded rate.
-            </p>
-          </>
-        )}
-      </div>
-
-      <div id="new" className="scroll-mt-6">
-        <h2 className="mb-3 text-lg font-semibold">Add budget</h2>
-        {/* Keyed on the selected month so every per-month default — the scope
-            `overallExists` picks, a category already chosen — is rebuilt when
-            the month changes. `BudgetForm` no longer holds the month itself
-            (it merges the current props in at submit), so this is about
-            field state, not about which month a create lands in. */}
-        <BudgetForm
-          key={`${selected.year}-${selected.month}`}
-          year={selected.year}
-          month={selected.month}
-          categories={categories.map((category) => ({ id: category.id, name: category.name }))}
-          overallExists={overallExists}
-        />
-      </div>
+          </div>
+          {/* Only qualifies figures that are actually on screen — the empty
+              state above has none for this note to explain. */}
+          <p className="text-xs/[1rem] text-muted-foreground">{t('budgets.spendingNote')}</p>
+        </div>
+      )}
     </div>
   )
 }

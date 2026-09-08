@@ -1,13 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
 import { updateBudgetSchema, type UpdateBudgetInput } from '@/lib/validation/budget'
 import { deleteBudgetAction, updateBudgetAction } from '@/lib/server/actions/budget-actions'
-import { BUDGET_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { BudgetProgressDto } from '@/lib/ui/budget-view-model'
+import { ConfirmDialog } from '@/components/common/confirm-dialog'
+import { Dialog } from '@/components/common/dialog'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
+import { RowActionsMenu } from '@/components/common/row-actions-menu'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -22,48 +29,95 @@ import { Input } from '@/components/ui/input'
  */
 export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
   const router = useRouter()
+  const t = useTranslations()
   const [editing, setEditing] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const deleteSubmit = useSubmitState()
 
-  async function handleDelete() {
-    if (!window.confirm('Delete this budget? Spending history is not affected.')) return
+  const name = budget.categoryName ?? t('labels.budgetScope.OVERALL')
+
+  async function confirmDelete() {
     setError(null)
-    try {
-      const result = await deleteBudgetAction(budget.id)
-      if (!result.ok) {
-        setError(BUDGET_ERROR_MESSAGES[result.error])
-        return
+    await deleteSubmit.run(async () => {
+      try {
+        const result = await deleteBudgetAction(budget.id)
+        if (!result.ok) {
+          setConfirming(false)
+          setError(t(BUDGET_ERROR_KEYS[result.error]))
+          return
+        }
+        setConfirming(false)
+        router.refresh()
+      } catch {
+        console.error('BudgetRowActions: delete failed')
+        setConfirming(false)
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-    } catch {
-      console.error('BudgetRowActions: delete failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <div className="flex w-full flex-col items-end gap-2">
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => setEditing((v) => !v)}>
-          {editing ? 'Close' : 'Edit'}
-        </Button>
-        <Button type="button" variant="destructive" size="sm" onClick={handleDelete}>
-          Delete
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
-      {editing && <BudgetEditForm budget={budget} onDone={() => setEditing(false)} />}
-    </div>
+    <>
+      <RowActionsMenu
+        label={t('common.rowActions', { name })}
+        actions={[
+          { id: 'edit', label: t('budgets.editAction'), onSelect: () => setEditing(true) },
+          {
+            id: 'delete',
+            label: t('budgets.deleteAction'),
+            tone: 'negative',
+            onSelect: () => {
+              setError(null)
+              setConfirming(true)
+            },
+          },
+        ]}
+      />
+
+      {error && (
+        <InlineAlert tone="negative" className="mt-2">
+          {error}
+        </InlineAlert>
+      )}
+
+      <Dialog
+        open={editing}
+        onOpenChange={setEditing}
+        title={t('budgets.editTitle', { name })}
+        closeLabel={t('common.close')}
+      >
+        {/* Mounted only while the dialog is open — this is what removes the
+            form's SSR-defaults problem (spec §9): with no server render to
+            disagree with, there is nothing for a hydration gate to guard. */}
+        {editing && <BudgetEditForm budget={budget} onDone={() => setEditing(false)} />}
+      </Dialog>
+
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={t('budgets.deleteConfirmTitle', { name })}
+        description={t('budgets.deleteConfirmBody')}
+        confirmLabel={t('budgets.deleteAction')}
+        cancelLabel={t('common.cancel')}
+        pendingLabel={t('budgets.deletePending')}
+        onConfirm={confirmDelete}
+      />
+    </>
   )
 }
 
 function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone: () => void }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `budget-edit-${name}-${uid}`
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<UpdateBudgetInput>({
     resolver: zodResolver(updateBudgetSchema),
     defaultValues: {
@@ -74,54 +128,64 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
 
   async function onSubmit(values: UpdateBudgetInput) {
     setError(null)
-    try {
-      const result = await updateBudgetAction(budget.id, values)
-      if (!result.ok) {
-        setError(BUDGET_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await updateBudgetAction(budget.id, values)
+        if (!result.ok) {
+          setError(t(BUDGET_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone()
+      } catch {
+        console.error('BudgetEditForm: update failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone()
-    } catch {
-      console.error('BudgetEditForm: update failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="flex w-full max-w-xs flex-col gap-2 border-t border-border pt-2"
-    >
-      <div>
-        <Input
-          type="number"
-          step="0.01"
-          aria-label={`Edit ${budget.label} budget amount`}
-          {...register('amount', { valueAsNumber: true })}
-        />
-        {errors.amount && <p className="text-sm text-negative">{errors.amount.message}</p>}
-      </div>
-      <div>
-        <select
-          {...register('currency')}
-          aria-label={`Edit ${budget.label} budget currency`}
-          className="rounded-md border p-2"
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('budgets.editAction')}</legend>
+
+        <FormField
+          id={fieldId('amount')}
+          label={t('budgets.amount')}
+          error={errors.amount?.message}
         >
-          <option value="VND">VND</option>
-          <option value="USD">USD</option>
-        </select>
-        {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isSubmitting}>
-          Save
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('amount', { valueAsNumber: true })}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('budgets.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            <select {...aria} {...register('currency')} className={SELECT_CLASS}>
+              <option value="VND">VND</option>
+              <option value="USD">USD</option>
+            </select>
+          )}
+        </FormField>
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit">{submit.pending ? t('common.saving') : t('common.save')}</Button>
+        </div>
+      </fieldset>
     </form>
   )
 }
