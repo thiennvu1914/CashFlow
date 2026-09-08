@@ -45,7 +45,10 @@ test('register, log out, forgot password with a real reset round trip, then log 
   await page.getByRole('button', { name: 'Create account' }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 
-  await page.getByRole('button', { name: 'Log out' }).click()
+  // Log out is now translated (default locale vi: "Đăng xuất") — see the same
+  // vi/en alternation `phase4.spec.ts` etc. use for every other nav selector
+  // Phase 7 moved.
+  await page.getByRole('button', { name: /^Đăng xuất$|^Log out$/ }).click()
   await expect(page).toHaveURL(/\/login/)
 
   await page.goto('/forgot-password')
