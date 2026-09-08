@@ -1,7 +1,7 @@
 import { cn } from 'cn'
 import type { Currency } from '@/lib/currency/provider'
 import type { KpiDto } from '@/lib/ui/dashboard-view-model'
-import { MoneyText } from '@/components/common/money-text'
+import { MoneyText, type MoneySize } from '@/components/common/money-text'
 
 /**
  * The dashboard's five headline figures as ONE bordered panel (spec §6.1).
@@ -126,6 +126,7 @@ export function SummaryPanel({
         labels={labels}
         hints={hints}
         size="md"
+        smallSize="row"
         className="order-2 border-t border-border md:col-start-1 md:col-span-6 md:row-start-2 xl:col-start-1 xl:col-span-3 xl:border-r xl:border-border"
       />
 
@@ -141,6 +142,7 @@ export function SummaryPanel({
         labels={labels}
         hints={hints}
         size="lg"
+        smallSize="row"
         className="order-4 border-t border-border md:col-start-1 md:col-span-2 md:row-start-3 xl:col-start-4 xl:col-span-2 xl:row-start-1 xl:row-span-2 xl:border-t-0"
       />
       <Cell
@@ -149,6 +151,7 @@ export function SummaryPanel({
         labels={labels}
         hints={hints}
         size="lg"
+        smallSize="row"
         className="order-5 border-t border-l border-border md:col-start-3 md:col-span-2 md:row-start-3 xl:col-start-6 xl:col-span-2 xl:row-start-1 xl:row-span-2 xl:border-t-0"
       />
       <Cell
@@ -157,6 +160,7 @@ export function SummaryPanel({
         labels={labels}
         hints={hints}
         size="lg"
+        smallSize="row"
         className="order-3 border-t border-l border-border md:col-start-5 md:col-span-2 md:row-start-3 xl:col-start-8 xl:col-span-2 xl:row-start-1 xl:row-span-2 xl:border-t-0"
       />
     </dl>
@@ -174,6 +178,7 @@ function Cell({
   labels,
   hints,
   size,
+  smallSize,
   note,
   className,
 }: {
@@ -181,7 +186,17 @@ function Cell({
   currency: Currency
   labels: Record<string, string>
   hints: Record<string, string>
-  size: 'md' | 'lg' | 'kpi' | 'hero'
+  size: MoneySize
+  /**
+   * The figure's size below `sm` (fix round 1, area C): the base grid is only
+   * two columns wide, so each of the four 2×2 cells has roughly a phone's
+   * half-width to show a figure in — a `size="lg"` (24 px) or even `"md"`
+   * (22 px) 14-character VND figure ("21.141.376,59") no longer fits that
+   * comfortably and was sitting flush against, or past, the card's right
+   * edge. Undefined for Net Worth, the only cell that spans both base columns
+   * and therefore never needed a smaller figure at any width.
+   */
+  smallSize?: MoneySize
   note?: string
   className?: string
 }) {
@@ -195,7 +210,7 @@ function Cell({
     <div className={cn('flex flex-col gap-1 bg-surface p-4 xl:justify-center', className)}>
       <dt className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{labels[kpi.labelKey]}</dt>
       <dd className="flex flex-col gap-1">
-        <Figure kpi={kpi} currency={currency} hints={hints} size={size} />
+        <Figure kpi={kpi} currency={currency} hints={hints} size={size} smallSize={smallSize} />
         {note && <span className="text-xs/[1rem] text-muted-foreground">{note}</span>}
       </dd>
     </div>
@@ -209,17 +224,29 @@ function Cell({
  * answers and only one of them is a number. The hint appears only in the cells
  * an FX outage actually broke — the three monthly metrics are historical and
  * are restated from each row's own snapshot, so they are never affected.
+ *
+ * `smallSize` renders TWO `MoneyText`s for a REAL value, one `sm:hidden` and
+ * one `hidden sm:inline-flex` — not a single responsive font-size utility —
+ * because `MoneyText`'s `size` prop already resolves to a fixed class combo
+ * on its OWN inner span (not something a caller's `className` can reach or
+ * override; see `money-text.tsx`), and money-text.tsx is out of this fix's
+ * scope. `undefined` (Net Worth) skips the split entirely and renders exactly
+ * as before. The em-dash (no usable value) branch never splits regardless of
+ * `smallSize`: a single "—" is never at risk of clipping at any width, and
+ * duplicating it would only double what a screen reader announces.
  */
 function Figure({
   kpi,
   currency,
   hints,
   size,
+  smallSize,
 }: {
   kpi: KpiDto
   currency: Currency
   hints: Record<string, string>
-  size: 'md' | 'lg' | 'kpi' | 'hero'
+  size: MoneySize
+  smallSize?: MoneySize
 }) {
   if (kpi.value === null) {
     return (
@@ -231,12 +258,26 @@ function Figure({
       </span>
     )
   }
+  const tone = kpi.negative ? 'negative' : 'default'
+  if (!smallSize) {
+    return <MoneyText value={kpi.value} currency={currency} tone={tone} size={size} />
+  }
   return (
-    <MoneyText
-      value={kpi.value}
-      currency={currency}
-      tone={kpi.negative ? 'negative' : 'default'}
-      size={size}
-    />
+    <>
+      <MoneyText
+        value={kpi.value}
+        currency={currency}
+        tone={tone}
+        size={smallSize}
+        className="sm:hidden"
+      />
+      <MoneyText
+        value={kpi.value}
+        currency={currency}
+        tone={tone}
+        size={size}
+        className="hidden sm:inline-flex"
+      />
+    </>
   )
 }

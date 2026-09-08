@@ -88,6 +88,49 @@ test.describe
     }
   })
 
+  test("at 375 every summary figure fits without clipping, clear of the panel's right edge", async ({
+    page,
+  }) => {
+    // Fix round 1, area C: the 2×2 cells' right-column figures ("Thu nhập
+    // ròng", "Chi tiêu tháng") were sitting flush against — or past — the
+    // panel's right edge at 375, because `size="lg"`/`size="md"` (24 px/22 px)
+    // no longer fit a 14-character VND figure in half of a phone-width
+    // column. `summary-panel.tsx` now renders those four cells' figures at a
+    // smaller size below `sm`.
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.goto('/dashboard')
+
+    const summary = page.locator('dl').first()
+    const panelBox = await summary.boundingBox()
+    expect(panelBox).not.toBeNull()
+
+    const valueCells = summary.locator('dd')
+    const count = await valueCells.count()
+    expect(count).toBe(5)
+    for (let i = 0; i < count; i++) {
+      const cell = valueCells.nth(i)
+      const { scrollWidth, clientWidth, text } = await cell.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        text: el.textContent,
+      }))
+      // A one pixel tolerance for sub-pixel rounding, matching the existing
+      // 768 `dt` check below — a figure that genuinely overflows its box is
+      // clipped by several pixels, not one.
+      expect(scrollWidth, `figure "${text}" clipped at 375px`).toBeLessThanOrEqual(clientWidth + 1)
+
+      const cellBox = await cell.boundingBox()
+      expect(cellBox, `figure "${text}" has no bounding box`).not.toBeNull()
+      if (cellBox && panelBox) {
+        const marginFromPanelRight = panelBox.x + panelBox.width - (cellBox.x + cellBox.width)
+        expect(
+          marginFromPanelRight,
+          `figure "${text}" sits within 12px of the panel's right edge`,
+        ).toBeGreaterThanOrEqual(12)
+      }
+    }
+  })
+
   test('at 768 every summary label is fully visible, never clipped', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 1024 })
     await page.goto('/dashboard')
