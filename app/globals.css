@@ -96,8 +96,9 @@
  * computed with a standalone oklch -> linear-sRGB -> relative-luminance
  * pipeline (CSS Color 4 math; color-mix() pairs are alpha-composited over
  * their stated backdrop before measuring). Minimums: 4.5:1 text, 3:1 UI.
- * Every row below PASSES (revised after controller review — see "Deviations"
- * at the end for the two tokens that were nudged to get there).
+ * Every row below PASSES (revised after two rounds of controller/reviewer
+ * fixes — see "Deviations" at the end for every token that was nudged to
+ * get there).
  *
  * LIGHT
  *   foreground/background        15.41:1  PASS  (#191F1D on #F5F6F4)
@@ -120,21 +121,26 @@
  *
  * DARK
  *   foreground/background        15.89:1  PASS  (#F5F6F4 on #171C1A)
- *   foreground/surface           14.56:1  PASS  (#F5F6F4 on #202724)
- *   foreground/surface-2         12.60:1  PASS  (#F5F6F4 on #29302D)
- *   foreground/input-bg          16.63:1  PASS  (#F5F6F4 on #1C221F)
- *   muted-foreground/background   5.01:1  PASS
- *   muted-foreground/surface      4.59:1  PASS
- *   muted-foreground/input-bg     5.24:1  PASS  (placeholder text)
- *   brand/background              5.17:1  PASS  (nudged, see "Deviations")
- *   brand/surface                 4.74:1  PASS  (nudged, see "Deviations")
- *   positive/surface              4.85:1  PASS
- *   negative/surface              5.31:1  PASS
- *   warning/surface               6.70:1  PASS
+ *   foreground/surface           14.02:1  PASS  (#F5F6F4 on #202724; --surface
+ *                                                corrected, see "Deviations" #4)
+ *   foreground/surface-2         12.60:1  PASS  (#F5F6F4 on #2A2E2C, see #4)
+ *   foreground/input-bg          14.88:1  PASS  (#F5F6F4 on #1C221F; --input-bg
+ *                                                corrected, see "Deviations" #4)
+ *   muted-foreground/background   5.31:1  PASS  (nudged, see "Deviations" #4)
+ *   muted-foreground/surface      4.69:1  PASS  (nudged, see "Deviations" #4)
+ *   muted-foreground/input-bg     4.97:1  PASS  (placeholder text; nudged, see #4)
+ *   brand/background              5.17:1  PASS  (nudged, see "Deviations" #3)
+ *   brand/surface                 4.56:1  PASS  (nudged #3; shifted again by the
+ *                                                --surface correction in #4)
+ *   positive/surface              4.67:1  PASS  (shifted by the --surface
+ *                                                correction, see "Deviations" #4)
+ *   negative/surface              5.12:1  PASS  (shifted by #4)
+ *   warning/surface               6.45:1  PASS  (shifted by #4)
  *   primary-foreground/brand      5.17:1  PASS  (recheck after the brand nudge)
- *   border-strong/surface         3.52:1  PASS  (re-verified; unaffected by the
- *                                                input/brand nudges — 3.34:1 on surface-2)
- *   input/input-bg                3.28:1  PASS  (nudged, see "Deviations")
+ *   border-strong/surface         3.48:1  PASS  (shifted by the --surface
+ *                                                correction in #4 — 3.34:1 on surface-2)
+ *   input/input-bg                3.23:1  PASS  (nudged #2; shifted again by the
+ *                                                --input-bg correction in #4)
  *   focus/background              5.17:1  PASS  (tracks brand/background — focus = brand)
  *   focus/surface-2               4.10:1  PASS  (tracks brand/surface-2)
  *
@@ -170,6 +176,37 @@
  *      fill) was re-checked after the change and improved (4.68:1 -> 5.17:1),
  *      so --primary-foreground did not need to move. --focus tracks --brand,
  *      so focus/background and focus/surface-2 improved by the same amount.
+ *
+ *   4. Dark --surface and --input-bg were WRONG, not just imprecise — flagged
+ *      by two independent oklch -> sRGB measurements (Task 2a's script and
+ *      the Task 1a reviewer's) after this task had already closed:
+ *        --surface   oklch(0.253 0.007 164.376) actually converts to #1F2321,
+ *                    not the comment's claimed #202724 (off by 4 units on G,
+ *                    3 on B — beyond a rounding-noise tolerance of ~2 units
+ *                    per channel). Corrected to oklch(0.265 0.011 167.731),
+ *                    which round-trips to exactly #202724.
+ *        --input-bg  oklch(0.2 0.006 170) actually converts to #131716,
+ *                    DARKER than --background (#171C1A) — the opposite of
+ *                    the spec's "recessed field" ladder, and visibly a
+ *                    near-black hole in the browser instead of a lighter
+ *                    fill. Corrected to oklch(0.245 0.01 163.978), which
+ *                    round-trips to exactly #1C221F and now sits correctly
+ *                    between --background (L 0.22) and the corrected
+ *                    --surface (L 0.265).
+ *      --surface-2 (oklch(0.298 0.007 164.376), actually #2A2E2C vs the
+ *      spec's #29302D) was within the ~2-units-per-channel tolerance on
+ *      every channel, so only its comment was corrected — the token itself
+ *      is unchanged.
+ *      Correcting --surface shifted every dark pair measured against it
+ *      (foreground/surface, brand/surface, positive/negative/warning/
+ *      surface, border-strong/surface) and dropped muted-foreground/surface
+ *      below 4.5:1 (4.59:1 -> 4.42:1), which required nudging dark
+ *      --muted-foreground 55% -> 57% (the smallest step restoring margin:
+ *      4.69:1); this also lifted muted-foreground/background and
+ *      muted-foreground/input-bg further above their minimum. Correcting
+ *      --input-bg shifted foreground/input-bg, muted-foreground/input-bg,
+ *      and input/input-bg (37% unchanged; still 3.23:1, comfortably ≥ 3:1
+ *      against the new, lighter fill — no further --input change needed).
  */
 
 :root {
@@ -267,19 +304,36 @@
   --warning: oklch(0.736 0.1 79.908);
   /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. The
      existing `--surface` was oklch(0.274 …) (#242926); the spec's ladder needs
-     the middle rung a shade darker so surface-2 is visibly distinct from it. */
-  --surface: oklch(0.253 0.007 164.376); /* #202724 */
-  --surface-2: oklch(0.298 0.007 164.376); /* #29302D */
+     the middle rung a shade darker so surface-2 is visibly distinct from it.
+     Step 5 measurement (2nd controller-fix round): the previous value here,
+     oklch(0.253 0.007 164.376), actually converts to #1F2321 — off from the
+     spec's #202724 by more than 2 units on the G/B channels (39/36 -> 35/33),
+     confirmed by an independent oklch -> sRGB check, so the TOKEN itself was
+     corrected (not just the comment): oklch(0.265 0.011 167.731), which
+     round-trips to exactly #202724. --surface-2's existing value,
+     oklch(0.298 0.007 164.376), converts to #2A2E2C — only 1-2 units off the
+     spec's #29302D on every channel, so that token is unchanged; only its
+     comment below is corrected to the real converted hex. */
+  --surface: oklch(0.265 0.011 167.731); /* #202724 */
+  --surface-2: oklch(0.298 0.007 164.376); /* actually #2A2E2C; within tolerance, see note above */
   /* Step 5 measurement: the brief's literal 22% measures 1.99:1 against
      --surface (under the 3:1 UI minimum). Like light, unused elsewhere yet,
-     so raised to 40% to clear 3:1 against both --surface (3.52:1) and
-     --surface-2 (3.34:1), see Step 5 table below. */
+     so raised to 40% to clear 3:1 against both --surface (3.48:1 after the
+     --surface fix above) and --surface-2 (3.34:1), see Step 5 table below. */
   --border-strong: color-mix(in oklch, var(--foreground) 40%, transparent);
   --focus: var(--brand);
   /* Spec §3: "inputs on #1C221F" — one step below `--surface` (#202724), so a
      field reads as recessed into its card. Fixed rather than translucent, so
-     the same input looks the same on a card and inside a dialog. */
-  --input-bg: oklch(0.2 0.006 170); /* #1C221F */
+     the same input looks the same on a card and inside a dialog.
+     Step 5 measurement (2nd controller-fix round): the previous value here,
+     oklch(0.2 0.006 170), actually converts to #131716 — DARKER than
+     --background (#171C1A), the opposite of the spec's "one step below
+     --surface, lighter than --background" ladder; confirmed by an
+     independent oklch -> sRGB check (rendered as a near-black hole instead
+     of a recessed field). Corrected to oklch(0.245 0.01 163.978), which
+     round-trips to exactly #1C221F and sits correctly between --background
+     (L 0.22) and --surface (L 0.265). */
+  --input-bg: oklch(0.245 0.01 163.978); /* #1C221F */
 
   /* shadcn primitives, remapped onto the CashFlow tokens above */
   --card: var(--surface);
@@ -291,7 +345,13 @@
   --muted: color-mix(in oklch, var(--foreground) 8%, var(--background));
   --secondary: var(--muted);
   --secondary-foreground: var(--foreground);
-  --muted-foreground: color-mix(in oklch, var(--foreground) 55%, var(--background));
+  /* Step 5 measurement (2nd controller-fix round): correcting --surface above
+     (lighter, L 0.253 -> 0.265) dropped muted-foreground/surface from 4.59:1
+     to 4.42:1 — under the 4.5:1 text minimum. Raised 55% -> 57%, the
+     smallest step that restores a little margin (4.69:1); still passes
+     against --background (5.31:1, up from 5.01:1) and --input-bg
+     (4.97:1). */
+  --muted-foreground: color-mix(in oklch, var(--foreground) 57%, var(--background));
   --accent-foreground: var(--background);
   --destructive: var(--negative);
   --border: color-mix(in oklch, var(--foreground) 14%, transparent);
