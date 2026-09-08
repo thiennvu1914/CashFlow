@@ -28,22 +28,41 @@ export interface SubmitState {
   run: <T>(work: () => Promise<T>) => Promise<T | undefined>
 }
 
+/**
+ * The lock's state machine, with no React import: `isPending`/`setPending` are
+ * handed in rather than closed over a `useState` pair, so the re-entry guard
+ * and the unlock-on-resolve/unlock-on-throw paths can be unit-tested with a
+ * plain boolean and a spy — no DOM, no jsdom, no Testing Library (none of
+ * which this repo has) — while `useSubmitState` stays a thin wrapper over it.
+ *
+ * `run` does not catch: if `work` rejects, `run`'s own promise rejects with
+ * the same error (the `finally` still unlocks first) rather than swallowing
+ * it and returning `undefined` — a caller that needs to show an inline error
+ * for a failed submit has to see the rejection to do it.
+ */
+export function createSubmitRunner(
+  isPending: () => boolean,
+  setPending: (pending: boolean) => void,
+): <T>(work: () => Promise<T>) => Promise<T | undefined> {
+  return async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
+    // A guard, not just an optimisation: `run` can be reached from a
+    // keyboard Enter and a click in the same tick before React has
+    // re-rendered the disabled fieldset.
+    if (isPending()) return undefined
+    setPending(true)
+    try {
+      return await work()
+    } finally {
+      setPending(false)
+    }
+  }
+}
+
 export function useSubmitState(): SubmitState {
   const [pending, setPending] = useState(false)
 
   const run = useCallback(
-    async <T>(work: () => Promise<T>): Promise<T | undefined> => {
-      // A guard, not just an optimisation: `run` can be reached from a
-      // keyboard Enter and a click in the same tick before React has
-      // re-rendered the disabled fieldset.
-      if (pending) return undefined
-      setPending(true)
-      try {
-        return await work()
-      } finally {
-        setPending(false)
-      }
-    },
+    <T>(work: () => Promise<T>) => createSubmitRunner(() => pending, setPending)(work),
     [pending],
   )
 
