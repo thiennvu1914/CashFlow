@@ -110,6 +110,108 @@ describe('current position service', () => {
     }
   }
 
+  /** A user with no accounts at all — the Net Worth cases that are only about
+   *  debts and loans, with nothing to add from the account side. */
+  async function setupWithoutAccounts() {
+    const user = await prisma.user.create({
+      data: {
+        id: randomUUID(),
+        email: `test-${randomUUID()}@example.com`,
+        name: 'Test',
+        emailVerified: false,
+      },
+    })
+    createdUserIds.push(user.id)
+    return { userId: user.id }
+  }
+
+  /**
+   * A debt, and optionally one repayment against it — written directly rather
+   * than through `createDebt`/`recordDebtPayment`, because this suite is about
+   * the position's arithmetic and the services' Zod parse, row lock and
+   * overpayment check would add a transaction per row without changing a single
+   * figure. (`debt.test.ts` is where those rules are pinned down.)
+   */
+  async function seedDebt(
+    userId: string,
+    row: {
+      direction: 'RECEIVABLE' | 'PAYABLE'
+      originalAmount: string
+      currency?: 'VND' | 'USD'
+      status?: 'ACTIVE' | 'WRITTEN_OFF'
+      /** A repayment already recorded, so `outstanding` is not the original. */
+      paid?: string
+    },
+  ) {
+    const debt = await prisma.debt.create({
+      data: {
+        userId,
+        direction: row.direction,
+        person: 'Counterparty',
+        originalAmount: new Prisma.Decimal(row.originalAmount),
+        currency: row.currency ?? 'VND',
+        status: row.status ?? 'ACTIVE',
+      },
+    })
+    if (row.paid !== undefined) {
+      await prisma.debtPayment.create({
+        data: {
+          userId,
+          debtId: debt.id,
+          amount: new Prisma.Decimal(row.paid),
+          date: new Date('2026-03-01T00:00:00Z'),
+        },
+      })
+    }
+    return debt
+  }
+
+  /** A loan, and optionally one instalment against it — same reasoning as
+   *  `seedDebt`. `totalAmount` is the split's sum, which the
+   *  `LoanPayment_total_matches_split` CHECK enforces. */
+  async function seedLoan(
+    userId: string,
+    row: {
+      principal: string
+      currency?: 'VND' | 'USD'
+      status?: 'ACTIVE' | 'CLOSED'
+      principalPaid?: string
+      interestPaid?: string
+    },
+  ) {
+    const loan = await prisma.loan.create({
+      data: {
+        userId,
+        lender: 'Bank',
+        principal: new Prisma.Decimal(row.principal),
+        currency: row.currency ?? 'VND',
+        interestRate: new Prisma.Decimal('5'),
+        startDate: new Date('2026-01-01T00:00:00Z'),
+        termMonths: 12,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: new Prisma.Decimal('1'),
+        nextDueDate: new Date('2026-04-01T00:00:00Z'),
+        dueDayOfMonth: 1,
+        status: row.status ?? 'ACTIVE',
+      },
+    })
+    if (row.principalPaid !== undefined || row.interestPaid !== undefined) {
+      const principalAmount = new Prisma.Decimal(row.principalPaid ?? '0')
+      const interestAmount = new Prisma.Decimal(row.interestPaid ?? '0')
+      await prisma.loanPayment.create({
+        data: {
+          userId,
+          loanId: loan.id,
+          totalAmount: principalAmount.add(interestAmount),
+          principalAmount,
+          interestAmount,
+          paymentDate: new Date('2026-03-01T00:00:00Z'),
+        },
+      })
+    }
+    return loan
+  }
+
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network access in test')
@@ -127,6 +229,12 @@ describe('current position service', () => {
       await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
       if (userIds.length > 0) {
         await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
+        // Payments before their parent: both foreign keys are ON DELETE
+        // RESTRICT, so the other order is a P2003 rather than a cascade.
+        await prisma.debtPayment.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.debt.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.loanPayment.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.loan.deleteMany({ where: { userId: { in: userIds } } })
         await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
         await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
       }
@@ -478,8 +586,227 @@ describe('current position service', () => {
     })
   })
 
+  /**
+   * Net Worth = account assets + active receivables − active payables − active
+   * outstanding loan principal (spec §5.4), every component converted at the
+   * SAME single current rate.
+   *
+   * Each case here is about one term of that formula, so a sign error or a
+   * missing exclusion shows up as one failing case rather than as a wrong total
+   * nobody can attribute.
+   */
+  describe('Net Worth beyond the accounts', () => {
+    /** The all-VND account side every case below starts from: one account
+     *  holding 1,000,000 VND, so nothing on the account side needs a rate and
+     *  any FX call the assertions see was provoked by a debt or a loan. */
+    async function vndAccountsOnly() {
+      const s = await setup()
+      await prisma.financialAccount.delete({
+        where: { userId_id: { userId: s.userId, id: s.usdAccountId } },
+      })
+      return s
+    }
+
+    it('adds an active receivable to the account total', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '2000000',
+      })
+      const { provider, callCount } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
+
+      expect(position.totalBalance.toString()).toBe('1000000')
+      expect(position.receivables.toString()).toBe('2000000')
+      expect(position.payables.toString()).toBe('0')
+      expect(position.loanOutstanding.toString()).toBe('0')
+      expect(position.netWorth.toString()).toBe('3000000')
+      // A VND debt under a VND dashboard needs no rate at all.
+      expect(position.fx).toBeNull()
+      expect(callCount()).toBe(0)
+    })
+
+    it('subtracts an active payable, and counts only what is still owed on it', async () => {
+      const s = await vndAccountsOnly()
+      // 800,000 borrowed, 300,000 already repaid — 500,000 is the liability.
+      await seedDebt(s.userId, {
+        direction: 'PAYABLE',
+        originalAmount: '800000',
+        paid: '300000',
+      })
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      expect(position.payables.toString()).toBe('500000')
+      expect(position.receivables.toString()).toBe('0')
+      expect(position.netWorth.toString()).toBe('500000')
+    })
+
+    it('subtracts the loan principal still outstanding — interest paid changes nothing', async () => {
+      const s = await vndAccountsOnly()
+      await seedLoan(s.userId, {
+        principal: '1000000',
+        principalPaid: '300000',
+        // Interest is the cost of borrowing, not a repayment of it: counting it
+        // here would report 650,000 outstanding and a Net Worth 50,000 too high.
+        interestPaid: '50000',
+      })
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      expect(position.loanOutstanding.toString()).toBe('700000')
+      expect(position.netWorth.toString()).toBe('300000')
+    })
+
+    it('excludes a written-off debt and a closed loan — neither is a position any more', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '9000000',
+        status: 'WRITTEN_OFF',
+      })
+      await seedDebt(s.userId, {
+        direction: 'PAYABLE',
+        originalAmount: '7000000',
+        status: 'WRITTEN_OFF',
+      })
+      await seedLoan(s.userId, { principal: '5000000', status: 'CLOSED' })
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      expect(position.receivables.toString()).toBe('0')
+      expect(position.payables.toString()).toBe('0')
+      expect(position.loanOutstanding.toString()).toBe('0')
+      expect(position.netWorth.toString()).toBe(position.totalBalance.toString())
+    })
+
+    it('excludes a settled foreign debt by value, without going looking for a rate', async () => {
+      const s = await vndAccountsOnly()
+      // ACTIVE, in USD, and fully repaid: it contributes nothing, so no
+      // conversion is required — the predicate that skips it is the same one
+      // that decides whether a rate is needed at all.
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '100',
+        currency: 'USD',
+        paid: '100',
+      })
+      const { provider, callCount } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
+
+      expect(position.receivables.toString()).toBe('0')
+      expect(position.netWorth.toString()).toBe('1000000')
+      expect(position.fx).toBeNull()
+      expect(callCount()).toBe(0)
+    })
+
+    it('converts a foreign debt and loan at one rate even when every account is already in the display currency', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '100',
+        currency: 'USD',
+      })
+      await seedLoan(s.userId, { principal: '200', currency: 'USD' })
+      const { provider, callCount } = countingProvider(25_000)
+
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
+
+      // 100 USD x 25,000 and 200 USD x 25,000 — never 100 and 200 summed raw
+      // beside a million dong.
+      expect(position.receivables.toString()).toBe('2500000')
+      expect(position.loanOutstanding.toString()).toBe('5000000')
+      expect(position.totalBalance.toString()).toBe('1000000')
+      // 1,000,000 + 2,500,000 − 5,000,000: a genuinely negative Net Worth,
+      // reported rather than clamped.
+      expect(position.netWorth.toString()).toBe('-1500000')
+      // The account side needed nothing, so this rate exists *because* of the
+      // debt and the loan — and it was resolved exactly once for both.
+      expect(position.fx?.isFallback).toBe(false)
+      expect(callCount()).toBe(1)
+    })
+
+    it('consults the current-rate policy exactly once for the accounts, the debts and the loans together', async () => {
+      const s = await setup()
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '100',
+        currency: 'USD',
+      })
+      await seedDebt(s.userId, { direction: 'PAYABLE', originalAmount: '40', currency: 'USD' })
+      await seedLoan(s.userId, { principal: '200', currency: 'USD' })
+      const { provider, callCount } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
+
+      // 1,000,000 + 100 USD of accounts, then +100 USD −40 USD −200 USD of
+      // agreements, all at 25,000: 3,500,000 + 2,500,000 − 1,000,000 − 5,000,000.
+      expect(position.totalBalance.toString()).toBe('3500000')
+      expect(position.netWorth.toString()).toBe('0')
+      // Five foreign records, one rate: the position may never make a lookup
+      // per row.
+      expect(callCount()).toBe(1)
+    })
+
+    it('propagates FxUnavailableError when a debt is the only thing that needs converting', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, {
+        direction: 'PAYABLE',
+        originalAmount: '100',
+        currency: 'USD',
+      })
+
+      // No honest figure exists, so the position refuses rather than reporting
+      // a Net Worth that quietly ignores the payable.
+      await expect(
+        getCurrentPosition(s.userId, 'VND', { providerOverride: failingProvider }),
+      ).rejects.toThrow(FxUnavailableError)
+    })
+
+    it('never touches FX when the accounts, debts and loans are all in the display currency', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, { direction: 'RECEIVABLE', originalAmount: '2000000' })
+      await seedDebt(s.userId, { direction: 'PAYABLE', originalAmount: '500000' })
+      await seedLoan(s.userId, { principal: '1000000' })
+      const { provider, callCount } = countingProvider()
+
+      const position = await getCurrentPosition(s.userId, 'VND', { providerOverride: provider })
+
+      // 1,000,000 + 2,000,000 − 500,000 − 1,000,000
+      expect(position.netWorth.toString()).toBe('1500000')
+      expect(position.fx).toBeNull()
+      expect(callCount()).toBe(0)
+    })
+
+    it("never counts another user's debts or loans", async () => {
+      const mine = await vndAccountsOnly()
+      const theirs = await setupWithoutAccounts()
+      await seedDebt(theirs.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '9000000',
+      })
+      await seedLoan(theirs.userId, { principal: '9000000' })
+
+      const position = await getCurrentPosition(mine.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      expect(position.receivables.toString()).toBe('0')
+      expect(position.loanOutstanding.toString()).toBe('0')
+      expect(position.netWorth.toString()).toBe('1000000')
+    })
+  })
+
   describe('getNetWorth', () => {
-    it('equals total account balance until Phase 6 extends it', async () => {
+    it('equals the total account balance when there is nothing owed either way', async () => {
       const s = await setup()
 
       const netWorth = await getNetWorth(s.userId, 'VND', {
@@ -491,6 +818,28 @@ describe('current position service', () => {
 
       expect(netWorth.toString()).toBe('3500000')
       expect(netWorth.toString()).toBe(total.toString())
+    })
+
+    it("returns exactly the position's netWorth once debts and loans exist", async () => {
+      const s = await setup()
+      await prisma.financialAccount.delete({
+        where: { userId_id: { userId: s.userId, id: s.usdAccountId } },
+      })
+      await seedDebt(s.userId, { direction: 'RECEIVABLE', originalAmount: '2000000' })
+      await seedDebt(s.userId, { direction: 'PAYABLE', originalAmount: '500000' })
+      await seedLoan(s.userId, { principal: '1000000' })
+
+      const netWorth = await getNetWorth(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      // The wrapper is a projection, not a second definition: it may never
+      // compute a figure of its own.
+      expect(netWorth.toString()).toBe(position.netWorth.toString())
+      expect(netWorth.toString()).toBe('1500000')
     })
   })
 

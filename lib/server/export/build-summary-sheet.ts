@@ -60,19 +60,23 @@ export async function buildSummarySheet(
   ])
 
   const displayFmt = moneyFmt(ctx.displayCurrency)
-  const unavailable = position === null ? 'No usable exchange rate at export time' : ''
+  // `null`, not `''`: an empty string becomes an empty shared string, which
+  // Excel renders as its own index rather than as a blank (see `cells.ts`).
+  const unavailable = position === null ? 'No usable exchange rate at export time' : null
   const countBy = (status: 'ACTIVE' | 'ARCHIVED') =>
     accountsByStatus.find((group) => group.status === status)?._count._all ?? 0
 
-  const generatedAt = sheet.addRow(['Generated at', localDateCell(ctx.now, ctx.timezone), ''])
+  // Every row's third cell is a note only some rows have, and an absent one is
+  // `null` throughout — never `''`, for the reason above.
+  const generatedAt = sheet.addRow(['Generated at', localDateCell(ctx.now, ctx.timezone), null])
   generatedAt.getCell(2).numFmt = DATE_TIME_FMT
 
-  sheet.addRow(['Timezone', ctx.timezone, ''])
-  sheet.addRow(['Display currency', ctx.displayCurrency, ''])
+  sheet.addRow(['Timezone', ctx.timezone, null])
+  sheet.addRow(['Display currency', ctx.displayCurrency, null])
   // `ctx.fx` is the very object the totals below were computed from — it was
   // handed to `getCurrentPosition` rather than re-fetched — so this line
   // describes the rate those figures used, not a second opinion about it.
-  sheet.addRow(['FX rate', describeFx(ctx.fx, ctx.timezone), ''])
+  sheet.addRow(['FX rate', describeFx(ctx.fx, ctx.timezone), null])
 
   for (const [label, value] of [
     ['Total account balance', position?.totalBalance ?? null],
@@ -95,10 +99,12 @@ export async function buildSummarySheet(
     row.getCell(2).numFmt = displayFmt
   }
 
-  sheet.addRow(['Active accounts', countBy('ACTIVE'), ''])
-  sheet.addRow(['Archived accounts', countBy('ARCHIVED'), ''])
-  sheet.addRow(['Transactions', transactionCount, ''])
-  sheet.addRow(['Transfers', transferCount, ''])
+  // The four counts are numeric cells: a zero here is a fact ("no archived
+  // accounts"), so it stays a 0 and is never blanked.
+  sheet.addRow(['Active accounts', countBy('ACTIVE'), null])
+  sheet.addRow(['Archived accounts', countBy('ARCHIVED'), null])
+  sheet.addRow(['Transactions', transactionCount, null])
+  sheet.addRow(['Transfers', transferCount, null])
 }
 
 async function currentPositionOrNull(ctx: ExportContext): Promise<CurrentPosition | null> {

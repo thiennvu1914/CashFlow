@@ -3,6 +3,12 @@ import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency } from '@/lib/currency/provider'
 import { buildAccountsSheet } from './build-accounts-sheet'
 import { buildBudgetsSheet } from './build-budgets-sheet'
+import { buildDebtPaymentsSheet } from './build-debt-payments-sheet'
+import { buildDebtsSheet } from './build-debts-sheet'
+import { buildLoanPaymentsSheet } from './build-loan-payments-sheet'
+import { buildLoansSheet } from './build-loans-sheet'
+import { buildRemindersSheet } from './build-reminders-sheet'
+import { buildSavingsGoalsSheet } from './build-savings-goals-sheet'
 import { buildSummarySheet } from './build-summary-sheet'
 import { buildTransactionsSheet } from './build-transactions-sheet'
 import { buildTransfersSheet } from './build-transfers-sheet'
@@ -54,12 +60,20 @@ export type SheetBuilder = (workbook: ExcelJS.Workbook, ctx: ExportContext) => P
  * contract: the sheets are visible in one place, in the order they appear in
  * the file, and a builder that is not listed cannot run.
  *
- * Phase 5 appended `buildBudgetsSheet` — it is the only sheet here that reads
- * nothing from `ctx.fx`, because budget progress is historical end to end (see
- * that builder's own comment). Phase 6 appends Savings Goals, Debts, Debt
- * Payments, Loans, Loan Payments and Reminders — completing spec §12's full
- * workbook. Each is one import plus one entry below; nothing else changes, and
- * the route never learns their names.
+ * **This is now spec §12's full workbook.** Phase 5 appended
+ * `buildBudgetsSheet` and Phase 6 appended the six planning sheets below, so
+ * every sheet the spec lists is here, in the order it lists them. Each was one
+ * import plus one entry; nothing else changed, and the route still never learns
+ * their names.
+ *
+ * The six Phase 6 sheets share a property with `buildBudgetsSheet` and not with
+ * the first four: **none of them reads `ctx.fx` or `ctx.displayCurrency`.** Every
+ * figure on them is denominated in the record's own currency (ruling R5-3) —
+ * a VND debt and a USD debt are two obligations rather than two views of one —
+ * so there is nothing on them for a rate to convert, and an FX outage leaves
+ * them completely populated. The Summary sheet's Net Worth is the single place
+ * where those positions are restated at one current rate, and it is the only
+ * cell that goes blank when no rate can be had.
  */
 export const FULL_EXPORT_SHEET_BUILDERS: readonly SheetBuilder[] = [
   buildSummarySheet,
@@ -67,6 +81,12 @@ export const FULL_EXPORT_SHEET_BUILDERS: readonly SheetBuilder[] = [
   buildTransactionsSheet,
   buildTransfersSheet,
   buildBudgetsSheet,
+  buildSavingsGoalsSheet,
+  buildDebtsSheet,
+  buildDebtPaymentsSheet,
+  buildLoansSheet,
+  buildLoanPaymentsSheet,
+  buildRemindersSheet,
 ]
 
 /**

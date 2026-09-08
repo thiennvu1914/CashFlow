@@ -8,6 +8,7 @@ import {
   localDateCell,
   moneyCell,
   moneyFmt,
+  textCell,
   writeHeader,
 } from './cells'
 import type { ExportContext } from './sheet-registry'
@@ -69,7 +70,9 @@ export function writeTransactionsSheet(
       row.id,
       localDateCell(row.date, ctx.timezone),
       row.type,
-      row.category?.name ?? '',
+      // Both optional, and `textCell` is what makes an absent one a blank cell
+      // rather than an empty shared string Excel renders as a number.
+      textCell(row.category?.name),
       row.account.name,
       moneyCell(row.amount),
       row.currency,
@@ -81,7 +84,7 @@ export function writeTransactionsSheet(
       // zone — shifting it would rename the rate's own day.
       localDateCell(row.fxRateEffectiveAt, 'UTC'),
       localDateCell(row.fxRateFetchedAt, ctx.timezone),
-      row.note ?? '',
+      textCell(row.note),
     ])
     written.getCell(2).numFmt = DATE_TIME_FMT
     // Formatted by the ROW's currency, not the user's: a USD row shows cents

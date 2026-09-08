@@ -1,14 +1,26 @@
 import { Prisma } from '@prisma/client'
+import { formatInTimeZone } from 'date-fns-tz'
 import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
 import { FxUnavailableError, getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
 import { getCurrentAccountBalances } from './balance'
+import { getDebtsWithOutstanding } from './debt'
 import { listActiveFinancialAccounts } from './financial-account'
+import { getLoansWithOutstanding } from './loan'
 
 /**
  * The user's current position: what they hold right now, restated in one
  * display currency (spec §5.4).
+ *
+ * **Net Worth = account assets + active receivables − active payables − active
+ * outstanding loan principal** (spec §5.4), each term converted to
+ * `displayCurrency` at the SAME single current rate. Written-off debts and
+ * closed loans are excluded — a debt the user has given up on is not an asset
+ * and a settled loan is not a liability — and so is anything with nothing left
+ * outstanding, which falls out of the arithmetic rather than out of a status.
+ * Interest paid on a loan is nowhere in the formula: interest is the cost of
+ * borrowing, not a repayment of it, so only `outstandingPrincipal` counts.
  *
  * **Current position = balances as of now.** The balances come from
  * `getCurrentAccountBalances` (`balance.ts`), the single definition of a current
@@ -24,11 +36,30 @@ import { listActiveFinancialAccounts } from './financial-account'
  * `getCurrentPosition` call, so the three figures can never disagree with each
  * other: they are three views of one set of balances converted at one rate.
  *
- * Cost is constant, not per-account: one `listActiveFinancialAccounts`, one
- * batched `getAccountBalances` for every id at once, and — only when at least
- * one account is held in a currency other than `displayCurrency` — one call to
- * `getUsableCurrentRate`. A single-currency user therefore never touches FX at
- * all and their dashboard renders unchanged through a provider outage.
+ * The **query count** is constant, not per-account and not per-record: one
+ * `listActiveFinancialAccounts`, one batched `getAccountBalances` for every id
+ * at once, one `getDebtsWithOutstanding` and one `getLoansWithOutstanding`
+ * (each of those is itself one `findMany` plus one `groupBy`, whatever the
+ * number of rows), and — only when at least one active account, unsettled debt
+ * or unsettled loan is held in a currency other than `displayCurrency` — one
+ * call to `getUsableCurrentRate`. A single-currency user therefore never
+ * touches FX at all and their dashboard renders unchanged through a provider
+ * outage.
+ *
+ * The **payload** is not constant, and this function does not need what it
+ * pays for: both of those services read through their own `WITH_PAYMENTS`
+ * include (`debt.ts`, `loan.ts`), so every `DebtPayment` and `LoanPayment` row
+ * crosses the wire on every dashboard render — O(payments) — while the only
+ * figures used here come from the accompanying `groupBy` sums, and the payment
+ * arrays are discarded. It is one include shared with the Debts and Loans
+ * pages, which do render each payment, and splitting it means a second read
+ * path and a second definition of a debt's shape; that trade is Phase 7
+ * backlog, not something this comment should claim away.
+ *
+ * No conversion happens inside a transaction and none of the three reads opens
+ * one: the debt and loan services do no FX of their own (each record keeps its
+ * own currency), so the single rate lookup here is the only network-capable
+ * step and it sits outside every query.
  *
  * Arithmetic is `Prisma.Decimal` end to end and nothing is rounded here:
  * rounding is a presentation decision, and the pages convert to chart numbers
@@ -54,13 +85,33 @@ export interface PositionAccount {
 export interface CurrentPosition {
   /** Σ of every active account's `displayBalance`. */
   totalBalance: Prisma.Decimal
-  /** See `getNetWorth` — identical to `totalBalance` in Phase 4. */
+  /**
+   * `totalBalance + receivables − payables − loanOutstanding`, in
+   * `displayCurrency` (spec §5.4). See `getNetWorth`.
+   */
   netWorth: Prisma.Decimal
   accounts: PositionAccount[]
   /**
-   * The rate every conversion in this result used, or `null` when no account
-   * needed converting. Carries `isFallback` and `source`, so a caller can show
-   * "rate may be out of date" without asking the policy a second question.
+   * Σ of what is still owed *to* the user across their active RECEIVABLE
+   * debts, converted. An asset: it adds to Net Worth.
+   */
+  receivables: Prisma.Decimal
+  /**
+   * Σ of what the user still owes on their active PAYABLE debts, converted. A
+   * liability: it subtracts.
+   */
+  payables: Prisma.Decimal
+  /**
+   * Σ of the principal still outstanding on the user's active loans,
+   * converted — never including interest paid, which is the cost of the loan
+   * rather than part of it. A liability: it subtracts.
+   */
+  loanOutstanding: Prisma.Decimal
+  /**
+   * The rate every conversion in this result used, or `null` when nothing —
+   * account, debt or loan — needed converting. Carries `isFallback` and
+   * `source`, so a caller can show "rate may be out of date" without asking
+   * the policy a second question.
    */
   fx: UsableRateResult | null
 }
@@ -114,16 +165,50 @@ export async function getCurrentPosition(
   // make the KPI strip disagree with the Account Balance Over Time chart's
   // current point, which is sampled at `now` too.
   const asOf = options.now ?? new Date()
-  const balances = await getCurrentAccountBalances(
-    userId,
-    accounts.map((account) => account.id),
-    asOf,
-  )
+  // The debts and the loans travel with the balances rather than after them:
+  // three independent reads, one round trip's worth of latency. Neither
+  // service does any FX — each record keeps its own currency and the
+  // conversion happens below, outside every query.
+  //
+  // `today` is what `getDebtsWithOutstanding`/`getLoansWithOutstanding` use to
+  // derive `displayStatus` (OVERDUE against the user's calendar day) — and
+  // `displayStatus` is the one field of theirs this function never reads. Every
+  // amount below comes from `outstanding`/`outstandingPrincipal`, which are
+  // pure arithmetic over the stored rows and do not depend on `today` at all,
+  // so the UTC reading of `asOf` used here cannot move a figure by a dong. The
+  // position deliberately takes no `timezone` option for a value it ignores;
+  // the pages that *do* render an overdue badge pass their own
+  // `todayCalendarDateInZone`.
+  const today = formatInTimeZone(asOf, 'UTC', 'yyyy-MM-dd')
+  const [balances, debts, loans] = await Promise.all([
+    getCurrentAccountBalances(
+      userId,
+      accounts.map((account) => account.id),
+      asOf,
+    ),
+    // Active only, both of them: a written-off debt and a closed loan are
+    // history, not a position (they stay visible on their own pages).
+    getDebtsWithOutstanding(userId, today, { activeOnly: true }),
+    getLoansWithOutstanding(userId, today, { activeOnly: true }),
+  ])
+
+  // Nothing left owed contributes nothing, so a debt that has been repaid in
+  // full drops out here — by value, where a written-off one dropped out by
+  // status. Filtering *before* `needsConversion` is what makes the two
+  // decisions one decision: a record skipped here can never be one whose
+  // conversion would then need a rate nobody fetched.
+  const unsettledDebts = debts.filter((row) => row.outstanding.gt(0))
+  const unsettledLoans = loans.filter((row) => row.outstandingPrincipal.gt(0))
 
   // The rate is resolved once, up front, and only if it is actually needed —
-  // never inside the per-account loop, and never for a user whose accounts are
-  // all in the display currency already.
-  const needsConversion = accounts.some((account) => account.currency !== displayCurrency)
+  // never inside a per-record loop, and never for a user whose accounts, debts
+  // and loans are all in the display currency already. A foreign-currency debt
+  // on its own is enough: Net Worth would otherwise either omit it or sum
+  // 100 USD into a total of dong.
+  const needsConversion =
+    accounts.some((account) => account.currency !== displayCurrency) ||
+    unsettledDebts.some((row) => row.debt.currency !== displayCurrency) ||
+    unsettledLoans.some((row) => row.loan.currency !== displayCurrency)
   // `in`, not a truthiness test: a supplied `null` must suppress the lookup
   // exactly as a supplied rate does.
   const rateWasSupplied = 'fx' in options
@@ -141,22 +226,28 @@ export async function getCurrentPosition(
     if (!fx) throw new FxUnavailableError()
   }
 
+  /**
+   * One amount, restated in `displayCurrency` at the single rate above.
+   *
+   * The same function for accounts, debts and loans, so "convert first, then
+   * sum" is written once and no term of the Net Worth formula can be summed
+   * raw. A same-currency amount is returned untouched — the `Decimal` instance
+   * itself, not a recomputation of it — which is also what keeps this callable
+   * when `fx` is legitimately `null`.
+   */
+  function inDisplayCurrency(amount: Prisma.Decimal, currency: Currency): Prisma.Decimal {
+    if (currency === displayCurrency) return amount
+    // Unreachable: `needsConversion` is true whenever this branch is, so `fx`
+    // is non-null here. The throw exists so a future edit that decouples the
+    // two fails loudly instead of silently charting native numbers.
+    if (!fx) throw new Error('Missing exchange rate for a conversion that is required')
+    return applyVndPerUsdRate(amount, currency, displayCurrency, fx.rateDecimal)
+  }
+
   let totalBalance = new Prisma.Decimal(0)
   const positionAccounts: PositionAccount[] = accounts.map((account) => {
     const nativeBalance = balances.get(account.id) ?? new Prisma.Decimal(0)
-    let displayBalance = nativeBalance
-    if (account.currency !== displayCurrency) {
-      // Unreachable: `needsConversion` is true whenever this branch is, so `fx`
-      // is non-null here. The throw exists so a future edit that decouples the
-      // two fails loudly instead of silently charting native numbers.
-      if (!fx) throw new Error('Missing exchange rate for a conversion that is required')
-      displayBalance = applyVndPerUsdRate(
-        nativeBalance,
-        account.currency,
-        displayCurrency,
-        fx.rateDecimal,
-      )
-    }
+    const displayBalance = inDisplayCurrency(nativeBalance, account.currency)
     totalBalance = totalBalance.add(displayBalance)
     return {
       id: account.id,
@@ -167,7 +258,31 @@ export async function getCurrentPosition(
     }
   })
 
-  return { totalBalance, netWorth: totalBalance, accounts: positionAccounts, fx }
+  let receivables = new Prisma.Decimal(0)
+  let payables = new Prisma.Decimal(0)
+  for (const { debt, outstanding } of unsettledDebts) {
+    const converted = inDisplayCurrency(outstanding, debt.currency)
+    // The direction is the whole difference between an asset and a liability,
+    // and it is the stored field — never inferred from a sign, because every
+    // outstanding amount here is positive.
+    if (debt.direction === 'RECEIVABLE') receivables = receivables.add(converted)
+    else payables = payables.add(converted)
+  }
+
+  let loanOutstanding = new Prisma.Decimal(0)
+  for (const { loan, outstandingPrincipal } of unsettledLoans) {
+    loanOutstanding = loanOutstanding.add(inDisplayCurrency(outstandingPrincipal, loan.currency))
+  }
+
+  return {
+    totalBalance,
+    netWorth: totalBalance.add(receivables).sub(payables).sub(loanOutstanding),
+    accounts: positionAccounts,
+    receivables,
+    payables,
+    loanOutstanding,
+    fx,
+  }
 }
 
 /** Σ of every active account's balance, restated in `displayCurrency`. */
@@ -181,13 +296,17 @@ export async function getTotalAccountBalance(
 }
 
 /**
- * Phase 4: Net Worth = Total Account Balance only.
+ * Net Worth = Total Account Balance + active receivables − active payables −
+ * active outstanding loan principal (spec §5.4), each term converted from its
+ * own currency to `displayCurrency` at the one current rate.
  *
- * Phase 6 extends this to `+ receivables outstanding − payables outstanding −
- * outstanding loan principal` (spec §5.4), each converted the same way (own
- * currency → `displayCurrency` at the current rate). The signature does not
- * change — only `getCurrentPosition`'s body grows — so every caller written
- * now keeps working when the definition widens.
+ * Phase 4 answered `totalBalance` alone; Phase 6 widened the definition
+ * without touching this signature, exactly as that phase's comment promised —
+ * only `getCurrentPosition`'s body grew, so every caller written then (the
+ * dashboard's KPI, the export's Summary sheet) picked the extension up as it
+ * stood. A projection of the position and never a second definition of it:
+ * this function computes nothing itself, so the KPI and the sheet cannot
+ * disagree about what Net Worth means.
  */
 export async function getNetWorth(
   userId: string,

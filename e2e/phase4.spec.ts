@@ -87,6 +87,10 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Transfers',
       'Accounts',
       'Budgets',
+      'Savings',
+      'Debts',
+      'Loans',
+      'Reminders',
       'Categories',
       'Reports',
       'Settings',
@@ -114,8 +118,13 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       'Account Balance Over Time',
       'Expense by Category',
       'Account Balance Distribution',
-      'Recent Transactions',
+      // The planning widgets, in the order the page renders them, with Recent
+      // Transactions kept last (directive Z's hierarchy).
       'Budget Progress',
+      'Savings Goals',
+      'Debt / Loan Overview',
+      'Upcoming Reminders',
+      'Recent Transactions',
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     }

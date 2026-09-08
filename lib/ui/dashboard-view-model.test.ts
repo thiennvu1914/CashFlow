@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
+import type { SavingsGoalStatus } from '@prisma/client'
 import type { BudgetProgress } from '@/lib/server/services/budget'
+import type { OccurrenceRow } from '@/lib/server/services/reminder'
+import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import { buildDashboardViewModel, type DashboardInput } from './dashboard-view-model'
 
 /**
@@ -51,6 +54,12 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
           displayBalance: decimal('10000000'),
         },
       ],
+      // A user with nothing owed either way: Net Worth is the account total,
+      // which is what the KPI cases below assert. The cases that are about the
+      // Debt / Loan overview pass their own three figures.
+      receivables: decimal('0'),
+      payables: decimal('0'),
+      loanOutstanding: decimal('0'),
       fx: {
         rate: 25000,
         rateDecimal: decimal('25000.000000'),
@@ -123,8 +132,14 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
         category: null,
       },
     ],
-    // Most cases say nothing about budgets; the two that do pass their own.
+    // Most cases say nothing about budgets, goals or reminders; the ones that
+    // do pass their own.
     budgets: [],
+    goals: [],
+    occurrences: [],
+    // The user's own calendar day for `NOW` in Ho Chi Minh City — 10:00Z is
+    // 17:00 there, still the 15th.
+    today: '2026-09-15',
     ...overrides,
   }
 }
@@ -172,6 +187,89 @@ function budgetProgress(overrides: {
     remaining: amount.sub(spent),
     ratio: spent.div(amount),
     status: overrides.status,
+  }
+}
+
+/**
+ * One `SavingsGoal` row as `listSavingsGoals` returns it — `Decimal`s and a
+ * nullable `Date`, so the DTO under test sees exactly what production hands it.
+ *
+ * The service is imported for its *type* only, as above: a value import would
+ * pull `lib/prisma` into a suite that is pure mapping.
+ */
+function savingsGoal(overrides: {
+  id: string
+  name?: string
+  currency?: 'VND' | 'USD'
+  target: string
+  progress: string
+  status?: SavingsGoalStatus
+}): SavingsGoalRow {
+  return {
+    id: overrides.id,
+    userId: 'u1',
+    name: overrides.name ?? overrides.id,
+    targetAmount: decimal(overrides.target),
+    currentProgress: decimal(overrides.progress),
+    currency: overrides.currency ?? 'VND',
+    deadline: null,
+    note: null,
+    status: overrides.status ?? 'ACTIVE',
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    updatedAt: new Date('2026-09-01T00:00:00Z'),
+  }
+}
+
+/**
+ * One `ReminderOccurrence` with its reminder, as `listUpcomingOccurrences`
+ * returns it.
+ *
+ * `dueAt` is the instant of LOCAL midnight (`prisma/schema.prisma` says so on
+ * the column), which is what makes the zone cases below meaningful: local
+ * midnight on the 16th in Ho Chi Minh City is 17:00Z on the 15th, so a UTC
+ * reading of the same row would call it "today".
+ */
+function occurrence(overrides: {
+  id: string
+  title?: string
+  dueAt: Date
+  amount?: string
+  currency?: 'VND' | 'USD'
+  type?: 'INCOME' | 'EXPENSE'
+}): OccurrenceRow {
+  const at = new Date('2026-09-01T00:00:00Z')
+  return {
+    id: overrides.id,
+    userId: 'u1',
+    reminderId: `r-${overrides.id}`,
+    dueAt: overrides.dueAt,
+    status: 'PENDING',
+    actionedAt: null,
+    createdAt: at,
+    reminder: {
+      id: `r-${overrides.id}`,
+      userId: 'u1',
+      title: overrides.title ?? overrides.id,
+      type: overrides.type ?? 'EXPENSE',
+      expectedAmount: decimal(overrides.amount ?? '500000'),
+      currency: overrides.currency ?? 'VND',
+      categoryId: null,
+      accountId: null,
+      frequency: 'MONTHLY',
+      interval: 1,
+      dayOfMonth: 1,
+      month: null,
+      startDate: new Date('2026-08-31T17:00:00Z'),
+      // The zone the schedule is anchored to (ruling R6-22) — never read here:
+      // the widget renders each `dueAt` in the *viewer's* zone.
+      timezone: 'Asia/Ho_Chi_Minh',
+      note: null,
+      active: true,
+      createdAt: at,
+      updatedAt: at,
+      category: null,
+      account: null,
+    },
   }
 }
 
@@ -422,5 +520,240 @@ describe('buildDashboardViewModel', () => {
 
   it('maps no budgets to an empty list — the widget says so rather than charting nothing', () => {
     expect(buildDashboardViewModel(makeInput({ budgets: [] })).budgets).toEqual([])
+  })
+
+  describe('savings goals', () => {
+    it('shows each goal in its OWN currency, through the Savings page’s own DTO', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          goals: [
+            savingsGoal({
+              id: 'g1',
+              name: 'Emergency fund',
+              target: '20000000',
+              progress: '5000000',
+            }),
+            savingsGoal({
+              id: 'g2',
+              name: 'New laptop',
+              currency: 'USD',
+              target: '2000',
+              progress: '2000',
+              status: 'ACHIEVED',
+            }),
+          ],
+        }),
+      )
+
+      // A USD goal under a VND dashboard stays in USD — a goal is never
+      // restated in `displayCurrency` (ruling R5-3).
+      expect(vm.displayCurrency).toBe('VND')
+      expect(vm.savingsGoals.map((g) => [g.id, g.name, g.currency, g.progress, g.target])).toEqual([
+        ['g1', 'Emergency fund', 'VND', '5.000.000', '20.000.000'],
+        ['g2', 'New laptop', 'USD', '2.000,00', '2.000,00'],
+      ])
+      expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.statusLabel])).toEqual([
+        [25, '25 %', 'In progress'],
+        [100, '100 %', 'Achieved'],
+      ])
+    })
+
+    it('shows at most five goals, keeping the order the service gave them', () => {
+      const goals = Array.from({ length: 7 }, (_, index) =>
+        savingsGoal({ id: `g${index}`, target: '100', progress: '10' }),
+      )
+
+      const vm = buildDashboardViewModel(makeInput({ goals }))
+
+      // A widget, not the Savings page: the page itself lists every goal.
+      expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
+    })
+
+    it('never shows an archived goal, and an archived one does not use up a slot', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          goals: [
+            savingsGoal({ id: 'archived', target: '100', progress: '1', status: 'ARCHIVED' }),
+            ...Array.from({ length: 5 }, (_, index) =>
+              savingsGoal({ id: `g${index}`, target: '100', progress: '10' }),
+            ),
+          ],
+        }),
+      )
+
+      expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
+    })
+
+    it('maps no goals to an empty list', () => {
+      expect(buildDashboardViewModel(makeInput()).savingsGoals).toEqual([])
+    })
+  })
+
+  describe('debt / loan overview', () => {
+    it('formats the three outstanding figures in the display currency', () => {
+      const input = makeInput()
+      const position = input.position
+      if (!position) throw new Error('fixture must carry a position')
+      const vm = buildDashboardViewModel({
+        ...input,
+        position: {
+          ...position,
+          receivables: decimal('2500000'),
+          payables: decimal('750000'),
+          loanOutstanding: decimal('18000000'),
+        },
+      })
+
+      expect(vm.debtLoanOverview).toEqual({
+        receivables: '2.500.000',
+        payables: '750.000',
+        loanOutstanding: '18.000.000',
+      })
+      // Already converted by the position — the widget's caption says
+      // `displayCurrency` and this is that currency.
+      expect(vm.displayCurrency).toBe('VND')
+    })
+
+    it('has no overview at all when the position is unavailable', () => {
+      // The three figures are current-position aggregates, so they degrade with
+      // it: an FX outage leaves nothing honest to compare.
+      expect(buildDashboardViewModel(makeInput({ position: null })).debtLoanOverview).toBeNull()
+    })
+
+    it('reports zeroes as figures, not as a missing overview', () => {
+      // Nothing owed either way is an answer — "0" — and not the same fact as
+      // "we cannot say".
+      expect(buildDashboardViewModel(makeInput()).debtLoanOverview).toEqual({
+        receivables: '0',
+        payables: '0',
+        loanOutstanding: '0',
+      })
+    })
+  })
+
+  describe('upcoming reminders', () => {
+    it('reads each due date in the user’s zone and keeps the overdue ones first', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          occurrences: [
+            // Local midnight on 10 Sep in Ho Chi Minh City — five days late.
+            occurrence({ id: 'o1', title: 'Rent', dueAt: new Date('2026-09-09T17:00:00Z') }),
+            // Local midnight on 16 Sep: 17:00Z on the 15th. Read in UTC this
+            // row would say "Today", which is the bug this case exists for.
+            occurrence({
+              id: 'o2',
+              title: 'Salary',
+              type: 'INCOME',
+              amount: '1200',
+              currency: 'USD',
+              dueAt: new Date('2026-09-15T17:00:00Z'),
+            }),
+          ],
+        }),
+      )
+
+      expect(
+        vm.upcomingReminders.map((o) => [o.id, o.title, o.dueDate, o.dueLabel, o.overdue]),
+      ).toEqual([
+        ['o1', 'Rent', '2026-09-10', 'Overdue', true],
+        ['o2', 'Salary', '2026-09-16', 'Tomorrow', false],
+      ])
+      // Each in its reminder's own currency, never converted.
+      expect(vm.upcomingReminders.map((o) => [o.amount, o.currency, o.typeLabel])).toEqual([
+        ['500.000', 'VND', 'Bill'],
+        ['1.200,00', 'USD', 'Income'],
+      ])
+    })
+
+    it('shows at most five occurrences, in the dueAt order the service gave them', () => {
+      // Eight rows, none of them late: the cap is the only thing that applies,
+      // and the widget reads exactly as it did before the partition existed.
+      const occurrences = Array.from({ length: 8 }, (_, index) =>
+        occurrence({
+          id: `o${index}`,
+          dueAt: new Date(Date.UTC(2026, 8, 15 + index, 17, 0, 0)),
+        }),
+      )
+
+      const vm = buildDashboardViewModel(makeInput({ occurrences }))
+
+      // The Reminders page is the unbounded list; the widget is the next five.
+      expect(vm.upcomingReminders.map((o) => o.id)).toEqual(['o0', 'o1', 'o2', 'o3', 'o4'])
+      expect(vm.overdueReminderCount).toBe(0)
+    })
+
+    it('keeps room for upcoming rows when the user has a pile of overdue ones', () => {
+      // Ruling R6-23: `listUpcomingOccurrences` is unbounded and `dueAt asc`, so
+      // taking the head of it filled a widget captioned "the next 30 days" with
+      // nothing but months-old rows — permanently, for any user carrying five
+      // unanswered bills.
+      const overdue = Array.from({ length: 7 }, (_, index) =>
+        // Local midnight on 2–8 September in Ho Chi Minh City, oldest first.
+        occurrence({
+          id: `late${index + 1}`,
+          title: `Late ${index + 1}`,
+          dueAt: new Date(Date.UTC(2026, 8, index + 1, 17, 0, 0)),
+        }),
+      )
+      const upcoming = Array.from({ length: 3 }, (_, index) =>
+        // Local midnight on 16–18 September, soonest first.
+        occurrence({
+          id: `soon${index + 1}`,
+          title: `Soon ${index + 1}`,
+          dueAt: new Date(Date.UTC(2026, 8, 15 + index, 17, 0, 0)),
+        }),
+      )
+
+      const vm = buildDashboardViewModel(makeInput({ occurrences: [...overdue, ...upcoming] }))
+
+      // Two overdue — the two oldest — and then everything genuinely coming.
+      expect(vm.upcomingReminders.map((o) => [o.id, o.overdue])).toEqual([
+        ['late1', true],
+        ['late2', true],
+        ['soon1', false],
+        ['soon2', false],
+        ['soon3', false],
+      ])
+      // And the count is of ALL of them, not of the two on show: the widget's
+      // muted line is where the other five are accounted for.
+      expect(vm.overdueReminderCount).toBe(7)
+    })
+
+    it('shows a single overdue row beside a single upcoming one', () => {
+      // The overdue allowance is a cap, not a reservation: one late bill takes
+      // one slot, and nothing about the upcoming half changes.
+      const vm = buildDashboardViewModel(
+        makeInput({
+          occurrences: [
+            occurrence({ id: 'late', title: 'Rent', dueAt: new Date('2026-09-09T17:00:00Z') }),
+            occurrence({ id: 'soon', title: 'Salary', dueAt: new Date('2026-09-15T17:00:00Z') }),
+          ],
+        }),
+      )
+
+      expect(vm.upcomingReminders.map((o) => [o.id, o.dueLabel])).toEqual([
+        ['late', 'Overdue'],
+        ['soon', 'Tomorrow'],
+      ])
+      expect(vm.overdueReminderCount).toBe(1)
+    })
+
+    it('is unaffected by an FX outage — a reminder needs no rate', () => {
+      const occurrences = [occurrence({ id: 'o1', dueAt: new Date('2026-09-15T17:00:00Z') })]
+
+      const withFx = buildDashboardViewModel(makeInput({ occurrences }))
+      const withoutFx = buildDashboardViewModel(makeInput({ occurrences, position: null }))
+
+      expect(withoutFx.upcomingReminders).toEqual(withFx.upcomingReminders)
+    })
+
+    it('maps no occurrences to an empty list', () => {
+      const vm = buildDashboardViewModel(makeInput())
+
+      // Both empty together: the widget's "nothing due" sentence is reachable
+      // only in this state, never with pending rows hidden behind a cap.
+      expect(vm.upcomingReminders).toEqual([])
+      expect(vm.overdueReminderCount).toBe(0)
+    })
   })
 })

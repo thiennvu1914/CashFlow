@@ -6,9 +6,13 @@ import type { AccountBalancePoint } from '@/lib/server/services/account-balance-
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
 import type { BudgetProgress } from '@/lib/server/services/budget'
 import type { CurrentPosition } from '@/lib/server/services/position'
+import type { OccurrenceRow } from '@/lib/server/services/reminder'
+import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import type { listTransactions } from '@/lib/server/services/transaction'
 import { type BudgetProgressDto, toBudgetProgressDto } from './budget-view-model'
 import { formatMoney, formatRate } from './format-money'
+import { type OccurrenceDto, toOccurrenceDto } from './reminder-view-model'
+import { type SavingsGoalDto, toSavingsGoalDto } from './savings-goal-view-model'
 
 /**
  * The dashboard's DTO boundary, as one pure function.
@@ -36,6 +40,17 @@ export interface DashboardInput {
   /** The user's IANA zone — every date on this page is rendered in it, never in the server's. */
   timezone: string
   now: Date
+  /**
+   * The user's own calendar day (`yyyy-MM-dd`, from `todayCalendarDateInZone`)
+   * — what "overdue" and "due tomorrow" are measured against.
+   *
+   * Passed in rather than derived from `now` here so it is one value for the
+   * whole page: the goals widget's missed deadlines and the reminders widget's
+   * due labels are then answering the same question about the same day. It is
+   * a *calendar* comparison in the user's zone throughout, never an instant
+   * one in the server's (ruling R6-7).
+   */
+  today: string
   /**
    * `null` when the current position needed an FX conversion and no usable rate
    * existed. Only the two current-position KPIs and the distribution chart
@@ -67,6 +82,30 @@ export interface DashboardInput {
    * (ruling R5-3).
    */
   budgets: BudgetProgress[]
+  /**
+   * The goals the user is still tracking, from `listSavingsGoals` — which
+   * already excludes ARCHIVED rows and puts the ones still in progress first,
+   * so the widget shows the top of that list rather than re-deciding its order.
+   *
+   * Each goal keeps its own currency and none is converted (ruling R5-3), so
+   * this widget reads the same during an FX outage as it does with a live rate.
+   */
+  goals: SavingsGoalRow[]
+  /**
+   * Every PENDING occurrence, soonest first, from `listUpcomingOccurrences` —
+   * which puts the overdue ones at the top by construction because their
+   * `dueAt` is in the past. Deliberately unbounded and *not* limited to the
+   * lookahead window: an unanswered bill from three months ago is still a bill,
+   * so it is in this list.
+   *
+   * Which is why the widget partitions it rather than taking the head (ruling
+   * R6-23): a user with five old unanswered bills would otherwise get a widget
+   * captioned "the next 30 days" containing nothing from the next 30 days.
+   *
+   * Expected amounts are in each reminder's own currency and are never
+   * converted, so this widget too is untouched by an FX outage.
+   */
+  occurrences: OccurrenceRow[]
 }
 
 export interface KpiDto {
@@ -137,6 +176,24 @@ export interface RecentTransactionDto {
   positive: boolean
 }
 
+/**
+ * The three current-position aggregates behind the Net Worth card, already
+ * formatted in the display currency.
+ *
+ * Strings, not `Decimal`s or numbers: they are read, never recomputed, and the
+ * widget that renders them must be able to be a plain server component with no
+ * money type crossing into it.
+ */
+export interface DebtLoanOverviewDto {
+  /** Owed *to* the user — the term that adds to Net Worth. */
+  receivables: string
+  /** Owed *by* the user on debts — subtracts. */
+  payables: string
+  /** Loan principal still outstanding — subtracts. Interest paid is not part
+   *  of it. */
+  loanOutstanding: string
+}
+
 export interface DashboardViewModel {
   displayCurrency: Currency
   /** e.g. `September 2026`. */
@@ -156,22 +213,75 @@ export interface DashboardViewModel {
    *  widget shows a USD budget in USD under a VND dashboard. Empty when the
    *  user set none for the month. */
   budgets: BudgetProgressDto[]
+  /** The goals widget: non-archived goals, in progress first, capped — each in
+   *  its own currency. Empty when the user has set none. */
+  savingsGoals: SavingsGoalDto[]
+  /** `null` when the position is unavailable — three outstanding amounts that
+   *  could not be converted are not comparable, and inventing a zero would say
+   *  the user owes nothing. */
+  debtLoanOverview: DebtLoanOverviewDto | null
+  /**
+   * The reminders widget's rows: at most two overdue occurrences (oldest first)
+   * and then genuinely upcoming ones (soonest first), five in all, each in its
+   * reminder's own currency. Empty only when nothing at all is pending.
+   *
+   * The two-row cap on the overdue half is the whole point (ruling R6-23):
+   * taking the head of a `dueAt asc` list filled the widget with months-old
+   * rows and pushed everything actually coming out of it. Two is enough to say
+   * "you are behind" and leaves three slots for what the widget is for; the
+   * Reminders page is where the full overdue list lives.
+   */
+  upcomingReminders: OccurrenceDto[]
+  /**
+   * How many PENDING occurrences are already past due — *all* of them, not just
+   * the ones above, so the widget can say "7 overdue" while showing two of
+   * them. Zero when the user is up to date.
+   */
+  overdueReminderCount: number
 }
 
 /** Shown instead of a figure that would need a rate we do not have. */
 const FX_UNAVAILABLE_HINT = 'FX unavailable'
+
+/**
+ * How many rows the two list widgets show.
+ *
+ * A dashboard widget is a glance, not a page: both the Savings page and the
+ * Reminders page list everything the user has (deliberately unbounded — a cap
+ * on their own data would be the app quietly forgetting some of it), and each
+ * widget links through to its page. Five is the same number Recent Transactions
+ * shows, so the column of widgets stays one height.
+ */
+const WIDGET_ROW_LIMIT = 5
+
+/**
+ * How many of the reminders widget's five rows an overdue occurrence may take
+ * (ruling R6-23).
+ *
+ * `listUpcomingOccurrences` is unbounded and ordered `dueAt asc`, so the head of
+ * it is the *oldest unanswered* bill, not the next one due. Five slots filled
+ * from that head is a widget captioned "the next 30 days" showing nothing from
+ * the next 30 days — the state a user with a few forgotten bills lives in
+ * permanently. Two says "you are behind, and here is the oldest of it" and
+ * still leaves three slots for what the widget exists to show; the count beside
+ * the list carries the rest, and the Reminders page has the complete group.
+ */
+const WIDGET_OVERDUE_ROW_LIMIT = 2
 
 export function buildDashboardViewModel(input: DashboardInput): DashboardViewModel {
   const {
     displayCurrency: currency,
     timezone,
     now,
+    today,
     position,
     monthly,
     cashFlowTrend,
     balanceOverTime,
     recentTransactions,
     budgets,
+    goals,
+    occurrences,
   } = input
 
   const monthLabel = formatInTimeZone(now, timezone, 'LLLL yyyy')
@@ -202,6 +312,18 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       negative: monthly.netIncome.isNegative(),
     },
   ]
+
+  // Mapped in full before anything is dropped, unlike the goals above — the
+  // count needs every pending occurrence classified, and `overdue` is decided
+  // by `toOccurrenceDto` (a calendar-day comparison in the user's zone, ruling
+  // R6-7). Re-deriving it here to save formatting the rows the widget will not
+  // show would be a second definition of "late", which is the one thing this
+  // page must not have; the Reminders page maps the same list in full.
+  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today))
+  const overdueOccurrences = allOccurrences.filter((occurrence) => occurrence.overdue)
+  // Both halves keep the service's `dueAt asc` order — oldest overdue first,
+  // soonest upcoming first — exactly as the Reminders page groups them.
+  const upcomingOccurrences = allOccurrences.filter((occurrence) => !occurrence.overdue)
 
   return {
     displayCurrency: currency,
@@ -276,6 +398,45 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     // other. `displayCurrency` is deliberately not passed — a budget is shown
     // in its own currency.
     budgets: budgets.map(toBudgetProgressDto),
+    // Delegated to the Savings page's own DTO mapper, for the reason the
+    // budgets line gives: the widget's compact rows and the page's full rows
+    // are the same `GoalList` fed by the same function, so a percentage or a
+    // status label cannot read one way on one page and another way on the
+    // other.
+    //
+    // The ARCHIVED filter is belt and braces — `listSavingsGoals` already
+    // excludes them — and it runs *before* the cap, so an archived row could
+    // never take a visible goal's slot. `today` is what decides whether a
+    // deadline has been missed.
+    savingsGoals: goals
+      .filter((goal) => goal.status !== 'ARCHIVED')
+      .slice(0, WIDGET_ROW_LIMIT)
+      .map((goal) => toSavingsGoalDto(goal, today)),
+    // The three figures the position already converted, formatted once here.
+    // `null` propagates the position's own refusal: three outstanding amounts
+    // that could not be restated in one currency cannot be compared, and a
+    // fabricated zero would tell the user they owe nothing (spec §6.3).
+    debtLoanOverview:
+      position === null
+        ? null
+        : {
+            receivables: formatMoney(position.receivables, currency),
+            payables: formatMoney(position.payables, currency),
+            loanOutstanding: formatMoney(position.loanOutstanding, currency),
+          },
+    // At most two overdue rows, then whatever is genuinely coming, five in all.
+    // The single `slice` at the end is what makes the overdue half a *cap*
+    // rather than a reservation: one overdue occurrence takes one slot and
+    // leaves four for the upcoming ones, and a user with nothing overdue sees
+    // five upcoming rows exactly as before.
+    upcomingReminders: [
+      ...overdueOccurrences.slice(0, WIDGET_OVERDUE_ROW_LIMIT),
+      ...upcomingOccurrences,
+    ].slice(0, WIDGET_ROW_LIMIT),
+    // The full tally, not the number shown: the widget's one muted line is the
+    // only place the user learns that the two rows above it are the tip of
+    // seven.
+    overdueReminderCount: overdueOccurrences.length,
   }
 }
 

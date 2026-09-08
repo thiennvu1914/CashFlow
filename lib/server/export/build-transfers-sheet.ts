@@ -1,6 +1,14 @@
 import type ExcelJS from 'exceljs'
 import { listTransfersForExport } from '@/lib/server/services/transfer'
-import { DATE_TIME_FMT, RATE_FMT, localDateCell, moneyCell, moneyFmt, writeHeader } from './cells'
+import {
+  DATE_TIME_FMT,
+  RATE_FMT,
+  localDateCell,
+  moneyCell,
+  moneyFmt,
+  textCell,
+  writeHeader,
+} from './cells'
 import type { ExportContext } from './sheet-registry'
 
 /**
@@ -46,7 +54,7 @@ export async function buildTransfersSheet(
       // Blank, not zero and not 1: a same-currency transfer applied no rate at
       // all, and writing one would invent a fact the row does not hold.
       row.exchangeRateUsed === null ? null : moneyCell(row.exchangeRateUsed),
-      row.note ?? '',
+      textCell(row.note),
     ])
     written.getCell(1).numFmt = DATE_TIME_FMT
     written.getCell(4).numFmt = moneyFmt(row.fromAccount.currency)

@@ -7,6 +7,7 @@ import {
   TEST_TIMEZONE,
   cleanupExportUsers,
   createExportUser,
+  expectNoEmptyStrings,
   fakeFxProvider,
   makeExportContext,
   seedTransaction,
@@ -103,6 +104,12 @@ describe('buildFilteredWorkbook', () => {
     expect(labelledRow(summary, 'Expense').getCell(2).value).toBe(3_000)
     expect(labelledRow(summary, 'Income').getCell(2).value).toBe(0)
     expect(labelledRow(summary, 'Net Income').getCell(2).value).toBe(-3_000)
+
+    // None of these rows carries a note, and the shared Transactions sheet is
+    // the same one the full export writes: an absent note is an empty cell, so
+    // the file holds no empty shared string for Excel to render as its index.
+    expect(transactions.getRow(2).getCell(13).value).toBeNull()
+    await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
   })
 
   it('writes the date as the user local wall clock, not the stored UTC instant', async () => {
@@ -214,6 +221,84 @@ describe('buildFilteredWorkbook', () => {
     )
     expect(labelledRow(summary, 'Expense').getCell(3).value).toBe(note)
     expect(labelledRow(summary, 'Net Income').getCell(3).value).toBe(note)
+  })
+
+  it('stays two sheets — none of the Phase 6 planning sheets joins a filtered export', async () => {
+    const s = await setup()
+    // Records on four of the six new sheets, so their absence below is a
+    // decision rather than an empty database.
+    await prisma.savingsGoal.create({
+      data: {
+        userId: s.userId,
+        name: 'Emergency fund',
+        targetAmount: 10_000_000,
+        currency: 'VND',
+      },
+    })
+    await prisma.debt.create({
+      data: {
+        userId: s.userId,
+        direction: 'RECEIVABLE',
+        person: 'An',
+        originalAmount: 1_000_000,
+        currency: 'VND',
+      },
+    })
+    await prisma.loan.create({
+      data: {
+        userId: s.userId,
+        lender: 'Sacombank',
+        principal: 1_000_000,
+        currency: 'VND',
+        interestRate: '7.125',
+        startDate: new Date('2026-01-01T00:00:00Z'),
+        termMonths: 12,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: 90_000,
+        nextDueDate: new Date('2026-04-01T00:00:00Z'),
+        dueDayOfMonth: 1,
+      },
+    })
+    await prisma.recurringReminder.create({
+      data: {
+        userId: s.userId,
+        title: 'Rent',
+        type: 'EXPENSE',
+        expectedAmount: 5_000_000,
+        currency: 'VND',
+        frequency: 'MONTHLY',
+        interval: 1,
+        dayOfMonth: 1,
+        // Local midnight on 1 March 2026 in the zone the schedule is anchored
+        // to — the two always travel together (ruling R6-22).
+        startDate: new Date('2026-02-28T17:00:00Z'),
+        timezone: 'Asia/Ho_Chi_Minh',
+      },
+    })
+
+    const range = resolveReportRange(
+      { period: 'custom', from: '2026-03-01', to: '2026-03-31' },
+      TEST_TIMEZONE,
+    )
+    const ctx = await makeExportContext(s.userId, { providerOverride: fakeFxProvider() })
+    const workbook = await buildFilteredWorkbook(ctx, range)
+
+    // A goal, a debt, a loan and a reminder belong to no report range at all —
+    // a deadline in December says nothing about March, and a debt's outstanding
+    // amount is a *current* figure, not a windowed one. So the filtered
+    // workbook is what it has always been, and "Export all data" is where the
+    // planning sheets live (spec §12).
+    expect(workbook.worksheets.map((w) => w.name)).toEqual(['Summary', 'Transactions'])
+    for (const name of [
+      'Savings Goals',
+      'Debts',
+      'Debt Payments',
+      'Loans',
+      'Loan Payments',
+      'Reminders',
+    ]) {
+      expect(workbook.getWorksheet(name)).toBeUndefined()
+    }
   })
 
   it('says on the sheet that transfers are not in a filtered export', async () => {

@@ -1,7 +1,11 @@
 import {
   ArrowLeftRight,
+  BellRing,
   ChartColumn,
+  HandCoins,
+  Landmark,
   LayoutDashboard,
+  PiggyBank,
   Receipt,
   Settings,
   Tags,
@@ -14,8 +18,13 @@ import {
  * The application's navigation, in one place, so the desktop rail and the
  * mobile bar can never drift apart about what exists or where it lives.
  *
- * Only routes that exist are listed — Budgets is here now that Phase 5 has
- * shipped `/budgets`.
+ * Only routes that exist are listed — Budgets since Phase 5 shipped
+ * `/budgets`, Savings since Phase 6's first group shipped `/goals`, Debts
+ * since its third group shipped `/debts`, Loans since its fifth group shipped
+ * `/loans`, and Reminders now that its seventh group has shipped
+ * `/reminders`. The mobile tab bar is unchanged: `MOBILE_TAB_HREFS` names the
+ * four routes it shows, so Savings, Debts, Loans and Reminders join the "More"
+ * menu on their own.
  */
 export interface NavItem {
   href: string
@@ -29,13 +38,17 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight },
   { href: '/accounts', label: 'Accounts', icon: Wallet },
   { href: '/budgets', label: 'Budgets', icon: Target },
+  { href: '/goals', label: 'Savings', icon: PiggyBank },
+  { href: '/debts', label: 'Debts', icon: HandCoins },
+  { href: '/loans', label: 'Loans', icon: Landmark },
+  { href: '/reminders', label: 'Reminders', icon: BellRing },
   { href: '/categories', label: 'Categories', icon: Tags },
   { href: '/reports', label: 'Reports', icon: ChartColumn },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 /**
- * The four the mobile tab bar shows. A phone bar with eight targets is a bar
+ * The four the mobile tab bar shows. A phone bar with nine targets is a bar
  * with no targets: the rest live behind "More", which is a deliberate
  * prioritisation rather than a truncation of `NAV_ITEMS`.
  */

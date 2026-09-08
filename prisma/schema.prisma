@@ -156,6 +156,7 @@ model Category {
 
   transactions Transaction[]
   budgets      Budget[]
+  reminders    RecurringReminder[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -177,10 +178,11 @@ model FinancialAccount {
   status         RecordStatus @default(ACTIVE)
   createdAt      DateTime     @default(now())
 
-  accountType   AccountType   @relation(fields: [userId, accountTypeId], references: [userId, id])
+  accountType   AccountType         @relation(fields: [userId, accountTypeId], references: [userId, id])
   transactions  Transaction[]
-  transfersFrom Transfer[]    @relation("TransferFromAccount")
-  transfersTo   Transfer[]    @relation("TransferToAccount")
+  transfersFrom Transfer[]          @relation("TransferFromAccount")
+  transfersTo   Transfer[]          @relation("TransferToAccount")
+  reminders     RecurringReminder[]
 
   @@unique([userId, id])
   @@index([userId])
@@ -366,4 +368,463 @@ model Budget {
 
   @@unique([userId, id])
   @@index([userId, year, month])
+}
+
+enum SavingsGoalStatus {
+  ACTIVE
+  ACHIEVED
+  ARCHIVED
+}
+
+/// A manual savings target (spec §4.8). Tracking only — `currentProgress` is
+/// typed in by the user and is never derived from, or written to, any account.
+/// Nothing in `lib/server/services/savings-goal.ts` creates a Transaction or a
+/// Transfer, so a goal reaching its target moves no money and changes no
+/// balance; the two are related only in the user's head.
+///
+/// ACHIEVED is recomputed from progress >= target on every write (spec §5,
+/// "never store what can drift") rather than being a state the user sets, so
+/// raising a target past what is already saved reverts the goal to ACTIVE on
+/// its own. ARCHIVED is the one stored human decision, and it is terminal: an
+/// archived goal refuses further edits (`SavingsGoalArchivedError`).
+///
+/// `deadline` is a calendar date, not an instant: it is stored as the UTC
+/// midnight of the chosen day — a carrier — and never re-projected through a
+/// timezone. See `lib/datetime/calendar-date.ts` (ruling R6-7).
+///
+/// `currency` is the goal's own, and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3): the page renders each goal in the currency it was set
+/// in. Two invariants are database CHECK constraints in this model's migration,
+/// since Prisma's schema language has no CHECK syntax:
+/// `SavingsGoal_targetAmount_positive` (> 0) and
+/// `SavingsGoal_currentProgress_nonnegative` (>= 0). There is deliberately no
+/// `currentProgress <= targetAmount` CHECK — over-saving is a real thing that
+/// happens, and the UI clamps only the progress *bar*.
+model SavingsGoal {
+  id              String            @id @default(cuid())
+  userId          String
+  name            String
+  targetAmount    Decimal           @db.Decimal(18, 2)
+  currentProgress Decimal           @db.Decimal(18, 2) @default(0)
+  currency        Currency
+  deadline        DateTime?
+  note            String?
+  status          SavingsGoalStatus @default(ACTIVE)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
+
+enum DebtDirection {
+  RECEIVABLE
+  PAYABLE
+}
+
+/// Stored status is deliberately only ACTIVE | WRITTEN_OFF. OPEN,
+/// PARTIALLY_PAID, PAID and OVERDUE are all computable from the derived
+/// outstanding amount and the due date, and storing any of them would let them
+/// drift the moment a payment is recorded or a due date passes (spec §5,
+/// "never store what can drift"). Writing a debt off is the one genuine human
+/// decision here — "I am never getting this back" is not derivable from any
+/// figure — so it is the one thing stored.
+enum DebtStoredStatus {
+  ACTIVE
+  WRITTEN_OFF
+}
+
+/// Money someone owes the user (RECEIVABLE) or the user owes someone else
+/// (PAYABLE), spec §4.9. Tracking only: there is no foreign key and no code
+/// path from here to FinancialAccount or Transaction, so recording a repayment
+/// changes no balance — `lib/server/services/debt.ts` imports nothing that
+/// could, and `debt.test.ts` re-asserts the account counts and a derived
+/// balance after every mutation.
+///
+/// The outstanding amount is never stored: it is `originalAmount` minus the sum
+/// of this debt's `DebtPayment` rows, computed in `debt.ts`
+/// (`deriveDebtOutstanding`). A stored copy would be a second source of truth
+/// that a failed write, a deleted payment or a concurrent request could put out
+/// of step with the payments themselves.
+///
+/// `direction`, `originalAmount` and `currency` are immutable after creation
+/// (see `lib/validation/debt.ts`): they define *which* debt this is, and
+/// changing one after payments exist would rewrite history rather than correct
+/// it. Editing covers `person`, `description`, `dueDate` and `notes`.
+///
+/// `dueDate` is a calendar date, not an instant: stored as the UTC midnight of
+/// the chosen day — a carrier — and never re-projected through a timezone. An
+/// overdue check compares `formatCalendarDate(dueDate)` against
+/// `todayCalendarDateInZone(user.timezone)`; see `lib/datetime/calendar-date.ts`
+/// (ruling R6-7).
+///
+/// `currency` is the debt's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). `Debt_originalAmount_positive` (> 0) is a database
+/// CHECK constraint in this model's migration, since Prisma's schema language
+/// has no CHECK syntax.
+model Debt {
+  id             String           @id @default(cuid())
+  userId         String
+  direction      DebtDirection
+  person         String
+  description    String?
+  originalAmount Decimal          @db.Decimal(18, 2)
+  currency       Currency
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  dueDate        DateTime?
+  status         DebtStoredStatus @default(ACTIVE)
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  payments DebtPayment[]
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
+
+/// One repayment recorded against a Debt (spec §4.9). It inherits the debt's
+/// currency — there are no cross-currency debt payments in the MVP, so a
+/// payment carries no currency column of its own and no FX snapshot.
+///
+/// The composite `(userId, debtId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: a payment can never point at
+/// another user's debt (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+///
+/// `date` is a calendar date carrier, like `Debt.dueDate` — "I was paid back on
+/// the 12th" names a day, not a moment. `DebtPayment_amount_positive` (> 0) is
+/// a database CHECK constraint in this model's migration.
+model DebtPayment {
+  id        String   @id @default(cuid())
+  userId    String
+  debtId    String
+  amount    Decimal  @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  date      DateTime
+  note      String?
+  createdAt DateTime @default(now())
+
+  debt Debt @relation(fields: [userId, debtId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, debtId, date])
+}
+
+/// Stored status is deliberately only ACTIVE | CLOSED. PAID_OFF and OVERDUE are
+/// both computable — from the derived outstanding principal and from
+/// `nextDueDate` against the user's today — and storing either would let it
+/// drift the moment a payment lands or a day passes (spec §5, "never store what
+/// can drift"). Closing a loan is the one genuine human decision here ("this
+/// agreement is finished", whether it was repaid, refinanced or forgiven), so it
+/// is the one thing stored — and it is terminal.
+enum LoanStoredStatus {
+  ACTIVE
+  CLOSED
+}
+
+/// How often an instalment falls due. The advancement arithmetic for each lives
+/// in `lib/datetime/add-months-clamped.ts` (`advanceByFrequency`), whose
+/// `PaymentFrequency` union mirrors this enum by hand so the browser bundle
+/// never pulls in the Prisma client.
+enum PaymentFrequency {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+/// A loan the user owes (spec §4.10). Tracking only: there is no foreign key and
+/// no code path from here to FinancialAccount or Transaction, so recording an
+/// instalment changes no balance — `lib/server/services/loan.ts` imports nothing
+/// that could, and `loan.test.ts` re-asserts the account counts and a derived
+/// balance after every mutation.
+///
+/// Outstanding principal is never stored: it is `principal` minus the sum of
+/// this loan's `LoanPayment.principalAmount` values, computed in `loan.ts`
+/// (`deriveLoanOutstandingPrincipal`). A stored copy would be a second source of
+/// truth that a rolled-back write, a deleted payment or a concurrent request
+/// could put out of step with the payment rows themselves.
+///
+/// `dueDayOfMonth` is the schedule's anchor: the day the user's instalments fall
+/// on, captured from the first `nextDueDate`, so a loan due on the 31st goes
+/// Jan 31 → Feb 28 → Mar 31 instead of drifting to the 28th for good (ruling
+/// R6-6a). It is ignored for a WEEKLY loan, which has no day of the month.
+///
+/// `interestRate` is percent per year and purely informational: nothing in this
+/// app computes interest or an amortisation schedule from it — the user reads
+/// their instalment off their own loan statement and types the principal and
+/// interest parts in. Storing it makes the loan's own terms visible next to its
+/// history; deriving anything from it would be inventing figures the bank did
+/// not charge.
+///
+/// `principal`, `currency`, `startDate`, `termMonths`, `paymentFrequency` and
+/// `interestRate` are immutable after creation (see `lib/validation/loan.ts`):
+/// they define *which* loan this is, and changing one after payments exist would
+/// re-interpret that history against terms the loan never had. Editing covers
+/// `lender`, `scheduledPaymentAmount` and `notes`.
+///
+/// `startDate` and `nextDueDate` are calendar dates, not instants: stored as the
+/// UTC midnight of the chosen day — carriers — and never re-projected through a
+/// timezone (ruling R6-7, `lib/datetime/calendar-date.ts`). An overdue check
+/// compares `formatCalendarDate(nextDueDate)` against
+/// `todayCalendarDateInZone(user.timezone)`.
+///
+/// `currency` is the loan's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). Five invariants are database CHECK constraints in this
+/// model's migration, since Prisma's schema language has no CHECK syntax:
+/// `Loan_principal_positive` (> 0), `Loan_interestRate_nonnegative` (>= 0),
+/// `Loan_termMonths_positive` (> 0), `Loan_scheduledPaymentAmount_positive`
+/// (> 0) and `Loan_dueDayOfMonth_range` (1–31).
+model Loan {
+  id                     String           @id @default(cuid())
+  userId                 String
+  lender                 String
+  principal              Decimal          @db.Decimal(18, 2)
+  currency               Currency
+  /// Percent per year, informational only — no interest is ever computed here.
+  interestRate           Decimal          @db.Decimal(6, 3)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  startDate              DateTime
+  termMonths             Int
+  paymentFrequency       PaymentFrequency
+  scheduledPaymentAmount Decimal          @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7). Advanced
+  /// by exactly one interval inside the same transaction as each payment.
+  nextDueDate            DateTime
+  /// The schedule's anchor day, 1–31, captured from the first `nextDueDate`.
+  dueDayOfMonth          Int
+  status                 LoanStoredStatus @default(ACTIVE)
+  notes                  String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  payments LoanPayment[]
+
+  @@unique([userId, id])
+  @@index([userId, status])
+}
+
+/// One instalment recorded against a Loan (spec §4.10). It inherits the loan's
+/// currency — there are no cross-currency loan payments in the MVP, so a payment
+/// carries no currency column of its own and no FX snapshot.
+///
+/// `totalAmount = principalAmount + interestAmount`, enforced three times over:
+/// by Zod before the request is trusted (`lib/validation/loan.ts`), by a
+/// `Prisma.Decimal` re-check inside the locked transaction, and by the
+/// `LoanPayment_total_matches_split` CHECK in this model's migration. Only
+/// `principalAmount` reduces the outstanding principal; interest is the cost of
+/// the loan and reduces nothing. An interest-only instalment
+/// (`principalAmount = 0`) is legitimate and accepted (ruling R6-6), so the
+/// CHECKs are `principalAmount >= 0`, `interestAmount >= 0` and
+/// `totalAmount > 0`.
+///
+/// The composite `(userId, loanId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: a payment can never point at
+/// another user's loan (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+model LoanPayment {
+  id              String   @id @default(cuid())
+  userId          String
+  loanId          String
+  totalAmount     Decimal  @db.Decimal(18, 2)
+  principalAmount Decimal  @db.Decimal(18, 2)
+  interestAmount  Decimal  @db.Decimal(18, 2)
+  /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
+  paymentDate     DateTime
+  note            String?
+  createdAt       DateTime @default(now())
+
+  loan Loan @relation(fields: [userId, loanId], references: [userId, id])
+
+  @@unique([userId, id])
+  @@index([userId, loanId, paymentDate])
+}
+
+/// Whether a reminder is money coming in or going out. Mirrors `CategoryType`
+/// value for value on purpose: a reminder's `type` is what a linked `Category`
+/// has to match (`reminder.ts` refuses an INCOME category on an EXPENSE
+/// reminder), so a divergence between the two enums would make that check
+/// meaningless. It is a separate enum rather than a reuse because the two
+/// concepts are separate — a later phase adding a transfer-shaped reminder
+/// would widen this one and must not widen categories.
+enum ReminderType {
+  INCOME
+  EXPENSE
+}
+
+/// How often a reminder recurs. ONE_TIME is a member rather than a null
+/// `frequency` so "remind me once, on the 14th" is a first-class schedule
+/// instead of a special case every query has to remember to handle — and it is
+/// the one frequency whose backfill window is never clamped (directive O; see
+/// `lib/server/services/recurrence.ts`).
+///
+/// `lib/server/services/recurrence.ts` mirrors this enum by hand as a string
+/// union so the recurrence arithmetic stays free of a Prisma import, exactly as
+/// `PaymentFrequency` is mirrored in `lib/datetime/add-months-clamped.ts`.
+enum RecurrenceFrequency {
+  ONE_TIME
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+/// What the user has done about one due instance. PENDING is the only state
+/// materialization ever writes; the other two are the user's own answer to
+/// "have you dealt with this?".
+///
+/// "Overdue" is deliberately **not** a member: it is a derived display flag —
+/// PENDING, with `dueAt`'s calendar day in the viewer's zone before the viewer's
+/// own today (`lib/ui/reminder-view-model.ts`) — and storing it would need a
+/// background job to keep it true and would be wrong for every reader in a
+/// different timezone (spec §4.7, §5 "never store what can drift").
+enum OccurrenceStatus {
+  PENDING
+  ACKNOWLEDGED
+  DISMISSED
+}
+
+/// A recurring financial reminder or bill (spec §4.7). Never a Transaction: when
+/// an occurrence is due it is shown in-app, and acknowledging or dismissing it
+/// changes only the occurrence. `startDate` is the instant of LOCAL midnight on
+/// the chosen day in `timezone` — the zone recorded on this row, not whatever
+/// the user's profile says today (ruling R6-22) — and every `dueAt` is likewise
+/// a local midnight in it, so "due on the 1st" means the 1st where the user
+/// lived when they set the reminder up.
+///
+/// This one model is both of the product spec's "Recurring Financial Reminders"
+/// and "Bill Reminders": read side by side they describe the same mechanism, and
+/// Bills is the `type = EXPENSE` view of it (spec §4.7's design decision).
+///
+/// Tracking only, like `Debt` and `Loan`: there is no foreign key and no code
+/// path from here to `Transaction` or `Transfer`, so no reminder can ever move
+/// money. `accountId` is which account the user *expects* to pay from — a label
+/// on the reminder, not a link that debits anything — and
+/// `lib/server/services/reminder.ts` imports nothing that could write to a
+/// ledger (`reminder.test.ts` proves the absence both structurally and
+/// behaviourally).
+///
+/// `categoryId` and `accountId` are optional and carry composite
+/// `(userId, categoryId)` / `(userId, accountId)` foreign keys, so a reminder can
+/// never reference another user's category or account (spec §4.12) — an attempt
+/// raises P2003 even when the service is bypassed. `reminder.ts` additionally
+/// requires a linked category's `type` to match the reminder's and a linked
+/// account to be ACTIVE *at creation*; neither is re-checked later, because
+/// archiving a category must not freeze the reminders filed under it (the same
+/// rule `transaction.ts` applies).
+///
+/// `dayOfMonth` is the schedule's anchor day and is clamped down to each target
+/// month's length, so 31 means "the 31st, or the last day of a shorter month"
+/// and a reminder due at month end never decays to the 28th (ruling R6-6a's
+/// reasoning, applied here through `lib/datetime/add-months-clamped.ts`).
+/// `month` is 1–12 and is the YEARLY anchor month only; both are NULL for
+/// WEEKLY and ONE_TIME, where they would have no meaning.
+///
+/// `active` is a switch, not a status enum: pausing a reminder stops
+/// materialization producing new occurrences and nothing else — the ones already
+/// materialized stay exactly as they are, because they really were due.
+///
+/// `currency` is the reminder's own and `User.baseCurrency` never rewrites it
+/// (ledger ruling R5-3). Four invariants are database CHECK constraints in this
+/// model's migration, since Prisma's schema language has no CHECK syntax:
+/// `RecurringReminder_expectedAmount_positive` (> 0),
+/// `RecurringReminder_interval_min` (>= 1),
+/// `RecurringReminder_dayOfMonth_range` (NULL or 1–31) and
+/// `RecurringReminder_month_range` (NULL or 1–12).
+model RecurringReminder {
+  id             String              @id @default(cuid())
+  userId         String
+  title          String
+  type           ReminderType
+  expectedAmount Decimal             @db.Decimal(18, 2)
+  currency       Currency
+  categoryId     String?
+  accountId      String?
+  frequency      RecurrenceFrequency
+  interval       Int                 @default(1)
+  /// The anchor day 1–31, clamped to each month's length. MONTHLY/YEARLY only.
+  dayOfMonth     Int?
+  /// The anchor month 1–12 (not JavaScript's 0–11). YEARLY only.
+  month          Int?
+  /// The instant of LOCAL midnight on the first day the reminder can fall on,
+  /// in `timezone` below — never in the viewer's current zone.
+  startDate      DateTime
+  /// The IANA zone this schedule is anchored to — the user's zone at the moment
+  /// the reminder was created, e.g. `"Asia/Ho_Chi_Minh"`.
+  ///
+  /// Recorded on the row instead of read from `User.timezone` on each pass
+  /// because `User.timezone` is editable (ruling R6-22). Materialization derives
+  /// the local start day from `startDate` and writes each `dueAt` as local
+  /// midnight, so doing that in the *request's* zone would re-phase every
+  /// existing series the moment the profile changed: a monthly reminder stored
+  /// at `2025-12-31T17:00Z` reads as 31 December in `America/New_York`, and the
+  /// new `dueAt`s would be different instants from the stored ones — which
+  /// `@@unique([reminderId, dueAt])` cannot dedupe, leaving two PENDING rows for
+  /// one bill. A later profile change therefore never moves an existing series;
+  /// only *display* follows the viewer, and every page renders `dueAt` and
+  /// `startDate` in whatever zone the viewer is in now.
+  timezone       String
+  note           String?
+  active         Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  category    Category?            @relation(fields: [userId, categoryId], references: [userId, id])
+  account     FinancialAccount?    @relation(fields: [userId, accountId], references: [userId, id])
+  occurrences ReminderOccurrence[]
+
+  @@unique([userId, id])
+  @@index([userId, active])
+}
+
+/// One due instance, materialized lazily on read. `@@unique([reminderId, dueAt])`
+/// is what makes materialization idempotent under repeated and concurrent reads.
+///
+/// There is no cron and no background job (spec §4.7): reading the Reminders page
+/// or the dashboard widget computes each active reminder's due dates for a window
+/// around today and inserts the missing rows with
+/// `createMany({ skipDuplicates: true })`. The unique index is therefore not a
+/// safety net over an application check — it *is* the check, which is why two
+/// requests arriving at the same moment cannot produce a duplicate however they
+/// interleave.
+///
+/// Materialization only ever inserts. It never updates an existing row, so an
+/// ACKNOWLEDGED or DISMISSED occurrence can never be resurrected as PENDING by a
+/// later read — the property `reminder.test.ts` pins down directly.
+///
+/// `dueAt` is the instant of LOCAL midnight of the day the occurrence falls on,
+/// in the reminder's own `timezone` (17:00Z the previous day for
+/// `Asia/Ho_Chi_Minh`), so "due on the 1st" is the 1st where the user lives.
+///
+/// It is an instant rather than a calendar-date carrier because the *database*
+/// reasons about it: `@@unique([reminderId, dueAt])` is what makes lazy
+/// materialization idempotent, and `@@index([userId, status, dueAt])` is what
+/// orders the upcoming list — both need exactly one unambiguous value per due
+/// day, which a zone-resolved instant is and a carrier plus a zone is not.
+///
+/// Deciding whether an occurrence is *overdue* is a different comparison and it
+/// does not happen against `now`: `lib/ui/reminder-view-model.ts` reads `dueAt`
+/// as a calendar day in the viewer's zone and compares it with the user's own
+/// today, as dates — so a bill due today is never "late" merely because the
+/// server's clock has passed local midnight (ruling R6-7). Nothing stores an
+/// overdue flag.
+///
+/// The composite `(userId, reminderId)` foreign key is what makes cross-tenant
+/// reference impossible at the database level: an occurrence can never point at
+/// another user's reminder (spec §4.12), and an attempt raises P2003 even when it
+/// bypasses the service.
+model ReminderOccurrence {
+  id         String           @id @default(cuid())
+  userId     String
+  reminderId String
+  /// The instant of LOCAL midnight of the day this occurrence is due.
+  dueAt      DateTime
+  status     OccurrenceStatus @default(PENDING)
+  actionedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  reminder RecurringReminder @relation(fields: [userId, reminderId], references: [userId, id])
+
+  @@unique([reminderId, dueAt])
+  @@unique([userId, id])
+  @@index([userId, status, dueAt])
 }
