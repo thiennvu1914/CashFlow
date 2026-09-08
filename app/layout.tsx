@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Manrope } from 'next/font/google'
 import { NextIntlClientProvider } from 'next-intl'
 import { resolveLocale } from '@/lib/i18n/config'
+import { loadMessages } from '@/lib/i18n/messages'
 import { resolveTheme } from '@/lib/theme/config'
 import './globals.css'
 
@@ -31,9 +32,7 @@ export async function generateViewport(): Promise<Viewport> {
 
 export default async function RootLayout({ children }: LayoutProps<'/'>) {
   const [locale, theme] = await Promise.all([resolveLocale(), resolveTheme()])
-  // Task 2b (`lib/i18n/messages.ts` / `loadMessages`) has not run yet, so this
-  // keeps the flat per-locale JSON import for now; 2b swaps it for `loadMessages`.
-  const messages = (await import(`@/messages/${locale}.json`)).default
+  const messages = await loadMessages(locale)
 
   return (
     // The `dark` class is decided on the SERVER and shipped in the first HTML
