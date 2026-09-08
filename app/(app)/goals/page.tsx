@@ -1,11 +1,16 @@
+import { getTranslations } from 'next-intl/server'
+import { PiggyBank } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
+import { resolveLocale } from '@/lib/i18n/config'
 import { listAllSavingsGoals } from '@/lib/server/services/savings-goal'
 import { toSavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { GoalForm } from '@/components/goals/goal-form'
+import { GoalCreateButton } from '@/components/goals/goal-create-button'
 import { GoalList } from '@/components/goals/goal-list'
 import { GoalRowActions } from '@/components/goals/goal-row-actions'
+import { EmptyState } from '@/components/common/empty-state'
+import { PageHeader } from '@/components/common/page-header'
 
 /**
  * Savings (spec §4.8): manual targets, each in its own currency and never
@@ -38,6 +43,8 @@ export default async function GoalsPage() {
   // so this page redirects on its own. `user.id` scopes the only query below.
   const user = await requireUserOrRedirect()
   const { timezone } = resolveProfileDefaults(user)
+  const t = await getTranslations()
+  const locale = await resolveLocale()
   // The one place the user's zone enters: whether a deadline has passed is a
   // comparison of calendar dates, never of instants (ruling R6-7).
   const today = todayCalendarDateInZone(timezone, new Date())
@@ -46,42 +53,47 @@ export default async function GoalsPage() {
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders `SavingsGoalDto`s.
-  const dtos = goals.map((goal) => toSavingsGoalDto(goal, today))
+  const dtos = goals.map((goal) => toSavingsGoalDto(goal, today, locale))
   const active = dtos
     .filter((dto) => dto.status !== 'ARCHIVED')
     .sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status])
   const archived = dtos.filter((dto) => dto.status === 'ARCHIVED')
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <div className="flex flex-col gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Savings</h1>
-          <p className="text-sm text-muted-foreground">Manual targets — nothing here moves money</p>
+    <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('goals.title')}
+        description={t('goals.description')}
+        actions={<GoalCreateButton />}
+      />
+
+      {active.length === 0 ? (
+        <EmptyState
+          icon={PiggyBank}
+          size="page"
+          title={t('goals.emptyTitle')}
+          description={t('goals.emptyBody')}
+        />
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <GoalList
+            goals={active}
+            locale={locale}
+            timeZone={timezone}
+            renderActions={(goal) => <GoalRowActions goal={goal} />}
+          />
         </div>
-
-        {active.length === 0 ? (
-          <p className="text-sm text-foreground/60">No savings goals yet — add one below.</p>
-        ) : (
-          <GoalList goals={active} renderActions={(goal) => <GoalRowActions goal={goal} />} />
-        )}
-      </div>
-
-      <div id="new" className="scroll-mt-6">
-        <h2 className="mb-3 text-lg font-semibold">Add goal</h2>
-        <GoalForm />
-      </div>
+      )}
 
       {archived.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-foreground/60">
-            Archived goals ({archived.length})
+        <details className="rounded-lg border border-border bg-surface">
+          <summary className="cursor-pointer px-4 py-3 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+            {t('goals.archivedSection', { count: archived.length })}
           </summary>
-          {/* Read-only, like the archived accounts on `/accounts`: an archived
-              goal refuses every write (`SavingsGoalArchivedError`), so no
-              actions are offered here. */}
-          <div className="mt-3 opacity-70">
-            <GoalList goals={archived} />
+          {/* Read-only, like every other archived section in this app: an
+              archived goal refuses every write, so no actions are offered here. */}
+          <div className="border-t border-border opacity-70">
+            <GoalList goals={archived} locale={locale} timeZone={timezone} />
           </div>
         </details>
       )}

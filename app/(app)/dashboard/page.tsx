@@ -389,7 +389,11 @@ export default async function DashboardPage() {
               action={{ label: t('dashboard.emptyBudgetsAction'), href: '/budgets' }}
             />
           ) : (
-            <BudgetProgressList budgets={vm.budgets.slice(0, WIDGET_ROWS)} compact />
+            <BudgetProgressList
+              budgets={vm.budgets.slice(0, WIDGET_ROWS)}
+              locale={locale}
+              compact
+            />
           )}
         </ChartContainer>
 
@@ -415,7 +419,12 @@ export default async function DashboardPage() {
               action={{ label: t('dashboard.emptyGoalsAction'), href: '/goals' }}
             />
           ) : (
-            <GoalList goals={vm.savingsGoals.slice(0, WIDGET_ROWS)} compact />
+            <GoalList
+              goals={vm.savingsGoals.slice(0, WIDGET_ROWS)}
+              locale={locale}
+              timeZone={timezone}
+              compact
+            />
           )}
         </ChartContainer>
 
