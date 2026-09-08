@@ -171,26 +171,33 @@ export default async function DashboardPage() {
       listUpcomingOccurrences(user.id, timezone, now),
     ])
 
+  // Resolved before `buildDashboardViewModel`: every figure and chart-axis
+  // label it produces is locale-sensitive (fix round 1, finding 1), so the
+  // view model needs the reader's locale before it builds anything, not
+  // after.
+  const t = await getTranslations()
+  const locale = await resolveLocale()
+
   // The only place `Decimal` becomes `number`/`string` on this page. Everything
   // below renders DTOs; no component receives a `Decimal`, a `Date` or a
   // service type.
-  const vm = buildDashboardViewModel({
-    displayCurrency,
-    timezone,
-    now,
-    today,
-    position,
-    monthly,
-    cashFlowTrend,
-    balanceOverTime,
-    recentTransactions,
-    budgets,
-    goals,
-    occurrences,
-  })
-
-  const t = await getTranslations()
-  const locale = await resolveLocale()
+  const vm = buildDashboardViewModel(
+    {
+      displayCurrency,
+      timezone,
+      now,
+      today,
+      position,
+      monthly,
+      cashFlowTrend,
+      balanceOverTime,
+      recentTransactions,
+      budgets,
+      goals,
+      occurrences,
+    },
+    locale,
+  )
 
   /** Every summary label and hint, translated once for the panel. */
   const summaryLabels = {
@@ -249,6 +256,16 @@ export default async function DashboardPage() {
               currency={vm.displayCurrency}
               locale={locale}
               height={CHART_HEIGHT.tall}
+              summary={t('dashboard.cashFlowTrendSummary', {
+                currency: vm.displayCurrency,
+                from: vm.cashFlowTrend[0]?.label ?? '',
+                to: vm.cashFlowTrend.at(-1)?.label ?? '',
+              })}
+              seriesLabels={{
+                income: t('dashboard.chartSeriesIncome'),
+                expense: t('dashboard.chartSeriesExpense'),
+                netIncome: t('dashboard.netIncome'),
+              }}
             />
           )}
         </ChartContainer>
@@ -269,6 +286,11 @@ export default async function DashboardPage() {
               currency={vm.displayCurrency}
               locale={locale}
               height={CHART_HEIGHT.tall}
+              summary={t('dashboard.expenseByCategorySummary', {
+                count: vm.expenseByCategory.length,
+                currency: vm.displayCurrency,
+              })}
+              seriesLabel={t('dashboard.chartSeriesSpent')}
             />
           )}
         </ChartContainer>
@@ -303,6 +325,13 @@ export default async function DashboardPage() {
               currency={vm.displayCurrency}
               locale={locale}
               height={CHART_HEIGHT.medium}
+              summary={
+                t('dashboard.balanceOverTimeSummary', { currency: vm.displayCurrency }) +
+                t('dashboard.balanceOverTimeGapsSuffix', {
+                  count: vm.balanceOverTime.filter((point) => point.balance === null).length,
+                })
+              }
+              seriesLabel={t('dashboard.chartSeriesAccountBalance')}
             />
           )}
         </ChartContainer>
@@ -322,6 +351,14 @@ export default async function DashboardPage() {
               currency={vm.displayCurrency}
               locale={locale}
               height={CHART_HEIGHT.medium}
+              summary={t('dashboard.incomeVsExpenseSummary', {
+                currency: vm.displayCurrency,
+                periods: vm.incomeVsExpense.map((row) => row.period).join(', '),
+              })}
+              seriesLabels={{
+                income: t('dashboard.chartSeriesIncome'),
+                expense: t('dashboard.chartSeriesExpense'),
+              }}
             />
           )}
         </ChartContainer>
@@ -345,6 +382,11 @@ export default async function DashboardPage() {
               currency={vm.displayCurrency}
               locale={locale}
               height={CHART_HEIGHT.short}
+              summary={t('dashboard.accountDistributionSummary', {
+                count: vm.distribution.length,
+                currency: vm.displayCurrency,
+              })}
+              seriesLabel={t('dashboard.chartSeriesBalance')}
             />
           )}
         </ChartContainer>

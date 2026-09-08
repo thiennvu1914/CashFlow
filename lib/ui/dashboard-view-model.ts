@@ -1,6 +1,7 @@
 import { Prisma, type TransactionType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
+import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
@@ -10,6 +11,7 @@ import type { OccurrenceRow } from '@/lib/server/services/reminder'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import type { listTransactions } from '@/lib/server/services/transaction'
 import { type BudgetProgressDto, toBudgetProgressDto } from './budget-view-model'
+import { formatDate } from './format-date'
 import { formatMoney, formatRate } from './format-money'
 import { type OccurrenceDto, toOccurrenceDto } from './reminder-view-model'
 import { type SavingsGoalDto, toSavingsGoalDto } from './savings-goal-view-model'
@@ -309,7 +311,18 @@ const WIDGET_ROW_LIMIT = 5
  */
 const WIDGET_OVERDUE_ROW_LIMIT = 2
 
-export function buildDashboardViewModel(input: DashboardInput): DashboardViewModel {
+export function buildDashboardViewModel(
+  input: DashboardInput,
+  /**
+   * The reader's locale (fix round 1, finding 1). Optional and trailing,
+   * defaulting to `vi`, so no existing caller or test moves — `formatMoney`/
+   * `formatRate`/`formatDate` all take the same optional-trailing-locale
+   * shape for the same reason. Every figure and chart-axis label this
+   * function produces threads it through; the page passes the resolved
+   * locale once it has one (`resolveLocale()`).
+   */
+  locale: Locale = DEFAULT_LOCALE,
+): DashboardViewModel {
   const {
     displayCurrency: currency,
     timezone,
@@ -330,7 +343,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     if (!position || value === undefined) {
       return { labelKey, value: null, hintKey: FX_UNAVAILABLE_HINT_KEY, negative: false }
     }
-    return { labelKey, value: formatMoney(value, currency), negative: value.isNegative() }
+    return { labelKey, value: formatMoney(value, currency, locale), negative: value.isNegative() }
   }
 
   // Net Worth FIRST: it is the panel's dominant figure (spec §6.1), with Total
@@ -342,19 +355,19 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     positionKpi('dashboard.totalBalance', position?.totalBalance),
     {
       labelKey: 'dashboard.monthlyIncome',
-      value: formatMoney(monthly.income, currency),
+      value: formatMoney(monthly.income, currency, locale),
       negative: false,
     },
     // Expense is stored and aggregated as a positive magnitude, so it is never
     // "negative" — red by meaning, not by sign, and the panel does not colour it.
     {
       labelKey: 'dashboard.monthlyExpense',
-      value: formatMoney(monthly.expense, currency),
+      value: formatMoney(monthly.expense, currency, locale),
       negative: false,
     },
     {
       labelKey: 'dashboard.netIncome',
-      value: formatMoney(monthly.netIncome, currency),
+      value: formatMoney(monthly.netIncome, currency, locale),
       negative: monthly.netIncome.isNegative(),
     },
   ]
@@ -375,9 +388,14 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     displayCurrency: currency,
     monthStart: now,
     kpis,
-    fxStatus: buildFxStatus(position, timezone),
+    fxStatus: buildFxStatus(position, timezone, locale),
+    // `monthShort`/`monthYearShort` (fix round 1, finding 2): a plain
+    // `formatInTimeZone(..., 'LLL')` always formats in date-fns' own default
+    // locale (English) regardless of the reader's — the exact bug this fix
+    // exists for, since "Apr … Sep" ticks under a Vietnamese dashboard is
+    // exactly the kind of un-translated surface the rest of this task removes.
     cashFlowTrend: cashFlowTrend.map((point) => ({
-      label: formatInTimeZone(point.startUtc, timezone, 'LLL'),
+      label: formatDate(point.startUtc, { locale, timeZone: timezone, style: 'monthShort' }),
       income: point.income.toNumber(),
       expense: point.expense.toNumber(),
       netIncome: point.netIncome.toNumber(),
@@ -389,12 +407,12 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     // shorter than two points yields whatever it has rather than a fabricated
     // zero month.
     incomeVsExpense: cashFlowTrend.slice(-2).map((point) => ({
-      period: formatInTimeZone(point.startUtc, timezone, 'LLL yyyy'),
+      period: formatDate(point.startUtc, { locale, timeZone: timezone, style: 'monthYearShort' }),
       income: point.income.toNumber(),
       expense: point.expense.toNumber(),
     })),
     balanceOverTime: balanceOverTime.map((point) => ({
-      label: formatInTimeZone(point.asOf, timezone, 'LLL'),
+      label: formatDate(point.asOf, { locale, timeZone: timezone, style: 'monthShort' }),
       // Preserved as `null`, never coerced to 0: a month with no known rate is
       // a hole in the line, and a zero would draw a cliff that never happened.
       balance: point.balance === null ? null : point.balance.toNumber(),
@@ -432,7 +450,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
         // The sign is derived from `type` here and prefixed to the formatted
         // magnitude — `amount` itself is always positive and no arithmetic
         // negates it.
-        amount: `${positive ? '+' : '−'}${formatMoney(tx.amount, tx.currency)}`,
+        amount: `${positive ? '+' : '−'}${formatMoney(tx.amount, tx.currency, locale)}`,
         currency: tx.currency,
         positive,
       }
@@ -466,9 +484,9 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       position === null
         ? null
         : {
-            receivables: formatMoney(position.receivables, currency),
-            payables: formatMoney(position.payables, currency),
-            loanOutstanding: formatMoney(position.loanOutstanding, currency),
+            receivables: formatMoney(position.receivables, currency, locale),
+            payables: formatMoney(position.payables, currency, locale),
+            loanOutstanding: formatMoney(position.loanOutstanding, currency, locale),
           },
     // At most two overdue rows, then whatever is genuinely coming, five in all.
     // The single `slice` at the end is what makes the overdue half a *cap*
@@ -486,14 +504,18 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
   }
 }
 
-function buildFxStatus(position: CurrentPosition | null, timezone: string): FxStatus {
+function buildFxStatus(
+  position: CurrentPosition | null,
+  timezone: string,
+  locale: Locale,
+): FxStatus {
   // A null position means the conversion was required and refused — distinct
   // from a position that simply never needed one.
   if (position === null) return { kind: 'unavailable' }
   if (position.fx === null) return { kind: 'not-needed' }
   const { fx } = position
   const details: FxRateDetails = {
-    rate: formatRate(fx.rateDecimal),
+    rate: formatRate(fx.rateDecimal, locale),
     // The rate's own day, in UTC: `effectiveDate` is a UTC start-of-day marker
     // (see the `ExchangeRate` model), not an instant to re-project.
     effectiveDate: formatInTimeZone(fx.effectiveDate, 'UTC', 'yyyy-MM-dd'),

@@ -24,23 +24,29 @@ import {
  * along a left-hand axis without a legend, a leader line or a colour key. The
  * service already ordered the rows (with an id tiebreak), so the chart draws
  * them in the order it was given.
+ *
+ * `summary` and `seriesLabel` arrive already translated from the page (fix
+ * round 1, finding 2) — see `CashFlowTrendChart`'s doc comment for why.
  */
 export function ExpenseByCategoryChart({
   data,
   currency,
   locale,
   height,
+  summary,
+  seriesLabel,
 }: {
   data: NamedAmountDto[]
   currency: Currency
   locale: Locale
   height: number
+  /** The chart's accessible name, fully translated and interpolated by the page. */
+  summary: string
+  /** Translated Tooltip series name (the bar has no Legend). */
+  seriesLabel: string
 }) {
   return (
-    <div
-      role="img"
-      aria-label={`Horizontal bar chart of this month's expenses by category in ${currency}, ${data.length} categories, largest first`}
-    >
+    <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
@@ -60,7 +66,7 @@ export function ExpenseByCategoryChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name="Spent" fill={CHART_COLORS.expense} />
+          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.expense} />
         </BarChart>
       </ResponsiveContainer>
     </div>

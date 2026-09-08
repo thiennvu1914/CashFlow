@@ -336,6 +336,22 @@ describe('buildDashboardViewModel', () => {
     expect(vm.kpis[0].hintKey).toBe('dashboard.fxUnavailableHint')
   })
 
+  it('formats every figure with the reader’s locale, not always vi (fix round 1, finding 1)', () => {
+    // The optional trailing `locale` parameter, defaulting to `vi` — every
+    // other test in this file calls `buildDashboardViewModel` with no second
+    // argument and still gets the vi grouping it always has, which is the
+    // whole point of a default.
+    const vm = buildDashboardViewModel(makeInput(), 'en')
+
+    const netWorth = vm.kpis.find((k) => k.labelKey === 'dashboard.netWorth')
+    // vi would read '12.000.000' (period-grouped) — en groups with commas.
+    expect(netWorth?.value).toBe('12,000,000')
+
+    const [expenseRow] = vm.recentTransactions
+    // vi would read '−250.000'.
+    expect(expenseRow.amount).toBe('−250,000')
+  })
+
   it('never puts a raw transaction type in a recent-transaction row', () => {
     const vm = buildDashboardViewModel(makeInput())
     for (const row of vm.recentTransactions) {
@@ -414,8 +430,8 @@ describe('buildDashboardViewModel', () => {
     const vm = buildDashboardViewModel(makeInput())
 
     expect(vm.balanceOverTime).toEqual([
-      { label: 'Aug', balance: null },
-      { label: 'Sep', balance: 12000000 },
+      { label: 'Tháng 8', balance: null },
+      { label: 'Tháng 9', balance: 12000000 },
     ])
   })
 
@@ -423,8 +439,8 @@ describe('buildDashboardViewModel', () => {
     const vm = buildDashboardViewModel(makeInput())
 
     expect(vm.incomeVsExpense).toEqual([
-      { period: 'Aug 2026', income: 20000000, expense: 25000000 },
-      { period: 'Sep 2026', income: 30000000, expense: 8000000 },
+      { period: 'thg 8 2026', income: 20000000, expense: 25000000 },
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
     ])
   })
 
@@ -446,8 +462,8 @@ describe('buildDashboardViewModel', () => {
     // Three points in, two bars out — the *last* two, and July is not one of them.
     expect(vm.cashFlowTrend).toHaveLength(3)
     expect(vm.incomeVsExpense).toEqual([
-      { period: 'Aug 2026', income: 20000000, expense: 25000000 },
-      { period: 'Sep 2026', income: 30000000, expense: 8000000 },
+      { period: 'thg 8 2026', income: 20000000, expense: 25000000 },
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
     ])
     // The comparison's right-hand bar and the trend's final point are the same
     // window, so they cannot disagree.
@@ -461,7 +477,9 @@ describe('buildDashboardViewModel', () => {
     const vm = buildDashboardViewModel({ ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) })
 
     // One point, one bar — never an invented zero month beside it.
-    expect(vm.incomeVsExpense).toEqual([{ period: 'Sep 2026', income: 30000000, expense: 8000000 }])
+    expect(vm.incomeVsExpense).toEqual([
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
+    ])
   })
 
   it('takes Expense by Category from the same month aggregate as the KPIs', () => {

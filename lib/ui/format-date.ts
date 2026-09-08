@@ -22,7 +22,8 @@ import { INTL_LOCALE, type Locale } from '@/lib/i18n/locale'
  * a locale decision (`09/09/2026` vs `Sep 9, 2026`) and a token string
  * hard-codes one language's order into every language.
  */
-export type DateStyle = 'date' | 'dateTime' | 'monthYear' | 'weekday' | 'dayMonth'
+export type DateStyle =
+  'date' | 'dateTime' | 'monthYear' | 'weekday' | 'dayMonth' | 'monthShort' | 'monthYearShort'
 
 const CARRIER_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
@@ -38,6 +39,16 @@ const OPTIONS: Record<DateStyle, Intl.DateTimeFormatOptions> = {
   monthYear: { year: 'numeric', month: 'long' },
   weekday: { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit' },
   dayMonth: { month: '2-digit', day: '2-digit' },
+  // The dashboard's chart axis ticks (spec §14 fix round 1, finding 2): a
+  // trend/balance chart's x-axis needs a label short enough for six ticks
+  // across an 8/12-width chart — `monthYear`'s long form ("tháng 9 năm 2026")
+  // is the header's sentence, not a tick. `month: 'short'` is the shortest
+  // locale-correct form `Intl` gives either language.
+  monthShort: { month: 'short' },
+  // The Income vs Expense comparison's two bar labels ("Aug 2026" / "thg 8
+  // 2026") — same reasoning, with the year so two different Augusts a year
+  // apart could never look identical.
+  monthYearShort: { month: 'short', year: 'numeric' },
 }
 
 /**

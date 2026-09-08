@@ -31,28 +31,31 @@ import {
  * ever measured. The page decides when NOTHING is known and shows its own
  * `EmptyState` instead of this component (spec §6.1: an empty balance history
  * is an empty state, never a flat zero line).
+ *
+ * `summary` and `seriesLabel` arrive already translated from the page (fix
+ * round 1, finding 2) — see `CashFlowTrendChart`'s doc comment for why. The
+ * gap count is already folded into `summary` by the page, since the exact
+ * gap wording is a pluralised sentence and belongs with the translator.
  */
 export function AccountBalanceHistoryChart({
   data,
   currency,
   locale,
   height,
+  summary,
+  seriesLabel,
 }: {
   data: BalancePointDto[]
   currency: Currency
   locale: Locale
   height: number
+  /** The chart's accessible name, fully translated and interpolated by the page. */
+  summary: string
+  /** Translated Tooltip series name (the line has no Legend). */
+  seriesLabel: string
 }) {
-  const known = data.filter((point) => point.balance !== null)
-  const gaps = data.length - known.length
-
   return (
-    <div
-      role="img"
-      aria-label={`Line chart of total account balance in ${currency} at each month end${
-        gaps > 0 ? `, with ${gaps} month(s) missing a historical rate shown as gaps` : ''
-      }`}
-    >
+    <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
@@ -75,7 +78,7 @@ export function AccountBalanceHistoryChart({
           <Line
             {...LINE_PROPS}
             dataKey="balance"
-            name="Account balance"
+            name={seriesLabel}
             stroke={CHART_COLORS.balance}
             connectNulls={false}
             // A gap is only visible as a gap if its neighbours are drawn; with

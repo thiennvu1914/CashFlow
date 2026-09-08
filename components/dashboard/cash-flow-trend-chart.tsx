@@ -33,25 +33,33 @@ import {
  * DTO boundary — so nothing financial is computed on the client. The empty
  * state is the page's call now (Step 8): a chart with genuinely nothing to
  * plot never reaches this component.
+ *
+ * `summary` and `seriesLabels` arrive already translated from the page (fix
+ * round 1, finding 2): a client component has no `getTranslations`, and this
+ * one already receives every other locale-sensitive value as a prop
+ * (`locale` itself only reaches `formatCompactAmount`/`formatChartValue`), so
+ * the aria-label sentence and the Legend/Tooltip series names follow the same
+ * pattern rather than hard-coding English.
  */
 export function CashFlowTrendChart({
   data,
   currency,
   locale,
   height,
+  summary,
+  seriesLabels,
 }: {
   data: TrendPointDto[]
   currency: Currency
   locale: Locale
   height: number
+  /** The chart's accessible name, fully translated and interpolated by the page. */
+  summary: string
+  /** Translated Legend/Tooltip series names. */
+  seriesLabels: { income: string; expense: string; netIncome: string }
 }) {
-  const span = data.length > 0 ? `${data[0].label} to ${data[data.length - 1].label}` : ''
-
   return (
-    <div
-      role="img"
-      aria-label={`Line chart of monthly income, expense and net income in ${currency}, ${span}`}
-    >
+    <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
@@ -72,9 +80,24 @@ export function CashFlowTrendChart({
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
           <Legend iconType="plainline" wrapperStyle={{ fontSize: '0.7rem' }} />
-          <Line {...LINE_PROPS} dataKey="income" name="Income" stroke={CHART_COLORS.income} />
-          <Line {...LINE_PROPS} dataKey="expense" name="Expense" stroke={CHART_COLORS.expense} />
-          <Line {...LINE_PROPS} dataKey="netIncome" name="Net Income" stroke={CHART_COLORS.net} />
+          <Line
+            {...LINE_PROPS}
+            dataKey="income"
+            name={seriesLabels.income}
+            stroke={CHART_COLORS.income}
+          />
+          <Line
+            {...LINE_PROPS}
+            dataKey="expense"
+            name={seriesLabels.expense}
+            stroke={CHART_COLORS.expense}
+          />
+          <Line
+            {...LINE_PROPS}
+            dataKey="netIncome"
+            name={seriesLabels.netIncome}
+            stroke={CHART_COLORS.net}
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>

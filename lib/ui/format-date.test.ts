@@ -42,6 +42,23 @@ describe('formatDate', () => {
     ).toBe('Sep 9, 2026')
   })
 
+  it('formats a short month for a chart axis tick, in either locale', () => {
+    // 2026-09-08T17:30Z is 2026-09-09 00:30 in Ho Chi Minh City — September.
+    expect(formatDate(INSTANT, { locale: 'en', timeZone: HCM, style: 'monthShort' })).toBe('Sep')
+    expect(formatDate(INSTANT, { locale: 'vi', timeZone: HCM, style: 'monthShort' })).toBe(
+      'Tháng 9',
+    )
+  })
+
+  it('formats a short month and year for a comparison-chart bar label', () => {
+    expect(formatDate(INSTANT, { locale: 'en', timeZone: HCM, style: 'monthYearShort' })).toBe(
+      'Sep 2026',
+    )
+    expect(formatDate(INSTANT, { locale: 'vi', timeZone: HCM, style: 'monthYearShort' })).toBe(
+      'thg 9 2026',
+    )
+  })
+
   it('formats a weekday for a day-group header and a bare day/month for a compact row', () => {
     expect(formatDate('2026-09-09', { locale: 'en', timeZone: HCM, style: 'weekday' })).toContain(
       'Wednesday',

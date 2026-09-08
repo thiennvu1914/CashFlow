@@ -21,23 +21,29 @@ import {
  * display currency by `getCurrentPosition`. Charting native balances would put
  * a 400 USD account beside a 10,000,000 VND one and imply the second is
  * twenty-five thousand times the first, when they are roughly equal.
+ *
+ * `summary` and `seriesLabel` arrive already translated from the page (fix
+ * round 1, finding 2) — see `CashFlowTrendChart`'s doc comment for why.
  */
 export function AccountDistributionChart({
   data,
   currency,
   locale,
   height,
+  summary,
+  seriesLabel,
 }: {
   data: NamedAmountDto[]
   currency: Currency
   locale: Locale
   height: number
+  /** The chart's accessible name, fully translated and interpolated by the page. */
+  summary: string
+  /** Translated Tooltip series name (the bar has no Legend). */
+  seriesLabel: string
 }) {
   return (
-    <div
-      role="img"
-      aria-label={`Horizontal bar chart of the balance of each of ${data.length} active accounts, in ${currency}`}
-    >
+    <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
@@ -57,7 +63,7 @@ export function AccountDistributionChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name="Balance" fill={CHART_COLORS.distribution} />
+          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
         </BarChart>
       </ResponsiveContainer>
     </div>
