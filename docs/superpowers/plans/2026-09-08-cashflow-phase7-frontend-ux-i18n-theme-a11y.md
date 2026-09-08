@@ -12030,7 +12030,7 @@ Keep the whole comment at `:23-31` about the 30-second bound and about this form
 - `:82-88` — the login fields → `getByLabel(/^Email$/)` / `getByLabel(/Mật khẩu|^Password$/)`; the submit → `/Đăng nhập|Sign in/`; `getByText('Invalid email or password')` → `/Email hoặc mật khẩu không đúng|Invalid email or password/`.
 - **Add one test:** the invalid-token state. `page.goto('/reset-password?error=INVALID_TOKEN')`, assert the `h1` matches `/không hợp lệ|invalid or expired/` and that a link to `/forgot-password` is present with the `auth.requestNewLink` name.
 
-`e2e/phase7-theme-locale.spec.ts` (Task 11) — fill in its elided sign-back-in lines with these selectors now.
+`e2e/phase7-theme-locale.spec.ts` (Task 11 Step 8) already carries the concrete sign-back-in selectors; if any auth label changed in this task, update those lines to the selectors above.
 
 - [ ] **Step 6: Full verification**
 
