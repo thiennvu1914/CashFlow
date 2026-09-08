@@ -392,35 +392,50 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    const rail = page.locator('nav[aria-label="Primary"]')
+    const rail = page.getByRole('navigation', { name: /Điều hướng chính|^Primary$/ })
     await expect(rail).toBeVisible()
 
     // The rail's own DOM order, so "after Budgets, in this order" is asserted
     // as a fact about the navigation rather than as four independent
-    // visibility checks that would pass in any order.
+    // visibility checks that would pass in any order. Note: the rail's links
+    // now include the "Thêm giao dịch" action and the wordmark link, which are
+    // outside the `<nav>` — so scoping `allTextContents()` to the `nav` (as
+    // `rail` already does) still yields exactly the twelve destination labels,
+    // and the icon-rail's `sr-only` span still carries the label text at 1280.
     const labels = await rail.getByRole('link').allTextContents()
-    const budgetsIndex = labels.indexOf('Budgets')
+    const budgetsIndex = labels.findIndex((label) => /Ngân sách|Budgets/.test(label))
     expect(budgetsIndex).toBeGreaterThanOrEqual(0)
-    expect(labels.slice(budgetsIndex + 1, budgetsIndex + 5)).toEqual([
-      'Savings',
-      'Debts',
-      'Loans',
-      'Reminders',
-    ])
+    const nextFour = labels.slice(budgetsIndex + 1, budgetsIndex + 5)
+    expect(nextFour).toEqual(
+      nextFour.filter((label) =>
+        /Tiết kiệm|Savings|Công nợ|Debts|Khoản vay|Loans|Nhắc nhở|Reminders/.test(label),
+      ),
+    )
+    expect(nextFour).toHaveLength(4)
 
     // Each link lands on its own page, and each page states what it has:
     // Savings is `/goals`' h1 (the route and the label differ on purpose).
     const destinations = [
       {
-        label: 'Savings',
+        label: /Tiết kiệm|Savings/,
         url: /\/goals/,
         heading: 'Savings',
         empty: 'No savings goals yet — add one below.',
       },
-      { label: 'Debts', url: /\/debts/, heading: 'Debts', empty: 'No debts yet — add one below.' },
-      { label: 'Loans', url: /\/loans/, heading: 'Loans', empty: 'No loans yet — add one below.' },
       {
-        label: 'Reminders',
+        label: /Công nợ|Debts/,
+        url: /\/debts/,
+        heading: 'Debts',
+        empty: 'No debts yet — add one below.',
+      },
+      {
+        label: /Khoản vay|Loans/,
+        url: /\/loans/,
+        heading: 'Loans',
+        empty: 'No loans yet — add one below.',
+      },
+      {
+        label: /Nhắc nhở|Reminders/,
         url: /\/reminders/,
         heading: 'Reminders',
         empty: 'No reminders yet — add one below.',
@@ -852,26 +867,31 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await page.goto('/dashboard')
 
     // The four routes the bar shows are deliberately unchanged by Phase 6: a
-    // phone bar with nine targets is a bar with no targets. Read off the tab
-    // labels' own `<span>`s — the bar's fifth target, "Add transaction", is an
-    // icon with an `aria-label` and no text at all, so it is asserted by name.
-    const bar = page.locator('nav[aria-label="Primary (compact)"]')
+    // phone bar with nine targets is a bar with no targets. Checked per-tab by
+    // accessible name, rather than reading every `<a span>`'s text, because the
+    // bar's fifth target, "Thêm giao dịch"/"Add transaction", is an icon with
+    // an `aria-label` and no text at all.
+    const bar = page.getByRole('navigation', { name: /Điều hướng nhanh|Primary \(compact\)/ })
     await expect(bar).toBeVisible()
-    expect(await bar.locator('a span').allTextContents()).toEqual([
-      'Dashboard',
-      'Transactions',
-      'Accounts',
-      'Reports',
-    ])
-    await expect(bar.getByRole('link', { name: 'Add transaction' })).toBeVisible()
+    for (const label of [
+      /Tổng quan|Dashboard/,
+      /Giao dịch|Transactions/,
+      /Tài khoản|Accounts/,
+      /Báo cáo|Reports/,
+    ]) {
+      await expect(bar.getByRole('link', { name: label })).toBeVisible()
+    }
+    await expect(bar.getByRole('link', { name: /Thêm giao dịch|Add transaction/ })).toBeVisible()
 
-    const moreButton = page.getByRole('button', { name: 'More navigation' })
-    await moreButton.click()
-    const panelId = await moreButton.getAttribute('aria-controls')
-    if (!panelId) throw new Error('More button has no aria-controls')
-    const morePanel = page.locator(`#${panelId}`)
+    await page.getByRole('button', { name: /^Thêm$|^More$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /Tất cả mục|All sections/ })
 
-    for (const label of ['Savings', 'Debts', 'Loans', 'Reminders']) {
+    for (const label of [
+      /Tiết kiệm|Savings/,
+      /Công nợ|Debts/,
+      /Khoản vay|Loans/,
+      /Nhắc nhở|Reminders/,
+    ]) {
       await expect(morePanel.getByRole('link', { name: label })).toBeVisible()
     }
 
