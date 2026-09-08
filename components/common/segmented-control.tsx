@@ -16,6 +16,17 @@ export interface Segment {
  * segment is showing and the control works before (and without) JavaScript —
  * the same reasoning `components/reports/period-filter.tsx` and
  * `components/budgets/month-nav.tsx` already gave for their links.
+ *
+ * `flex-wrap` below `sm`, `sm:flex-nowrap` from `sm` up (fix round 1, promoted
+ * minor): Reports' six-segment track was the first consumer with enough
+ * segments to clip at 375 ("Tùy chọ…") rather than merely needing its
+ * `overflow-x-auto` fallback scroll. Wrapping to a second row keeps every
+ * segment visible and tappable instead of hiding one behind a horizontal
+ * scroll a user has no visual cue to try. `sm:flex-nowrap` keeps every OTHER
+ * consumer (`month-nav.tsx`'s 3 segments, the Reminders tabs' 2) rendering
+ * exactly as before at every width they were already proven at — this only
+ * changes behaviour below `sm` (640), and only when there are enough segments
+ * to wrap in the first place.
  */
 export function SegmentedControl({
   label,
@@ -32,7 +43,7 @@ export function SegmentedControl({
     <nav
       aria-label={label}
       className={cn(
-        'inline-flex max-w-full overflow-x-auto rounded-md border border-border bg-surface p-0.5',
+        'inline-flex max-w-full flex-wrap overflow-x-auto rounded-md border border-border bg-surface p-0.5 sm:flex-nowrap',
         className,
       )}
     >

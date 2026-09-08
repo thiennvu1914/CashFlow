@@ -166,6 +166,26 @@ describe('SummaryPanel', () => {
     expect(html).not.toContain('text-4xl')
   })
 
+  it("splits the flat variant's figure at lg, not sm — the 768-1023 clipping fix (fix round 1)", () => {
+    // The three-column grid starts at `md` (768) and stays tight through
+    // 1023, so the smaller figure must cover that whole range — a plain
+    // `sm` split (the dashboard variant's own breakpoint) would already have
+    // switched back to the full `kpi` size well before 768.
+    const html = renderToStaticMarkup(
+      <SummaryPanel
+        variant="flat"
+        kpis={KPIS.slice(2)}
+        currency="VND"
+        labels={LABELS}
+        hints={HINTS}
+      />,
+    )
+    expect(html).toContain('lg:hidden')
+    expect(html).toContain('hidden lg:inline-flex')
+    expect(html).not.toContain('sm:hidden')
+    expect(html).not.toContain('hidden sm:inline-flex')
+  })
+
   it('marks a negative net income without relying on the minus sign alone', () => {
     const negative: KpiDto[] = [
       ...KPIS.slice(0, 4),

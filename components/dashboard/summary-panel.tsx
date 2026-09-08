@@ -78,6 +78,20 @@ export function SummaryPanel({
             labels={labels}
             hints={hints}
             size="kpi"
+            // The grid goes to three EQUAL columns at exactly `md` (768) —
+            // the same breakpoint `kpi`'s own bump used to use, which is what
+            // clipped a 13-character VND figure against its neighbour at 768
+            // (fix round 1, IMPORTANT finding: reverting `kpi` to `md:` in
+            // `money-text.tsx` — it is shared with `loan-list.tsx` — moved
+            // the fix here instead). `smallSize="lg"` (24 px, no breakpoint
+            // of its own) covers the tight 768–1023 range and `smallBreakpoint
+            // ="lg"` is what makes the split switch back to the full `kpi`
+            // figure at 1024, where three columns already have room (proven
+            // in this fix round's re-capture) — not at `sm` (640), which is
+            // the OTHER cells' breakpoint and would leave the 768–1023 range
+            // still showing the clipping-size figure.
+            smallSize="lg"
+            smallBreakpoint="lg"
             className={cn(index > 0 && 'border-t border-border md:border-t-0 md:border-l')}
           />
         ))}
@@ -179,6 +193,7 @@ function Cell({
   hints,
   size,
   smallSize,
+  smallBreakpoint,
   note,
   className,
 }: {
@@ -197,6 +212,16 @@ function Cell({
    * and therefore never needed a smaller figure at any width.
    */
   smallSize?: MoneySize
+  /**
+   * Which breakpoint the `smallSize`/`size` split switches at (fix round 1,
+   * IMPORTANT finding). Defaults to `'sm'` (640) — the dashboard variant's
+   * four non-hero cells, which need the smaller figure only below the base
+   * 2-column grid's own breakpoint. The `flat` variant passes `'lg'` (1024)
+   * instead: its three-column grid starts at `md` (768) and stays tight
+   * through 1023, so the smaller figure has to cover that whole range, not
+   * just below `sm`.
+   */
+  smallBreakpoint?: 'sm' | 'lg'
   note?: string
   className?: string
 }) {
@@ -210,7 +235,14 @@ function Cell({
     <div className={cn('flex flex-col gap-1 bg-surface p-4 xl:justify-center', className)}>
       <dt className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{labels[kpi.labelKey]}</dt>
       <dd className="flex flex-col gap-1">
-        <Figure kpi={kpi} currency={currency} hints={hints} size={size} smallSize={smallSize} />
+        <Figure
+          kpi={kpi}
+          currency={currency}
+          hints={hints}
+          size={size}
+          smallSize={smallSize}
+          smallBreakpoint={smallBreakpoint}
+        />
         {note && <span className="text-xs/[1rem] text-muted-foreground">{note}</span>}
       </dd>
     </div>
@@ -225,28 +257,36 @@ function Cell({
  * an FX outage actually broke — the three monthly metrics are historical and
  * are restated from each row's own snapshot, so they are never affected.
  *
- * `smallSize` renders TWO `MoneyText`s for a REAL value, one `sm:hidden` and
- * one `hidden sm:inline-flex` — not a single responsive font-size utility —
+ * `smallSize` renders TWO `MoneyText`s for a REAL value, one hidden below the
+ * split and one hidden above it — not a single responsive font-size utility —
  * because `MoneyText`'s `size` prop already resolves to a fixed class combo
  * on its OWN inner span (not something a caller's `className` can reach or
- * override; see `money-text.tsx`), and money-text.tsx is out of this fix's
- * scope. `undefined` (Net Worth) skips the split entirely and renders exactly
- * as before. The em-dash (no usable value) branch never splits regardless of
+ * override; see `money-text.tsx`). The split defaults to `sm` (640) but the
+ * `flat` variant passes `lg` (1024) — see `smallBreakpoint` on `Cell`.
+ * `undefined` (Net Worth) skips the split entirely and renders exactly as
+ * before. The em-dash (no usable value) branch never splits regardless of
  * `smallSize`: a single "—" is never at risk of clipping at any width, and
  * duplicating it would only double what a screen reader announces.
  */
+const SMALL_SIZE_CLASSES: Record<'sm' | 'lg', { small: string; large: string }> = {
+  sm: { small: 'sm:hidden', large: 'hidden sm:inline-flex' },
+  lg: { small: 'lg:hidden', large: 'hidden lg:inline-flex' },
+}
+
 function Figure({
   kpi,
   currency,
   hints,
   size,
   smallSize,
+  smallBreakpoint = 'sm',
 }: {
   kpi: KpiDto
   currency: Currency
   hints: Record<string, string>
   size: MoneySize
   smallSize?: MoneySize
+  smallBreakpoint?: 'sm' | 'lg'
 }) {
   if (kpi.value === null) {
     return (
@@ -262,6 +302,7 @@ function Figure({
   if (!smallSize) {
     return <MoneyText value={kpi.value} currency={currency} tone={tone} size={size} />
   }
+  const { small, large } = SMALL_SIZE_CLASSES[smallBreakpoint]
   return (
     <>
       <MoneyText
@@ -269,15 +310,9 @@ function Figure({
         currency={currency}
         tone={tone}
         size={smallSize}
-        className="sm:hidden"
+        className={small}
       />
-      <MoneyText
-        value={kpi.value}
-        currency={currency}
-        tone={tone}
-        size={size}
-        className="hidden sm:inline-flex"
-      />
+      <MoneyText value={kpi.value} currency={currency} tone={tone} size={size} className={large} />
     </>
   )
 }

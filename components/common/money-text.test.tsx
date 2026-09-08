@@ -48,4 +48,15 @@ describe('MoneyText', () => {
     expect(lg).toContain('text-[1.5rem]/[1.875rem]')
     expect(md).not.toContain('text-[1.5rem]')
   })
+
+  it('bumps kpi at md:, not lg: — it is shared with loan-list.tsx, not Reports-only', () => {
+    // A Task 10 fix round moved this to `lg:` to paper over a Reports-only
+    // clipping bug at 768, which silently shrank `/loans`' outstanding-
+    // principal figure (also `size="kpi"`) across 768–1023 too. Reverted:
+    // the clipping fix now lives in `SummaryPanel`'s `flat` variant instead,
+    // which is the one place that actually needs a narrower figure at 768.
+    const html = renderToStaticMarkup(<MoneyText value="17.258.623,41" size="kpi" />)
+    expect(html).toContain('md:text-[1.875rem]/[2.25rem]')
+    expect(html).not.toContain('lg:text-[1.875rem]/[2.25rem]')
+  })
 })

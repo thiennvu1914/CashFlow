@@ -17,13 +17,18 @@ export function InlineAlert({
   tone,
   children,
   className,
+  id,
 }: {
   tone: keyof typeof TONE_CLASSES
   children: React.ReactNode
   className?: string
+  /** Optional, so a caller with a field this alert explains (Reports'
+   *  invalid-range message, say) can point at it with `aria-describedby`. */
+  id?: string
 }) {
   return (
     <p
+      id={id}
       role={tone === 'negative' ? 'alert' : undefined}
       className={cn(
         'rounded-md border px-3 py-2 text-[0.8125rem]/[1.125rem]',
