@@ -287,14 +287,18 @@ function debtFigureLine(outstanding: string, original: string): RegExp {
 }
 
 /**
- * The loan row's dominant figure (`loans.outstandingLine`), in either locale:
- * vi reads "Dư nợ gốc {outstanding} VND", en reads "Principal outstanding
- * {outstanding} VND" — a single self-contained `<span>`'s text, so this is
- * safe to assert as one alternation despite the row's other lines sitting in
- * sibling elements with no text-node separator between them.
+ * The loan row's dominant figure: a muted caption (`loans.outstandingLabel`,
+ * "Dư nợ gốc"/"Principal outstanding") above a `MoneyText` figure (fix round
+ * 1, finding 6 — split apart specifically so the caption can wrap at narrow
+ * widths instead of clipping, which `loans.outstandingLine`'s one
+ * `whitespace-nowrap` sentence used to do). The caption and the figure are
+ * SEPARATE elements with no text-node space between them in `.textContent()`
+ * (same reasoning as `debtFigureLine`'s neighbours), so `\s*` stands in for
+ * both "no space" and "a real space", and this still matches regardless of
+ * which of `MoneyText`'s two breakpoint copies `.textContent()` picks up.
  */
 function loanOutstandingLine(outstanding: string): RegExp {
-  return new RegExp(`(Dư nợ gốc|Principal outstanding) ${outstanding} VND`)
+  return new RegExp(`(Dư nợ gốc|Principal outstanding)\\s*${outstanding}\\s*VND`)
 }
 
 /**

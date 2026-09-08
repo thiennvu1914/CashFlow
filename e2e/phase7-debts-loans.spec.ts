@@ -375,5 +375,28 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
         /\bRECEIVABLE\b|\bPAYABLE\b|\bOPEN\b|\bPARTIALLY_PAID\b|\bWRITTEN_OFF\b|\bACTIVE\b|\bOVERDUE\b|\bPAID_OFF\b|\bCLOSED\b|\bMONTHLY\b|\bWEEKLY\b|\bYEARLY\b/,
       )
     }
+
+    // fix round 1, finding 1: Tổng's digit grouping must follow the READER's
+    // locale, not a hard-coded 'vi' default — `formatMoney`'s locale
+    // parameter defaults to 'vi' when omitted, which is exactly the bug this
+    // guards against. Bank (this file's only loan) was closed in an earlier
+    // test, so a fresh loan is created here, now that the page itself
+    // renders in English, to open a payment dialog against.
+    await createLoanViaUi(page, {
+      lender: 'English Bank',
+      principal: 10_000_000,
+      interestRate: 5,
+      termMonths: 12,
+      scheduledPayment: 900_000,
+    })
+    const englishRow = namedRow(page, page, 'English Bank')
+    await englishRow.getByRole('button', { name: 'Record payment' }).click()
+    const englishDialog = page.getByRole('dialog', { name: 'Record payment · English Bank' })
+    await englishDialog.getByLabel('Principal').fill('3000000')
+    await englishDialog.getByLabel('Interest').fill('800000')
+    const englishTotal = englishDialog.getByLabel('Total')
+    // Comma grouping (en-US), never the Vietnamese dot grouping.
+    await expect(englishTotal).toHaveValue(/3,800,000/)
+    await expect(englishTotal).not.toHaveValue(/3\.800\.000/)
   })
 })
