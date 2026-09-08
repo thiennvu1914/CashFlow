@@ -5,7 +5,13 @@ import ExcelJS from 'exceljs'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { DEBT_ERROR_MESSAGES, LOAN_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
-import { createAccountViaUi, digitsOnly, registerNewUser, todayInZone } from './helpers'
+import {
+  createAccountViaUi,
+  digitsOnly,
+  eitherLocale,
+  registerNewUser,
+  todayInZone,
+} from './helpers'
 
 /**
  * Phase 6 Group 10: end-to-end coverage for the four planning modules
@@ -147,8 +153,11 @@ function namedRow(page: Page, root: Page | Locator, name: string): Locator {
 }
 
 /** The `<details>` whose `<summary>` reads exactly `summary` — the archived /
- *  written-off / closed history sections, and a row's own payment log. */
-function detailsFor(page: Page, summary: string): Locator {
+ *  written-off / closed history sections, and a row's own payment log.
+ *  `summary` may be a `RegExp` (a vi/en alternation) for a section whose
+ *  wording is now localised; `exact` is ignored by Playwright for a `RegExp`
+ *  match, same as `sectionFor`'s `heading`. */
+function detailsFor(page: Page, summary: string | RegExp): Locator {
   return page.locator('details').filter({ has: page.getByText(summary, { exact: true }) })
 }
 
@@ -197,19 +206,41 @@ async function openDetails(details: Locator): Promise<Locator> {
  * action's own confirmation that the row landed.
  * ------------------------------------------------------------------------- */
 
+/**
+ * Creates one savings goal through the `/goals` page's header action ("Thêm
+ * mục tiêu") and its create `Sheet` (spec §6.5) — creation lives behind that
+ * button, not inline on the page.
+ */
 async function createGoalViaUi(
   page: Page,
   opts: { name: string; target: number; current?: number },
 ): Promise<void> {
   await page.goto('/goals')
-  const nameInput = page.getByLabel('Goal name')
+  await page.getByRole('button', { name: /Thêm mục tiêu|Add goal/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm mục tiêu|Add goal/ })
+  const nameInput = sheet.getByLabel(/Tên mục tiêu|Goal name/)
   await nameInput.fill(opts.name)
-  await page.getByLabel('Target amount').fill(String(opts.target))
+  await sheet.getByLabel(/Số tiền mục tiêu|Target amount/).fill(String(opts.target))
   if (opts.current !== undefined) {
-    await page.getByLabel('Current amount').fill(String(opts.current))
+    await sheet.getByLabel(/Đã tiết kiệm|Current amount/).fill(String(opts.current))
   }
-  await page.getByRole('button', { name: 'Add goal' }).click()
-  await expect(nameInput).toHaveValue('')
+  await sheet.getByRole('button', { name: /Thêm mục tiêu|Add goal/ }).click()
+  // A successful submit resets the form, which clears the name field — and
+  // the sheet closes itself, so wait for that instead: it is the app's own
+  // confirmation that the goal was created.
+  await expect(sheet).toBeHidden()
+}
+
+/**
+ * Opens a row's `…` menu. `name` is the row's own visible label as it reads in
+ * vi (a goal's name is the same in both locales, so `enName` defaults to the
+ * same value) — `common.rowActions` interpolates whichever the page is
+ * actually rendering into the trigger's accessible name.
+ */
+async function openRowMenu(page: Page, row: Locator, name: string, enName = name): Promise<void> {
+  await row
+    .getByRole('button', { name: eitherLocale(`Tác vụ cho ${name}`, `Actions for ${enName}`) })
+    .click()
 }
 
 async function createDebtViaUi(
@@ -420,12 +451,17 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     // Each link lands on its own page, and each page states what it has:
     // Savings is `/goals`' h1 (the route and the label differ on purpose).
-    const destinations = [
+    const destinations: {
+      label: RegExp
+      url: RegExp
+      heading: string | RegExp
+      empty: string | RegExp
+    }[] = [
       {
         label: /^(Tiết kiệm|Savings)$/,
         url: /\/goals/,
-        heading: 'Savings',
-        empty: 'No savings goals yet — add one below.',
+        heading: /Mục tiêu tiết kiệm|^Savings$/,
+        empty: /Chưa có mục tiêu tiết kiệm|No savings goals yet/,
       },
       {
         label: /^(Công nợ|Debts)$/,
@@ -470,55 +506,64 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Emergency fund')
     await expect(row).toBeVisible()
-    await expect(row.getByText('In progress', { exact: true })).toBeVisible()
-    // The pair, in the goal's own currency and never converted. The unescaped
-    // `.`s accept whatever thousands separator `formatMoney`'s locale uses.
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^2.500.000 \/ 10.000.000 VND$/,
+    await expect(row.getByText(/Đang thực hiện|In progress/, { exact: true })).toBeVisible()
+    // The pair, in the goal's own currency and never converted, now with the
+    // percent folded into the same figure line. The unescaped `.`s accept
+    // whatever thousands separator `formatMoney`'s locale uses.
+    await expect(row.locator('.tabular-nums').first()).toHaveText(
+      /^2.500.000 \/ 10.000.000 VND · 25 %$/,
     )
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
-    await expect(row.getByText('Remaining 7.500.000')).toBeVisible()
+    // No deadline was set, so the meta line is the "still to go" figure.
+    await expect(row).toContainText('7.500.000')
 
     // Update progress → the whole target, which is what flips the status.
-    await row.getByRole('button', { name: 'Update progress' }).click()
-    await page.getByLabel('New amount for Emergency fund').fill('10000000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await row.getByRole('button', { name: /Cập nhật tiến độ|Update progress/ }).click()
+    const progressDialog = page.getByRole('dialog')
+    await progressDialog.getByLabel(/Số tiền hiện có|Current amount/).fill('10000000')
+    await progressDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText('Achieved', { exact: true })).toBeVisible()
+    // "Đạt mục tiêu"/"Achieved" now appears twice on an achieved row — once as
+    // the status badge, once as the meta line replacing the deadline/remaining
+    // text (`goals.achieved` and `labels.goalStatus.ACHIEVED` share the same
+    // wording by design) — so `.first()` is what keeps this a single-element
+    // match rather than a strict-mode violation.
+    await expect(row.getByText(/Đạt mục tiêu|^Achieved$/, { exact: true }).first()).toBeVisible()
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
     // Edit → the definition, not the progress: two panes, two intents.
-    await row.getByRole('button', { name: 'Edit' }).click()
-    await page.getByLabel('Edit name for Emergency fund').fill('Emergency fund 2')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await openRowMenu(page, row, 'Emergency fund')
+    await page.getByRole('menuitem', { name: /^Sửa$|^Edit$/ }).click()
+    const editDialog = page.getByRole('dialog')
+    await editDialog.getByLabel(/Tên mục tiêu|Goal name/).fill('Emergency fund 2')
+    await editDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
     const renamed = namedRow(page, page, 'Emergency fund 2')
     await expect(renamed).toBeVisible()
     await expect(namedRow(page, page, 'Emergency fund')).toHaveCount(0)
 
-    // Archive → confirmed, then the row moves into the read-only history.
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Archive this goal? Its history stays visible under Archived goals.',
-      )
-      return dialog.accept()
-    })
-    await renamed.getByRole('button', { name: 'Archive' }).click()
+    // Archive → confirmed through a ConfirmDialog, then the row moves into
+    // the read-only history.
+    await openRowMenu(page, renamed, 'Emergency fund 2')
+    await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: /^Lưu trữ$|^Archive$/ })
+      .click()
 
     // The live list is empty again, so the page shows its own empty state.
-    await expect(page.getByText('No savings goals yet — add one below.')).toBeVisible()
+    await expect(page.getByText(/Chưa có mục tiêu tiết kiệm|No savings goals yet/)).toBeVisible()
 
-    const archived = detailsFor(page, 'Archived goals (1)')
+    const archived = detailsFor(page, /Mục tiêu đã lưu trữ \(1\)|Archived goals \(1\)/)
     await expect(archived).toBeVisible()
     await openDetails(archived)
     const archivedRow = namedRow(page, archived, 'Emergency fund 2')
     await expect(archivedRow).toBeVisible()
-    await expect(archivedRow.getByText('Archived', { exact: true })).toBeVisible()
+    await expect(archivedRow.getByText(/Đã lưu trữ|^Archived$/, { exact: true })).toBeVisible()
     // An archived goal refuses every write, so it is offered no actions at all
-    // — showing them would be a promise the service breaks.
-    for (const action of ['Update progress', 'Edit', 'Archive']) {
-      await expect(archivedRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    // — showing them would be a promise the service breaks: no inline
+    // "Cập nhật tiến độ" button and no `…` menu trigger.
+    await expect(archivedRow.getByRole('button')).toHaveCount(0)
   })
 
   test('3. receivable: partial payment, refused overpayment, settled', async ({ page }) => {
@@ -923,7 +968,16 @@ test.describe.serial('Phase 6 — planning modules', () => {
   test('9. hydration gates and SSR defaults in the raw server HTML', async ({ page }) => {
     // Deterministic by construction: raw response bodies, no timing at all —
     // the same technique as `e2e/transaction-form-hydration.spec.ts`.
-    const pages = ['/goals', '/debts', '/loans', '/reminders'] as const
+    //
+    // `/goals` is deliberately NOT one of these any more (Task 7): its create
+    // form now lives inside a `Sheet` opened from the header action, and a
+    // closed `Sheet` renders no popup content at all in the initial HTML — so
+    // there is no longer a gated `<fieldset>` (or an `aria-label`-only
+    // `<select>`) to find on the raw page. `components/goals/goal-form.test.tsx`
+    // is what now pins its server markup, mounted directly rather than through
+    // a closed dialog, the same way `AccountForm`'s equivalent Wave 2 form —
+    // also Sheet-gated — has never had a raw-HTML check in this suite either.
+    const pages = ['/debts', '/loans', '/reminders'] as const
     const bodies = new Map<string, string>()
     for (const url of pages) {
       const response = await page.request.get(url)
@@ -965,13 +1019,9 @@ test.describe.serial('Phase 6 — planning modules', () => {
     )
     expect(inputMarkup(reminders, 'Start date')).toContain(`value="${TODAY}"`)
 
-    // 4. `/goals` and `/debts` have no date default at all (a target has no
-    //    start day, and a debt's due date is optional), and their selects
-    //    default to their own first option — so the marker must be on the value
-    //    the form actually holds and on nothing else.
-    expect(selectMarkup(bodies.get('/goals')!, 'Goal currency')).toMatch(
-      /<option[^>]*\svalue="VND"[^>]*\sselected=""/,
-    )
+    // 4. `/debts` has no date default at all (a debt's due date is optional),
+    //    and its select defaults to its own first option — so the marker must
+    //    be on the value the form actually holds and on nothing else.
     expect(selectMarkup(bodies.get('/debts')!, 'Direction')).toMatch(
       /<option[^>]*\svalue="RECEIVABLE"[^>]*\sselected=""/,
     )

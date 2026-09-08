@@ -121,14 +121,20 @@ export async function createTransactionViaUi(
 }
 
 /**
- * Creates one budget through the `/budgets` page's "Add budget" form.
+ * Creates one budget through the `/budgets` page's header action ("Thêm ngân
+ * sách") and its create `Sheet` (spec §6.5) — creation lives behind that
+ * button, not inline on the page.
  *
  * Navigates to `/budgets` first by default (the page's *current* local month —
  * no `?month=` is ever passed, matching every seed in `phase5.spec.ts`).
  * `stayOnPage` suppresses that navigation for the one case that must submit
  * the form exactly as the caller left it: a client-side month change keeps the
  * mounted form alive, and a fresh `goto` would remount it and hide the very
- * staleness that case exists to catch.
+ * staleness that case exists to catch. The sheet itself unmounts its form on
+ * close, so that staleness is now prevented structurally too — reopening the
+ * button always mounts a fresh `BudgetForm` with the current props — but the
+ * client-side month MERGE this case actually asserts (the props a mounted
+ * form was given, not a re-navigated one) is still real and still exercised.
  *
  * Always selects `scope` explicitly rather than relying on the form's default
  * (which flips between `OVERALL`/`CATEGORY` depending on whether an overall
@@ -138,7 +144,7 @@ export async function createTransactionViaUi(
  *
  * Does not assert success: a duplicate submission is expected to fail with an
  * inline error rather than resetting the form, so the caller — not this
- * helper — asserts whichever outcome the scenario expects.
+ * helper — asserts whichever outcome its scenario expects.
  *
  * Plain `selectOption`/`fill` here too — see `createTransactionViaUi` and
  * `lib/ui/use-hydrated.ts`.
@@ -154,18 +160,23 @@ export async function createBudgetViaUi(
   },
 ): Promise<void> {
   if (!opts.stayOnPage) await page.goto('/budgets')
-  await page.getByLabel('Budget scope').selectOption(opts.scope)
+  await page.getByRole('button', { name: /Thêm ngân sách|Add budget/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm ngân sách|Add budget/ })
+  await sheet.getByLabel(/Phạm vi|Budget scope/).selectOption(opts.scope)
   if (opts.scope === 'CATEGORY') {
     if (!opts.categoryName) {
       throw new Error('createBudgetViaUi: categoryName is required when scope is CATEGORY')
     }
-    await page.getByLabel('Budget category').selectOption({ label: opts.categoryName })
+    await sheet.getByLabel(/Danh mục|Budget category/).selectOption({ label: opts.categoryName })
   }
-  await page.getByLabel('Budget amount').fill(String(opts.amount))
+  await sheet.getByLabel(/Hạn mức|Budget amount/).fill(String(opts.amount))
   if (opts.currency && opts.currency !== 'VND') {
-    await page.getByLabel('Budget currency').selectOption(opts.currency)
+    await sheet.getByLabel(/Tiền tệ|Budget currency/).selectOption(opts.currency)
   }
-  await page.getByRole('button', { name: 'Add budget' }).click()
+  await sheet.getByRole('button', { name: /Thêm ngân sách|Add budget/ }).click()
+  // Deliberately NOT asserted here: a duplicate submission is expected to
+  // fail with an inline error rather than resetting the form, so the caller —
+  // not this helper — asserts whichever outcome its scenario expects.
 }
 
 /** "Today" as `yyyy-MM-dd` in the given IANA timezone (no `Date` library needed). */
