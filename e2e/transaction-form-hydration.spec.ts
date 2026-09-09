@@ -26,7 +26,12 @@ import {
  * HTML at all, since Base UI's `Dialog`/`Sheet` renders nothing while closed,
  * so its own hydration-gate regression is now covered at the component level,
  * `components/accounts/account-form.test.tsx`, rather than by the raw-fetch
- * technique this file uses for the three forms that stay inline on their page.)
+ * technique this file uses for the two forms that stay inline on their page.
+ * Phase 7 Task 7 (fix round 3) later moved budget creation the same way —
+ * behind a header button and a `Sheet` — so `/budgets` gets the same
+ * treatment: its gate, its labels and its scope `<select>`'s CATEGORY default
+ * (an Overall budget already exists for the month) are asserted at the
+ * component level instead, `components/budgets/budget-form.test.tsx`.)
  *
  * Nothing in this file may paper over that. There is no retry helper, no
  * `waitForTimeout`, no sleep and no relaxed assertion anywhere below, and
@@ -78,37 +83,17 @@ const CATEGORYLESS_TYPES = [
 
 /**
  * Every page whose gated money form is unconditionally part of its initial
- * HTML. `/accounts`' create form (Task 6) is excluded on purpose: it now
- * mounts inside a `Sheet` that is closed on first render, and Base UI's
- * `Dialog`/`Sheet` renders nothing at all while closed — there is no raw HTML
- * to fetch it from. Its gate (`<fieldset disabled>`/`aria-busy`), its five
- * visible labels and the account-type/currency `<select>`s' own-first-option
- * default (no `selected=`/`defaultValue` anywhere) are verified at the
- * component level instead — `components/accounts/account-form.test.tsx`,
- * against the same `renderToStaticMarkup` output this file reads for every
- * other page via a live server response.
+ * HTML. `/accounts`' and `/budgets`' create forms are excluded on purpose:
+ * both now mount inside a `Sheet` that is closed on first render, and Base
+ * UI's `Dialog`/`Sheet` renders nothing at all while closed — there is no raw
+ * HTML to fetch either from. Their gates (`<fieldset disabled>`/`aria-busy`),
+ * their visible labels and their own `<select>` defaults are verified at the
+ * component level instead — `components/accounts/account-form.test.tsx` and
+ * `components/budgets/budget-form.test.tsx` — against the same
+ * `renderToStaticMarkup` output this file reads for every other page via a
+ * live server response.
  */
-const GATED_PAGES = ['/transactions', '/transfers', '/budgets'] as const
-
-/**
- * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- * nest, so the first `</select>` after the opening tag closes it.
- *
- * Scoping is what makes the `selected` assertions below meaningful:
- * `/budgets`' scope select has siblings that render similar option shapes,
- * and only the right one may carry a pre-selected option. (`/transfers`' two
- * account selectors moved off `aria-label` in Task 5b — see
- * `selectMarkupByTransferId` below; `/accounts`' selects did the same in
- * Task 6, onto a visible `<label>` bound through `FormField`.)
- */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
-  const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
-  return html.slice(start, end + '</select>'.length)
-}
+const GATED_PAGES = ['/transactions', '/transfers'] as const
 
 /**
  * The visible label of the `<option>` react-dom marked as pre-selected inside
@@ -238,9 +223,14 @@ test.describe.serial('Money forms — hydration gate', () => {
     // helper does not assert success (a duplicate is a legitimate outcome
     // elsewhere), so the row assertion below is what proves the seed landed.
     await createBudgetViaUi(page, { scope: 'OVERALL', amount: 1_000_000, currency: 'VND' })
-    await expect(
-      page.locator('li').filter({ has: page.getByText('Overall', { exact: true }) }),
-    ).toHaveCount(1)
+    // The scope label is `labels.budgetScope.OVERALL` ("Tổng thể"/"Overall"),
+    // translated — the vi page (the default, no `NEXT_LOCALE` cookie here)
+    // never renders the literal English word "Overall". Anchored (`^…$`)
+    // around `eitherLocale`'s own escaped alternation so this keeps the
+    // original assertion's `{ exact: true }` semantics — an element whose
+    // ENTIRE text is one of the two words, not merely contains it.
+    const overallLabel = new RegExp(`^(?:${eitherLocale('Tổng thể', 'Overall').source})$`)
+    await expect(page.locator('li').filter({ has: page.getByText(overallLabel) })).toHaveCount(1)
 
     await page.goto('/categories')
     incomeNames = await categoryNames(page, eitherLocale('Danh mục thu', 'Income Categories'))
@@ -311,21 +301,17 @@ test.describe.serial('Money forms — hydration gate', () => {
     )
     expect(selectedOptionLabel(selectMarkupByTransferId(transfers, 'from'))).toBeNull()
 
-    // 4. `/budgets` — an Overall budget exists for this month (seeded in
-    //    `beforeAll`), so the scope default is CATEGORY: the second option.
-    const budgets = bodies.get('/budgets')!
-    expect(selectedOptionLabel(selectMarkup(budgets, 'Budget scope'))).toBe('Category')
-    expect(selectMarkup(budgets, 'Budget scope')).toMatch(
-      /<option[^>]*\svalue="CATEGORY"[^>]*\sselected=""/,
-    )
-    // The CATEGORY-only field is server-rendered too — no post-hydration pop-in.
-    expect(selectedOptionLabel(selectMarkup(budgets, 'Budget category'))).toBe('Select a category')
-
-    // `/accounts`' create form has no raw-HTML case to assert here (Task 6):
-    // it is mounted only inside a closed `Sheet`, which renders nothing at
-    // all until opened, so its gate, its labels and its two `<select>`s'
-    // own-first-option default (no stray `selected=`) are asserted at the
-    // component level instead — `components/accounts/account-form.test.tsx`.
+    // `/accounts`' and `/budgets`' create forms have no raw-HTML case to
+    // assert here (Task 6, Task 7 fix round 3 respectively): both are
+    // mounted only inside a closed `Sheet`, which renders nothing at all
+    // until opened, so their gates, their labels and their `<select>`s' own
+    // defaults (`/budgets`' scope select defaults to CATEGORY when an Overall
+    // budget already exists for the month, the same seed this file's
+    // `beforeAll` still creates via `createBudgetViaUi`, now only to prove
+    // the create flow itself still works, not for a raw-HTML assertion) are
+    // asserted at the component level instead —
+    // `components/accounts/account-form.test.tsx` and
+    // `components/budgets/budget-form.test.tsx`.
   })
 
   test('an early INCOME selection is never reverted (5 fresh navigations)', async ({ page }) => {
