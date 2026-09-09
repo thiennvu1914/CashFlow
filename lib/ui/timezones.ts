@@ -7,10 +7,22 @@
  * which matters, because `isValidIanaTimezone` in `lib/validation/profile.ts`
  * validates against exactly that.
  *
- * The current zone is hoisted into its own leading group for two reasons: a
- * user opening the picker is looking for what they have, and the list omits some
- * legacy aliases (`US/Pacific`), so a stored value that is not in it must still
- * be selectable or the form would silently change it on the next save.
+ * Two independent guarantees, not one, and deliberately no general alias
+ * canonicalisation between them:
+ *
+ * 1. The CURRENT zone is always hoisted into its own leading group and always
+ *    selectable, whether or not the runtime enumerates it — the list omits
+ *    some legacy aliases (e.g. `US/Pacific`), so a stored value that happens to
+ *    be one must still be pickable or the form would silently change it on the
+ *    next save. This holds only while that value IS current; `US/Pacific`
+ *    picked once and saved away from would not reappear elsewhere in the list
+ *    (nothing in this app writes an arbitrary legacy alias going forward — the
+ *    picker only ever offers enumerated ids plus the one exception below — so
+ *    that case does not otherwise arise).
+ * 2. `LEGACY_ALIASES` below is a second, narrower guarantee for exactly one
+ *    string: CashFlow's own default zone, which every new signup starts with
+ *    and which the runtime does not enumerate at all. That one stays listed
+ *    (in its natural region group) even when it is NOT current.
  */
 export interface TimezoneGroup {
   /** The region prefix of the IANA id, e.g. `'Asia'`; `'current'` for the
@@ -38,7 +50,14 @@ export interface TimezoneGroup {
 const LEGACY_ALIASES = ['Asia/Ho_Chi_Minh']
 
 export function timezoneGroups(current: string): TimezoneGroup[] {
-  const all = new Set(Intl.supportedValuesOf('timeZone'))
+  // `Intl.supportedValuesOf` is itself a newer addition to `Intl` than
+  // `Intl.DateTimeFormat` (which `isValidIanaTimezone` relies on) — guard it
+  // rather than assume every runtime this ever executes on has it, and fall
+  // back to just the stored zone, still selectable, rather than throwing and
+  // taking the whole Settings page down with it.
+  const all = new Set(
+    typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [],
+  )
   for (const alias of LEGACY_ALIASES) all.add(alias)
 
   const byRegion = new Map<string, string[]>()

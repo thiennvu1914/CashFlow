@@ -63,12 +63,14 @@ const LABELS = {
   preferencesDescription: 'How CashFlow displays your figures.',
 }
 
+const EMAIL = 'probe@example.com'
+
 const messages = await loadMessages('vi')
 
 function render(defaultValues: ProfileInput = APP_DEFAULTS): string {
   return renderToStaticMarkup(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
-      <ProfileForm defaultValues={defaultValues} labels={LABELS} />
+      <ProfileForm defaultValues={defaultValues} email={EMAIL} labels={LABELS} />
     </NextIntlClientProvider>,
   )
 }
@@ -104,6 +106,17 @@ function inputMarkup(html: string, name: string): string {
   const start = html.lastIndexOf('<input', nameIndex)
   const end = html.indexOf('>', nameIndex)
   if (start === -1 || end === -1) throw new Error(`No <input> named "${name}"`)
+  return html.slice(start, end + 1)
+}
+
+/** The `<input>` markup carrying the given `id` attribute — for the email
+ *  field, which (deliberately) carries no `name`/`register()` at all. */
+function inputMarkupById(html: string, id: string): string {
+  const idIndex = html.indexOf(`id="${id}"`)
+  if (idIndex === -1) throw new Error(`No element with id "${id}" in the markup`)
+  const start = html.lastIndexOf('<input', idIndex)
+  const end = html.indexOf('>', idIndex)
+  if (start === -1 || end === -1) throw new Error(`No <input> with id "${id}"`)
   return html.slice(start, end + 1)
 }
 
@@ -194,7 +207,10 @@ describe('ProfileForm — one form, two groups, one Save', () => {
     const html = render()
     expect(html.match(/<form/g)).toHaveLength(1)
     expect(html.match(/<fieldset/g)).toHaveLength(2)
-    // Both gated before hydration, both marked busy-capable.
+    // Both gated before hydration. `aria-busy` is NOT asserted here — it
+    // tracks the in-flight SUBMIT, not the hydration gate, so on this
+    // pre-submit render it is absent (see the "hydration gate" describe
+    // block above for that distinction spelled out).
     expect(html.match(/<fieldset disabled/g)).toHaveLength(2)
     expect(html.match(/<legend class="sr-only"/g)).toHaveLength(2)
   })
@@ -219,6 +235,18 @@ describe('ProfileForm — one form, two groups, one Save', () => {
       expect(html).toContain(`for="${id}"`)
       expect(html).toContain(`id="${id}"`)
     }
+  })
+
+  it('shows the signed-in email as a labelled, read-only, non-editable field', () => {
+    const html = render()
+    expect(html).toContain('for="settings-email"')
+    const emailMarkup = inputMarkupById(html, 'settings-email')
+    expect(emailMarkup).toContain(`value="${EMAIL}"`)
+    expect(emailMarkup).toMatch(/\bdisabled=""/)
+    // Not one of the five `ProfileInput` fields `register()` wires up — it
+    // carries no `name` attribute at all, so it could never be posted by
+    // `updateProfile`.
+    expect(emailMarkup).not.toMatch(/\sname="/)
   })
 
   it('hoists the stored timezone into the leading optgroup', () => {

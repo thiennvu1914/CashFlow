@@ -25,6 +25,7 @@ export default async function SettingsPage() {
           the `<form>` element the two cards sit inside. */}
       <ProfileForm
         defaultValues={defaults}
+        email={user.email}
         labels={{
           profileTitle: t('settings.profileTitle'),
           profileDescription: t('settings.profileDescription'),

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useRouter } from 'next/navigation'
@@ -35,9 +35,14 @@ import { Input } from '@/components/ui/input'
  */
 export function ProfileForm({
   defaultValues,
+  email,
   labels,
 }: {
   defaultValues: ProfileInput
+  /** The signed-in email, shown as read-only context under Name — never
+   *  editable here or anywhere else in the app, so it is not part of
+   *  `ProfileInput`/`profileSchema` and is never passed to `register()`. */
+  email: string
   labels: {
     profileTitle: string
     profileDescription: string
@@ -59,8 +64,14 @@ export function ProfileForm({
     formState: { errors, isDirty },
   } = useForm<ProfileInput>({ resolver: zodResolver(profileSchema), defaultValues })
 
-  /** The zone list, with the stored value hoisted to its own leading group. */
-  const groups = timezoneGroups(defaultValues.timezone)
+  /**
+   * The zone list, with the stored value hoisted to its own leading group.
+   * `timezoneGroups` walks all ~400 `Intl.supportedValuesOf('timeZone')`
+   * entries and re-sorts every region — real work worth not repeating on
+   * every keystroke in the OTHER fields (Name, Base Currency, …), none of
+   * which change `defaultValues.timezone`.
+   */
+  const groups = useMemo(() => timezoneGroups(defaultValues.timezone), [defaultValues.timezone])
 
   async function onSubmit(values: ProfileInput) {
     setNotice(null)
@@ -129,6 +140,16 @@ export function ProfileForm({
               // lands on.
               <Input {...aria} {...register('name')} defaultValue={defaultValues.name} />
             )}
+          </FormField>
+
+          {/* Owner K1: the signed-in email as read-only context — not
+              editable here or anywhere else in the app, so it carries its
+              own unconditional `disabled` rather than relying on the
+              fieldset's (which lifts once hydrated). Not `register()`ed:
+              it is not one of `ProfileInput`'s five fields, and `updateProfile`
+              never accepts it. */}
+          <FormField id="settings-email" label={t('settings.email')}>
+            {(aria) => <Input {...aria} defaultValue={email} disabled readOnly />}
           </FormField>
         </fieldset>
       </SettingsCard>

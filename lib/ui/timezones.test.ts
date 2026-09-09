@@ -48,4 +48,19 @@ describe('timezoneGroups', () => {
     const all = groups.flatMap((group) => group.zones)
     expect(all.filter((zone) => zone === 'Asia/Ho_Chi_Minh')).toHaveLength(1)
   })
+
+  it('falls back to just the stored zone when the runtime has no Intl.supportedValuesOf', () => {
+    // A guard against an older runtime lacking this newer `Intl` addition —
+    // the picker must still render the user's own value rather than throw and
+    // take the whole Settings page down with it.
+    const original = Intl.supportedValuesOf
+    // @ts-expect-error deliberately simulating an older runtime for this test
+    delete Intl.supportedValuesOf
+    try {
+      const groups = timezoneGroups('Asia/Ho_Chi_Minh')
+      expect(groups).toEqual([{ region: 'current', zones: ['Asia/Ho_Chi_Minh'] }])
+    } finally {
+      Intl.supportedValuesOf = original
+    }
+  })
 })

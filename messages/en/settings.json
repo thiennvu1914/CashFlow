@@ -3,6 +3,7 @@
   "profileTitle": "Profile",
   "profileDescription": "The name shown throughout the app.",
   "name": "Name",
+  "email": "Email",
   "preferencesTitle": "Preferences",
   "preferencesDescription": "How CashFlow displays your figures.",
   "baseCurrency": "Display currency",
@@ -24,7 +25,7 @@
   "currentPassword": "Current password",
   "newPassword": "New password",
   "changePasswordAction": "Change password",
-  "changePasswordPending": "Saving…",
+  "changePasswordPending": "Changing…",
   "passwordChanged": "Password updated",
   "passwordError": "Current password is incorrect or the new password is invalid"
 }
