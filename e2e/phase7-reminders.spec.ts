@@ -167,8 +167,8 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
   test('en (via Settings): the same three rows read in English', async ({ page }) => {
     await page.goto('/settings', { waitUntil: 'commit' })
     await page.locator('select[name="locale"]').selectOption('en')
-    await page.getByRole('button', { name: 'Save changes' }).click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
     await page.goto('/reminders?view=due&type=all')
 
@@ -188,8 +188,8 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
     // hard-codes regardless of which app locale is selected.)
     await page.goto('/settings', { waitUntil: 'commit' })
     await page.locator('select[name="locale"]').selectOption('vi')
-    await page.getByRole('button', { name: 'Save changes' }).click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
   })
 
   test('vi: the Dashboard Upcoming Reminders widget is fully Vietnamese, with no English relative-date literal', async ({

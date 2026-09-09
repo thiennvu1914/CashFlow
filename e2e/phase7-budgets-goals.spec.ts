@@ -225,8 +225,8 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
   }) => {
     await page.goto('/settings', { waitUntil: 'commit' })
     await page.locator('select[name="locale"]').selectOption('en')
-    await page.getByRole('button', { name: 'Save changes' }).click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
     await page.goto('/budgets')
     await expect(

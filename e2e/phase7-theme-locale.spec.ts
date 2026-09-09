@@ -1,7 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser } from './helpers'
+import { registerNewUser, eitherLocale } from './helpers'
 
 /**
  * Theme and locale, end to end (spec §12).
@@ -40,16 +40,17 @@ function preferences(page: import('@playwright/test').Page) {
 }
 
 /**
- * The login form is not yet localized or labelled (that is Task 12's scope),
- * so this is the plain placeholder/button-text flow the current `LoginForm`
- * renders. Task 12 updates this file's login interaction alongside the form
- * itself.
+ * Task 12 landed labelled, translated auth forms: `Email` is the same in both
+ * locales, `Mật khẩu`/`Password` and `Đăng nhập`/`Sign in` are not — so every
+ * selector here is locale-tolerant (`eitherLocale`/an anchored alternation)
+ * rather than pinned to one language, the same pattern `e2e/phase7-auth.spec.ts`
+ * and `e2e/helpers.ts`'s `registerNewUser` use post-Task-12.
  */
 async function loginViaUi(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/login')
-  await page.getByPlaceholder('Email').fill(account.email)
-  await page.getByPlaceholder('Password').fill(account.password)
-  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByLabel(eitherLocale('Email', 'Email')).fill(account.email)
+  await page.getByLabel(eitherLocale('Mật khẩu', 'Password')).fill(account.password)
+  await page.getByRole('button', { name: /^(Đăng nhập|Sign in)$/ }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 }
 
@@ -218,10 +219,7 @@ test.describe.serial('Phase 7 — theme and locale', () => {
     // snapshot's session token was just revoked by the sign-out above, which
     // is why this spec runs this test last) and reverse the toggle, so the
     // account is left exactly as the suite found it.
-    await page.getByPlaceholder('Email').fill(account.email)
-    await page.getByPlaceholder('Password').fill(account.password)
-    await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page).toHaveURL(/\/dashboard/)
+    await loginViaUi(page)
 
     await page.goto('/settings')
     await preferences(page)

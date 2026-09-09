@@ -234,8 +234,8 @@ test.describe
   }) => {
     await page.goto('/settings', { waitUntil: 'commit' })
     await page.locator('select[name="locale"]').selectOption('en')
-    await page.getByRole('button', { name: 'Save changes' }).click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
     await page.goto('/dashboard')
     const summary = page.locator('dl').first()
@@ -254,8 +254,8 @@ test.describe
   test('switching to dark theme in Settings renders html.dark on /dashboard', async ({ page }) => {
     await page.goto('/settings', { waitUntil: 'commit' })
     await page.locator('select[name="theme"]').selectOption('dark')
-    await page.getByRole('button', { name: 'Save changes' }).click()
-    await expect(page.getByText('Profile saved')).toBeVisible()
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
     await page.goto('/dashboard')
     const isDark = await page.evaluate(() => document.documentElement.classList.contains('dark'))
