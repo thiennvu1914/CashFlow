@@ -82,14 +82,17 @@ export function ForgotPasswordForm() {
         <Button type="submit" className="w-full">
           {submit.pending ? t('auth.sendingResetLink') : t('auth.sendResetLink')}
         </Button>
-
-        <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
-          {t('auth.rememberedIt')}{' '}
-          <Link href="/login" className="text-brand underline-offset-4 hover:underline">
-            {t('auth.signIn')}
-          </Link>
-        </p>
       </fieldset>
+
+      {/* Below the fieldset, not inside it: navigation, not a member of the
+          "Đặt lại mật khẩu" form group a screen reader announces the
+          fieldset's contents as. */}
+      <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
+        {t('auth.rememberedIt')}{' '}
+        <Link href="/login" className="text-brand underline-offset-4 hover:underline">
+          {t('auth.signIn')}
+        </Link>
+      </p>
     </form>
   )
 }

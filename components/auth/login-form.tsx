@@ -44,8 +44,14 @@ export function LoginForm() {
         })
         if (error) {
           // Fixed message regardless of what Better Auth reports — never reveal
-          // whether the email exists.
-          setError('root', { message: t('auth.invalidCredentials') })
+          // whether the email exists. The one exception is the real rate
+          // limiter (`lib/auth/create-auth.ts`), whose 429 is a genuinely
+          // different situation the visitor needs to know about (wait, don't
+          // retry), not a wrong password — so it alone gets its own copy.
+          setError('root', {
+            message:
+              error.status === 429 ? t('auth.tooManyAttempts') : t('auth.invalidCredentials'),
+          })
           return
         }
       } catch {
@@ -95,20 +101,23 @@ export function LoginForm() {
         <Button type="submit" className="w-full">
           {submit.pending ? t('auth.signingIn') : t('auth.signIn')}
         </Button>
-
-        <Link
-          href="/forgot-password"
-          className="text-sm text-brand underline-offset-4 hover:underline"
-        >
-          {t('auth.forgotPassword')}
-        </Link>
-        <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
-          {t('auth.noAccount')}{' '}
-          <Link href="/register" className="text-brand underline-offset-4 hover:underline">
-            {t('auth.createOne')}
-          </Link>
-        </p>
       </fieldset>
+
+      {/* Below the fieldset, not inside it: these are navigation, not part of
+          the "Đăng nhập CashFlow" form group a screen reader announces the
+          fieldset's contents as. */}
+      <Link
+        href="/forgot-password"
+        className="text-sm text-brand underline-offset-4 hover:underline"
+      >
+        {t('auth.forgotPassword')}
+      </Link>
+      <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
+        {t('auth.noAccount')}{' '}
+        <Link href="/register" className="text-brand underline-offset-4 hover:underline">
+          {t('auth.createOne')}
+        </Link>
+      </p>
     </form>
   )
 }

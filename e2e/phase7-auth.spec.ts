@@ -78,6 +78,41 @@ test('a wrong password on login shows the translated friendly error', async ({ p
   await expect(page.getByText('Email hoặc mật khẩu không đúng')).toBeVisible()
 })
 
+test('a rate-limited (429) sign-in shows the too-many-attempts message, not the uniform invalid-credentials one', async ({
+  page,
+}) => {
+  const { email, password } = await registerNewUser(page, {
+    emailPrefix: 'e2e-phase7-auth-429',
+  })
+  await page.context().clearCookies()
+
+  // A real 429 from Better Auth's own rate limiter (`lib/auth/create-auth.ts`)
+  // is a genuinely different situation from a wrong password — the visitor
+  // needs to know to wait, not that their credentials were rejected. Routed
+  // rather than actually tripping the real limiter, so this stays
+  // deterministic regardless of how many other sign-ins ran earlier in the
+  // suite.
+  await page.route('**/api/auth/sign-in/email', async (route) => {
+    await route.fulfill({
+      status: 429,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'Too many requests' }),
+    })
+  })
+
+  await page.goto('/login')
+  await page.getByLabel('Email').fill(email)
+  await page.getByLabel('Mật khẩu').fill(password)
+  await page.getByRole('button', { name: 'Đăng nhập' }).click()
+
+  await expect(
+    page.getByText('Bạn đã thử quá nhiều lần. Vui lòng đợi một phút rồi thử lại.'),
+  ).toBeVisible()
+  await expect(page.getByText('Email hoặc mật khẩu không đúng')).toHaveCount(0)
+
+  await page.unroute('**/api/auth/sign-in/email')
+})
+
 test('forgot-password submits and shows the neutral confirmation regardless of whether the address is registered', async ({
   page,
 }) => {
@@ -159,6 +194,15 @@ test('no horizontal overflow at 375, and the card is full width with padding', a
       innerWidth: window.innerWidth,
     }))
     expect(scrollWidth, `overflow at ${url}`).toBeLessThanOrEqual(innerWidth)
+
+    // Not just "no overflow" — the card itself (`app/(auth)/layout.tsx`'s
+    // `w-full max-w-[25rem]` div) must actually BE full width inside the
+    // page wrapper's `p-4` (16px each side), not a narrower "mobile card"
+    // floating in unexplained side margins.
+    const card = page.locator('div.rounded-lg.border-border.bg-surface').first()
+    const box = await card.boundingBox()
+    expect(box, `card bounding box at ${url}`).not.toBeNull()
+    expect(Math.abs(box!.width - (innerWidth - 32)), `card width at ${url}`).toBeLessThanOrEqual(1)
   }
 })
 
