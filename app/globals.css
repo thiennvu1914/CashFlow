@@ -89,124 +89,209 @@
  *   light --warning     oklch(0.55 0.11 78)  #94680F  (4.56:1 on background)
  * (a straight L=0.56 for --warning, as first proposed, measured 4.37:1 and
  * was rejected; L=0.55 is the smallest darkening that clears 4.5:1)
+ *
+ * The table above is a record of the BRIEF's source values and their literal
+ * conversions, not of what the tokens hold today. Four of them have since
+ * moved, every time because a measured pair failed and never for taste:
+ * dark --surface (0.274 -> 0.265, to land on the spec's #202724 exactly),
+ * dark --input-bg, dark --brand (0.605 -> 0.63 -> 0.66) and dark
+ * --muted-foreground (55% -> 57% -> 60%). Each carries its own reasoning at
+ * the declaration, and the current painted values are tabulated in the
+ * MEASURED WCAG CONTRAST block immediately below.
  */
 
 /*
- * Phase 7 §2 Step 5 — measured WCAG contrast ratios for every text/UI pair,
- * computed with a standalone oklch -> linear-sRGB -> relative-luminance
- * pipeline (CSS Color 4 math; color-mix() pairs are alpha-composited over
- * their stated backdrop before measuring). Minimums: 4.5:1 text, 3:1 UI.
- * Every row below PASSES (revised after two rounds of controller/reviewer
- * fixes — see "Deviations" at the end for every token that was nudged to
- * get there).
+ * MEASURED WCAG CONTRAST — every text and UI pair, both themes.
  *
- * LIGHT
- *   foreground/background        15.41:1  PASS  (#191F1D on #F5F6F4)
- *   foreground/surface           16.75:1  PASS  (#191F1D on #FFFFFF)
- *   foreground/surface-2         15.33:1  PASS  (#191F1D on #F4F5F5)
- *   foreground/input-bg          16.75:1  PASS  (input-bg = surface in light)
- *   muted-foreground/background   5.73:1  PASS
- *   muted-foreground/surface      6.22:1  PASS
- *   muted-foreground/input-bg     6.22:1  PASS  (placeholder text; input-bg = surface)
- *   brand/background              5.86:1  PASS
- *   brand/surface                 6.37:1  PASS
- *   positive/surface              5.30:1  PASS
- *   negative/surface              5.20:1  PASS
- *   warning/surface               4.93:1  PASS
- *   primary-foreground/brand      6.37:1  PASS
- *   border-strong/surface         3.27:1  PASS
- *   input/input-bg                3.17:1  PASS  (nudged, see "Deviations")
- *   focus/background              5.86:1  PASS
- *   focus/surface-2               5.83:1  PASS
+ * Started by Task 1a Step 5 (light) and completed by Task 14 (dark, owner
+ * item E2). Minimums: 4.5:1 for text (WCAG 1.4.3 AA at these sizes), 3:1 for
+ * UI boundaries (1.4.11).
  *
- * DARK
- *   foreground/background        15.89:1  PASS  (#F5F6F4 on #171C1A)
- *   foreground/surface           14.02:1  PASS  (#F5F6F4 on #202724; --surface
- *                                                corrected, see "Deviations" #4)
- *   foreground/surface-2         12.60:1  PASS  (#F5F6F4 on #2A2E2C, see #4)
- *   foreground/input-bg          14.88:1  PASS  (#F5F6F4 on #1C221F; --input-bg
- *                                                corrected, see "Deviations" #4)
- *   muted-foreground/background   5.31:1  PASS  (nudged, see "Deviations" #4)
- *   muted-foreground/surface      4.69:1  PASS  (nudged, see "Deviations" #4)
- *   muted-foreground/input-bg     4.97:1  PASS  (placeholder text; nudged, see #4)
- *   brand/background              5.17:1  PASS  (nudged, see "Deviations" #3)
- *   brand/surface                 4.56:1  PASS  (nudged #3; shifted again by the
- *                                                --surface correction in #4)
- *   positive/surface              4.67:1  PASS  (shifted by the --surface
- *                                                correction, see "Deviations" #4)
- *   negative/surface              5.12:1  PASS  (shifted by #4)
- *   warning/surface               6.45:1  PASS  (shifted by #4)
- *   primary-foreground/brand      5.17:1  PASS  (recheck after the brand nudge)
- *   border-strong/surface         3.48:1  PASS  (shifted by the --surface
- *                                                correction in #4 — 3.34:1 on surface-2)
- *   input/input-bg                3.23:1  PASS  (nudged #2; shifted again by the
- *                                                --input-bg correction in #4)
- *   focus/background              5.17:1  PASS  (tracks brand/background — focus = brand)
- *   focus/surface-2               4.10:1  PASS  (tracks brand/surface-2)
+ * HOW THESE WERE MEASURED. Not by eye, and not from the oklch literals alone.
+ * Every value below was read out of the RUNNING app: each token is resolved
+ * to exact sRGB with `rgb(from var(--x) r g b / alpha)` (which Chrome
+ * serialises as `color(srgb …)`), a translucent token is alpha-composited
+ * over the stated backdrop in sRGB, and the ratio is computed from the 8-bit
+ * result. A separate standalone oklch -> linear-sRGB pipeline agreed with the
+ * browser on every opaque token and DISAGREED on three — `--muted`,
+ * `--muted-foreground` and the `color-mix(…, transparent)` trio — because
+ * `color-mix(in oklch, …)` between a near-achromatic colour and a chromatic
+ * one resolves to a POWERLESS hue in Chrome (the computed value is literally
+ * `oklch(0.28 0.0066 none)`), which lands a shade warmer than an
+ * arithmetically interpolated hue would. Dark `--muted` therefore paints
+ * #2C2829, not the #262A28 the maths predicts, and dark `--muted-foreground`
+ * paints #989495, not #949694. The browser figures are the ones recorded —
+ * they are what a user sees. (Harmless in itself, but worth knowing before
+ * anyone "corrects" a hex here from a converter.)
  *
- * Deviations from the brief's literal values, each the smallest change that
- * clears its minimum with a little margin:
+ * ================================ LIGHT ================================
+ * Tokens as painted: background #F5F6F4  surface #FFFFFF  surface-2 #F5F5F5
+ * input-bg #FFFFFF  foreground #191F1D  muted #EAE8E9  muted-foreground
+ * #645F60  brand #206B58  accent #5777A2  positive #307856  negative #B54A46
+ * warning #94680F  border #211C1D/0.12  border-strong #211C1D/0.5
+ * input #211C1D/0.49
  *
- *   1. --border-strong (both themes): 18%/22% measured 1.45:1 / 1.99:1
- *      against --surface — far under 3:1, because a translucent near-black
- *      tint barely moves the relative luminance of a near-white/dark-charcoal
- *      surface. Not consumed by any component yet (Task 1c/5a are first), so
- *      raised to 50% (light) / 40% (dark) — clears 3:1 against --surface AND
- *      --surface-2 with margin.
+ *   TEXT (>= 4.5:1)                    background  surface  surface-2  input-bg
+ *   foreground                             15.43    16.73     15.35     16.73
+ *   muted-foreground                        5.79     6.27      5.75      6.27
+ *   brand                                   5.86     6.35      5.83      6.35
+ *   positive                                4.91     5.32      4.88        —
+ *   negative                                4.80     5.21      4.78        —
+ *   warning                                 4.56     4.95      4.54        —
+ *   primary-foreground on a brand fill      6.35
+ *   accent-foreground on an accent fill     4.60   (menu/select highlighted row)
+ *   primary-foreground on a negative fill   5.21   (ConfirmDialog's confirm
+ *                                                   button; = white in light)
  *
- *   2. --input (both themes), --input-bg's own edge: the brief's literal
- *      18% (light) / 22% (dark) measured 1.45:1 / 1.95:1 against --input-bg
- *      — under the 3:1 UI minimum. Per controller ruling, tokens are this
- *      task's deliverable and are not protected by "nothing renders
- *      differently" (that constraint is about pages/layouts, not the values
- *      the tokens hold) — so both were raised, keeping the same neutral
- *      --foreground hue (no shift toward brand):
- *        light  18% -> 49%  (1.45:1 -> 3.17:1 against --input-bg = --surface)
- *        dark   22% -> 37%  (1.95:1 -> 3.28:1 against --input-bg = #1C221F)
- *      Kept as color-mix(... transparent) rather than switched to an opaque
- *      value, for consistency with --border-strong's identical idiom and
- *      because the measured pair (input-bg) is fixed in both themes, so the
- *      alpha composite is exactly as deterministic as an opaque color here.
+ *   UI (>= 3:1)                        background  surface  surface-2  input-bg
+ *   border-strong                            3.21     3.26      3.19      3.26
+ *   input                                    3.13     3.17      3.11      3.17
+ *   focus (= brand)                          5.86     6.35      5.83      6.35
+ *   border                                  [1.27]   [1.27]    [1.27]    [1.27]
+ *   muted                                   [1.12]   [1.21]    [1.12]      —
+ *   chart series on surface: brand 6.35, accent 4.60, positive 5.32,
+ *                            negative 5.21, warning 4.95
  *
- *   3. --brand (dark only; light --brand is unchanged): oklch L 0.605 -> 0.63
- *      (chroma/hue unchanged: 0.094 173.622), hex #38947D -> #419C84.
- *      brand/surface was 4.29:1 (under 4.5:1); brand/background was already
- *      passing at 4.68:1 but is a chained consequence of the same token.
- *      primary-foreground/brand (dark text --background drawn on a --brand
- *      fill) was re-checked after the change and improved (4.68:1 -> 5.17:1),
- *      so --primary-foreground did not need to move. --focus tracks --brand,
- *      so focus/background and focus/surface-2 improved by the same amount.
+ * ================================ DARK =================================
+ * Tokens as painted: background #171C1A  surface #202724  surface-2 #2A2E2C
+ * input-bg #1C221F  foreground #F5F6F4  muted #2C2829  muted-foreground
+ * #989495  brand #4BA58D  accent #7A94B8  positive #479E76  negative #D0807C
+ * warning #CBA35D  border #F7F5F5/0.14  border-strong #F7F5F5/0.4
+ * input #F7F5F5/0.37
  *
- *   4. Dark --surface and --input-bg were WRONG, not just imprecise — flagged
- *      by two independent oklch -> sRGB measurements (Task 2a's script and
- *      the Task 1a reviewer's) after this task had already closed:
- *        --surface   oklch(0.253 0.007 164.376) actually converts to #1F2321,
- *                    not the comment's claimed #202724 (off by 4 units on G,
- *                    3 on B — beyond a rounding-noise tolerance of ~2 units
- *                    per channel). Corrected to oklch(0.265 0.011 167.731),
- *                    which round-trips to exactly #202724.
- *        --input-bg  oklch(0.2 0.006 170) actually converts to #131716,
- *                    DARKER than --background (#171C1A) — the opposite of
- *                    the spec's "recessed field" ladder, and visibly a
- *                    near-black hole in the browser instead of a lighter
- *                    fill. Corrected to oklch(0.245 0.01 163.978), which
- *                    round-trips to exactly #1C221F and now sits correctly
- *                    between --background (L 0.22) and the corrected
- *                    --surface (L 0.265).
- *      --surface-2 (oklch(0.298 0.007 164.376), actually #2A2E2C vs the
- *      spec's #29302D) was within the ~2-units-per-channel tolerance on
- *      every channel, so only its comment was corrected — the token itself
- *      is unchanged.
- *      Correcting --surface shifted every dark pair measured against it
- *      (foreground/surface, brand/surface, positive/negative/warning/
- *      surface, border-strong/surface) and dropped muted-foreground/surface
- *      below 4.5:1 (4.59:1 -> 4.42:1), which required nudging dark
- *      --muted-foreground 55% -> 57% (the smallest step restoring margin:
- *      4.69:1); this also lifted muted-foreground/background and
- *      muted-foreground/input-bg further above their minimum. Correcting
- *      --input-bg shifted foreground/input-bg, muted-foreground/input-bg,
- *      and input/input-bg (37% unchanged; still 3.23:1, comfortably ≥ 3:1
- *      against the new, lighter fill — no further --input change needed).
+ *   TEXT (>= 4.5:1)                background  surface  surface-2  input-bg  muted
+ *   foreground                         15.91    14.07     12.70     14.92   13.43
+ *   muted-foreground                    5.75     5.09      4.59      5.40    4.86
+ *   brand                               5.80     5.13      4.63      5.44    4.90
+ *   positive                            5.27     4.66     [4.21]      —     [4.45]
+ *   negative                            5.80     5.13      4.63       —      4.89
+ *   warning                             7.34     6.49      5.86       —      6.19
+ *   accent                              5.55     4.91     [4.43]      —      4.68
+ *   primary-foreground on a brand fill  5.80
+ *   accent-foreground on an accent fill 5.55   (menu/select highlighted row)
+ *   primary-foreground on a negative fill 5.80 (ConfirmDialog's confirm button;
+ *                            it was `text-white` = 2.97:1 until Task 14 — see
+ *                            components/common/confirm-dialog.tsx)
+ *
+ *   UI (>= 3:1)                    background  surface  surface-2  input-bg
+ *   border-strong                       3.61     3.47      3.36      3.54
+ *   input                               3.26     3.18      3.09      3.23
+ *   focus (= brand)                     5.80     5.13      4.63      5.44
+ *   border                             [1.50]   [1.53]    [1.53]    [1.53]
+ *   muted                              [1.18]   [1.05]    [1.06]      —
+ *   chart series on surface: brand 5.13, accent 4.91, positive 4.66,
+ *                            negative 5.13, warning 6.49
+ *   surface ladder: background -> surface 1.13, surface -> surface-2 1.11,
+ *                   input-bg recessed below surface 1.06
+ *
+ * The pairs Task 14 fixed by moving a token — each the smallest step that
+ * clears its minimum, chroma and hue untouched, light untouched (the
+ * per-token comments below carry the full reasoning):
+ *   dark --brand            0.63 -> 0.66   brand/surface-2  4.14 -> 4.63
+ *                                          brand/muted      4.38 -> 4.90
+ *   dark --muted-foreground  57% -> 60%    mf/surface-2     4.20 -> 4.59
+ *                                          mf/muted         4.44 -> 4.86
+ *
+ * ============ THE [BRACKETED] ROWS: MEASURED, NOT MET, WHY ============
+ *
+ * 1. `--border` at 12 % (light) / 14 % (dark) is 1.27:1 / 1.50-1.53:1 against
+ *    every surface, and no alpha near the spec's value can reach 3:1 — a
+ *    translucent hairline over a near-white or near-charcoal ground barely
+ *    moves its luminance. That is exactly why `--border-strong` exists (50 % /
+ *    40 %, 3.19-3.61:1): the hairline is the calm card edge, `--border-strong`
+ *    is the divider for anywhere 3:1 is actually required. A card is also
+ *    never delimited by its hairline alone — `--surface` differs from
+ *    `--background` on every side of it. Both themes measure the same, so this
+ *    is not a dark regression; raising `--border` would restructure the
+ *    palette in both themes, which Task 14's brief forbids.
+ *
+ * 2. `--muted` in dark is 1.05:1 against `--surface` and 1.06:1 against
+ *    `--surface-2`, i.e. the hover/active wash is nearly invisible there. It
+ *    is structural, not a wrong number: `--muted` is derived from
+ *    `--background`, and in dark the two surfaces sit ABOVE the background, so
+ *    the wash lands between them — its minimum against `--surface` is at ~6 %
+ *    and against `--surface-2` at ~10 %, and 8 % sits in that trough. Neither
+ *    direction is free: sweeping it lighter (14-20 %) reaches 1.23-1.47:1
+ *    against the surfaces but drops `text-brand` on it to 3.7-3.1:1 and
+ *    `text-muted-foreground` to 3.8-3.2:1 (the rail's active row, the
+ *    SegmentedControl, the reminders chips and StatusBadge's neutral tone all
+ *    put text on `bg-muted`); sweeping it darker to `--background` itself
+ *    keeps the text but makes the wash vanish on the page background, where
+ *    the reminders chips and the mobile-nav hovers live. Making it translucent
+ *    (`foreground 6-12 %`, so it lightens whatever it sits on) fails the same
+ *    text pairs. Recorded and left alone, with two consequences handled
+ *    separately:
+ *      - the 6 px `Progress` track is the one `bg-muted` surface with no text
+ *        on it, and it WAS unreadable (a 0 %-progress debt showed nothing at
+ *        all), so it takes `dark:bg-foreground/14` — see
+ *        components/common/progress.tsx;
+ *      - every other `bg-muted` state is a large area with a straight edge,
+ *        where 1.05:1 is perceptible (verified in the dark screenshots: the
+ *        rail's active row, the segmented controls and the chart bar-cursor
+ *        band all read), and each also carries a non-colour cue — the rail's
+ *        2 px `before:` indicator, `font-medium`, `aria-current="page"`.
+ *    Fixing it properly means widening the dark surface ladder or splitting
+ *    `--muted` into a wash token and a fill token; both are palette decisions
+ *    above a consistency pass. Light measures 1.12-1.21:1 for the same token,
+ *    so this is a matter of degree rather than a dark-only defect.
+ *
+ * 3. `positive/surface-2` (4.21) and `accent/surface-2` (4.43) in dark have no
+ *    consumer: `text-positive` renders only on cards and on the page (money
+ *    rows, debt/loan/budget figures, the dashboard's debt-loan panel) and no
+ *    dialog or sheet in the product renders a `MoneyText` or a `StatusBadge`;
+ *    `text-accent` is not used anywhere at all (`--accent` is a fill — menu
+ *    highlight, distribution bars). `positive/muted` (4.45) is likewise
+ *    unconsumed: StatusBadge's positive tone uses the tinted fill below, not
+ *    `bg-muted`. Measured and recorded so that a future component that DOES
+ *    put one of those on a raised surface knows it must nudge the token first.
+ *
+ * 4. The tinted StatusBadge / InlineAlert pill — `bg-<tone>/10
+ *    dark:bg-<tone>/18` with `text-<tone>` on it — does not reach 4.5:1 for
+ *    every tone in EITHER theme, and cannot be made to at these token values:
+ *      dark (18 %)   on surface / surface-2 / background
+ *        positive     3.61  3.28  4.09
+ *        negative     3.89  3.52  4.43
+ *        brand        3.85  3.54  4.38
+ *        warning      4.66  4.21  5.31
+ *      light (10 %)  on surface / surface-2 / background
+ *        positive     4.67  4.30  4.30
+ *        negative     4.54  4.19  4.21
+ *        brand        5.50  5.06  5.09
+ *        warning      4.35  4.01  4.03
+ *    The cause is headroom: a tone that measures 4.6-5.1:1 on the plain
+ *    surface has nothing left once a wash of ITSELF moves that surface toward
+ *    it, and the movement is in the contrast-losing direction in both themes
+ *    (lighter in dark, darker in light). Sweeping the dark alpha 18 % -> 8 %
+ *    only recovers ~0.5 and buys it by making the pill fainter still; mixing
+ *    the tint toward `--background` instead of over the surface lands in the
+ *    same trough as note 2; and clearing 4.5:1 by lightening the tones needs
+ *    L ~0.75-0.77 for positive/brand/negative — a pastel palette, which
+ *    contradicts both the spec's pinned dark lightnesses and "never neon".
+ *    The remaining routes are a dedicated tinted-surface token per tone in
+ *    both themes, or dropping the tint for a bordered pill in dark. Both are
+ *    design decisions across every screen in both themes, so Task 14 recorded
+ *    this rather than guessing. Mitigation already in place: every badge's
+ *    wording differs per state (StatusBadge's own doc), so colour is never the
+ *    only signal, and `role="alert"` carries the negative InlineAlert to a
+ *    screen reader regardless.
+ *    The pill's own FILL is 1.13-1.16:1 (light) / 1.28-1.39:1 (dark) against
+ *    its surface. It is a decorative wash behind text that carries the
+ *    meaning, not a control boundary, so 1.4.11's 3:1 does not apply to it —
+ *    but it does mean the pill reads as tinted text more than as a chip.
+ *
+ * ================= NOT A CONTRAST PROBLEM, BUT FOUND HERE =================
+ *
+ * `:focus-visible` below sets `outline: 2px solid var(--focus)` for every
+ * control, and the ring's colour is comfortably above 3:1 on every surface
+ * (see the tables). It does NOT render on anything built from
+ * `buttonVariants`, in either theme: that base class carries Tailwind's
+ * `outline-none`, which lives in a later cascade layer than `@layer base` and
+ * overrides `outline-style` only — so a focused Button computes
+ * `outline-width: 2px`, `outline-color: <brand>`, `outline-style: none`.
+ * Verified in the browser (`document.activeElement.matches(':focus-visible')`
+ * is true while `getComputedStyle(el).outlineStyle` is `none`). Task 16 owns
+ * "focus visible everywhere"; Task 14 measured the colour and handed the
+ * missing style over rather than editing a shared primitive out of turn.
  */
 
 :root {
@@ -232,8 +317,9 @@
      --surface (well under the 3:1 UI minimum) because --surface is pure
      white here — a semi-transparent near-black at 18% alpha barely tints it.
      --border-strong is not consumed anywhere yet (Task 1c/5a are first), so
-     it is safe to nudge; raised to 50% to clear 3:1 (measured 3.27:1, see
-     Step 5 table below). */
+     it is safe to nudge; raised to 50% to clear 3:1 (measured 3.26:1
+     against --surface in the browser — see the MEASURED WCAG CONTRAST block
+     above). */
   --border-strong: color-mix(in oklch, var(--foreground) 50%, transparent);
   --focus: var(--brand);
   /* The background an input SITS on, rather than a translucent wash over
@@ -286,25 +372,38 @@
   /* CashFlow base tokens (warm charcoal, never pure black) */
   --background: oklch(0.22 0.007 173.672);
   --foreground: oklch(0.971 0.002 134.839);
-  /* Step 5 measurement (controller-fix round): brand/surface measured
-     4.29:1 against the spec-pinned #202724 --surface — under the 4.5:1 text
-     minimum (--brand is used as literal link/nav text, e.g. `text-brand` in
-     components/layout/app-shell.tsx). Chroma/hue unchanged (0.094 173.622);
-     L raised 0.605 -> 0.63 (#38947D -> #419C84), the smallest lift that
-     clears 4.5:1 with a little margin (4.74:1). Re-checked
-     primary-foreground/brand (dark text --background on a --brand fill)
-     afterward: it improved (4.68:1 -> 5.17:1), so --primary-foreground did
-     not need to move. Light --brand is unchanged. */
-  --brand: oklch(0.63 0.094 173.622);
+  /* Step 5 measurement, twice. Chroma and hue have never moved (0.094
+     173.622); only L has, and only because a measured pair failed:
+       0.605 -> 0.63  (#38947D -> #419C84, Task 1a controller-fix round)
+                      brand/surface was 4.29:1 against the spec-pinned
+                      #202724 --surface, under the 4.5:1 text minimum
+                      (--brand is literal link/nav text, e.g. `text-brand`
+                      in components/layout/app-shell.tsx).
+       0.63  -> 0.66  (#419C84 -> #4BA58D, Task 14) two pairs the earlier
+                      round did not measure still failed at 0.63:
+                        brand/muted     4.38:1 — the rail's active row, the
+                                        SegmentedControl's active segment,
+                                        MoreSheet's active item and the
+                                        reminders type chips are all
+                                        `bg-muted text-brand`;
+                        brand/surface-2 4.14:1 — --brand inside a dialog or
+                                        sheet, and the --focus ring drawn on
+                                        a raised surface.
+                      0.65 was measured first and left brand/surface-2 at
+                      4.46:1, still short; 0.66 is the smallest step that
+                      clears every brand pair (4.63:1 at the worst) and it
+                      lifts primary-foreground/brand (the dark --background
+                      text on a --brand fill) from 5.19:1 to 5.80:1, so
+                      --primary-foreground still does not need to move.
+     Light --brand is unchanged in both rounds. */
+  --brand: oklch(0.66 0.094 173.622);
   --accent: oklch(0.66 0.061 256.836);
   --positive: oklch(0.635 0.105 160.924);
   --negative: oklch(0.683 0.1 23.252);
   --warning: oklch(0.736 0.1 79.908);
-  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. This
-     declaration is the ONLY `--surface` in `.dark`: an earlier draft declared
-     it twice, first as oklch(0.274 …) (#242926) and then again here, so the
-     first one was dead and the spec's ladder needs the middle rung a shade
-     darker than it anyway, for surface-2 to be visibly distinct.
+  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. The
+     existing `--surface` was oklch(0.274 …) (#242926); the spec's ladder needs
+     the middle rung a shade darker so surface-2 is visibly distinct from it.
      Step 5 measurement (2nd controller-fix round): the previous value here,
      oklch(0.253 0.007 164.376), actually converts to #1F2321 — off from the
      spec's #202724 by more than 2 units on the G/B channels (39/36 -> 35/33),
@@ -318,8 +417,9 @@
   --surface-2: oklch(0.298 0.007 164.376); /* actually #2A2E2C; within tolerance, see note above */
   /* Step 5 measurement: the brief's literal 22% measures 1.99:1 against
      --surface (under the 3:1 UI minimum). Like light, unused elsewhere yet,
-     so raised to 40% to clear 3:1 against both --surface (3.48:1 after the
-     --surface fix above) and --surface-2 (3.34:1), see Step 5 table below. */
+     so raised to 40% to clear 3:1 against both --surface (3.47:1 as the
+     browser paints it, after the --surface fix below) and --surface-2
+     (3.36:1) — see the MEASURED WCAG CONTRAST block above. */
   --border-strong: color-mix(in oklch, var(--foreground) 40%, transparent);
   --focus: var(--brand);
   /* Spec §3: "inputs on #1C221F" — one step below `--surface` (#202724), so a
@@ -345,13 +445,19 @@
   --muted: color-mix(in oklch, var(--foreground) 8%, var(--background));
   --secondary: var(--muted);
   --secondary-foreground: var(--foreground);
-  /* Step 5 measurement (2nd controller-fix round): correcting --surface above
-     (lighter, L 0.253 -> 0.265) dropped muted-foreground/surface from 4.59:1
-     to 4.42:1 — under the 4.5:1 text minimum. Raised 55% -> 57%, the
-     smallest step that restores a little margin (4.69:1); still passes
-     against --background (5.31:1, up from 5.01:1) and --input-bg
-     (4.97:1). */
-  --muted-foreground: color-mix(in oklch, var(--foreground) 57%, var(--background));
+  /* Step 5 measurement, twice.
+       55% -> 57%  (Task 1a 2nd controller-fix round) correcting --surface
+                   above (lighter, L 0.253 -> 0.265) had dropped
+                   muted-foreground/surface from 4.59:1 to 4.42:1.
+       57% -> 60%  (Task 14) 57% resolves to #918D8E in the browser and left
+                   two pairs short: muted-foreground/surface-2 4.20:1 (every
+                   dialog and sheet description, and FormField's helper text
+                   inside a sheet) and muted-foreground/muted 4.44:1
+                   (StatusBadge's `neutral`/`muted` tones, the default
+                   category chips, and the rail's hovered row). 60% clears
+                   both (4.59:1 and 4.86:1) and lifts the three pairs that
+                   already passed. Light --muted-foreground is unchanged. */
+  --muted-foreground: color-mix(in oklch, var(--foreground) 60%, var(--background));
   --accent-foreground: var(--background);
   --destructive: var(--negative);
   --border: color-mix(in oklch, var(--foreground) 14%, transparent);
