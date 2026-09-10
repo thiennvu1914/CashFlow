@@ -767,10 +767,31 @@ test.describe.serial('Phase 7 — accessibility', () => {
       expect(names.plot, 'the focusable plot carries a name of its own').not.toBe('')
       expect(names.plot, "the plot's name is the figure's own summary").toBe(names.figure)
     }
-    // And the computed accessible name, not just the markup that feeds it.
-    await expect(page.locator('figure svg[tabindex="0"]').first()).toHaveAccessibleName(
-      /^Biểu đồ .{20,}/,
-    )
+    // And the COMPUTED name of the element focus actually lands on (fix round
+    // 1, Minor 3): asserting on `figure svg[tabindex="0"]` proved a name on a
+    // node picked by selector, which is not the same claim. Focus the plot,
+    // confirm `document.activeElement` IS that svg, then assert the name
+    // through a `:focus` locator — so the accname really is computed for the
+    // focused node — and that it equals its own figure's summary.
+    const focusedPlot = page.locator('figure svg[tabindex="0"]').first()
+    await focusedPlot.focus()
+    const active = await page.evaluate(() => {
+      const element = document.activeElement
+      const first = document.querySelector('figure svg[tabindex="0"]')
+      return {
+        isTheFirstPlot: element === first,
+        tag: element?.tagName.toLowerCase() ?? null,
+        role: element?.getAttribute('role') ?? null,
+        figureLabel: element?.closest('figure')?.getAttribute('aria-label') ?? null,
+      }
+    })
+    expect(active.isTheFirstPlot, 'focus landed on the plot itself').toBe(true)
+    expect(active.tag).toBe('svg')
+    expect(active.role).toBe('application')
+    expect(active.figureLabel, 'the focused plot sits in a named figure').not.toBeNull()
+    const focusedName = page.locator('figure svg[tabindex="0"]:focus')
+    await expect(focusedName).toHaveAccessibleName(/^Biểu đồ .{20,}/)
+    await expect(focusedName).toHaveAccessibleName(active.figureLabel!)
 
     // (a) reachable by Tab — every chart, not just the first. The rail is 16
     // stops at 1440, so a bounded 70-press sweep covers the whole page.
