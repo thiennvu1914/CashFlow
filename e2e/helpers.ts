@@ -45,13 +45,15 @@ export async function registerNewUser(
  * against `os.tmpdir()`, a `beforeAll` opening a logged-out context, the
  * `registerNewUser` call, the save and the close, plus the comment explaining
  * `storageState: undefined` (twenty-one copies across twenty files, pre-flight
- * A-7). The copies had already drifted: some closed the context in a `finally`,
- * none did, and each carried its own two spellings of the same label.
+ * A-7). The copies had already drifted into three wordings of that comment,
+ * none of them closed the context in a `finally`, and each carried its own two
+ * spellings of the same label.
  *
  * `label` is that one spelling now: it names the temp file
  * (`cashflow-<label>-<pid>.json`, per-process so two runs on one machine never
- * share a file) and the registered user's email prefix (`e2e-<label>`). Give
- * each spec file a distinct one.
+ * share a file) and the registered user's email prefix (`e2e-<label>`). It must
+ * be distinct per session — two sessions sharing a label would silently share
+ * one state file, so a duplicate throws when the second spec file loads.
  */
 export interface AuthenticatedSession {
   /** The `storageState` path — pass to `test.use({ storageState })`. */
@@ -67,7 +69,24 @@ export interface AuthenticatedSession {
   ): Promise<{ email: string; password: string }>
 }
 
+/**
+ * Every label handed out so far. Playwright loads all spec files into one
+ * process to collect the tests, so a label reused by a second file is caught
+ * here at load time — before either file's `beforeAll` overwrites the other's
+ * saved session and turns it into a cross-file failure nobody would read as a
+ * naming collision.
+ */
+const takenLabels = new Set<string>()
+
 export function authenticatedSession(label: string): AuthenticatedSession {
+  if (takenLabels.has(label)) {
+    throw new Error(
+      `authenticatedSession('${label}') is already used by another spec file. Two sessions with ` +
+        'the same label share one storage-state file and one email prefix; give each spec file its own.',
+    )
+  }
+  takenLabels.add(label)
+
   const statePath = path.join(os.tmpdir(), `cashflow-${label}-${process.pid}.json`)
 
   return {
