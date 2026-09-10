@@ -135,3 +135,10 @@
 - [ ] Run from the frozen HEAD: `npm run test`; `CI=1 npx playwright test` (workers 1, retries 0); `npm run lint` (0 errors, 0 warnings); `npm run format:check`; `npx tsc --noEmit`; `npx prisma validate`; `npx prisma migrate status`; `npm run build`.
 - [ ] Clean-install proof: rename `node_modules`, `npm ci` alone, confirm the Prisma client exists and `npx tsc --noEmit` passes; restore.
 - [ ] Deliver the 29-item Wave 1 report and STOP (no Wave 2, no push, no merge).
+
+---
+
+## Notes for Wave 2
+
+- `postinstall: prisma generate` with `prisma` in `devDependencies` (Task 1) means `npm ci --omit=dev` fails outright — the Wave 2 Dockerfile/deploy step must install dev dependencies before pruning, or run `npm ci --ignore-scripts` followed by an explicit `prisma generate`.
+- `vitest.global-setup.ts` still loads `.env` only via `dotenv`, while Playwright now resolves env through `@next/env`'s precedence (`.env.local`, `.env.test`, etc.) — reconcile the two loaders as the first Wave 2 test-harness item, before adding any new env-dependent config.

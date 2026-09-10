@@ -738,6 +738,13 @@ export interface DashboardOccurrenceRead {
  *
  * The caps are clamped to at least one, so a caller cannot turn a half off by
  * passing zero and silently lose the overdue rows.
+ *
+ * The two bounded reads and `overdueCount` run in one `Promise.all`, not a
+ * transaction: a write between them (a reminder dismissed or a new occurrence
+ * materialized by another request) can leave `overdueCount` one off from the
+ * rows actually returned until the next render. This is self-healing and
+ * non-financial — the dashboard is a live view, not a ledger — so it is
+ * accepted rather than paid for with a transaction on every render.
  */
 export async function listDashboardOccurrences(
   userId: string,
