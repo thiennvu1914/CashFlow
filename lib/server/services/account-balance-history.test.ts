@@ -448,4 +448,62 @@ describe('getAccountBalanceOverTime', () => {
 
     expect(points.map((point) => point.balance?.toString())).toEqual(['1000000', '1000000', '0'])
   })
+
+  /**
+   * The account list is resolved once for the chart (Phase 8, Task 4 —
+   * pre-flight finding B-4).
+   *
+   * Every point used to re-read the same ownership rows: `getAccountBalances`
+   * opened with a `financialAccount.findMany` whose `where` does not depend on
+   * the cutoff, so a six-month chart fetched and re-validated an identical
+   * account set six times over — on top of the one this service had already
+   * fetched to decide which accounts exist at all. The per-point work that
+   * genuinely depends on the cutoff (the three aggregate scans) is unchanged,
+   * and asserted here so a "fix" that batched the sums instead would show up.
+   */
+  it('resolves the account list once for the whole chart, not once per point', async () => {
+    const s = await setup()
+    const wallet = await makeAccount({
+      ...s,
+      name: 'Wallet',
+      currency: 'VND',
+      initialBalance: '1000000',
+    })
+    await makeAccount({ ...s, name: 'Savings', currency: 'VND', initialBalance: '2000000' })
+    await makeTx({
+      userId: s.userId,
+      accountId: wallet.id,
+      type: 'CASH_IN',
+      amount: '500000',
+      date: new Date('2026-08-10T03:00:00.000Z'),
+    })
+    const { provider } = makeForbiddenProvider()
+    const accountFindMany = vi.spyOn(prisma.financialAccount, 'findMany')
+    const transactionGroupBy = vi.spyOn(prisma.transaction, 'groupBy')
+
+    const points = await getAccountBalanceOverTime(s.userId, HCMC, 'VND', 6, provider, NOW)
+
+    // The values first: 3,000,000 until August's deposit, 3,500,000 after it.
+    expect(points.map((point) => point.month)).toEqual([
+      '2026-04',
+      '2026-05',
+      '2026-06',
+      '2026-07',
+      '2026-08',
+      '2026-09',
+    ])
+    expect(points.map((point) => point.balance?.toString())).toEqual([
+      '3000000',
+      '3000000',
+      '3000000',
+      '3000000',
+      '3500000',
+      '3500000',
+    ])
+    // One ownership read for six points — it was seven.
+    expect(accountFindMany).toHaveBeenCalledTimes(1)
+    // And still one balance batch per point, because each one's cutoff is a
+    // different instant.
+    expect(transactionGroupBy).toHaveBeenCalledTimes(6)
+  })
 })

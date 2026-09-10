@@ -63,14 +63,20 @@ export const DEBT_DIRECTION_EXPORT_LABELS: Record<DebtDirection, string> = {
  * to a day early.
  *
  * Two queries for any number of debts (the service's own `findMany` plus one
- * `groupBy`), never a sum per row.
+ * `groupBy`), never a sum per row — and `includePayments: false`, because this
+ * sheet renders `Paid` and `Outstanding` and no individual repayment (Phase 8,
+ * finding B-7). The history has a sheet of its own, `buildDebtPaymentsSheet`,
+ * which is now the only place in the workbook a `DebtPayment` row is read: it
+ * used to be joined here as well and then discarded, so every payment crossed
+ * the wire twice per export. The figures are unchanged — they come from the
+ * service's `groupBy` sums either way.
  */
 export async function buildDebtsSheet(
   workbook: ExcelJS.Workbook,
   ctx: ExportContext,
 ): Promise<void> {
   const today = todayCalendarDateInZone(ctx.timezone, ctx.now)
-  const rows = await getDebtsWithOutstanding(ctx.userId, today)
+  const rows = await getDebtsWithOutstanding(ctx.userId, today, { includePayments: false })
   const sheet = workbook.addWorksheet('Debts')
 
   writeHeader(sheet, [

@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client'
-import type { LoanPayment, LoanStoredStatus } from '@prisma/client'
+import type { Loan, LoanPayment, LoanStoredStatus } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { advanceByFrequency } from '@/lib/datetime/add-months-clamped'
 import {
@@ -252,8 +252,17 @@ export type LoanDisplayStatus = 'ACTIVE' | 'OVERDUE' | 'PAID_OFF' | 'CLOSED'
  */
 export type LoanRow = Prisma.LoanGetPayload<{ include: { payments: true } }>
 
-export interface LoanWithOutstanding {
-  loan: LoanRow
+/**
+ * The same derived figures over a loan read *without* its instalments — what
+ * `getLoansWithOutstanding(..., { includePayments: false })` returns.
+ *
+ * The mirror of `debt.ts`'s `DebtTotals`, and for the same reason: both sums
+ * come from the `groupBy` on either path, so there is one definition of what a
+ * loan still owes (`loan.test.ts` asserts the two paths agree figure by figure)
+ * and only the payload differs.
+ */
+export interface LoanTotals {
+  loan: Loan
   /** Σ of this loan's `principalAmount` values, from the authoritative
    *  `groupBy` sum — the only part that pays the loan down. */
   principalPaid: Prisma.Decimal
@@ -262,6 +271,10 @@ export interface LoanWithOutstanding {
   interestPaid: Prisma.Decimal
   outstandingPrincipal: Prisma.Decimal
   displayStatus: LoanDisplayStatus
+}
+
+export interface LoanWithOutstanding extends LoanTotals {
+  loan: LoanRow
 }
 
 /**
@@ -292,7 +305,7 @@ const STATUS_RANK: Record<LoanStoredStatus, number> = { ACTIVE: 0, CLOSED: 1 }
  * written in `schema.prisma`. The rank above says the intent outright. (Same
  * reasoning, and the same total ordering, as `debt.ts` and `savings-goal.ts`.)
  */
-function compareForDisplay(a: LoanRow, b: LoanRow): number {
+function compareForDisplay(a: Loan, b: Loan): number {
   return (
     STATUS_RANK[a.status] - STATUS_RANK[b.status] ||
     a.createdAt.getTime() - b.createdAt.getTime() ||
@@ -398,18 +411,40 @@ export async function listLoans(userId: string): Promise<LoanRow[]> {
  * `activeOnly` is what the dashboard and Net Worth pass: a closed loan is not a
  * liability any more, but it is still part of the user's history and stays
  * visible on the page itself.
+ *
+ * `includePayments: false` drops the instalment history from the payload and
+ * nothing else (Phase 8, finding B-7). The figures are unchanged — they were
+ * always the `groupBy`'s, never the included rows' — so this stays one read
+ * path and one definition of a loan's outstanding principal, with the
+ * O(payments) payload made optional for the callers that never render an
+ * instalment: Net Worth (`position.ts`) and the export's Loans and Summary
+ * sheets. The default is `true`, so the Loans page, which lists every
+ * instalment, is untouched.
  */
 export async function getLoansWithOutstanding(
   userId: string,
   today: string,
-  options: { activeOnly?: boolean } = {},
-): Promise<LoanWithOutstanding[]> {
+  options?: { activeOnly?: boolean; includePayments?: true },
+): Promise<LoanWithOutstanding[]>
+export async function getLoansWithOutstanding(
+  userId: string,
+  today: string,
+  options: { activeOnly?: boolean; includePayments: boolean },
+): Promise<LoanTotals[]>
+export async function getLoansWithOutstanding(
+  userId: string,
+  today: string,
+  options: { activeOnly?: boolean; includePayments?: boolean } = {},
+): Promise<LoanTotals[]> {
+  const where = options.activeOnly ? { userId, status: 'ACTIVE' as const } : { userId }
+  const orderBy = [{ createdAt: 'asc' as const }, { id: 'asc' as const }]
   const [loans, sums] = await Promise.all([
-    prisma.loan.findMany({
-      where: options.activeOnly ? { userId, status: 'ACTIVE' } : { userId },
-      include: WITH_PAYMENTS,
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    }),
+    // Two calls rather than one with a conditional `include` key, so each keeps
+    // its own precise Prisma payload type instead of collapsing to a union the
+    // caller would have to narrow.
+    options.includePayments === false
+      ? prisma.loan.findMany({ where, orderBy })
+      : prisma.loan.findMany({ where, include: WITH_PAYMENTS, orderBy }),
     prisma.loanPayment.groupBy({
       by: ['loanId'],
       where: { userId },
@@ -419,7 +454,11 @@ export async function getLoansWithOutstanding(
 
   const paidByLoan = new Map(sums.map((row) => [row.loanId, row._sum]))
 
-  return loans.sort(compareForDisplay).map((loan) => {
+  // Widened to `Loan` so the two `findMany` shapes share one sort and one
+  // derivation; the overload above is what hands a caller back the precise row
+  // type it asked for.
+  const rows: Loan[] = loans
+  return rows.sort(compareForDisplay).map((loan) => {
     const paid = paidByLoan.get(loan.id)
     const principalPaid = paid?.principalAmount ?? new Prisma.Decimal(0)
     const interestPaid = paid?.interestAmount ?? new Prisma.Decimal(0)

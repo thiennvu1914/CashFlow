@@ -19,6 +19,7 @@ import {
   writeOffDebt,
   DebtNotActiveError,
   DebtOverpaymentError,
+  type DebtTotals,
   type DebtWithOutstanding,
 } from './debt'
 
@@ -674,6 +675,83 @@ describe('debt service', () => {
     it('returns nothing for a user with no debts', async () => {
       expect(await getDebtsWithOutstanding(fx.userId, TODAY)).toEqual([])
       expect(await listDebts(fx.userId)).toEqual([])
+    })
+
+    /**
+     * `includePayments: false` — the totals-only read (Phase 8, Task 4,
+     * pre-flight finding B-7).
+     *
+     * The dashboard, the Accounts page header and two export sheets need
+     * `paid`, `outstanding` and `displayStatus` and nothing else, but every one
+     * of them used to pull the user's whole payment history across the wire to
+     * get them — the `groupBy` beside the `findMany` was already the
+     * authoritative sum, and the included rows were discarded.
+     *
+     * The one thing that must not change is the arithmetic, so this compares the
+     * two paths figure by figure on a fixture that covers every shape the
+     * derivation has a branch for: no payments, a fractional part-payment, an
+     * exactly-settled debt, and a written-off one that has payments against it.
+     */
+    it('derives identical figures with and without the payment history', async () => {
+      const none = await createDebt(fx.userId, { ...BASE_DEBT, person: 'None' })
+      const partly = await createDebt(fx.userId, { ...BASE_DEBT, person: 'Partly' })
+      const full = await createDebt(fx.userId, { ...BASE_DEBT, person: 'Full' })
+      const gone = await createDebt(fx.userId, { ...BASE_DEBT, person: 'Gone' })
+      await recordDebtPayment(fx.userId, partly.id, { amount: 100_000, date: '2026-03-01' })
+      await recordDebtPayment(fx.userId, partly.id, { amount: 250_000.5, date: '2026-03-02' })
+      await recordDebtPayment(fx.userId, full.id, { amount: 1_000_000, date: '2026-03-03' })
+      await recordDebtPayment(fx.userId, gone.id, { amount: 400_000, date: '2026-03-04' })
+      await writeOffDebt(fx.userId, gone.id)
+
+      const withHistory = await getDebtsWithOutstanding(fx.userId, TODAY)
+      const totalsOnly = await getDebtsWithOutstanding(fx.userId, TODAY, { includePayments: false })
+
+      // Every figure the callers actually read, to the digit — `toString()` so a
+      // Decimal's scale is compared too, not just its value.
+      const figures = (entries: DebtWithOutstanding[] | DebtTotals[]) =>
+        entries.map((entry) => [
+          entry.debt.person,
+          entry.debt.originalAmount.toString(),
+          entry.paid.toString(),
+          entry.outstanding.toString(),
+          entry.displayStatus,
+        ])
+
+      expect(figures(totalsOnly)).toEqual(figures(withHistory))
+      expect(figures(totalsOnly)).toEqual([
+        ['None', '1000000', '0', '1000000', 'OPEN'],
+        ['Partly', '1000000', '350000.5', '649999.5', 'PARTIALLY_PAID'],
+        ['Full', '1000000', '1000000', '0', 'PAID'],
+        ['Gone', '1000000', '400000', '600000', 'WRITTEN_OFF'],
+      ])
+      // Same rows, same order, same ids — only the history is left behind.
+      expect(totalsOnly.map((entry) => entry.debt.id)).toEqual([
+        none.id,
+        partly.id,
+        full.id,
+        gone.id,
+      ])
+      expect(withHistory[1].debt.payments).toHaveLength(2)
+      expect(totalsOnly.every((entry) => !('payments' in entry.debt))).toBe(true)
+    })
+
+    it('fetches no payment rows for a totals-only read, and still one aggregate', async () => {
+      for (const person of ['A', 'B', 'C']) {
+        const debt = await createDebt(fx.userId, { ...BASE_DEBT, person })
+        await recordDebtPayment(fx.userId, debt.id, { amount: 1_000, date: '2026-03-01' })
+        await recordDebtPayment(fx.userId, debt.id, { amount: 2_000, date: '2026-03-02' })
+      }
+      const findMany = vi.spyOn(prisma.debt, 'findMany')
+      const groupBy = vi.spyOn(prisma.debtPayment, 'groupBy')
+
+      const entries = await getDebtsWithOutstanding(fx.userId, TODAY, { includePayments: false })
+
+      // Still two queries — the point is the *payload*: no `payments` include,
+      // so a user with a thousand instalments costs the dashboard nothing.
+      expect(findMany).toHaveBeenCalledTimes(1)
+      expect(findMany.mock.calls[0][0]?.include).toBeUndefined()
+      expect(groupBy).toHaveBeenCalledTimes(1)
+      expect(entries.every((entry) => entry.paid.toString() === '3000')).toBe(true)
     })
   })
 

@@ -3,7 +3,7 @@ import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
 import { getHistoricalRate } from '@/lib/currency/fx-service'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
 import { getRecentMonthWindows } from '@/lib/datetime/month-windows'
-import { getAccountBalances } from './balance'
+import { getAccountBalancesForAccounts } from './balance'
 import { listAllFinancialAccounts } from './financial-account'
 
 /**
@@ -66,10 +66,15 @@ export interface AccountBalancePoint {
  * turning every earlier point into a gap — before it existed its balance was
  * zero, and zero converts to zero at any rate, so there is nothing to look up.
  *
- * Cost is one batched `getAccountBalances` per point (never one per account),
- * plus at most one `getHistoricalRate` per point. The points are computed
- * concurrently — each resolves a different UTC day, so two of them can never
- * race to cache the same row.
+ * Cost is one account read for the whole chart plus one batched balance read
+ * per point (never one per account), and at most one `getHistoricalRate` per
+ * point. The accounts are resolved once and passed down
+ * (`getAccountBalancesForAccounts`): the ownership row set does not depend on
+ * the cutoff, so re-reading it per point was six identical queries and six
+ * identical validations of rows this function already held.
+ *
+ * The points are computed concurrently — each resolves a different UTC day, so
+ * two of them can never race to cache the same row.
  *
  * Arithmetic is `Prisma.Decimal` end to end and nothing is rounded: rounding is
  * a presentation decision the page or the export makes later.
@@ -85,8 +90,12 @@ export async function getAccountBalanceOverTime(
   const windows = getRecentMonthWindows(timezone, monthsBack, now)
   if (windows.length === 0) return []
 
+  // Read once, for every point (pre-flight finding B-4). The account set is not
+  // a function of the cutoff — which accounts a user has does not depend on
+  // which month is being sampled — so it is resolved here and handed to each
+  // point's balance read, where `getAccountBalances` would otherwise re-fetch
+  // and re-validate the identical rows once per point.
   const accounts = await listAllFinancialAccounts(userId)
-  const accountIds = accounts.map((account) => account.id)
 
   // Concurrent, and safe to be: the points share no state, and each one caches
   // (at most) its own distinct UTC day, so no two can collide on the FX cache's
@@ -100,7 +109,7 @@ export async function getAccountBalanceOverTime(
 
       // Balances first: whether a rate is *needed* is a fact about this point's
       // numbers, not about the account list.
-      const balances = await getAccountBalances(userId, accountIds, asOf)
+      const balances = await getAccountBalancesForAccounts(userId, accounts, asOf)
       const balanceOf = (accountId: string) => balances.get(accountId) ?? new Prisma.Decimal(0)
 
       // Zero converts to zero at every rate, so a foreign account sitting at

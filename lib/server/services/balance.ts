@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
-import type { PrismaClient } from '@prisma/client'
+import type { FinancialAccount, PrismaClient } from '@prisma/client'
 import { BALANCE_SIGN } from '@/lib/money/transaction-sign'
 
 /**
@@ -61,6 +61,17 @@ export async function getAccountBalance(
 }
 
 /**
+ * The three fields the balance arithmetic reads off an account row, plus the
+ * `userId` it is checked against.
+ *
+ * A `Pick` rather than the whole model so `getAccountBalancesForAccounts` can be
+ * handed rows from any read that scoped itself by `userId` — including
+ * `listAllFinancialAccounts`, whose rows carry a joined `accountType` this
+ * function has no use for.
+ */
+export type OwnedAccount = Pick<FinancialAccount, 'id' | 'userId' | 'initialBalance' | 'createdAt'>
+
+/**
  * Batched form of `getAccountBalance` — the Accounts page uses this so
  * rendering N accounts costs a constant number of queries, not N.
  *
@@ -89,9 +100,51 @@ export async function getAccountBalances(
     where: { userId, id: { in: accountIds } },
   })
   const accountsById = new Map(accounts.map((account) => [account.id, account]))
-  for (const id of accountIds) {
-    if (!accountsById.has(id)) throw new AccountNotFoundError(id)
+  // Every requested id, in the order it was requested, so the returned map
+  // iterates the way the caller asked for — and any id that did not resolve
+  // fails the whole batch here rather than becoming a missing key later.
+  const requested: OwnedAccount[] = accountIds.map((id) => {
+    const account = accountsById.get(id)
+    if (!account) throw new AccountNotFoundError(id)
+    return account
+  })
+
+  return getAccountBalancesForAccounts(userId, requested, asOfDate, db)
+}
+
+/**
+ * The same arithmetic over accounts the caller has **already resolved**
+ * (pre-flight finding B-4).
+ *
+ * `getAccountBalances` opens with an ownership `findMany` whose `where` does not
+ * mention `asOfDate`, so a caller that samples the same accounts at several
+ * cutoffs re-fetches and re-validates one identical row set per cutoff: the
+ * six-month balance chart did that six times, having already read the very same
+ * accounts itself to know which ones exist. This entry point is for exactly
+ * that shape — resolve the accounts once, sample them many times.
+ *
+ * **Ownership is still enforced, in memory rather than by a query.** Every row
+ * must carry `userId`; one that does not is an `AccountNotFoundError` on that
+ * id, indistinguishable from a nonexistent one — the same answer the querying
+ * path gives, so passing another user's row can never widen what a caller can
+ * read. The three aggregates below are scoped by `userId` regardless, which is
+ * what makes tenant isolation a property of the query and not of the argument.
+ *
+ * Do not reach for this to avoid one lookup: `getAccountBalances` is the entry
+ * point, and this one only pays off when the same rows are sampled repeatedly.
+ */
+export async function getAccountBalancesForAccounts(
+  userId: string,
+  accounts: OwnedAccount[],
+  asOfDate?: Date,
+  db: BalanceDb = prisma,
+): Promise<Map<string, Prisma.Decimal>> {
+  if (accounts.length === 0) return new Map()
+
+  for (const account of accounts) {
+    if (account.userId !== userId) throw new AccountNotFoundError(account.id)
   }
+  const accountIds = accounts.map((account) => account.id)
 
   // Same `date <= asOfDate` cutoff as transactions: a transfer dated after
   // `asOfDate` did not happen yet as of that point in time.
@@ -131,9 +184,8 @@ export async function getAccountBalances(
   }
 
   const result = new Map<string, Prisma.Decimal>()
-  for (const id of accountIds) {
-    const account = accountsById.get(id)
-    if (!account) throw new AccountNotFoundError(id) // unreachable, checked above
+  for (const account of accounts) {
+    const id = account.id
     if (asOfDate && asOfDate < account.createdAt) {
       result.set(id, new Prisma.Decimal(0))
       continue

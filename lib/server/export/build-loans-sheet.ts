@@ -64,14 +64,20 @@ const INTEREST_RATE_FMT = '0.000'
  * called late and the whole workbook agrees on what day it is.
  *
  * Two queries for any number of loans (the service's own `findMany` plus one
- * `groupBy`), never a sum per row.
+ * `groupBy`), never a sum per row — and `includePayments: false`, because this
+ * sheet renders the two paid totals and no individual instalment (Phase 8,
+ * finding B-7). The history has a sheet of its own,
+ * `buildLoanPaymentsSheet`, which is now the only place in the workbook a
+ * `LoanPayment` row is read: it used to be joined here as well and then
+ * discarded, so every instalment crossed the wire twice per export. The figures
+ * are unchanged — they come from the service's `groupBy` sums either way.
  */
 export async function buildLoansSheet(
   workbook: ExcelJS.Workbook,
   ctx: ExportContext,
 ): Promise<void> {
   const today = todayCalendarDateInZone(ctx.timezone, ctx.now)
-  const rows = await getLoansWithOutstanding(ctx.userId, today)
+  const rows = await getLoansWithOutstanding(ctx.userId, today, { includePayments: false })
   const sheet = workbook.addWorksheet('Loans')
 
   writeHeader(sheet, [
