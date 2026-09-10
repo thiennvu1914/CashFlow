@@ -2,7 +2,7 @@
 
 import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Controller, useForm, useWatch, type Resolver } from 'react-hook-form'
+import { Controller, useForm, useWatch, type FieldErrors, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { Wallet } from 'lucide-react'
@@ -76,27 +76,50 @@ function mergeDateTime(values: FormInput): CreateTransactionFormInput {
  * malformed value — so an empty Giờ is what it is, and anything else lands on
  * Ngày (the field an out-of-range calendar date, e.g. 30 February, actually
  * comes from).
+ *
+ * Typed with react-hook-form 7.87's three-generic `Resolver<TFieldValues,
+ * TContext, TTransformedValues>` (pre-flight A-6): the form's own fields
+ * (`FormInput`) are the input, and the merged shape (`CreateTransactionFormInput`,
+ * with `date` instead of `datePart`/`timePart`) is what `handleSubmit` hands
+ * `onSubmit` on success — so `onSubmit` receives exactly what was validated,
+ * with no second `mergeDateTime` call that could drift from it. That is what
+ * lets every line below be exactly typed, with zero `as never`.
  */
-const resolver: Resolver<FormInput> = async (values, context, options) => {
-  const merged = mergeDateTime(values as FormInput)
-  const result = await zodResolver(createTransactionFormSchema)(
-    merged as never,
-    context,
-    options as never,
-  )
-  const errors = result.errors as Record<string, unknown>
-  if (errors.date) {
-    const target = (values as FormInput).timePart ? 'datePart' : 'timePart'
-    errors[target] = errors.date
-    delete errors.date
-  }
+const resolver: Resolver<FormInput, unknown, CreateTransactionFormInput> = async (
+  values,
+  context,
+  options,
+) => {
+  const merged = mergeDateTime(values)
+  // `zodResolver`'s returned function wants `ResolverOptions` shaped for the
+  // MERGED schema, whose only field-shaped member is `names` (`fields` and
+  // `shouldUseNativeValidation` are the same regardless of TFieldValues).
+  // `names` is the form's own currently-registered field names — `datePart`/
+  // `timePart`, never `date` — and `toNestErrors` only ever reads it to decide
+  // whether a nested error belongs to a field ARRAY; this form has none, so
+  // it is correctly left out rather than forwarded under the wrong shape.
+  const result = await zodResolver(createTransactionFormSchema)(merged, context, {
+    criteriaMode: options.criteriaMode,
+    fields: options.fields,
+    shouldUseNativeValidation: options.shouldUseNativeValidation,
+  })
+
+  // `result.errors` is keyed by the MERGED schema's fields (`date`, not
+  // `datePart`/`timePart`), so the `date` entry is pulled out here and
+  // re-attached under whichever visible field it belongs to below; `rest`
+  // (the other, identically-named fields) needs no remapping.
+  const { date: dateError, ...rest } = result.errors
+  const errors: FieldErrors<FormInput> = dateError
+    ? { ...rest, [values.timePart ? 'datePart' : 'timePart']: dateError }
+    : rest
+
   // `zodResolver` returns `values: {}` on failure, never `undefined` or a
   // falsy `values` — the merged object is spread INTO the result either way,
   // so `result.values` alone can never distinguish success from failure (an
   // empty object is still truthy). Whether `errors` has any key is the real
   // signal, and it is what RHF itself checks.
   const succeeded = Object.keys(errors).length === 0
-  return { values: (succeeded ? values : {}) as FormInput, errors } as never
+  return succeeded ? { values: merged, errors: {} } : { values: {}, errors }
 }
 
 export type AccountOption = { id: string; name: string; currency: Currency; balance: string }
@@ -188,7 +211,7 @@ export function TransactionForm({
     reset,
     setValue,
     formState: { errors },
-  } = useForm<FormInput>({
+  } = useForm<FormInput, unknown, CreateTransactionFormInput>({
     resolver,
     defaultValues: initial,
   })
@@ -249,13 +272,14 @@ export function TransactionForm({
       : group.labelKey === 'transactions.categoryGroupIncome',
   )
 
-  async function onSubmit(values: FormInput) {
+  async function onSubmit(values: CreateTransactionFormInput) {
     await submit.run({
       tag: 'TransactionForm: create failed',
-      // The action takes the schema's shape, so the two parts merge here —
-      // the same function the resolver used, so what was validated is what is
-      // sent.
-      action: () => createTransactionAction(mergeDateTime(values)),
+      // `values` is the RESOLVER's transformed output (the three-generic
+      // `Resolver`'s `TTransformedValues`), already merged — not the raw form
+      // fields — so this is the exact object the resolver validated, with no
+      // second `mergeDateTime` call that could drift from it.
+      action: () => createTransactionAction(values),
       errorKeys: TRANSACTION_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
