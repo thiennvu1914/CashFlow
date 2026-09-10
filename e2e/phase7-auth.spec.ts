@@ -251,3 +251,35 @@ test('the dark theme cookie renders html.dark on /login with no session to ask',
   const html = await (await page.request.get('/login')).text()
   expect(html).toMatch(/<html[^>]*class="[^"]*\bdark\b/)
 })
+
+/**
+ * Phase 8 Task 2 (E2) — `app/not-found.tsx`, the root 404 for every unmatched
+ * URL (A-2 in the Phase 8 pre-flight audit: before this, Next's raw unbranded
+ * default was the production fallback). Belongs here, not in a signed-in
+ * spec: an unmatched URL is reachable with NO session, exactly like the four
+ * screens above, and the page renders inside the root layout so `resolveLocale()`
+ * — session, then the `NEXT_LOCALE` cookie — picks the language same as any
+ * other pre-auth page.
+ */
+test('an unmatched URL renders the localized not-found page with exactly one h1', async ({
+  page,
+}) => {
+  await page.goto('/no-such-page')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Không tìm thấy trang này.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+  await expect(page.getByRole('link', { name: 'Đến Tổng quan' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Đến trang đăng nhập' })).toBeVisible()
+
+  await page
+    .context()
+    .addCookies([{ name: 'NEXT_LOCALE', value: 'en', url: 'http://localhost:3000' }])
+  await page.goto('/no-such-page')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'This page could not be found.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+  await expect(page.getByRole('link', { name: 'Go to Dashboard' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Go to sign in' })).toBeVisible()
+})

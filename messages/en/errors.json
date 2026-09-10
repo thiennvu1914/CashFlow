@@ -2,6 +2,10 @@
   "generic": "Something went wrong. Please try again.",
   "boundaryTitle": "Something went wrong loading this page.",
   "boundaryBody": "Your data has not been changed. Try again in a moment.",
+  "notFoundTitle": "This page could not be found.",
+  "notFoundBody": "This link does not exist, or it has moved.",
+  "goToDashboard": "Go to Dashboard",
+  "goToLogin": "Go to sign in",
   "account": {
     "NON_ZERO_BALANCE": "This account must have a zero balance before it can be archived. Transfer or adjust the balance first.",
     "ACCOUNT_LOCKED": "Currency and opening balance cannot be changed once the account has activity.",

@@ -90,22 +90,6 @@ export async function createTransactionAction(
   return { ok: true }
 }
 
-export async function updateTransactionAction(
-  id: string,
-  input: CreateTransactionFormInput,
-): Promise<TransactionActionResult> {
-  const user = await requireUser()
-  const { timezone } = resolveProfileDefaults(user)
-  try {
-    await transactionService.updateTransaction(user.id, id, toServiceInput(input, timezone))
-  } catch (e) {
-    return mapError(e)
-  }
-  revalidatePath('/transactions')
-  revalidatePath('/accounts')
-  return { ok: true }
-}
-
 export async function deleteTransactionAction(id: string): Promise<TransactionActionResult> {
   const user = await requireUser()
   try {

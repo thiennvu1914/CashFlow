@@ -13,7 +13,6 @@ import type { CreateTransactionFormInput } from '@/lib/validation/transaction'
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
 const createTransactionMock = vi.hoisted(() => vi.fn())
-const updateTransactionMock = vi.hoisted(() => vi.fn())
 const deleteTransactionMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
@@ -58,7 +57,6 @@ vi.mock('@/lib/auth/require-user', () => ({
 
 vi.mock('@/lib/server/services/transaction', () => ({
   createTransaction: createTransactionMock,
-  updateTransaction: updateTransactionMock,
   deleteTransaction: deleteTransactionMock,
   ArchivedAccountError: MockArchivedAccountError,
   CurrencyMismatchError: MockCurrencyMismatchError,
@@ -74,8 +72,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: revalidatePathMock,
 }))
 
-const { createTransactionAction, updateTransactionAction, deleteTransactionAction } =
-  await import('./transaction-actions')
+const { createTransactionAction, deleteTransactionAction } = await import('./transaction-actions')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -124,7 +121,6 @@ function notFoundError() {
 beforeEach(() => {
   requireUserMock.mockReset()
   createTransactionMock.mockReset()
-  updateTransactionMock.mockReset()
   deleteTransactionMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
@@ -273,84 +269,6 @@ describe('createTransactionAction', () => {
 
     await expect(createTransactionAction(validInput)).rejects.toThrow('Not authenticated')
     expect(createTransactionMock).not.toHaveBeenCalled()
-  })
-})
-
-describe('updateTransactionAction', () => {
-  it('calls the service with the session user id, the transaction id and the input only', async () => {
-    updateTransactionMock.mockResolvedValue(undefined)
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: true })
-    expect(updateTransactionMock).toHaveBeenCalledTimes(1)
-    expect(updateTransactionMock).toHaveBeenCalledWith(FIXED_USER.id, 'tx_1', expectedServiceInput)
-    expect(revalidatePathMock).toHaveBeenCalledWith('/transactions')
-    expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
-  })
-
-  it('maps FxUnavailableError to FX_UNAVAILABLE', async () => {
-    updateTransactionMock.mockRejectedValue(new MockFxUnavailableError())
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'FX_UNAVAILABLE' })
-  })
-
-  it('maps ArchivedAccountError to ARCHIVED_ACCOUNT', async () => {
-    updateTransactionMock.mockRejectedValue(new MockArchivedAccountError())
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'ARCHIVED_ACCOUNT' })
-  })
-
-  it('maps CurrencyMismatchError to CURRENCY_MISMATCH and does not revalidate', async () => {
-    updateTransactionMock.mockRejectedValue(new MockCurrencyMismatchError())
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'CURRENCY_MISMATCH' })
-    expect(revalidatePathMock).not.toHaveBeenCalled()
-  })
-
-  it('maps InvalidCategoryError to INVALID_CATEGORY', async () => {
-    updateTransactionMock.mockRejectedValue(new MockInvalidCategoryError('bad category'))
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'INVALID_CATEGORY' })
-  })
-
-  it('maps ConcurrentModificationError to CONFLICT and does not revalidate', async () => {
-    updateTransactionMock.mockRejectedValue(new MockConcurrentModificationError())
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'CONFLICT' })
-    expect(revalidatePathMock).not.toHaveBeenCalled()
-  })
-
-  it('maps a ZodError to INVALID_INPUT', async () => {
-    updateTransactionMock.mockRejectedValue(new ZodError([]))
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
-  })
-
-  it("maps Prisma's P2025 not-found error to NOT_FOUND", async () => {
-    updateTransactionMock.mockRejectedValue(notFoundError())
-
-    const result = await updateTransactionAction('tx_1', validInput)
-
-    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' })
-  })
-
-  it('rethrows an unmapped error', async () => {
-    updateTransactionMock.mockRejectedValue(new Error('boom'))
-
-    await expect(updateTransactionAction('tx_1', validInput)).rejects.toThrow('boom')
   })
 })
 
