@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from 'react'
 import { buttonVariants } from '@/components/ui/button'
 import { DEFAULT_LOCALE, isSupportedLocale, type Locale } from '@/lib/i18n/locale'
+import { DEFAULT_THEME, THEME_COOKIE, isTheme, type Theme } from '@/lib/theme/theme'
 import './globals.css'
 
 /**
@@ -38,6 +39,15 @@ import './globals.css'
  * A plain `<a>`, not `next/link`: this file can render with none of the
  * App Router's context providers mounted (they live inside the very layout
  * that just failed), and `<Link>` assumes that context exists.
+ *
+ * **The recovery button calls `retry`, not `reset`** — the same distinction
+ * `app/(app)/error.tsx` documents at length: `reset()` only clears the
+ * boundary's error state and re-renders the same already-failed tree, so a
+ * failure this file exists for (`resolveLocale()`/`resolveTheme()`/
+ * `loadMessages()` throwing in `app/layout.tsx`, all server-side reads) would
+ * make the button visibly do nothing. `retry()` wraps `router.refresh()` and
+ * the reset in a transition, re-fetching the layout so it gets another chance
+ * to succeed.
  */
 function subscribeToNothing(): () => void {
   // The cookie does not change while this boundary is mounted (there is no
@@ -72,20 +82,37 @@ function detectLocale(): Locale {
   return isSupportedLocale(value) ? value : DEFAULT_LOCALE
 }
 
+/**
+ * Same reasoning as `detectLocale` above, for the same reason: this file
+ * renders outside `next/headers` and outside the app-level theme toggle (the
+ * "Good to know" in `node_modules/next/dist/docs/.../error.md` notes that
+ * `global-error` renders its own document and does not inherit the app's
+ * theme class — the class has to be applied here, from the cookie, or this
+ * screen is stuck in light mode for every dark-theme user). Imported from
+ * `@/lib/theme/theme`, not `@/lib/theme/config`: the latter imports
+ * `next/headers`, which a Client Component may not bundle.
+ */
+export function detectTheme(): Theme {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${THEME_COOKIE}=([^;]+)`))
+  const value = match ? decodeURIComponent(match[1]) : undefined
+  return isTheme(value) ? value : DEFAULT_THEME
+}
+
 export default function GlobalError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string }
-  reset: () => void
+  retry: () => void
 }) {
   const locale = useSyncExternalStore(subscribeToNothing, detectLocale, () => DEFAULT_LOCALE)
+  const theme = useSyncExternalStore(subscribeToNothing, detectTheme, () => DEFAULT_THEME)
   const copy = COPY[locale]
 
   return (
     // global-error must include its own html and body tags — it replaces the
     // root layout, which is exactly what failed.
-    <html lang={locale}>
+    <html lang={locale} className={theme === 'dark' ? 'dark' : undefined}>
       <body className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6 text-center text-foreground antialiased">
         <div className="flex flex-col gap-1">
           <h1 className="text-[1.125rem]/[1.625rem] font-semibold">{copy.title}</h1>
@@ -94,7 +121,7 @@ export default function GlobalError({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button type="button" onClick={() => reset()} className={buttonVariants({ size: 'lg' })}>
+          <button type="button" onClick={() => retry()} className={buttonVariants({ size: 'lg' })}>
             {copy.retry}
           </button>
           {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- see file doc: no router context to assume here */}

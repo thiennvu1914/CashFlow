@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers'
 import { getOptionalSession } from '@/lib/auth/require-user'
-import { USER_FIELD_DEFAULTS } from '@/lib/auth/user-defaults'
+import { DEFAULT_THEME, THEME_COOKIE, isTheme, type Theme } from './theme'
 
 /**
  * Which theme this request renders in (spec §3).
@@ -10,24 +10,12 @@ import { USER_FIELD_DEFAULTS } from '@/lib/auth/user-defaults'
  * before there is a session to ask. The order is therefore session → cookie →
  * light, exactly as `resolveLocale` resolves the locale.
  *
- * `cashflow-theme`, not `theme`: a one-word cookie name on a shared dev host
- * collides with every other app on `localhost`, and the earlier draft of this
- * work used the short name. The spec names this one.
- *
  * Better Auth's additional-fields inference types `theme` on the session user
  * as plain `string` (the same limitation `lib/validation/profile.ts:57-69`
  * documents for `resolveProfileDefaults`), so it is narrowed here rather than
  * trusted.
  */
-export const THEME_COOKIE = 'cashflow-theme'
-
-export type Theme = 'light' | 'dark'
-
-export const DEFAULT_THEME: Theme = USER_FIELD_DEFAULTS.theme
-
-function isTheme(value: string | undefined): value is Theme {
-  return value === 'light' || value === 'dark'
-}
+export * from './theme'
 
 export async function resolveTheme(): Promise<Theme> {
   const session = await getOptionalSession()
