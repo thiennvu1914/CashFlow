@@ -125,6 +125,27 @@ export function ProfileForm({
     className: 'flex min-w-0 flex-col gap-4',
   }
 
+  /**
+   * The four preference fields are VALUE-shaped, not text-shaped (Task 18 fix
+   * round 1, Important 1). Widening the page to 672 px (owner item I1) gave
+   * every control in it ~558 px, so "VND", "Tiếng Việt" and "Sáng" each sat in
+   * a select more than half the page wide — the same defect the Categories add
+   * field had, where `flex-1` gave a one-word category name an 800 px input.
+   *
+   * `sm:max-w-[22rem]` (352) is the SAME cap that field now uses, so the
+   * product has one control width rather than two: it holds the longest value
+   * any of these four can take (the widest IANA zone name,
+   * `America/Argentina/ComodRivadavia`, measures ~250 px at 14 px plus the
+   * chevron's `pr-9`) with room to spare, and it caps the field rather than
+   * the control so a helper line does not run 624 px under a 352 px select.
+   * `sm:` only: a phone keeps the full-width controls spec §7 asks for.
+   *
+   * Name and Email stay full width deliberately — a display name and an email
+   * address are text of unbounded length, and truncating the box in which a
+   * user reads their own email is a worse answer than a wide box.
+   */
+  const VALUE_FIELD_CLASS = 'sm:max-w-[22rem]'
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-8">
       <SettingsCard title={labels.profileTitle} description={labels.profileDescription}>
@@ -163,6 +184,7 @@ export function ProfileForm({
             label={t('settings.baseCurrency')}
             helper={t('settings.baseCurrencyHelper')}
             error={errors.baseCurrency?.message}
+            className={VALUE_FIELD_CLASS}
           >
             {(aria) => (
               <div className="relative">
@@ -187,6 +209,7 @@ export function ProfileForm({
             id="settings-locale"
             label={t('settings.locale')}
             error={errors.locale?.message}
+            className={VALUE_FIELD_CLASS}
           >
             {(aria) => (
               <div className="relative">
@@ -211,7 +234,12 @@ export function ProfileForm({
             )}
           </FormField>
 
-          <FormField id="settings-theme" label={t('settings.theme')} error={errors.theme?.message}>
+          <FormField
+            id="settings-theme"
+            label={t('settings.theme')}
+            error={errors.theme?.message}
+            className={VALUE_FIELD_CLASS}
+          >
             {(aria) => (
               <div className="relative">
                 <select
@@ -236,6 +264,7 @@ export function ProfileForm({
             label={t('settings.timezone')}
             helper={t('settings.timezoneHelper')}
             error={errors.timezone?.message}
+            className={VALUE_FIELD_CLASS}
           >
             {(aria) => (
               // A native `<select>` with `<optgroup>`s, not a custom combobox:
