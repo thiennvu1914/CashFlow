@@ -146,7 +146,21 @@ export function TransferList({
                       // `sm` (where the date/time already fills the row);
                       // `sm:basis-auto` lets it sit inline once there is
                       // room, rather than ALWAYS forcing a second line.
-                      <span className="basis-full sm:basis-auto">
+                      //
+                      // `whitespace-nowrap` keeps that line WHOLE (owner item
+                      // F1). Measured at 375: the meta column is 105 px and
+                      // "· 1 USD = 25.000 VND" needs 114 px, so the line used
+                      // to break after "25.000" and leave "VND" alone on a
+                      // third line — a figure severed from its currency, in
+                      // the one row on this page that exists to state a rate.
+                      // The 9 px it now needs beyond its column come out of
+                      // the row's own interior (the 12 px gap before the
+                      // right-aligned amount column, which carries ~26 px of
+                      // slack of its own at this width), so nothing collides
+                      // and the page still does not scroll sideways —
+                      // `e2e/phase7-responsive.spec.ts` asserts exactly that
+                      // at 375 and 414.
+                      <span className="basis-full whitespace-nowrap sm:basis-auto">
                         {'· '}
                         {rateLine}
                       </span>
