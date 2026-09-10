@@ -122,7 +122,7 @@ export async function prepareDatabase(options: PrepareDatabaseOptions): Promise<
   )
 
   await createDatabaseIfMissing(
-    adminConnectionCandidates(databaseUrl, peerDatabaseUrl),
+    adminConnectionCandidates(databaseUrl, peerDatabaseUrl, variableName),
     databaseName,
     url.host,
   )
