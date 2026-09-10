@@ -188,45 +188,121 @@ test.describe
     }
   })
 
-  test('an empty (brand-new) dashboard shows contextual empty states, never a flat zero line', async ({
+  /**
+   * Task 17, owner item H1. This test used to assert that a brand-new
+   * dashboard showed five contextual empty states ("Chưa có giao dịch", "Chưa
+   * có dữ liệu số dư", …) rather than a flat zero line. A user with nothing at
+   * all now gets the three-step onboarding card in place of the whole widget
+   * grid, so the five empty states are no longer what that user sees — and the
+   * guarantee they encoded is asserted here in its stronger form: a brand-new
+   * dashboard draws no chart AT ALL, so it cannot draw a flat line at zero.
+   *
+   * The per-widget empty states did not go away; they belong to a dashboard
+   * that has *something* to show, and the test below this one asserts all
+   * three of them on the populated user — which is the state a real user is in
+   * when a widget is genuinely empty.
+   */
+  test('a brand-new dashboard guides the user, and the guidance goes away after the first transaction', async ({
     page,
   }) => {
-    test.setTimeout(60_000)
-    // A second, throwaway context: this user must have NOTHING (no account, no
-    // transaction, no budget, no goal, no debt, no loan, no reminder), which
-    // the populated user above deliberately is not.
+    test.setTimeout(180_000)
+    // A throwaway registration inside the test: this user must have NOTHING
+    // (no account, no transaction, no budget, no goal, no debt, no loan, no
+    // reminder), which the populated user above deliberately is not.
     await registerNewUser(page, { emailPrefix: 'e2e-phase7-dashboard-empty' })
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    for (const text of [
-      'Chưa có giao dịch',
-      'Chưa có ngân sách tháng này',
-      'Chưa có mục tiêu tiết kiệm',
-      'Chưa có dữ liệu số dư',
-      'Chưa có tài khoản nào',
+    const card = page.getByRole('region', {
+      name: /Bắt đầu với CashFlow|Get started with CashFlow/,
+    })
+    await expect(card).toBeVisible()
+    // Three steps, in order, each offering its own way forward — and step 3's
+    // two links are the "a budget OR a reminder" choice.
+    await expect(card.getByRole('listitem')).toHaveCount(3)
+    for (const name of [
+      /Thêm tài khoản|Add account/,
+      /Thêm giao dịch|Add transaction/,
+      /Đặt ngân sách|Set a budget/,
+      /Thêm nhắc nhở|Add reminder/,
     ]) {
-      await expect(page.getByText(text, { exact: true })).toBeVisible()
+      await expect(card.getByRole('link', { name })).toBeVisible()
     }
 
-    // The balance-history widget's empty state, specifically — never a chart
-    // with a flat line at zero. Every chart wrapper (not the `EmptyState`'s
-    // own lucide icon, which is `aria-hidden` and carries no `role`) is a
-    // `role="img"` div — its absence, alongside the visible empty-state copy,
-    // is what tells "the chart rendered" and "the empty state rendered" apart.
-    const balanceSection = page.locator('section').filter({
-      has: page.getByRole('heading', { name: /Số dư theo thời gian|Account Balance Over Time/ }),
-    })
-    await expect(balanceSection.locator('[role="img"]')).toHaveCount(0)
-    await expect(balanceSection.getByText('Chưa có dữ liệu số dư')).toBeVisible()
+    // The widget grid is not merely empty — it is not rendered: no chart
+    // anywhere (every chart wrapper is a `role="img"` div; the `EmptyState`'s
+    // own lucide icon is `aria-hidden` and carries no role), and the card's own
+    // `h2` is the only section heading on the page.
+    await expect(page.locator('main [role="img"]')).toHaveCount(0)
+    await expect(page.locator('main section h2')).toHaveCount(1)
+    for (const text of ['Chưa có giao dịch', 'Chưa có dữ liệu số dư']) {
+      await expect(page.getByText(text, { exact: true })).toHaveCount(0)
+    }
 
     const bodyText = await page.locator('main').innerText()
     expect(bodyText).not.toMatch(RAW_ENUM_PATTERN)
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      'no overflow on the onboarding dashboard',
+    ).toBe(true)
 
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    )
-    expect(overflow).toBe(true)
+    // Step 1 completes on its own once an account exists — the only step that
+    // can be complete while this card is on screen.
+    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 2_000_000 })
+    await page.goto('/dashboard')
+    await expect(card).toBeVisible()
+    await expect(card.getByText(/^(Đã xong|Done)$/)).toBeVisible()
+    await expect(card.getByRole('link', { name: /Thêm tài khoản|Add account/ })).toHaveCount(0)
+
+    // And the whole card goes away the moment there is a transaction: the
+    // normal dashboard renders unchanged from there on.
+    await createTransactionViaUi(page, {
+      type: 'EXPENSE',
+      accountName: 'Cash',
+      categoryName: 'Food & Dining',
+      amount: 120_000,
+    })
+    await page.goto('/dashboard')
+    await expect(card).toHaveCount(0)
+    await expect(
+      page.getByRole('heading', { name: /Giao dịch gần đây|Recent Transactions/ }),
+    ).toBeVisible()
+    await expect(page.locator('main [role="img"]').first()).toBeVisible()
+  })
+
+  test('a populated dashboard still shows one empty state, with one action, per widget that has nothing', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.goto('/dashboard')
+
+    // The onboarding card belongs to a user with no transactions; this one has
+    // one, so the grid is what renders.
+    await expect(
+      page.getByRole('region', { name: /Bắt đầu với CashFlow|Get started with CashFlow/ }),
+    ).toHaveCount(0)
+
+    // Three widgets this user has nothing for. Each says what is missing and
+    // offers exactly one way to fix it — and draws no chart while it does
+    // (`ChartContainer`'s "view all" link is rendered only when the widget has
+    // rows, so one link per section here IS the empty state's action).
+    for (const [heading, empty, action] of [
+      [/Tiến độ ngân sách|Budget Progress/, 'Chưa có ngân sách tháng này', /Đặt ngân sách/],
+      [/Mục tiêu tiết kiệm|Savings Goals/, 'Chưa có mục tiêu tiết kiệm', /Đặt mục tiêu/],
+      [
+        /Nhắc nhở sắp tới|Upcoming Reminders/,
+        'Không có gì đến hạn trong 30 ngày tới',
+        /Thêm nhắc nhở/,
+      ],
+    ] as const) {
+      const section = page
+        .locator('section')
+        .filter({ has: page.getByRole('heading', { name: heading }) })
+      await expect(section.getByText(empty, { exact: true })).toBeVisible()
+      await expect(section.getByRole('link')).toHaveCount(1)
+      await expect(section.getByRole('link', { name: action })).toBeVisible()
+      await expect(section.locator('[role="img"]')).toHaveCount(0)
+    }
   })
 
   test('switching to English in Settings renders the summary panel in English', async ({

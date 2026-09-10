@@ -36,6 +36,7 @@ import { DebtLoanOverview } from '@/components/dashboard/debt-loan-overview'
 import { ExpenseByCategoryChart } from '@/components/dashboard/expense-by-category-chart'
 import { FxRateStatus } from '@/components/dashboard/fx-rate-status'
 import { IncomeVsExpenseChart } from '@/components/dashboard/income-vs-expense-chart'
+import { OnboardingCard } from '@/components/dashboard/onboarding-card'
 import { RecentTransactions } from '@/components/dashboard/recent-transactions'
 import { SummaryPanel } from '@/components/dashboard/summary-panel'
 import { ChartContainer } from '@/components/common/chart-container'
@@ -175,6 +176,41 @@ export default async function DashboardPage() {
     locale,
   )
 
+  /**
+   * A user with nothing to show yet gets three steps instead of ten widgets
+   * each saying "chưa có…" (owner item H1).
+   *
+   * Derived entirely from data this page has ALREADY loaded — no extra query,
+   * and no change to any existing one: `vm.recentTransactions` is
+   * `listTransactions(limit 8)`, so an empty one means the user has no
+   * transactions at all; the planning rows come from the three widget lists;
+   * and the debt/loan totals come from the `position` read above.
+   *
+   * The condition is the owner ruling's "no transactions" AND "nothing else
+   * on this page has anything to say", deliberately narrower than the ruling's
+   * literal wording (recorded in the task report). "No transactions" alone
+   * would HIDE real data: a user who has entered five debts, a loan and three
+   * reminders but not yet a transaction has a dashboard full of figures, and
+   * replacing it with "add your first transaction" would take those figures
+   * off the screen. Every widget below is checked, so the card appears exactly
+   * when the grid would have been empty — which is the state the ruling
+   * describes ("a fresh user … instead of eleven empty widgets").
+   *
+   * `position === null` (an FX outage) counts as "has something to say": with
+   * no usable rate the debt and loan totals are unknown rather than zero, and
+   * a card claiming the user has nothing yet is not something this page can
+   * stand behind. Those readers get the normal dashboard, whose own widgets
+   * explain the gap.
+   */
+  const hasPlanningRows =
+    vm.budgets.length > 0 || vm.savingsGoals.length > 0 || vm.upcomingReminders.length > 0
+  const hasDebtOrLoan =
+    position === null ||
+    !position.receivables.isZero() ||
+    !position.payables.isZero() ||
+    !position.loanOutstanding.isZero()
+  const showOnboarding = vm.recentTransactions.length === 0 && !hasPlanningRows && !hasDebtOrLoan
+
   /** Every summary label and hint, translated once for the panel. */
   const summaryLabels = {
     'dashboard.netWorth': t('dashboard.netWorth'),
@@ -207,78 +243,85 @@ export default async function DashboardPage() {
         hints={summaryHints}
       />
 
-      {/* The spec's 12-column grid (§6.1), 24 px gutters. `order-*` below xl is
+      {showOnboarding ? (
+        // `vm.distribution` is the account list the distribution widget would
+        // have charted, and it is never `null` in this branch (a `null`
+        // position is `hasDebtOrLoan`, which is checked above) — so its length
+        // is what step 1's completion state reads.
+        <OnboardingCard hasAccount={(vm.distribution?.length ?? 0) > 0} />
+      ) : (
+        /* The spec's 12-column grid (§6.1), 24 px gutters. `order-*` below xl is
           what produces the mobile stacking order the spec fixes — which is NOT
           the desktop reading order: on a phone the ledger and the planning
           widgets come before the charts, because a phone is where the user
-          checks something rather than studies it. */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
-        {/* Row 3: trend 8/12 h300 + expense breakdown 4/12 h300 */}
-        <ChartContainer
-          title={t('dashboard.cashFlowTrend')}
-          height={CHART_HEIGHT.tall}
-          className="order-1 md:col-span-2 xl:col-span-8"
-        >
-          {/* Ruling #6 (never a flat zero line for insufficient data) applies
+          checks something rather than studies it. */
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
+          {/* Row 3: trend 8/12 h300 + expense breakdown 4/12 h300 */}
+          <ChartContainer
+            title={t('dashboard.cashFlowTrend')}
+            height={CHART_HEIGHT.tall}
+            className="order-1 md:col-span-2 xl:col-span-8"
+          >
+            {/* Ruling #6 (never a flat zero line for insufficient data) applies
               here too, though the brief's own Step 8 code omits it: six
               months of a genuinely new account is six zero points, and a line
               flat at zero across all of them is the same "measurement nobody
               took" the balance-history widget below guards against. */}
-          {vm.cashFlowTrend.every((point) => point.income === 0 && point.expense === 0) ? (
-            <EmptyState icon={Activity} title={t('dashboard.emptyCashFlowTitle')} />
-          ) : (
-            <CashFlowTrendChart
-              data={vm.cashFlowTrend}
-              currency={vm.displayCurrency}
-              locale={locale}
-              height={CHART_HEIGHT.tall}
-              summary={t('dashboard.cashFlowTrendSummary', {
-                currency: vm.displayCurrency,
-                from: vm.cashFlowTrend[0]?.label ?? '',
-                to: vm.cashFlowTrend.at(-1)?.label ?? '',
-              })}
-              seriesLabels={{
-                income: t('dashboard.chartSeriesIncome'),
-                expense: t('dashboard.chartSeriesExpense'),
-                netIncome: t('dashboard.netIncome'),
-              }}
-            />
-          )}
-        </ChartContainer>
+            {vm.cashFlowTrend.every((point) => point.income === 0 && point.expense === 0) ? (
+              <EmptyState icon={Activity} title={t('dashboard.emptyCashFlowTitle')} />
+            ) : (
+              <CashFlowTrendChart
+                data={vm.cashFlowTrend}
+                currency={vm.displayCurrency}
+                locale={locale}
+                height={CHART_HEIGHT.tall}
+                summary={t('dashboard.cashFlowTrendSummary', {
+                  currency: vm.displayCurrency,
+                  from: vm.cashFlowTrend[0]?.label ?? '',
+                  to: vm.cashFlowTrend.at(-1)?.label ?? '',
+                })}
+                seriesLabels={{
+                  income: t('dashboard.chartSeriesIncome'),
+                  expense: t('dashboard.chartSeriesExpense'),
+                  netIncome: t('dashboard.netIncome'),
+                }}
+              />
+            )}
+          </ChartContainer>
 
-        <ChartContainer
-          title={t('dashboard.expenseByCategory')}
-          height={CHART_HEIGHT.tall}
-          className="order-5 md:col-span-1 xl:order-2 xl:col-span-4"
-        >
-          {vm.expenseByCategory.length === 0 ? (
-            <EmptyState icon={PieChart} title={t('dashboard.emptyExpenseTitle')} />
-          ) : (
-            <ExpenseByCategoryChart
-              data={vm.expenseByCategory.map((row) => ({
-                ...row,
-                name: row.nameKey ? t(row.nameKey) : row.name,
-              }))}
-              currency={vm.displayCurrency}
-              locale={locale}
-              height={CHART_HEIGHT.tall}
-              summary={t('dashboard.expenseByCategorySummary', {
-                count: vm.expenseByCategory.length,
-                currency: vm.displayCurrency,
-              })}
-              seriesLabel={t('dashboard.chartSeriesSpent')}
-            />
-          )}
-        </ChartContainer>
+          <ChartContainer
+            title={t('dashboard.expenseByCategory')}
+            height={CHART_HEIGHT.tall}
+            className="order-5 md:col-span-1 xl:order-2 xl:col-span-4"
+          >
+            {vm.expenseByCategory.length === 0 ? (
+              <EmptyState icon={PieChart} title={t('dashboard.emptyExpenseTitle')} />
+            ) : (
+              <ExpenseByCategoryChart
+                data={vm.expenseByCategory.map((row) => ({
+                  ...row,
+                  name: row.nameKey ? t(row.nameKey) : row.name,
+                }))}
+                currency={vm.displayCurrency}
+                locale={locale}
+                height={CHART_HEIGHT.tall}
+                summary={t('dashboard.expenseByCategorySummary', {
+                  count: vm.expenseByCategory.length,
+                  currency: vm.displayCurrency,
+                })}
+                seriesLabel={t('dashboard.chartSeriesSpent')}
+              />
+            )}
+          </ChartContainer>
 
-        {/* Row 4: balance history 8/12 h260 + income vs expense 4/12 h260 */}
-        <ChartContainer
-          title={t('dashboard.balanceOverTime')}
-          caption={t('dashboard.balanceOverTimeCaption')}
-          height={CHART_HEIGHT.medium}
-          className="order-10 md:col-span-2 xl:order-3 xl:col-span-8"
-        >
-          {/* The spec is explicit: an empty balance history shows the EMPTY
+          {/* Row 4: balance history 8/12 h260 + income vs expense 4/12 h260 */}
+          <ChartContainer
+            title={t('dashboard.balanceOverTime')}
+            caption={t('dashboard.balanceOverTimeCaption')}
+            height={CHART_HEIGHT.medium}
+            className="order-10 md:col-span-2 xl:order-3 xl:col-span-8"
+          >
+            {/* The spec is explicit: an empty balance history shows the EMPTY
               STATE, not a flat zero line — a line at zero across six months is
               a measurement nobody took. `every(point => balance === null)` is
               the honest test for an FX gap; a user with literally no accounts
@@ -288,240 +331,241 @@ export default async function DashboardPage() {
               line at zero for an empty portfolio is the same "measurement
               nobody took" the gap case guards against, so it takes the same
               empty state. */}
-          {vm.balanceOverTime.every((point) => point.balance === null) ||
-          (vm.distribution !== null && vm.distribution.length === 0) ? (
-            <EmptyState
-              icon={LineChart}
-              title={t('dashboard.emptyBalanceHistoryTitle')}
-              description={t('dashboard.emptyBalanceHistoryBody')}
-            />
-          ) : (
-            <AccountBalanceHistoryChart
-              data={vm.balanceOverTime}
-              currency={vm.displayCurrency}
-              locale={locale}
-              height={CHART_HEIGHT.medium}
-              summary={
-                t('dashboard.balanceOverTimeSummary', { currency: vm.displayCurrency }) +
-                t('dashboard.balanceOverTimeGapsSuffix', {
-                  count: vm.balanceOverTime.filter((point) => point.balance === null).length,
-                })
-              }
-              seriesLabel={t('dashboard.chartSeriesAccountBalance')}
-            />
-          )}
-        </ChartContainer>
+            {vm.balanceOverTime.every((point) => point.balance === null) ||
+            (vm.distribution !== null && vm.distribution.length === 0) ? (
+              <EmptyState
+                icon={LineChart}
+                title={t('dashboard.emptyBalanceHistoryTitle')}
+                description={t('dashboard.emptyBalanceHistoryBody')}
+              />
+            ) : (
+              <AccountBalanceHistoryChart
+                data={vm.balanceOverTime}
+                currency={vm.displayCurrency}
+                locale={locale}
+                height={CHART_HEIGHT.medium}
+                summary={
+                  t('dashboard.balanceOverTimeSummary', { currency: vm.displayCurrency }) +
+                  t('dashboard.balanceOverTimeGapsSuffix', {
+                    count: vm.balanceOverTime.filter((point) => point.balance === null).length,
+                  })
+                }
+                seriesLabel={t('dashboard.chartSeriesAccountBalance')}
+              />
+            )}
+          </ChartContainer>
 
-        <ChartContainer
-          title={t('dashboard.incomeVsExpense')}
-          height={CHART_HEIGHT.medium}
-          className="order-9 md:col-span-1 xl:order-4 xl:col-span-4"
-        >
-          {/* Same reasoning as Cash Flow Trend above: two zero months is
+          <ChartContainer
+            title={t('dashboard.incomeVsExpense')}
+            height={CHART_HEIGHT.medium}
+            className="order-9 md:col-span-1 xl:order-4 xl:col-span-4"
+          >
+            {/* Same reasoning as Cash Flow Trend above: two zero months is
               nothing to compare, not a comparison of nothing. */}
-          {vm.incomeVsExpense.every((row) => row.income === 0 && row.expense === 0) ? (
-            <EmptyState icon={BarChart3} title={t('dashboard.emptyIncomeVsExpenseTitle')} />
-          ) : (
-            <IncomeVsExpenseChart
-              data={vm.incomeVsExpense}
-              currency={vm.displayCurrency}
-              locale={locale}
-              height={CHART_HEIGHT.medium}
-              summary={t('dashboard.incomeVsExpenseSummary', {
-                currency: vm.displayCurrency,
-                periods: vm.incomeVsExpense.map((row) => row.period).join(', '),
-              })}
-              seriesLabels={{
-                income: t('dashboard.chartSeriesIncome'),
-                expense: t('dashboard.chartSeriesExpense'),
-              }}
-            />
-          )}
-        </ChartContainer>
+            {vm.incomeVsExpense.every((row) => row.income === 0 && row.expense === 0) ? (
+              <EmptyState icon={BarChart3} title={t('dashboard.emptyIncomeVsExpenseTitle')} />
+            ) : (
+              <IncomeVsExpenseChart
+                data={vm.incomeVsExpense}
+                currency={vm.displayCurrency}
+                locale={locale}
+                height={CHART_HEIGHT.medium}
+                summary={t('dashboard.incomeVsExpenseSummary', {
+                  currency: vm.displayCurrency,
+                  periods: vm.incomeVsExpense.map((row) => row.period).join(', '),
+                })}
+                seriesLabels={{
+                  income: t('dashboard.chartSeriesIncome'),
+                  expense: t('dashboard.chartSeriesExpense'),
+                }}
+              />
+            )}
+          </ChartContainer>
 
-        {/* Row 5: three planning widgets, 4/12 each, h ≤ 240, ≤ 3 rows + a link */}
-        <ChartContainer
-          title={t('dashboard.accountDistribution')}
-          className="order-11 md:col-span-1 xl:order-5 xl:col-span-4"
-        >
-          {vm.distribution === null ? (
-            <EmptyState icon={Wallet} title={t('dashboard.distributionFxUnavailable')} />
-          ) : vm.distribution.length === 0 ? (
-            <EmptyState
-              icon={Wallet}
-              title={t('dashboard.emptyDistributionTitle')}
-              action={{ label: t('dashboard.emptyDistributionAction'), href: '/accounts' }}
-            />
-          ) : (
-            <AccountDistributionChart
-              data={vm.distribution}
-              currency={vm.displayCurrency}
-              locale={locale}
-              height={CHART_HEIGHT.short}
-              summary={t('dashboard.accountDistributionSummary', {
-                count: vm.distribution.length,
-                currency: vm.displayCurrency,
-              })}
-              seriesLabel={t('dashboard.chartSeriesBalance')}
-            />
-          )}
-        </ChartContainer>
+          {/* Row 5: three planning widgets, 4/12 each, h ≤ 240, ≤ 3 rows + a link */}
+          <ChartContainer
+            title={t('dashboard.accountDistribution')}
+            className="order-11 md:col-span-1 xl:order-5 xl:col-span-4"
+          >
+            {vm.distribution === null ? (
+              <EmptyState icon={Wallet} title={t('dashboard.distributionFxUnavailable')} />
+            ) : vm.distribution.length === 0 ? (
+              <EmptyState
+                icon={Wallet}
+                title={t('dashboard.emptyDistributionTitle')}
+                action={{ label: t('dashboard.emptyDistributionAction'), href: '/accounts' }}
+              />
+            ) : (
+              <AccountDistributionChart
+                data={vm.distribution}
+                currency={vm.displayCurrency}
+                locale={locale}
+                height={CHART_HEIGHT.short}
+                summary={t('dashboard.accountDistributionSummary', {
+                  count: vm.distribution.length,
+                  currency: vm.displayCurrency,
+                })}
+                seriesLabel={t('dashboard.chartSeriesBalance')}
+              />
+            )}
+          </ChartContainer>
 
-        <ChartContainer
-          title={t('dashboard.budgetProgress')}
-          caption={t('dashboard.budgetProgressCaption')}
-          right={
-            vm.budgets.length > 0 ? (
-              <Link
-                href="/budgets"
-                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
-              >
-                {t('dashboard.viewAllBudgets')}
-              </Link>
-            ) : undefined
-          }
-          className="order-3 md:col-span-1 xl:order-6 xl:col-span-4"
-        >
-          {vm.budgets.length === 0 ? (
-            <EmptyState
-              icon={Target}
-              title={t('dashboard.emptyBudgetsTitle')}
-              action={{ label: t('dashboard.emptyBudgetsAction'), href: '/budgets' }}
-            />
-          ) : (
-            <BudgetProgressList
-              budgets={vm.budgets.slice(0, WIDGET_ROWS)}
-              locale={locale}
-              compact
-            />
-          )}
-        </ChartContainer>
+          <ChartContainer
+            title={t('dashboard.budgetProgress')}
+            caption={t('dashboard.budgetProgressCaption')}
+            right={
+              vm.budgets.length > 0 ? (
+                <Link
+                  href="/budgets"
+                  className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+                >
+                  {t('dashboard.viewAllBudgets')}
+                </Link>
+              ) : undefined
+            }
+            className="order-3 md:col-span-1 xl:order-6 xl:col-span-4"
+          >
+            {vm.budgets.length === 0 ? (
+              <EmptyState
+                icon={Target}
+                title={t('dashboard.emptyBudgetsTitle')}
+                action={{ label: t('dashboard.emptyBudgetsAction'), href: '/budgets' }}
+              />
+            ) : (
+              <BudgetProgressList
+                budgets={vm.budgets.slice(0, WIDGET_ROWS)}
+                locale={locale}
+                compact
+              />
+            )}
+          </ChartContainer>
 
-        <ChartContainer
-          title={t('dashboard.savingsGoals')}
-          caption={t('dashboard.savingsGoalsCaption')}
-          right={
-            vm.savingsGoals.length > 0 ? (
-              <Link
-                href="/goals"
-                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
-              >
-                {t('dashboard.viewAllGoals')}
-              </Link>
-            ) : undefined
-          }
-          className="order-7 md:col-span-1 xl:order-7 xl:col-span-4"
-        >
-          {vm.savingsGoals.length === 0 ? (
-            <EmptyState
-              icon={PiggyBank}
-              title={t('dashboard.emptyGoalsTitle')}
-              action={{ label: t('dashboard.emptyGoalsAction'), href: '/goals' }}
-            />
-          ) : (
-            <GoalList
-              goals={vm.savingsGoals.slice(0, WIDGET_ROWS)}
-              locale={locale}
-              timeZone={timezone}
-              compact
-            />
-          )}
-        </ChartContainer>
+          <ChartContainer
+            title={t('dashboard.savingsGoals')}
+            caption={t('dashboard.savingsGoalsCaption')}
+            right={
+              vm.savingsGoals.length > 0 ? (
+                <Link
+                  href="/goals"
+                  className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+                >
+                  {t('dashboard.viewAllGoals')}
+                </Link>
+              ) : undefined
+            }
+            className="order-7 md:col-span-1 xl:order-7 xl:col-span-4"
+          >
+            {vm.savingsGoals.length === 0 ? (
+              <EmptyState
+                icon={PiggyBank}
+                title={t('dashboard.emptyGoalsTitle')}
+                action={{ label: t('dashboard.emptyGoalsAction'), href: '/goals' }}
+              />
+            ) : (
+              <GoalList
+                goals={vm.savingsGoals.slice(0, WIDGET_ROWS)}
+                locale={locale}
+                timeZone={timezone}
+                compact
+              />
+            )}
+          </ChartContainer>
 
-        {/* Row 6: debt/loan 4/12 + reminders 8/12 */}
-        <ChartContainer
-          title={t('dashboard.debtLoanOverview')}
-          caption={t('dashboard.debtLoanOverviewCaption', { currency: vm.displayCurrency })}
-          className="order-8 md:col-span-1 xl:order-8 xl:col-span-4"
-        >
-          {vm.debtLoanOverview === null ? (
-            <EmptyState icon={HandCoins} title={t('dashboard.debtLoanFxUnavailable')} />
-          ) : (
-            <DebtLoanOverview
-              data={vm.debtLoanOverview}
-              currency={vm.displayCurrency}
-              labels={{
-                'dashboard.receivables': t('dashboard.receivables'),
-                'dashboard.payables': t('dashboard.payables'),
-                'dashboard.loanOutstanding': t('dashboard.loanOutstanding'),
-              }}
-              footnote={t('dashboard.debtLoanIncluded')}
-            />
-          )}
-        </ChartContainer>
+          {/* Row 6: debt/loan 4/12 + reminders 8/12 */}
+          <ChartContainer
+            title={t('dashboard.debtLoanOverview')}
+            caption={t('dashboard.debtLoanOverviewCaption', { currency: vm.displayCurrency })}
+            className="order-8 md:col-span-1 xl:order-8 xl:col-span-4"
+          >
+            {vm.debtLoanOverview === null ? (
+              <EmptyState icon={HandCoins} title={t('dashboard.debtLoanFxUnavailable')} />
+            ) : (
+              <DebtLoanOverview
+                data={vm.debtLoanOverview}
+                currency={vm.displayCurrency}
+                labels={{
+                  'dashboard.receivables': t('dashboard.receivables'),
+                  'dashboard.payables': t('dashboard.payables'),
+                  'dashboard.loanOutstanding': t('dashboard.loanOutstanding'),
+                }}
+                footnote={t('dashboard.debtLoanIncluded')}
+              />
+            )}
+          </ChartContainer>
 
-        <ChartContainer
-          title={t('dashboard.upcomingReminders')}
-          caption={t('dashboard.upcomingRemindersCaption', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
-          right={
-            vm.upcomingReminders.length > 0 ? (
-              <Link
-                href="/reminders"
-                className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
-              >
-                {t('dashboard.viewAllReminders')}
-              </Link>
-            ) : undefined
-          }
-          className="order-4 md:col-span-2 xl:order-9 xl:col-span-8"
-        >
-          {vm.upcomingReminders.length === 0 ? (
-            <EmptyState
-              icon={BellRing}
-              title={t('dashboard.emptyRemindersTitle', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
-              // The old `#new` anchor pointed at an inline create form that no
-              // longer exists (Task 9 moved reminder creation behind the
-              // Reminders page's header action/sheet, same as goals/debts/
-              // loans) — so this links at the page itself, whose header
-              // carries "Thêm nhắc nhở".
-              action={{ label: t('dashboard.emptyRemindersAction'), href: '/reminders' }}
-            />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {/* A muted count, not a banner — the user needs to know how much
+          <ChartContainer
+            title={t('dashboard.upcomingReminders')}
+            caption={t('dashboard.upcomingRemindersCaption', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
+            right={
+              vm.upcomingReminders.length > 0 ? (
+                <Link
+                  href="/reminders"
+                  className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
+                >
+                  {t('dashboard.viewAllReminders')}
+                </Link>
+              ) : undefined
+            }
+            className="order-4 md:col-span-2 xl:order-9 xl:col-span-8"
+          >
+            {vm.upcomingReminders.length === 0 ? (
+              <EmptyState
+                icon={BellRing}
+                title={t('dashboard.emptyRemindersTitle', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
+                // The old `#new` anchor pointed at an inline create form that no
+                // longer exists (Task 9 moved reminder creation behind the
+                // Reminders page's header action/sheet, same as goals/debts/
+                // loans) — so this links at the page itself, whose header
+                // carries "Thêm nhắc nhở".
+                action={{ label: t('dashboard.emptyRemindersAction'), href: '/reminders' }}
+              />
+            ) : (
+              <div className="flex flex-col gap-2">
+                {/* A muted count, not a banner — the user needs to know how much
                   of it there is (the list shows at most two) without being
                   shouted at. Only the number carries colour, and the word
                   carries the meaning. */}
-              {vm.overdueReminderCount > 0 && (
-                <p className="text-xs/[1rem] text-muted-foreground">
-                  <span className="text-negative tabular-nums">
-                    {t('dashboard.overdueCount', { count: vm.overdueReminderCount })}
-                  </span>
-                </p>
-              )}
-              {/* `collapse` is deliberately omitted (default `false`, per the
+                {vm.overdueReminderCount > 0 && (
+                  <p className="text-xs/[1rem] text-muted-foreground">
+                    <span className="text-negative tabular-nums">
+                      {t('dashboard.overdueCount', { count: vm.overdueReminderCount })}
+                    </span>
+                  </p>
+                )}
+                {/* `collapse` is deliberately omitted (default `false`, per the
                   prop's own doc on `OccurrenceList`): the widget shows at most
                   five rows in total, and a "+n kỳ" badge here would explain a
                   list the user cannot expand. No inner card border either — a
                   card inside `ChartContainer`'s own card would be a
                   card-in-card. */}
-              <OccurrenceList
-                occurrences={vm.upcomingReminders}
-                locale={locale}
-                timeZone={timezone}
-                compact
-              />
-            </div>
-          )}
-        </ChartContainer>
+                <OccurrenceList
+                  occurrences={vm.upcomingReminders}
+                  locale={locale}
+                  timeZone={timezone}
+                  compact
+                />
+              </div>
+            )}
+          </ChartContainer>
 
-        {/* Row 7: the ledger, full width and LAST on desktop — the widgets
+          {/* Row 7: the ledger, full width and LAST on desktop — the widgets
             above are what the user came to decide something from, and the
             ledger is what they scroll to when they want to check one of them.
             On a phone it is second (order-2), because checking one entry is
             what a phone is for. */}
-        <ChartContainer
-          title={t('dashboard.recentTransactions')}
-          className="order-2 md:col-span-2 xl:order-10 xl:col-span-12"
-        >
-          <RecentTransactions
-            transactions={vm.recentTransactions}
-            locale={locale}
-            timeZone={timezone}
-            mobileLimit={5}
-          />
-        </ChartContainer>
-      </div>
+          <ChartContainer
+            title={t('dashboard.recentTransactions')}
+            className="order-2 md:col-span-2 xl:order-10 xl:col-span-12"
+          >
+            <RecentTransactions
+              transactions={vm.recentTransactions}
+              locale={locale}
+              timeZone={timezone}
+              mobileLimit={5}
+            />
+          </ChartContainer>
+        </div>
+      )}
     </div>
   )
 }
