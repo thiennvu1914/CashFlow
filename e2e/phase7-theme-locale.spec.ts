@@ -1,7 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser, eitherLocale } from './helpers'
+import { registerNewUser, eitherLocale, PAGES } from './helpers'
 
 /**
  * Theme and locale, end to end (spec §12).
@@ -141,6 +141,60 @@ test.describe.serial('Phase 7 — theme and locale', () => {
     const rail = page.getByRole('navigation', { name: /^Primary$/ })
     await expect(rail.getByRole('link', { name: 'Transactions' })).toBeVisible()
     await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+
+    // And back, so the suite leaves the account as it found it.
+    await page.goto('/settings')
+    await preferences(page)
+      .getByLabel(/Language/)
+      .selectOption('vi')
+    await page.getByRole('button', { name: /^Save$/ }).click()
+    await expect(page.getByText(/Profile saved/)).toBeVisible()
+  })
+
+  test('every page renders in the reader’s locale, with locale-formatted numbers (Task 13, Step 5)', async ({
+    page,
+  }) => {
+    // Twelve full navigations plus two settings round-trips comfortably clear
+    // the default 30 s — the same reasoning `registerNewUser`'s own widened
+    // bound gives for a cold Turbopack compile.
+    test.setTimeout(90_000)
+
+    // Signed back in through the UI for the same reason the test above does —
+    // `syncPreferenceCookies` keeps the cookie mirror in step with the account.
+    await loginViaUi(page)
+
+    await page.goto('/settings')
+    await preferences(page)
+      .getByLabel(/Ngôn ngữ|Language/)
+      .selectOption('en')
+    await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
+
+    // This account (registerNewUser's fixed name, and lib/server/defaults.ts's
+    // starter account types/categories) is deliberately ASCII-only, and never
+    // creates an account, a transaction or anything else with a Vietnamese
+    // name — so a diacritic found in `main` cannot be the user's own data
+    // leaking through; it can only be an untranslated vi string under an en
+    // page, which is exactly what this check is for.
+    for (const url of PAGES) {
+      await page.goto(url)
+      await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+      const text = (await page.locator('main').innerText())
+        // The Language <select>'s Vietnamese option is a language's own
+        // ENDONYM ("Tiếng Việt"), correctly shown in its own script regardless
+        // of which locale is rendering — the same convention every language
+        // switcher uses ("Français" stays "Français" in an English UI). Not a
+        // translation this app owns, so it is the one string this check
+        // excludes rather than a real leak.
+        .replace('Tiếng Việt', '')
+      expect(text, url).not.toMatch(/[ăâđêôơưĂÂĐÊÔƠƯ]|ạ|ả|ấ|ầ|ệ|ế|ị|ọ|ố|ồ|ộ|ớ|ợ|ủ|ứ|ự|ỳ|ỹ/)
+      // Wherever a four-plus-digit figure appears, it must be comma-grouped
+      // (en), never period-grouped (vi) — this account's own figures never
+      // grow that large, so the assertion is a no-op where there is nothing
+      // to group; it still catches the moment any page starts rendering one.
+      const viGrouped = text.match(/\d{1,3}(?:\.\d{3})+/)
+      expect(viGrouped, `${url}: found a vi-grouped figure under an en page`).toBeNull()
+    }
 
     // And back, so the suite leaves the account as it found it.
     await page.goto('/settings')

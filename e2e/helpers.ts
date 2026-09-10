@@ -215,3 +215,24 @@ export function eitherLocale(vi: string, en: string): RegExp {
   const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(`${escape(vi)}|${escape(en)}`)
 }
+
+/**
+ * Every signed-in route, in nav order. Shared by the specs that walk the
+ * whole app — this task's enum sweep and the all-pages locale assertion in
+ * `phase7-theme-locale.spec.ts` — so a per-spec copy is not how one of them
+ * ends up missing a route a later phase adds.
+ */
+export const PAGES = [
+  '/dashboard',
+  '/transactions',
+  '/transfers',
+  '/accounts',
+  '/categories',
+  '/budgets',
+  '/goals',
+  '/debts',
+  '/loans',
+  '/reminders',
+  '/reports',
+  '/settings',
+] as const
