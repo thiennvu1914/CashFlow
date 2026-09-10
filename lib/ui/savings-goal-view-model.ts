@@ -8,7 +8,7 @@ import {
 } from '@/lib/datetime/calendar-date'
 import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
-import { formatMoney } from './format-money'
+import { formatMoney, formatPercent } from './format-money'
 
 /**
  * The Savings page's DTO boundary, as one pure function.
@@ -124,7 +124,13 @@ export function toSavingsGoalDto(
     progress: formatMoney(progress, currency, locale),
     remaining: formatMoney(remaining, currency, locale),
     percent: Math.min(MAX_PERCENT, ratio.mul(100).toNumber()),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    // Rounded on the `Decimal` first (unchanged rounding semantics);
+    // `formatPercent` only formats that already-rounded whole number for the
+    // reader's locale and appends the sign -- it does no rounding of its own.
+    percentLabel: formatPercent(
+      ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP),
+      locale,
+    ),
     deadline,
     // A string compare, not an instant one — `compareCalendarDates` documents
     // why. `=== -1` so a deadline of *today* is not yet missed.

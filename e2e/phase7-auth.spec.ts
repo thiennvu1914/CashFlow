@@ -67,6 +67,37 @@ test('a duplicate-email registration shows the translated "email taken" message,
   await expect(page.getByText(/USER_ALREADY_EXISTS/)).toHaveCount(0)
 })
 
+test('a rate-limited (429) registration shows the too-many-attempts message, not the generic one (D3)', async ({
+  page,
+}) => {
+  // Routed rather than actually tripping the real limiter, so this stays
+  // deterministic regardless of how many other sign-ups ran earlier in the
+  // suite — mirroring the login form's identical 429 case above. The address
+  // is unique and never actually created (the route answers before Better
+  // Auth ever sees it), so there is nothing to clean up.
+  await page.route('**/api/auth/sign-up/email', async (route) => {
+    await route.fulfill({
+      status: 429,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'Too many requests' }),
+    })
+  })
+
+  await page.goto('/register')
+  await page.getByLabel(/^Tên$|^Name$/).fill('Rate Limited User')
+  await page.getByLabel(/^Email$/).fill(`e2e-phase7-auth-register-429-${Date.now()}@example.com`)
+  await page.getByLabel(/Mật khẩu|^Password$/).fill('correct-horse-battery-staple')
+  await page.getByRole('button', { name: 'Tạo tài khoản' }).click()
+
+  await expect(
+    page.getByText('Bạn đã thử quá nhiều lần. Vui lòng đợi một phút rồi thử lại.'),
+  ).toBeVisible()
+  await expect(page.getByText('Đã có tài khoản dùng email đó.')).toHaveCount(0)
+  await expect(page.getByText('Đã xảy ra lỗi. Vui lòng thử lại.')).toHaveCount(0)
+
+  await page.unroute('**/api/auth/sign-up/email')
+})
+
 test('a wrong password on login shows the translated friendly error', async ({ page }) => {
   const { email } = await registerNewUser(page, { emailPrefix: 'e2e-phase7-auth-wrongpw' })
 

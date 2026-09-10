@@ -173,6 +173,35 @@ export function formatReadableRate(
 }
 
 /**
+ * A percentage or an interest rate — `value` is already on the 0–100 scale
+ * (a `percentLabel`'s `ratio.mul(100)`, or a stored interest rate like
+ * `8.500`), never a 0–1 ratio: this function only formats and appends the
+ * sign, it never multiplies.
+ *
+ * `fractionDigits` is a MAXIMUM, not a fixed precision — `Intl.NumberFormat`
+ * trims trailing zeros the same way the old ad-hoc `RATE_FORMATTER` did
+ * (`8.500` renders as "8,5 %", not "8,500 %"). The default of 0 is every
+ * `percentLabel`'s shape, which is already rounded to a whole number on the
+ * `Decimal` itself with `ROUND_HALF_UP` before it ever reaches here — this
+ * function does no rounding of its own and must never be given the un-rounded
+ * ratio.
+ *
+ * A non-breaking space (U+00A0) separates the figure from the `%`, in every
+ * locale: an ordinary space lets the figure and the sign land on two
+ * different lines, which a bare `${n} %` template used to do.
+ */
+export function formatPercent(
+  value: Prisma.Decimal | string | number,
+  locale: Locale = DEFAULT_LOCALE,
+  fractionDigits = 0,
+): string {
+  const formatted = numberFormat(locale, { maximumFractionDigits: fractionDigits }).format(
+    Number(String(value)),
+  )
+  return `${formatted} %`
+}
+
+/**
  * A chart axis tick: the same figure, abbreviated, because "10.000.000" repeated
  * down a Y axis is a wall of digits that says less than "10 Tr" does. Compact
  * notation is a *label*, never a value — the tooltip and every KPI still show

@@ -4,7 +4,7 @@ import type { Currency } from '@/lib/currency/provider'
 import { formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { DebtDisplayStatus, DebtWithOutstanding } from '@/lib/server/services/debt'
-import { formatMoney } from './format-money'
+import { formatMoney, formatPercent } from './format-money'
 
 /**
  * The Debts page's DTO boundary, as two pure functions.
@@ -128,7 +128,13 @@ export function toDebtDto(
     // rather than a tidy "0" hiding it.
     outstanding: formatMoney(outstanding, currency, locale),
     percentPaid: Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, ratio.mul(100).toNumber())),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    // Rounded on the `Decimal` first (unchanged rounding semantics);
+    // `formatPercent` only formats that already-rounded whole number for the
+    // reader's locale and appends the sign -- it does no rounding of its own.
+    percentLabel: formatPercent(
+      ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP),
+      locale,
+    ),
     status: displayStatus,
     active: debt.status === 'ACTIVE',
     dueDate,

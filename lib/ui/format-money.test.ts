@@ -4,6 +4,7 @@ import {
   formatChartValue,
   formatCompactAmount,
   formatMoney,
+  formatPercent,
   formatRate,
   formatReadableRate,
 } from './format-money'
@@ -167,5 +168,39 @@ describe('locale-aware formatting', () => {
     // Vietnamese compact notation is ICU-dependent; this is what this Node
     // emits. If it changes, change the expectation and note the version.
     expect(formatCompactAmount(25_000_000, 'vi')).toBe('25 Tr')
+  })
+})
+
+describe('formatPercent', () => {
+  /**
+   * A non-breaking space (U+00A0) separates the figure from the sign in
+   * every locale -- deliberately not a plain space, so the pair can never
+   * wrap across a line break onto "86" / "%" on two rows.
+   */
+  const NBSP = '\u00A0'
+
+  it('renders a whole percent the same shape in both locales -- no thousands separator applies below 100', () => {
+    expect(formatPercent(86, 'vi')).toBe(`86${NBSP}%`)
+    expect(formatPercent(86, 'en')).toBe(`86${NBSP}%`)
+  })
+
+  it('keeps the decimal separator locale-aware for a fractional rate', () => {
+    expect(formatPercent(8.5, 'vi', 3)).toBe(`8,5${NBSP}%`)
+    expect(formatPercent(8.5, 'en', 3)).toBe(`8.5${NBSP}%`)
+  })
+
+  it('accepts a Prisma.Decimal and the string it serialises to', () => {
+    expect(formatPercent(new Prisma.Decimal('120'), 'vi')).toBe(`120${NBSP}%`)
+    expect(formatPercent('67', 'en')).toBe(`67${NBSP}%`)
+  })
+
+  it('trims trailing zeros rather than padding -- fractionDigits is a MAXIMUM, matching the old RATE_FORMATTER', () => {
+    expect(formatPercent(new Prisma.Decimal('12.345'), 'vi', 3)).toBe(`12,345${NBSP}%`)
+    expect(formatPercent(new Prisma.Decimal('100.000'), 'vi', 3)).toBe(`100${NBSP}%`)
+    expect(formatPercent(new Prisma.Decimal('0.000'), 'en', 3)).toBe(`0${NBSP}%`)
+  })
+
+  it('defaults to zero fraction digits -- the whole-percent shape every percentLabel uses', () => {
+    expect(formatPercent(30, 'vi')).toBe(`30${NBSP}%`)
   })
 })

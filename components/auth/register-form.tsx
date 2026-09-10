@@ -14,10 +14,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Maps a Better Auth error onto one of two fixed message KEYS. The server's own
- * `error.message` is never rendered: it is library text we do not control, it
- * can change between versions, and it can carry detail (a database or provider
- * message) that has no business on a public sign-up form.
+ * Maps a Better Auth error onto one of three fixed message KEYS. The server's
+ * own `error.message` is never rendered: it is library text we do not
+ * control, it can change between versions, and it can carry detail (a
+ * database or provider message) that has no business on a public sign-up
+ * form.
  *
  * `POST /sign-up/email` answers a duplicate address with
  * `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` — verified in
@@ -33,9 +34,21 @@ import { Input } from '@/components/ui/input'
  * account), and a useless generic error here just sends people in circles. The
  * endpoints where enumeration actually matters — sign-in and
  * request-password-reset — stay uniform.
+ *
+ * `status === 429` (Task 13, D3) is checked before the code: Better Auth's own
+ * rate limiter (`lib/auth/create-auth.ts`) answers a burst of sign-ups the
+ * same way it answers a burst of sign-ins, and a visitor who tripped it needs
+ * to know to wait, not "check the highlighted fields" or a generic failure —
+ * mirroring the login form's identical `error.status === 429` branch.
  */
-function registerErrorKey(code: string | undefined): 'auth.emailTaken' | 'errors.generic' {
-  if (code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' || code === 'USER_ALREADY_EXISTS') {
+function registerErrorKey(
+  error: { code?: string; status?: number } | undefined,
+): 'auth.tooManyAttempts' | 'auth.emailTaken' | 'errors.generic' {
+  if (error?.status === 429) return 'auth.tooManyAttempts'
+  if (
+    error?.code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' ||
+    error?.code === 'USER_ALREADY_EXISTS'
+  ) {
     return 'auth.emailTaken'
   }
   return 'errors.generic'
@@ -69,7 +82,7 @@ export function RegisterForm() {
           name: values.name,
         })
         if (error) {
-          setError('root', { message: t(registerErrorKey(error.code)) })
+          setError('root', { message: t(registerErrorKey(error)) })
           return
         }
       } catch {

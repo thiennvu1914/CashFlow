@@ -4,6 +4,7 @@ import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isRealCalendarDate } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
+import type { Locale } from '@/lib/i18n/locale'
 import {
   InvalidReportRangeError,
   describeRange,
@@ -13,7 +14,7 @@ import {
 } from '@/lib/reports/report-range'
 import { getActivitySummary } from '@/lib/server/services/activity'
 import { formatDate } from '@/lib/ui/format-date'
-import { formatMoney } from '@/lib/ui/format-money'
+import { formatMoney, formatPercent } from '@/lib/ui/format-money'
 import type { KpiDto } from '@/lib/ui/dashboard-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { ChartContainer } from '@/components/common/chart-container'
@@ -75,9 +76,17 @@ function echoableDate(value: string | string[] | undefined): string {
  * a screen reader announces for `CategoryBars`' now-decorative bar, so it
  * does not get to rely on an implicit invariant elsewhere.
  */
-function categoryPercentLabel(total: Prisma.Decimal, expenseTotal: Prisma.Decimal): string {
-  if (expenseTotal.isZero()) return '0 %'
-  return `${total.div(expenseTotal).mul(100).toDecimalPlaces(0).toString()} %`
+function categoryPercentLabel(
+  total: Prisma.Decimal,
+  expenseTotal: Prisma.Decimal,
+  locale: Locale,
+): string {
+  // Rounded on the `Decimal` first (unchanged rounding semantics — decimal.js'
+  // default mode is ROUND_HALF_UP); `formatPercent` only formats that
+  // already-rounded whole number for the reader's locale and appends the
+  // sign, never a rounding of its own.
+  if (expenseTotal.isZero()) return formatPercent(0, locale)
+  return formatPercent(total.div(expenseTotal).mul(100).toDecimalPlaces(0), locale)
 }
 
 export default async function ReportsPage({
@@ -166,7 +175,7 @@ export default async function ReportsPage({
     name: row.name,
     amount: formatMoney(row.total, displayCurrency, locale),
     percent: largest && !largest.isZero() ? row.total.div(largest).mul(100).toNumber() : 0,
-    percentLabel: categoryPercentLabel(row.total, summary.expense),
+    percentLabel: categoryPercentLabel(row.total, summary.expense, locale),
   }))
 
   const accountRows = summary.byAccount.map((row) => ({

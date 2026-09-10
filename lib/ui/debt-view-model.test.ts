@@ -112,7 +112,7 @@ describe('toDebtDto', () => {
     expect(dto.paid).toBe('0')
     expect(dto.outstanding).toBe('1.000.000')
     expect(dto.percentPaid).toBe(0)
-    expect(dto.percentLabel).toBe('0 %')
+    expect(dto.percentLabel).toBe('0 %')
     expect(dto.status).toBe('OPEN')
     expect(dto.active).toBe(true)
     expect(dto.dueDate).toBeNull()
@@ -155,7 +155,7 @@ describe('toDebtDto', () => {
     expect(dto.paid).toBe('250.000')
     expect(dto.outstanding).toBe('750.000')
     expect(dto.percentPaid).toBe(25)
-    expect(dto.percentLabel).toBe('25 %')
+    expect(dto.percentLabel).toBe('25 %')
   })
 
   it('rounds the label half-up on the Decimal, not on a float', () => {
@@ -170,7 +170,7 @@ describe('toDebtDto', () => {
       ),
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percentPaid).toBeCloseTo(66.6667, 3)
@@ -181,7 +181,7 @@ describe('toDebtDto', () => {
       row({ payments: [payment({ amount: new Prisma.Decimal('1000000') })] }, 'PAID'),
     )
     expect(settled.percentPaid).toBe(100)
-    expect(settled.percentLabel).toBe('100 %')
+    expect(settled.percentLabel).toBe('100 %')
     expect(settled.outstanding).toBe('0')
     expect(settled.status).toBe('PAID')
 
@@ -192,7 +192,7 @@ describe('toDebtDto', () => {
       row({ payments: [payment({ amount: new Prisma.Decimal('1200000') })] }, 'PAID'),
     )
     expect(overpaid.percentPaid).toBe(100)
-    expect(overpaid.percentLabel).toBe('120 %')
+    expect(overpaid.percentLabel).toBe('120 %')
   })
 
   it('reads the due date in UTC, so a carrier is the day the user picked', () => {

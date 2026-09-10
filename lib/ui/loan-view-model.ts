@@ -8,7 +8,7 @@ import {
 } from '@/lib/datetime/calendar-date'
 import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { LoanDisplayStatus, LoanWithOutstanding } from '@/lib/server/services/loan'
-import { formatMoney } from './format-money'
+import { formatMoney, formatPercent } from './format-money'
 
 /**
  * The Loans page's DTO boundary, as two pure functions.
@@ -22,13 +22,13 @@ import { formatMoney } from './format-money'
  * `Decimal` itself, before that widening, so the label and the bar can never
  * read two different roundings of the same ratio.
  *
- * The other `toNumber()` is `interestRateLabel`'s, and it is the one place in
- * the codebase an interest rate is widened. That is sanctioned rather than an
- * inconsistency: an interest rate is *not money* — it is a percentage stored as
- * `Decimal(6, 3)`, informational only (nothing in this app computes interest
- * from it), and it is never summed, compared or spent. So it goes through
- * `Intl.NumberFormat` here rather than through `formatMoney`, which would apply
- * a currency's precision to a figure that has none.
+ * `interestRateLabel` widens its `Decimal` too, inside `formatPercent`
+ * (`lib/ui/format-money.ts`) rather than here. That is sanctioned rather than
+ * an inconsistency: an interest rate is *not money* — it is a percentage
+ * stored as `Decimal(6, 3)`, informational only (nothing in this app computes
+ * interest from it), and it is never summed, compared or spent. So it goes
+ * through `formatPercent` rather than `formatMoney`, which would apply a
+ * currency's precision to a figure that has none.
  *
  * A loan is never converted to `User.baseCurrency` here or anywhere else
  * (ledger ruling R5-3): every figure is formatted in the loan's own `currency`,
@@ -48,7 +48,7 @@ import { formatMoney } from './format-money'
  * renders a row translates them via `paymentFrequencyLabelKey`/
  * `loanStatusLabelKey` (`lib/ui/labels.ts`) — this stays a pure function with
  * no translator of its own. `interestRateLabel` is the one exception, kept
- * exactly as it was: it is a percentage with its own `RATE_FORMATTER`, and the
+ * exactly as it was: it is a percentage formatted with `formatPercent`, and the
  * `%` sign is not language-specific here.
  */
 export interface LoanPaymentDto {
@@ -155,14 +155,16 @@ const DUE_SOON_DAYS = 7
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
- * The rate is a percentage, so it is formatted as a number and not as money:
- * `formatMoney` would impose a currency's precision (0 for VND, 2 for USD) on
- * a figure whose own scale is 3. Vietnamese grouping and decimal separator,
- * like every other figure on the page — `8.5` reads "8,5 %" — and up to three
- * decimals, which is exactly what `Decimal(6, 3)` can hold, with trailing
- * zeroes dropped so a whole rate reads "8 %" rather than "8,000 %".
+ * The rate is a percentage, so it is formatted with `formatPercent` and not
+ * `formatMoney`: `formatMoney` would impose a currency's precision (0 for
+ * VND, 2 for USD) on a figure whose own scale is 3. Grouping and decimal
+ * separator follow the reader's locale, like every other figure on the page
+ * (fix round 13, D2 — this used to be pinned to `vi-VN` regardless of who was
+ * reading, so an English reader saw "8,5 %"). Up to three decimals, which is
+ * exactly what `Decimal(6, 3)` can hold, with trailing zeroes dropped so a
+ * whole rate reads "8 %" rather than "8.000 %".
  */
-const RATE_FORMATTER = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 })
+const INTEREST_RATE_FRACTION_DIGITS = 3
 
 /**
  * The calendar date `days` days after `today`, computed on a carrier rather
@@ -207,7 +209,13 @@ export function toLoanDto(
     // a negative is how the user finds out, rather than a tidy "0" hiding it.
     outstandingPrincipal: formatMoney(outstandingPrincipal, currency, locale),
     percentRepaid: Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, ratio.mul(100).toNumber())),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    // Rounded on the `Decimal` first (unchanged rounding semantics);
+    // `formatPercent` only formats that already-rounded whole number for the
+    // reader's locale and appends the sign -- it does no rounding of its own.
+    percentLabel: formatPercent(
+      ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP),
+      locale,
+    ),
     nextDueDate,
     // Gated on the *service's* ACTIVE, which is what keeps the three states
     // mutually exclusive: OVERDUE is already past due (so "due soon" would
@@ -226,7 +234,7 @@ export function toLoanDto(
     paymentFrequency: loan.paymentFrequency,
     // The one `toNumber()` on an interest rate in the codebase — see the
     // module comment for why a percentage is not money.
-    interestRateLabel: `${RATE_FORMATTER.format(loan.interestRate.toNumber())} %`,
+    interestRateLabel: formatPercent(loan.interestRate, locale, INTEREST_RATE_FRACTION_DIGITS),
     termMonths: loan.termMonths,
     startDate: formatCalendarDate(loan.startDate),
     status: displayStatus,

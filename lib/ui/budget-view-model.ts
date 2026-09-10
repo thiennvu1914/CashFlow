@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import type { Currency } from '@/lib/currency/provider'
 import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { BudgetProgress, BudgetStatus } from '@/lib/server/services/budget'
-import { formatMoney } from './format-money'
+import { formatMoney, formatPercent } from './format-money'
 
 /**
  * The budgets page's DTO boundary, as one pure function.
@@ -90,7 +90,13 @@ export function toBudgetProgressDto(
     // rather than overflowing it — the status badge/`percentLabel` are what
     // say "120 %", not the bar's width.
     percent: Math.min(100, ratio.mul(100).toNumber()),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    // Rounded on the `Decimal` first (unchanged rounding semantics);
+    // `formatPercent` only formats that already-rounded whole number for the
+    // reader's locale and appends the sign -- it does no rounding of its own.
+    percentLabel: formatPercent(
+      ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP),
+      locale,
+    ),
     status,
     editable: { amount: budget.amount.toFixed(2), currency },
   }

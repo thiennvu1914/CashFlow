@@ -138,11 +138,11 @@ describe('toLoanDto', () => {
     expect(dto.interestPaid).toBe('0')
     expect(dto.outstandingPrincipal).toBe('240.000.000')
     expect(dto.percentRepaid).toBe(0)
-    expect(dto.percentLabel).toBe('0 %')
+    expect(dto.percentLabel).toBe('0 %')
     expect(dto.nextDueDate).toBe('2026-05-15')
     expect(dto.scheduledPayment).toBe('5.000.000')
     expect(dto.paymentFrequency).toBe('MONTHLY')
-    expect(dto.interestRateLabel).toBe('8,5 %')
+    expect(dto.interestRateLabel).toBe('8,5 %')
     expect(dto.termMonths).toBe(60)
     expect(dto.startDate).toBe('2026-01-15')
     expect(dto.status).toBe('ACTIVE')
@@ -190,7 +190,7 @@ describe('toLoanDto', () => {
     expect(dto.interestPaid).toBe('1.500.000')
     expect(dto.outstandingPrincipal).toBe('236.500.000')
     expect(dto.percentRepaid).toBeCloseTo(1.4583, 3)
-    expect(dto.percentLabel).toBe('1 %')
+    expect(dto.percentLabel).toBe('1 %')
   })
 
   it('rounds the label half-up on the Decimal, not on a float', () => {
@@ -209,7 +209,7 @@ describe('toLoanDto', () => {
       TODAY,
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percentRepaid).toBeCloseTo(66.6667, 3)
@@ -232,7 +232,7 @@ describe('toLoanDto', () => {
       TODAY,
     )
     expect(settled.percentRepaid).toBe(100)
-    expect(settled.percentLabel).toBe('100 %')
+    expect(settled.percentLabel).toBe('100 %')
     expect(settled.outstandingPrincipal).toBe('0')
     expect(settled.status).toBe('PAID_OFF')
 
@@ -255,7 +255,7 @@ describe('toLoanDto', () => {
       TODAY,
     )
     expect(overpaid.percentRepaid).toBe(100)
-    expect(overpaid.percentLabel).toBe('120 %')
+    expect(overpaid.percentLabel).toBe('120 %')
   })
 
   it('reads both carriers in UTC, so a stored date is the day the user picked', () => {
@@ -391,17 +391,17 @@ describe('toLoanDto', () => {
     // The stored column is `Decimal(6, 3)`, so a rate really can carry three.
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('8.500') }), TODAY).interestRateLabel,
-    ).toBe('8,5 %')
+    ).toBe('8,5 %')
     // 0 % is a real loan — the interest-free one from family.
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('0.000') }), TODAY).interestRateLabel,
-    ).toBe('0 %')
+    ).toBe('0 %')
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('12.345') }), TODAY).interestRateLabel,
-    ).toBe('12,345 %')
+    ).toBe('12,345 %')
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('100.000') }), TODAY).interestRateLabel,
-    ).toBe('100 %')
+    ).toBe('100 %')
   })
 
   it('keeps every payment frequency as the raw enum, for the component to label', () => {
