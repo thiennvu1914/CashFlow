@@ -43,7 +43,17 @@ test('register, log out, forgot password with a real reset round trip, then log 
   await page.getByLabel(/^Email$/).fill(email)
   await page.getByLabel(/Mật khẩu|^Password$/).fill(oldPassword)
   await page.getByRole('button', { name: /Tạo tài khoản|Create account/ }).click()
-  await expect(page).toHaveURL(/\/dashboard/)
+  // The same bounded 30 s allowance `registerNewUser` carries, and for the same
+  // reason — see the twelve-line comment on `e2e/helpers.ts`'s own
+  // `toHaveURL`. This spec sorts first, so under `workers: 1` this is THE first
+  // assertion in the whole suite and the one that waits out Turbopack's cold
+  // compile of the auth route and `/dashboard`; it kept Playwright's 5 s
+  // default only because it predates the helper. Not routed through the helper
+  // itself: this test needs the email and both passwords it chose, which the
+  // helper generates and does not take. Every later assertion here keeps the
+  // default timeout, including the second `/dashboard` navigation below — by
+  // then the routes are compiled.
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 })
 
   // Log out is now translated (default locale vi: "Đăng xuất") — see the same
   // vi/en alternation `phase4.spec.ts` etc. use for every other nav selector
