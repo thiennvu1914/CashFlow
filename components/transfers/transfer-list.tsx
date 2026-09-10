@@ -7,9 +7,10 @@ import { ArrowLeftRight, ArrowRight } from 'lucide-react'
 import type { Currency } from '@/lib/currency/provider'
 import type { Locale } from '@/lib/i18n/locale'
 import { deleteTransferAction } from '@/lib/server/actions/transfer-actions'
-import { GENERIC_ERROR_KEY, TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
 import { formatMoney, formatReadableRate } from '@/lib/ui/format-money'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { EmptyState } from '@/components/common/empty-state'
 import { FinancialListRow } from '@/components/common/financial-list-row'
@@ -57,6 +58,7 @@ export function TransferList({
   const [errors, setErrors] = useState<Record<string, string>>({})
   /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
   const [pendingDelete, setPendingDelete] = useState<TransferRow | null>(null)
+  const submit = useActionSubmit(t)
 
   /** Drops any stale message for one row — a fresh attempt starts clean. */
   function clearError(rowId: string) {
@@ -69,27 +71,22 @@ export function TransferList({
   }
 
   async function confirmDelete(row: TransferRow) {
-    clearError(row.id)
-    try {
-      const result = await deleteTransferAction(row.id)
-      if (!result.ok) {
-        // The dialog closes on failure too (spec §10, and the same reasoning
-        // `components/accounts/account-list.tsx` spells out): the row's
-        // `InlineAlert` renders BELOW the card, so a dialog left open puts its
-        // own scrim over the very message that explains the refusal — the user
-        // would see a dialog that appears to have done nothing.
-        setPendingDelete(null)
-        setErrors((prev) => ({ ...prev, [row.id]: t(TRANSFER_ERROR_KEYS[result.error]) }))
-        return
-      }
-      setPendingDelete(null)
-      router.refresh()
-    } catch {
-      console.error('TransferList: delete failed')
-      // Closed here too, for the reason above.
-      setPendingDelete(null)
-      setErrors((prev) => ({ ...prev, [row.id]: t(GENERIC_ERROR_KEY) }))
-    }
+    await submit.run({
+      tag: 'TransferList: delete failed',
+      action: () => deleteTransferAction(row.id),
+      errorKeys: TRANSFER_ERROR_KEYS,
+      onError: (failure) =>
+        failure === null
+          ? clearError(row.id)
+          : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
+      // The dialog closes on BOTH outcomes (spec §10, and the same reasoning
+      // `components/accounts/account-list.tsx` spells out): the row's
+      // `InlineAlert` renders BELOW the card, so a dialog left open puts its
+      // own scrim over the very message that explains the refusal — the user
+      // would see a dialog that appears to have done nothing.
+      onSettled: () => setPendingDelete(null),
+      onSuccess: () => router.refresh(),
+    })
   }
 
   if (transfers.length === 0) {

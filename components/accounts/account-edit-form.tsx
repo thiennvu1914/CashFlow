@@ -12,8 +12,8 @@ import {
   type UpdateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import { updateFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
-import { ACCOUNT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { ACCOUNT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -38,8 +38,8 @@ type AccountType = { id: string; name: string }
  *
  * Mounted only while its `Dialog` is open (`AccountList`), so it never
  * exists during SSR/hydration and needs no `useHydrated` gate (spec §9) —
- * but it still gets `useSubmitState`, so a slow update cannot be
- * double-submitted.
+ * but it still gets the in-flight lock (`useActionSubmit`, which wraps
+ * `useSubmitState`), so a slow update cannot be double-submitted.
  */
 export function AccountEditForm({
   accountId,
@@ -63,7 +63,7 @@ export function AccountEditForm({
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `account-edit-${name}-${uid}`
   const {
@@ -82,7 +82,6 @@ export function AccountEditForm({
   })
 
   async function onSubmit(values: UpdateFinancialAccountInput) {
-    setError(null)
     const payload: UpdateFinancialAccountInput = locked
       ? {
           name: values.name,
@@ -91,19 +90,15 @@ export function AccountEditForm({
         }
       : values
 
-    await submit.run(async () => {
-      try {
-        const result = await updateFinancialAccountAction(accountId, payload)
-        if (!result.ok) {
-          setError(t(ACCOUNT_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'AccountEditForm: update failed',
+      action: () => updateFinancialAccountAction(accountId, payload),
+      errorKeys: ACCOUNT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone?.()
-      } catch {
-        console.error('AccountEditForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

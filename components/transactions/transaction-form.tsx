@@ -10,11 +10,11 @@ import type { Currency, TransactionType } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { nowInZone } from '@/lib/datetime/local-date-time'
 import { createTransactionAction } from '@/lib/server/actions/transaction-actions'
-import { GENERIC_ERROR_KEY, TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
 import { transactionTypeLabelKey } from '@/lib/ui/labels'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import {
   createTransactionFormSchema,
   type CreateTransactionFormInput,
@@ -168,7 +168,7 @@ export function TransactionForm({
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   // Computed ONCE, at mount — not on every render — and reused for
   // `useForm`'s init, the account stand-in's option and the date/time
   // inputs' `defaultValue`s below. `datePart`/`timePart` are passed to
@@ -250,24 +250,19 @@ export function TransactionForm({
   )
 
   async function onSubmit(values: FormInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        // The action takes the schema's shape, so the two parts merge here —
-        // the same function the resolver used, so what was validated is what is
-        // sent.
-        const result = await createTransactionAction(mergeDateTime(values))
-        if (!result.ok) {
-          setError(t(TRANSACTION_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'TransactionForm: create failed',
+      // The action takes the schema's shape, so the two parts merge here —
+      // the same function the resolver used, so what was validated is what is
+      // sent.
+      action: () => createTransactionAction(mergeDateTime(values)),
+      errorKeys: TRANSACTION_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues(accounts, timezone))
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('TransactionForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

@@ -10,10 +10,10 @@ import type { Currency } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { createTransferFormSchema, type CreateTransferFormInput } from '@/lib/validation/transfer'
 import { createTransferAction } from '@/lib/server/actions/transfer-actions'
-import { GENERIC_ERROR_KEY, TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { TRANSFER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatReadableRate } from '@/lib/ui/format-money'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { nowInZone } from '@/lib/datetime/local-date-time'
 import { FieldError, FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
@@ -96,7 +96,7 @@ export function TransferForm({
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   /** A per-instance prefix, same reasoning as `TransactionForm`'s `fieldId`. */
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `transfer-${name}-${uid}`
@@ -162,24 +162,19 @@ export function TransferForm({
       : null
 
   async function onSubmit(values: FormInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        // Belt and suspenders with the effect above: the client never trusts a
-        // same-currency `toAmount` it might have raced past submitting — the
-        // server re-derives it anyway, but this keeps the two paths agreeing.
-        const payload = sameCurrency ? { ...values, toAmount: values.fromAmount } : values
-        const result = await createTransferAction(payload)
-        if (!result.ok) {
-          setError(t(TRANSFER_ERROR_KEYS[result.error]))
-          return
-        }
+    // Belt and suspenders with the effect above: the client never trusts a
+    // same-currency `toAmount` it might have raced past submitting — the
+    // server re-derives it anyway, but this keeps the two paths agreeing.
+    const payload = sameCurrency ? { ...values, toAmount: values.fromAmount } : values
+    await submit.run({
+      tag: 'TransferForm: create failed',
+      action: () => createTransferAction(payload),
+      errorKeys: TRANSFER_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues(accounts, timezone))
         router.refresh()
-      } catch {
-        console.error('TransferForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

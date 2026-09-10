@@ -7,8 +7,9 @@ import { Wallet } from 'lucide-react'
 import type { Currency } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { archiveFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
-import { ACCOUNT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { ACCOUNT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { AccountEditForm } from '@/components/accounts/account-edit-form'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -63,6 +64,7 @@ export function AccountList({
   /** The row awaiting archive confirmation, or `null`. One dialog for the whole list. */
   const [pendingArchive, setPendingArchive] = useState<AccountRow | null>(null)
   const [errorByAccountId, setErrorByAccountId] = useState<Record<string, string>>({})
+  const submit = useActionSubmit(t)
 
   /** Removes any stale message for one row — a fresh confirmation attempt or
    *  a dismissed dialog must never leave a PREVIOUS attempt's error behind. */
@@ -94,28 +96,21 @@ export function AccountList({
   }
 
   async function confirmArchive(account: AccountRow) {
-    clearError(account.id)
-    try {
-      const result = await archiveFinancialAccountAction(account.id)
-      if (!result.ok) {
-        // The dialog closes on failure too (spec §10): left open, its scrim
-        // hides the very `InlineAlert` below that explains why the archive
-        // was refused — the user would see a dialog that appears to have done
-        // nothing.
-        setPendingArchive(null)
-        setErrorByAccountId((prev) => ({
-          ...prev,
-          [account.id]: t(ACCOUNT_ERROR_KEYS[result.error]),
-        }))
-        return
-      }
-      setPendingArchive(null)
-      router.refresh()
-    } catch {
-      console.error('AccountList: archive failed')
-      setPendingArchive(null)
-      setErrorByAccountId((prev) => ({ ...prev, [account.id]: t(GENERIC_ERROR_KEY) }))
-    }
+    await submit.run({
+      tag: 'AccountList: archive failed',
+      action: () => archiveFinancialAccountAction(account.id),
+      errorKeys: ACCOUNT_ERROR_KEYS,
+      // The row's own sink, so two rows cannot overwrite each other's message.
+      onError: (failure) =>
+        failure === null
+          ? clearError(account.id)
+          : setErrorByAccountId((prev) => ({ ...prev, [account.id]: failure.message })),
+      // The dialog closes on BOTH outcomes (spec §10): left open, its scrim
+      // hides the very `InlineAlert` below that explains why the archive was
+      // refused — the user would see a dialog that appears to have done nothing.
+      onSettled: () => setPendingArchive(null),
+      onSuccess: () => router.refresh(),
+    })
   }
 
   if (accounts.length === 0) {

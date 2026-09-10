@@ -10,10 +10,11 @@ import type { Currency, TransactionType } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import { deleteTransactionAction } from '@/lib/server/actions/transaction-actions'
-import { GENERIC_ERROR_KEY, TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
 import { formatMoney } from '@/lib/ui/format-money'
 import { transactionTypeLabelKey } from '@/lib/ui/labels'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { EmptyState } from '@/components/common/empty-state'
 import { FinancialListRow } from '@/components/common/financial-list-row'
@@ -81,6 +82,7 @@ export function TransactionList({
   const [errors, setErrors] = useState<Record<string, string>>({})
   /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
   const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
+  const submit = useActionSubmit(t)
 
   /** Drops any stale message for one row — a fresh attempt starts clean. */
   function clearError(rowId: string) {
@@ -93,27 +95,22 @@ export function TransactionList({
   }
 
   async function confirmDelete(row: TransactionRow) {
-    clearError(row.id)
-    try {
-      const result = await deleteTransactionAction(row.id)
-      if (!result.ok) {
-        // The dialog closes on failure too (spec §10, and the same reasoning
-        // `components/accounts/account-list.tsx` spells out): the row's
-        // `InlineAlert` renders BELOW the card, so a dialog left open puts its
-        // own scrim over the very message that explains the refusal — the user
-        // would see a dialog that appears to have done nothing.
-        setPendingDelete(null)
-        setErrors((prev) => ({ ...prev, [row.id]: t(TRANSACTION_ERROR_KEYS[result.error]) }))
-        return
-      }
-      setPendingDelete(null)
-      router.refresh()
-    } catch {
-      console.error('TransactionList: delete failed')
-      // Closed here too, for the reason above.
-      setPendingDelete(null)
-      setErrors((prev) => ({ ...prev, [row.id]: t(GENERIC_ERROR_KEY) }))
-    }
+    await submit.run({
+      tag: 'TransactionList: delete failed',
+      action: () => deleteTransactionAction(row.id),
+      errorKeys: TRANSACTION_ERROR_KEYS,
+      onError: (failure) =>
+        failure === null
+          ? clearError(row.id)
+          : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
+      // The dialog closes on BOTH outcomes (spec §10, and the same reasoning
+      // `components/accounts/account-list.tsx` spells out): the row's
+      // `InlineAlert` renders BELOW the card, so a dialog left open puts its
+      // own scrim over the very message that explains the refusal — the user
+      // would see a dialog that appears to have done nothing.
+      onSettled: () => setPendingDelete(null),
+      onSuccess: () => router.refresh(),
+    })
   }
 
   if (transactions.length === 0) {
