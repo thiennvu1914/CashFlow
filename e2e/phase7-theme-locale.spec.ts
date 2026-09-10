@@ -187,13 +187,16 @@ test.describe.serial('Phase 7 — theme and locale', () => {
         // translation this app owns, so it is the one string this check
         // excludes rather than a real leak.
         .replace('Tiếng Việt', '')
-      // NOTE: the diacritic class above is a NET, not a proof — it lists the
-      // precomposed Vietnamese vowel-with-diacritic codepoints this suite
-      // happens to need, not every combining-mark sequence Vietnamese text can
-      // use (a decomposed "ữ"/"ử"/"ẻ" built from a base vowel plus a
-      // combining mark would not match). It catches every string this app
-      // actually emits (NFC-normalised, like every literal in `messages/`),
-      // but is not a guarantee against every conceivable Vietnamese string.
+      // NOTE: the diacritic class below is a NET, not a proof. It lists the
+      // precomposed (NFC) Vietnamese codepoints this suite happens to need —
+      // so two kinds of Vietnamese text slip through it: a precomposed
+      // codepoint that simply is not in the list (there is no "ữ", "ử" or "ẻ"
+      // here), and the DECOMPOSED form of any of them, where a base vowel is
+      // followed by a separate combining mark (U+0300–U+0323) that no member
+      // of this class matches. It catches every string this app actually
+      // emits — every literal in `messages/` is NFC and uses one of the
+      // letters listed — but it is not a guarantee against every conceivable
+      // Vietnamese string.
       expect(text, url).not.toMatch(/[ăâđêôơưĂÂĐÊÔƠƯ]|ạ|ả|ấ|ầ|ệ|ế|ị|ọ|ố|ồ|ộ|ớ|ợ|ủ|ứ|ự|ỳ|ỹ/)
       // Wherever a four-plus-digit figure appears, it must be comma-grouped
       // (en), never period-grouped (vi) — this account's own figures never

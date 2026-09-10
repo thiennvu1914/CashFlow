@@ -340,10 +340,12 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('formats every figure with the reader’s locale, not always vi (fix round 1, finding 1)', () => {
-    // The optional trailing `locale` parameter, defaulting to `vi` — every
-    // other test in this file calls `buildDashboardViewModel` with no second
-    // argument and still gets the vi grouping it always has, which is the
-    // whole point of a default.
+    // The trailing `locale` parameter is REQUIRED (see the builder's own doc
+    // comment, and Task 13 fix round 1's Minor): a default `vi` is exactly how
+    // four of this builder's five mappers stayed Vietnamese under an English
+    // page, so a missing `locale` is now a compile error. Every other test in
+    // this file passes `'vi'` explicitly and gets the grouping it always had;
+    // this one passes `'en'` and must get the reader's.
     const vm = buildDashboardViewModel(makeInput(), 'en')
 
     const netWorth = vm.kpis.find((k) => k.labelKey === 'dashboard.netWorth')
