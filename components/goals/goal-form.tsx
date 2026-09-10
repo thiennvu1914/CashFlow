@@ -8,9 +8,9 @@ import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import { createSavingsGoalSchema, type CreateSavingsGoalInput } from '@/lib/validation/savings-goal'
 import { createSavingsGoalAction } from '@/lib/server/actions/savings-goal-actions'
-import { GENERIC_ERROR_KEY, SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -40,7 +40,7 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `goal-${name}-${uid}`
   const {
@@ -54,21 +54,16 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
   })
 
   async function onSubmit(values: CreateSavingsGoalInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await createSavingsGoalAction(values)
-        if (!result.ok) {
-          setError(t(SAVINGS_GOAL_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'GoalForm: create failed',
+      action: () => createSavingsGoalAction(values),
+      errorKeys: SAVINGS_GOAL_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues())
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('GoalForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 
