@@ -1,7 +1,7 @@
 import { Prisma, type TransactionType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
-import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
+import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
@@ -314,14 +314,18 @@ const WIDGET_OVERDUE_ROW_LIMIT = 2
 export function buildDashboardViewModel(
   input: DashboardInput,
   /**
-   * The reader's locale (fix round 1, finding 1). Optional and trailing,
-   * defaulting to `vi`, so no existing caller or test moves — `formatMoney`/
-   * `formatRate`/`formatDate` all take the same optional-trailing-locale
-   * shape for the same reason. Every figure and chart-axis label this
-   * function produces threads it through; the page passes the resolved
-   * locale once it has one (`resolveLocale()`).
+   * The reader's locale (fix round 1, finding 1). REQUIRED, not optional
+   * (Task 13 fix round 1, Minor): this builder is the one place on the
+   * dashboard that formats figures from five different mappers at once, and
+   * a default here is exactly how four of them stayed Vietnamese under an
+   * English page — a missing `locale` at a call site is now a compile error
+   * rather than a silent `vi` fallback. `formatMoney`/`formatRate`/
+   * `formatDate` keep their own optional-trailing-locale shape (they are
+   * called from many more places, most of which already resolve one); this
+   * function is not. The page passes the resolved locale once it has one
+   * (`resolveLocale()`); every existing caller already does.
    */
-  locale: Locale = DEFAULT_LOCALE,
+  locale: Locale,
 ): DashboardViewModel {
   const {
     displayCurrency: currency,

@@ -275,7 +275,7 @@ function occurrence(overrides: {
 
 describe('buildDashboardViewModel', () => {
   it('hands the month out as an instant, not a pre-baked English string', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.monthStart).toBeInstanceOf(Date)
     expect(vm).not.toHaveProperty('monthLabel')
@@ -283,7 +283,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('labels every KPI with a message key, never display text', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
     expect(vm.kpis.map((kpi) => kpi.labelKey)).toEqual([
       'dashboard.netWorth',
       'dashboard.totalBalance',
@@ -297,13 +297,13 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('puts Net Worth first — the panel’s dominant figure (spec §6.1)', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
     expect(vm.kpis[0].labelKey).toBe('dashboard.netWorth')
     expect(vm.kpis[1].labelKey).toBe('dashboard.totalBalance')
   })
 
   it('reports all five KPIs, in order, with net income last', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.kpis.map((k) => [k.labelKey, k.value])).toEqual([
       ['dashboard.netWorth', '12.000.000'],
@@ -317,10 +317,13 @@ describe('buildDashboardViewModel', () => {
 
   it('marks a negative Net Income, and never marks the expense magnitude', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: { ...input.monthly, netIncome: decimal('-4000000') },
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: { ...input.monthly, netIncome: decimal('-4000000') },
+      },
+      'vi',
+    )
 
     const byLabel = new Map(vm.kpis.map((k) => [k.labelKey, k]))
     expect(byLabel.get('dashboard.netIncome')).toMatchObject({
@@ -331,7 +334,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('hands a null KPI a hint KEY rather than English text', () => {
-    const vm = buildDashboardViewModel({ ...makeInput(), position: null })
+    const vm = buildDashboardViewModel({ ...makeInput(), position: null }, 'vi')
     expect(vm.kpis[0].value).toBeNull()
     expect(vm.kpis[0].hintKey).toBe('dashboard.fxUnavailableHint')
   })
@@ -383,7 +386,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('never puts a raw transaction type in a recent-transaction row', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
     for (const row of vm.recentTransactions) {
       expect(row).not.toHaveProperty('title')
       expect(row).toHaveProperty('type')
@@ -395,7 +398,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   describe('when the current position is unavailable', () => {
-    const vm = buildDashboardViewModel(makeInput({ position: null }))
+    const vm = buildDashboardViewModel(makeInput({ position: null }), 'vi')
 
     it('withholds the two converted KPIs and says why', () => {
       const byLabel = new Map(vm.kpis.map((k) => [k.labelKey, k]))
@@ -414,7 +417,7 @@ describe('buildDashboardViewModel', () => {
     })
 
     it('leaves every historical figure exactly as it was — FX cannot reach them', () => {
-      const withFx = buildDashboardViewModel(makeInput())
+      const withFx = buildDashboardViewModel(makeInput(), 'vi')
       expect(vm.kpis.slice(2)).toEqual(withFx.kpis.slice(2))
       expect(vm.cashFlowTrend).toEqual(withFx.cashFlowTrend)
       expect(vm.expenseByCategory).toEqual(withFx.expenseByCategory)
@@ -424,7 +427,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('reports a live rate with its effective day and our fetch time', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.fxStatus).toEqual({
       kind: 'available',
@@ -439,10 +442,13 @@ describe('buildDashboardViewModel', () => {
     const input = makeInput()
     const position = input.position
     if (!position?.fx) throw new Error('fixture must carry an fx result')
-    const vm = buildDashboardViewModel({
-      ...input,
-      position: { ...position, fx: { ...position.fx, isFallback: true } },
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        position: { ...position, fx: { ...position.fx, isFallback: true } },
+      },
+      'vi',
+    )
 
     expect(vm.fxStatus).toMatchObject({ kind: 'fallback', rate: '25.000' })
   })
@@ -451,13 +457,13 @@ describe('buildDashboardViewModel', () => {
     const input = makeInput()
     const position = input.position
     if (!position) throw new Error('fixture must carry a position')
-    const vm = buildDashboardViewModel({ ...input, position: { ...position, fx: null } })
+    const vm = buildDashboardViewModel({ ...input, position: { ...position, fx: null } }, 'vi')
 
     expect(vm.fxStatus).toEqual({ kind: 'not-needed' })
   })
 
   it('keeps a missing balance point as a gap rather than a zero', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.balanceOverTime).toEqual([
       { label: 'Tháng 8', balance: null },
@@ -466,7 +472,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('compares the previous month against this one, by name', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.incomeVsExpense).toEqual([
       { period: 'thg 8 2026', income: 20000000, expense: 25000000 },
@@ -484,10 +490,13 @@ describe('buildDashboardViewModel', () => {
       expense: decimal('2'),
       netIncome: decimal('-1'),
     }
-    const vm = buildDashboardViewModel({
-      ...input,
-      cashFlowTrend: [july, ...input.cashFlowTrend],
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        cashFlowTrend: [july, ...input.cashFlowTrend],
+      },
+      'vi',
+    )
 
     // Three points in, two bars out — the *last* two, and July is not one of them.
     expect(vm.cashFlowTrend).toHaveLength(3)
@@ -504,7 +513,10 @@ describe('buildDashboardViewModel', () => {
 
   it('shows a single bar when only one month of trend exists', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({ ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) })
+    const vm = buildDashboardViewModel(
+      { ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) },
+      'vi',
+    )
 
     // One point, one bar — never an invented zero month beside it.
     expect(vm.incomeVsExpense).toEqual([
@@ -514,17 +526,20 @@ describe('buildDashboardViewModel', () => {
 
   it('takes Expense by Category from the same month aggregate as the KPIs', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: {
-        ...input.monthly,
-        expense: decimal('9000000'),
-        byCategory: [
-          { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
-          { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
-        ],
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: {
+          ...input.monthly,
+          expense: decimal('9000000'),
+          byCategory: [
+            { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
+            { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
+          ],
+        },
       },
-    })
+      'vi',
+    )
 
     expect(vm.expenseByCategory).toEqual([
       { name: 'Rent', value: 6000000 },
@@ -542,10 +557,13 @@ describe('buildDashboardViewModel', () => {
       name: `Category ${index}`,
       total: decimal(String(1000000 - index * 1000)),
     }))
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: { ...input.monthly, byCategory },
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: { ...input.monthly, byCategory },
+      },
+      'vi',
+    )
 
     expect(vm.expenseByCategory).toHaveLength(8)
     expect(vm.expenseByCategory.slice(0, 7)).toEqual(
@@ -560,20 +578,23 @@ describe('buildDashboardViewModel', () => {
 
   it('leaves eight or fewer categories unbucketed', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: {
-        ...input.monthly,
-        byCategory: [{ categoryId: 'c1', name: 'Food', total: decimal('1000000') }],
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: {
+          ...input.monthly,
+          byCategory: [{ categoryId: 'c1', name: 'Food', total: decimal('1000000') }],
+        },
       },
-    })
+      'vi',
+    )
 
     expect(vm.expenseByCategory).toEqual([{ name: 'Food', value: 1000000 }])
     expect(vm.expenseByCategory[0]).not.toHaveProperty('nameKey')
   })
 
   it('orders the distribution largest first, using converted balances', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.distribution).toEqual([
       { name: 'Dollars', value: 10000000 },
@@ -582,7 +603,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('signs recent transactions from their type and shows each in its own currency', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.recentTransactions).toEqual([
       {
@@ -632,6 +653,7 @@ describe('buildDashboardViewModel', () => {
           }),
         ],
       }),
+      'vi',
     )
 
     expect(vm.displayCurrency).toBe('VND')
@@ -648,7 +670,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('maps no budgets to an empty list — the widget says so rather than charting nothing', () => {
-    expect(buildDashboardViewModel(makeInput({ budgets: [] })).budgets).toEqual([])
+    expect(buildDashboardViewModel(makeInput({ budgets: [] }), 'vi').budgets).toEqual([])
   })
 
   describe('savings goals', () => {
@@ -672,6 +694,7 @@ describe('buildDashboardViewModel', () => {
             }),
           ],
         }),
+        'vi',
       )
 
       // A USD goal under a VND dashboard stays in USD — a goal is never
@@ -692,7 +715,7 @@ describe('buildDashboardViewModel', () => {
         savingsGoal({ id: `g${index}`, target: '100', progress: '10' }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ goals }))
+      const vm = buildDashboardViewModel(makeInput({ goals }), 'vi')
 
       // A widget, not the Savings page: the page itself lists every goal.
       expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
@@ -708,13 +731,14 @@ describe('buildDashboardViewModel', () => {
             ),
           ],
         }),
+        'vi',
       )
 
       expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
     })
 
     it('maps no goals to an empty list', () => {
-      expect(buildDashboardViewModel(makeInput()).savingsGoals).toEqual([])
+      expect(buildDashboardViewModel(makeInput(), 'vi').savingsGoals).toEqual([])
     })
   })
 
@@ -723,15 +747,18 @@ describe('buildDashboardViewModel', () => {
       const input = makeInput()
       const position = input.position
       if (!position) throw new Error('fixture must carry a position')
-      const vm = buildDashboardViewModel({
-        ...input,
-        position: {
-          ...position,
-          receivables: decimal('2500000'),
-          payables: decimal('750000'),
-          loanOutstanding: decimal('18000000'),
+      const vm = buildDashboardViewModel(
+        {
+          ...input,
+          position: {
+            ...position,
+            receivables: decimal('2500000'),
+            payables: decimal('750000'),
+            loanOutstanding: decimal('18000000'),
+          },
         },
-      })
+        'vi',
+      )
 
       expect(vm.debtLoanOverview).toEqual({
         receivables: '2.500.000',
@@ -746,13 +773,15 @@ describe('buildDashboardViewModel', () => {
     it('has no overview at all when the position is unavailable', () => {
       // The three figures are current-position aggregates, so they degrade with
       // it: an FX outage leaves nothing honest to compare.
-      expect(buildDashboardViewModel(makeInput({ position: null })).debtLoanOverview).toBeNull()
+      expect(
+        buildDashboardViewModel(makeInput({ position: null }), 'vi').debtLoanOverview,
+      ).toBeNull()
     })
 
     it('reports zeroes as figures, not as a missing overview', () => {
       // Nothing owed either way is an answer — "0" — and not the same fact as
       // "we cannot say".
-      expect(buildDashboardViewModel(makeInput()).debtLoanOverview).toEqual({
+      expect(buildDashboardViewModel(makeInput(), 'vi').debtLoanOverview).toEqual({
         receivables: '0',
         payables: '0',
         loanOutstanding: '0',
@@ -779,6 +808,7 @@ describe('buildDashboardViewModel', () => {
             }),
           ],
         }),
+        'vi',
       )
 
       expect(
@@ -804,7 +834,7 @@ describe('buildDashboardViewModel', () => {
         }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ occurrences }))
+      const vm = buildDashboardViewModel(makeInput({ occurrences }), 'vi')
 
       // The Reminders page is the unbounded list; the widget is the next five.
       expect(vm.upcomingReminders.map((o) => o.id)).toEqual(['o0', 'o1', 'o2', 'o3', 'o4'])
@@ -833,7 +863,10 @@ describe('buildDashboardViewModel', () => {
         }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ occurrences: [...overdue, ...upcoming] }))
+      const vm = buildDashboardViewModel(
+        makeInput({ occurrences: [...overdue, ...upcoming] }),
+        'vi',
+      )
 
       // Two overdue — the two oldest — and then everything genuinely coming.
       expect(vm.upcomingReminders.map((o) => [o.id, o.overdue])).toEqual([
@@ -858,6 +891,7 @@ describe('buildDashboardViewModel', () => {
             occurrence({ id: 'soon', title: 'Salary', dueAt: new Date('2026-09-15T17:00:00Z') }),
           ],
         }),
+        'vi',
       )
 
       expect(vm.upcomingReminders.map((o) => [o.id, o.daysToDue])).toEqual([
@@ -870,14 +904,14 @@ describe('buildDashboardViewModel', () => {
     it('is unaffected by an FX outage — a reminder needs no rate', () => {
       const occurrences = [occurrence({ id: 'o1', dueAt: new Date('2026-09-15T17:00:00Z') })]
 
-      const withFx = buildDashboardViewModel(makeInput({ occurrences }))
-      const withoutFx = buildDashboardViewModel(makeInput({ occurrences, position: null }))
+      const withFx = buildDashboardViewModel(makeInput({ occurrences }), 'vi')
+      const withoutFx = buildDashboardViewModel(makeInput({ occurrences, position: null }), 'vi')
 
       expect(withoutFx.upcomingReminders).toEqual(withFx.upcomingReminders)
     })
 
     it('maps no occurrences to an empty list', () => {
-      const vm = buildDashboardViewModel(makeInput())
+      const vm = buildDashboardViewModel(makeInput(), 'vi')
 
       // Both empty together: the widget's "nothing due" sentence is reachable
       // only in this state, never with pending rows hidden behind a cap.
