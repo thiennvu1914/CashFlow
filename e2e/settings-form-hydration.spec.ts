@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser } from './helpers'
+import { authenticatedSession } from './helpers'
 
 /**
  * The Settings profile form's hydration gate — the same silent-reversion defect
@@ -43,10 +41,7 @@ import { registerNewUser } from './helpers'
  * for all five fields, so no per-card scoping is needed on that button.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-settings-hydration-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('settings-hydration')
 
 /** The profile a freshly registered user has: `registerNewUser`'s name plus
  *  `USER_FIELD_DEFAULTS` (`lib/auth/user-defaults.ts`). */
@@ -116,20 +111,10 @@ function expectServerRenderedProfile(html: string, profile: typeof STORED | type
 }
 
 test.describe.serial('Settings profile form — hydration gate', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
-    // `storageState: undefined` overrides the file-level `test.use` above,
-    // which at this point names a file this step is about to create — the same
-    // reasoning as `phase4.spec.ts`' and `transaction-form-hydration.spec.ts`'
-    // `beforeAll`.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-settings-hydration' })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser)
   })
 
   test('server HTML gates the profile form and carries the stored profile', async ({ page }) => {

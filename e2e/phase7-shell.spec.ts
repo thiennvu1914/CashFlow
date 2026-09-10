@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser } from './helpers'
+import { authenticatedSession } from './helpers'
 
 /**
  * The app shell (spec §5): the rail's three widths, and the mobile More sheet's
@@ -23,18 +21,15 @@ import { registerNewUser } from './helpers'
  * auto-retrying matcher or a focus check on an element the previous action
  * already awaited.
  */
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-shell-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-shell')
 
 test.describe.serial('Phase 7 — app shell', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-shell' })
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+
+    await SESSION.bootstrap(browser)
   })
 
   test('the rail is 240 px at 1280, 64 px at 1024 and 768, and absent at 375', async ({ page }) => {

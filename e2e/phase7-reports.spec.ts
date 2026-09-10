@@ -1,12 +1,10 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
 import viReports from '@/messages/vi/reports.json'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createTransactionViaUi,
   digitsOnly,
-  registerNewUser,
   todayInZone,
 } from './helpers'
 
@@ -35,10 +33,7 @@ import {
 
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-reports-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-reports')
 
 /** A raw enum value: two-plus upper-case words joined by underscores
  *  (`CASH_OUT`) — never a translated label, which is prose in vi or en. */
@@ -55,33 +50,28 @@ const PERIOD_SEGMENTS = [
 ] as const
 
 test.describe.serial('Phase 7 Task 10 — reports', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
   test.describe.configure({ timeout: 120_000 })
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-reports' })
-    // Two accounts so By Account renders two rows, one of them net-negative —
-    // the case the responsive table and its `text-negative` treatment need.
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 0 })
-    await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 0 })
-    await createTransactionViaUi(page, {
-      type: 'INCOME',
-      accountName: 'Cash',
-      categoryName: 'Salary',
-      amount: 500_000,
+    await SESSION.bootstrap(browser, async (page) => {
+      // Two accounts so By Account renders two rows, one of them net-negative —
+      // the case the responsive table and its `text-negative` treatment need.
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 0 })
+      await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 0 })
+      await createTransactionViaUi(page, {
+        type: 'INCOME',
+        accountName: 'Cash',
+        categoryName: 'Salary',
+        amount: 500_000,
+      })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Bank',
+        categoryName: 'Food & Dining',
+        amount: 200_000,
+      })
     })
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Bank',
-      categoryName: 'Food & Dining',
-      amount: 200_000,
-    })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('vi: each named period segment navigates to its own ?period= URL and carries aria-current', async ({

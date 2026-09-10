@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import { createAccountViaUi, registerNewUser } from './helpers'
+import { authenticatedSession, createAccountViaUi } from './helpers'
 
 /**
  * Phase 7 Task 6: owner requirement R — coverage the Accounts/Categories
@@ -22,10 +20,7 @@ import { createAccountViaUi, registerNewUser } from './helpers'
  * `ConfirmDialog`; no raw enum text; no horizontal overflow at 375.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-accounts-categories-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-accounts-categories')
 
 const ZERO_BALANCE = 'Cash Envelope'
 const NON_ZERO = 'Main Bank'
@@ -47,25 +42,20 @@ function categorySection(page: Page, heading: RegExp): Locator {
 }
 
 test.describe.serial('Phase 7 Task 6 — accounts, categories', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-accounts' })
-    await createAccountViaUi(page, { name: ZERO_BALANCE, currency: 'VND', initialBalance: 0 })
-    await createAccountViaUi(page, { name: NON_ZERO, currency: 'VND', initialBalance: 500_000 })
-    await createAccountViaUi(page, {
-      name: LONG_BALANCE_NAME,
-      currency: 'VND',
-      initialBalance: LONG_BALANCE,
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: ZERO_BALANCE, currency: 'VND', initialBalance: 0 })
+      await createAccountViaUi(page, { name: NON_ZERO, currency: 'VND', initialBalance: 500_000 })
+      await createAccountViaUi(page, {
+        name: LONG_BALANCE_NAME,
+        currency: 'VND',
+        initialBalance: LONG_BALANCE,
+      })
     })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('create flow: header action opens the Sheet, every field is labelled, and the row appears with the right balance and currency', async ({

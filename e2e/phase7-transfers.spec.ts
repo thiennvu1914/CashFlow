@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Page } from '@playwright/test'
-import { createAccountViaUi, digitsOnly, registerNewUser } from './helpers'
+import { authenticatedSession, createAccountViaUi, digitsOnly } from './helpers'
 
 /**
  * Phase 7 Task 5b: owner requirement R — coverage the Transfers rebuild adds
@@ -19,14 +17,8 @@ import { createAccountViaUi, digitsOnly, registerNewUser } from './helpers'
  * no horizontal overflow.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-transfers-storage-state-${process.pid}.json`,
-)
-const SINGLE_ACCOUNT_STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-transfers-single-account-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-transfers')
+const SOLO_SESSION = authenticatedSession('phase7-transfers-solo')
 
 const CASH = 'Cash'
 const BANK = 'Bank'
@@ -44,21 +36,16 @@ async function accountBalance(page: Page, name: string): Promise<number> {
 }
 
 test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and row actions', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-transfers' })
-    await createAccountViaUi(page, { name: CASH, currency: 'VND', initialBalance: 10_000_000 })
-    await createAccountViaUi(page, { name: BANK, currency: 'VND', initialBalance: 1_000_000 })
-    await createAccountViaUi(page, { name: USD_SAVINGS, currency: 'USD', initialBalance: 0 })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: CASH, currency: 'VND', initialBalance: 10_000_000 })
+      await createAccountViaUi(page, { name: BANK, currency: 'VND', initialBalance: 1_000_000 })
+      await createAccountViaUi(page, { name: USD_SAVINGS, currency: 'USD', initialBalance: 0 })
+    })
   })
 
   test('every field in the create form has a visible label', async ({ page }) => {
@@ -217,19 +204,14 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
 })
 
 test.describe('Phase 7 Task 5b — fewer than two active accounts', () => {
-  test.use({ storageState: SINGLE_ACCOUNT_STORAGE_STATE_PATH })
+  test.use({ storageState: SOLO_SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-transfers-solo' })
-    await createAccountViaUi(page, { name: CASH, currency: 'VND', initialBalance: 1_000_000 })
-
-    await context.storageState({ path: SINGLE_ACCOUNT_STORAGE_STATE_PATH })
-    await context.close()
+    await SOLO_SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: CASH, currency: 'VND', initialBalance: 1_000_000 })
+    })
   })
 
   test('shows ONE page-level EmptyState with a CTA to /accounts — no stacked "no transfers yet" card, no <select> anywhere', async ({

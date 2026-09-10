@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { createAccountViaUi, createTransactionViaUi, registerNewUser } from './helpers'
+import { authenticatedSession, createAccountViaUi, createTransactionViaUi } from './helpers'
 
 /**
  * Phase 7 Task 5a: owner requirement R — coverage the Transactions rebuild
@@ -19,35 +17,27 @@ import { createAccountViaUi, createTransactionViaUi, registerNewUser } from './h
  * keyboard-driven delete flow goes through `ConfirmDialog`.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-transactions-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-transactions')
 
 /** A raw enum value: two-plus upper-case words joined by underscores — never
  *  a translated label, which is prose in Vietnamese or English. */
 const RAW_ENUM_PATTERN = /\b[A-Z]{2,}(?:_[A-Z]+)+\b/
 
 test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row actions', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-transactions' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Cash',
-      categoryName: 'Food & Dining',
-      amount: 120_000,
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 120_000,
+      })
     })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('every field in the create form has a visible label', async ({ page }) => {

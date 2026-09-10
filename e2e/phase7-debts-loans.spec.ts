@@ -1,10 +1,8 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { formatDate } from '@/lib/ui/format-date'
-import { eitherLocale, registerNewUser, todayInZone } from './helpers'
+import { authenticatedSession, eitherLocale, todayInZone } from './helpers'
 
 /**
  * Phase 7 Task 8: owner requirement S — coverage the Debts/Loans rebuild adds
@@ -34,10 +32,7 @@ import { eitherLocale, registerNewUser, todayInZone } from './helpers'
 
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-debts-loans-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-debts-loans')
 
 const TODAY = todayInZone(TIMEZONE)
 
@@ -131,17 +126,11 @@ async function createLoanViaUi(
 }
 
 test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
   test.describe.configure({ timeout: 120_000 })
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-debts-loans' })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser)
   })
 
   test('vi: receivable and payable sections show separate per-currency subtotals, and a row states counterparty/direction/status', async ({

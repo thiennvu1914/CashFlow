@@ -1,11 +1,9 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, request as playwrightRequest } from '@playwright/test'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createTransactionViaUi,
   digitsOnly,
-  registerNewUser,
   todayInZone,
 } from './helpers'
 
@@ -25,52 +23,38 @@ import {
  */
 
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase4-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase4')
 const BASE_URL = 'http://localhost:3000'
 
 test.describe.serial('Phase 4 — dashboard, reports and export', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    // `browser.newContext()` (the fixture-provided `browser`, not raw
-    // Playwright) inherits the file-level `test.use({ storageState: ... })`
-    // above by default — which, at this point, names a file this very step
-    // is about to create. `storageState: undefined` overrides that back to a
-    // clean, logged-out context.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
+    await SESSION.bootstrap(browser, async (page) => {
+      // A VND account and a USD account — enough to make FX conversion actually
+      // apply on the Dashboard's Total Account Balance / Net Worth / distribution.
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
+      await createAccountViaUi(page, { name: 'Wallet', currency: 'USD', initialBalance: 100 })
 
-    await registerNewUser(page, { emailPrefix: 'e2e-phase4' })
-
-    // A VND account and a USD account — enough to make FX conversion actually
-    // apply on the Dashboard's Total Account Balance / Net Worth / distribution.
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
-    await createAccountViaUi(page, { name: 'Wallet', currency: 'USD', initialBalance: 100 })
-
-    // One income and one expense on Cash, both at today's pre-filled
-    // date-time. A same-currency transfer needs two accounts in the same
-    // currency, which this seed does not have — transfers are out of scope
-    // for this spec per the task brief.
-    await createTransactionViaUi(page, {
-      type: 'INCOME',
-      accountName: 'Cash',
-      categoryName: 'Salary',
-      amount: 500_000,
+      // One income and one expense on Cash, both at today's pre-filled
+      // date-time. A same-currency transfer needs two accounts in the same
+      // currency, which this seed does not have — transfers are out of scope
+      // for this spec per the task brief.
+      await createTransactionViaUi(page, {
+        type: 'INCOME',
+        accountName: 'Cash',
+        categoryName: 'Salary',
+        amount: 500_000,
+      })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 200_000,
+      })
     })
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Cash',
-      categoryName: 'Food & Dining',
-      amount: 200_000,
-    })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('dashboard (desktop, 1280x800): shell, KPIs, widgets and seeded data', async ({ page }) => {
@@ -387,7 +371,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
 
     // A fresh, unauthenticated context — no cookies at all — must be refused.
     // `storageState: undefined` explicitly overrides the file-level
-    // `test.use({ storageState: STORAGE_STATE_PATH })`, which this module-level
+    // `test.use({ storageState: SESSION.path })`, which this module-level
     // `request.newContext()` would otherwise inherit while running inside a
     // test (same reasoning as the `beforeAll` context above) — without it,
     // this "anonymous" context is silently the logged-in seeded user.

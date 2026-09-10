@@ -1,12 +1,10 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Page } from '@playwright/test'
 import viValidation from '@/messages/vi/validation.json'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createBudgetViaUi,
   eitherLocale,
-  registerNewUser,
   todayInZone,
 } from './helpers'
 
@@ -58,10 +56,7 @@ import {
  * pattern `phase4.spec.ts` uses.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-tx-hydration-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('tx-hydration')
 
 const CATEGORY_REQUIRED_MESSAGE = 'Category is required for income and expense transactions'
 
@@ -194,53 +189,45 @@ let expenseNames: string[] = []
 let expenseOnlyNames: string[] = []
 
 test.describe.serial('Money forms — hydration gate', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    // `storageState: undefined` overrides the file-level `test.use` above,
-    // which at this point names a file this step is about to create — see the
-    // identical reasoning in `phase4.spec.ts`'s `beforeAll`.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, {
+        name: FIRST_ACCOUNT,
+        currency: 'VND',
+        initialBalance: 1_000_000,
+      })
+      await createAccountViaUi(page, {
+        name: SECOND_ACCOUNT,
+        currency: 'VND',
+        initialBalance: 500_000,
+      })
 
-    await registerNewUser(page, { emailPrefix: 'e2e-tx-hydration' })
-    await createAccountViaUi(page, {
-      name: FIRST_ACCOUNT,
-      currency: 'VND',
-      initialBalance: 1_000_000,
+      // An Overall budget on this month flips `BudgetForm`'s scope default to
+      // CATEGORY — the branch where the default is *not* the first option, and
+      // therefore the only branch its `defaultValue` actually matters on. The
+      // helper does not assert success (a duplicate is a legitimate outcome
+      // elsewhere), so the row assertion below is what proves the seed landed.
+      await createBudgetViaUi(page, { scope: 'OVERALL', amount: 1_000_000, currency: 'VND' })
+      // The scope label is `labels.budgetScope.OVERALL` ("Tổng thể"/"Overall"),
+      // translated — the vi page (the default, no `NEXT_LOCALE` cookie here)
+      // never renders the literal English word "Overall". Anchored (`^…$`)
+      // around `eitherLocale`'s own escaped alternation so this keeps the
+      // original assertion's `{ exact: true }` semantics — an element whose
+      // ENTIRE text is one of the two words, not merely contains it.
+      const overallLabel = new RegExp(`^(?:${eitherLocale('Tổng thể', 'Overall').source})$`)
+      await expect(page.locator('li').filter({ has: page.getByText(overallLabel) })).toHaveCount(1)
+
+      await page.goto('/categories')
+      incomeNames = await categoryNames(page, eitherLocale('Danh mục thu', 'Income Categories'))
+      expenseNames = await categoryNames(page, eitherLocale('Danh mục chi', 'Expense Categories'))
+      expenseOnlyNames = expenseNames.filter((name) => !incomeNames.includes(name))
+      expect(incomeNames.length).toBeGreaterThan(0)
+      expect(expenseOnlyNames.length).toBeGreaterThan(0)
     })
-    await createAccountViaUi(page, {
-      name: SECOND_ACCOUNT,
-      currency: 'VND',
-      initialBalance: 500_000,
-    })
-
-    // An Overall budget on this month flips `BudgetForm`'s scope default to
-    // CATEGORY — the branch where the default is *not* the first option, and
-    // therefore the only branch its `defaultValue` actually matters on. The
-    // helper does not assert success (a duplicate is a legitimate outcome
-    // elsewhere), so the row assertion below is what proves the seed landed.
-    await createBudgetViaUi(page, { scope: 'OVERALL', amount: 1_000_000, currency: 'VND' })
-    // The scope label is `labels.budgetScope.OVERALL` ("Tổng thể"/"Overall"),
-    // translated — the vi page (the default, no `NEXT_LOCALE` cookie here)
-    // never renders the literal English word "Overall". Anchored (`^…$`)
-    // around `eitherLocale`'s own escaped alternation so this keeps the
-    // original assertion's `{ exact: true }` semantics — an element whose
-    // ENTIRE text is one of the two words, not merely contains it.
-    const overallLabel = new RegExp(`^(?:${eitherLocale('Tổng thể', 'Overall').source})$`)
-    await expect(page.locator('li').filter({ has: page.getByText(overallLabel) })).toHaveCount(1)
-
-    await page.goto('/categories')
-    incomeNames = await categoryNames(page, eitherLocale('Danh mục thu', 'Income Categories'))
-    expenseNames = await categoryNames(page, eitherLocale('Danh mục chi', 'Expense Categories'))
-    expenseOnlyNames = expenseNames.filter((name) => !incomeNames.includes(name))
-    expect(incomeNames.length).toBeGreaterThan(0)
-    expect(expenseOnlyNames.length).toBeGreaterThan(0)
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('server HTML gates every money form and carries its real defaults', async ({ page }) => {

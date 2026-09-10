@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser, eitherLocale, PAGES } from './helpers'
+import { authenticatedSession, eitherLocale, PAGES } from './helpers'
 
 /**
  * Theme and locale, end to end (spec §12).
@@ -21,7 +19,7 @@ import { registerNewUser, eitherLocale, PAGES } from './helpers'
  * touching anything else, in its own context, precisely so nothing downstream
  * depends on a session it just killed.
  */
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-theme-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-theme')
 
 /**
  * The registered account, kept for every test that needs to sign back in
@@ -55,15 +53,12 @@ async function loginViaUi(page: import('@playwright/test').Page): Promise<void> 
 }
 
 test.describe.serial('Phase 7 — theme and locale', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    account = await registerNewUser(page, { emailPrefix: 'e2e-phase7-theme' })
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+
+    account = await SESSION.bootstrap(browser)
   })
 
   test('a new account starts in Vietnamese and light', async ({ page }) => {
