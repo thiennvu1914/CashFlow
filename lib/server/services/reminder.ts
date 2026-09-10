@@ -618,12 +618,18 @@ export async function materializeDueOccurrences(
  * the occurrence's local calendar day with the user's own
  * (`lib/ui/reminder-view-model.ts`, ruling R6-7) rather than two instants.
  *
- * Deliberately *not* limited to the lookahead window: a PENDING occurrence from
- * three months ago is a bill the user never answered, and dropping it out of the
- * list because it is old would be the app quietly forgetting it on their behalf.
- * It stays until they acknowledge or dismiss it. The dashboard widget therefore
- * partitions what it gets rather than trusting the head of the list to be
- * upcoming (`lib/ui/dashboard-view-model.ts`, ruling R6-23).
+ * Deliberately *not* limited to the lookahead window, and deliberately not
+ * bounded at all: this is the **Reminders page's** read, and that page groups
+ * rather than truncates — it states the true size of the overdue group above it
+ * (`reminders.overdueCount`). A PENDING occurrence from three months ago is a
+ * bill the user never answered, and dropping it out of the list because it is
+ * old would be the app quietly forgetting it on their behalf. It stays until
+ * they acknowledge or dismiss it.
+ *
+ * The **dashboard widget** shows five rows and does not use this function; it
+ * uses `listDashboardOccurrences` below, which is bounded. Both partition on the
+ * same day boundary, so the widget's rows are the head of each half of this
+ * list.
  *
  * `timezone` is the *viewer's* zone and is passed straight through to
  * materialization, which does not use it: each reminder's schedule is anchored
@@ -641,6 +647,122 @@ export async function listUpcomingOccurrences(
     include: OCCURRENCE_INCLUDE,
     orderBy: UPCOMING_ORDER,
   })
+}
+
+/**
+ * The instant the viewer's calendar day begins, in their own zone.
+ *
+ * The single boundary "overdue" is decided on, and it is *exactly* the view
+ * model's decision expressed as an instant. `lib/ui/reminder-view-model.ts`
+ * computes `overdue` as
+ * `compareCalendarDates(formatInTimeZone(dueAt, tz, 'yyyy-MM-dd'), today) < 0`
+ * with `today = todayCalendarDateInZone(tz, now)` — i.e. "the day `dueAt` falls
+ * on in `tz` is before the day `now` falls on in `tz`" — which holds for an
+ * instant if and only if that instant is before the first instant of the
+ * viewer's today. Both sides go through the same two helpers this module
+ * already uses for every other conversion, so there is one definition of a
+ * local calendar day here, not two.
+ *
+ * Note this is the *viewer's* zone, unlike materialization, which is anchored to
+ * each reminder's own stored zone (ruling R6-22). The two are different
+ * questions: which instants exist belongs to the reminder (R6-22); whether one
+ * of them is already behind the user belongs to the reader's today (R6-7).
+ */
+function startOfViewerDay(timezone: string, now: Date): Date {
+  return localCarrierToInstant(toLocalCalendarCarrier(now, timezone), timezone)
+}
+
+/**
+ * How many PENDING occurrences the user is already late for.
+ *
+ * A `count`, not a length: the dashboard widget renders at most two overdue rows
+ * but tells the user how many there are in total ("7 overdue"), and that total
+ * is the one figure a bounded row read cannot produce (pre-flight finding B-6).
+ * Same predicate as the rows it is counted beside — `status: 'PENDING'` and
+ * `dueAt` before `startOfViewerDay` — so the tally and the list can never
+ * disagree about what "late" means.
+ *
+ * Materializes nothing, like `listOccurrences`: a tally is a question about
+ * rows that already exist. `listDashboardOccurrences` is what orders the write
+ * before the count, so a first-ever view counts the rows it just created.
+ */
+export async function countOverdueOccurrences(
+  userId: string,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return prisma.reminderOccurrence.count({
+    where: { userId, status: 'PENDING', dueAt: { lt: startOfViewerDay(timezone, now) } },
+  })
+}
+
+/** The dashboard widget's read: the rows it renders, and the tally it reports. */
+export interface DashboardOccurrenceRead {
+  /** Up to `limits.overdue` overdue rows then up to `limits.upcoming` upcoming
+   *  ones — one ascending list, the same order `listUpcomingOccurrences`
+   *  returns. */
+  rows: OccurrenceRow[]
+  /** Every overdue occurrence, not just the ones in `rows`. */
+  overdueCount: number
+}
+
+/**
+ * The bounded read behind the dashboard's Upcoming Reminders widget
+ * (pre-flight finding B-6).
+ *
+ * The widget shows five rows, at most two of them overdue
+ * (`lib/ui/dashboard-view-model.ts`'s `WIDGET_ROW_LIMIT` /
+ * `WIDGET_OVERDUE_ROW_LIMIT`, passed in as `limits` so the caps live in one
+ * place — the module that owns them). It used to be built by fetching *every*
+ * PENDING occurrence and partitioning it in memory, so a user a year behind on
+ * one weekly reminder shipped ~57 joined rows through the RSC payload to render
+ * five.
+ *
+ * **Why two `take`s and not one.** The order is `dueAt asc`, so the whole
+ * overdue backlog sits at the head of the list: a single `take` of
+ * "overdue cap + display max" over that order returns nothing but overdue rows
+ * as soon as the backlog exceeds it, and the widget would render two rows
+ * instead of five — the exact failure ruling R6-23 exists to prevent, arrived
+ * at from the other end. One `take` per half, over the same order and the same
+ * boundary, returns precisely the rows the in-memory partition selected.
+ *
+ * Three constant-size queries (two bounded reads and a `count`) replace one
+ * unbounded read. They run concurrently, but strictly *after* materialization:
+ * the count must see the rows this call just created, or a first-ever view would
+ * report nothing overdue.
+ *
+ * The caps are clamped to at least one, so a caller cannot turn a half off by
+ * passing zero and silently lose the overdue rows.
+ */
+export async function listDashboardOccurrences(
+  userId: string,
+  timezone: string,
+  limits: { overdue: number; upcoming: number },
+  now: Date = new Date(),
+): Promise<DashboardOccurrenceRead> {
+  await materializeDueOccurrences(userId, timezone, now)
+
+  const boundary = startOfViewerDay(timezone, now)
+  const [overdue, upcoming, overdueCount] = await Promise.all([
+    prisma.reminderOccurrence.findMany({
+      where: { userId, status: 'PENDING', dueAt: { lt: boundary } },
+      include: OCCURRENCE_INCLUDE,
+      orderBy: UPCOMING_ORDER,
+      take: Math.max(1, Math.trunc(limits.overdue)),
+    }),
+    prisma.reminderOccurrence.findMany({
+      where: { userId, status: 'PENDING', dueAt: { gte: boundary } },
+      include: OCCURRENCE_INCLUDE,
+      orderBy: UPCOMING_ORDER,
+      take: Math.max(1, Math.trunc(limits.upcoming)),
+    }),
+    countOverdueOccurrences(userId, timezone, now),
+  ])
+
+  // Concatenated rather than re-sorted: every row of the first half is before
+  // the boundary and every row of the second is at or after it, so the join is
+  // already `dueAt asc` — the order the widget's partition depends on.
+  return { rows: [...overdue, ...upcoming], overdueCount }
 }
 
 /**

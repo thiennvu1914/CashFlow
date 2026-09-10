@@ -4,7 +4,11 @@ import type { SavingsGoalStatus } from '@prisma/client'
 import type { BudgetProgress } from '@/lib/server/services/budget'
 import type { OccurrenceRow } from '@/lib/server/services/reminder'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
-import { buildDashboardViewModel, type DashboardInput } from './dashboard-view-model'
+import {
+  DASHBOARD_OCCURRENCE_LIMITS,
+  buildDashboardViewModel,
+  type DashboardInput,
+} from './dashboard-view-model'
 
 /**
  * Pure mapping — no database, no session, no renderer. Every input below is a
@@ -137,6 +141,9 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
     budgets: [],
     goals: [],
     occurrences: [],
+    // The tally comes from its own `count` query rather than from the array
+    // above (Phase 8, finding B-6), so a case that asserts it says so.
+    overdueOccurrenceCount: 0,
     // The user's own calendar day for `NOW` in Ho Chi Minh City — 10:00Z is
     // 17:00 there, still the 15th.
     today: '2026-09-15',
@@ -844,10 +851,10 @@ describe('buildDashboardViewModel', () => {
     })
 
     it('keeps room for upcoming rows when the user has a pile of overdue ones', () => {
-      // Ruling R6-23: `listUpcomingOccurrences` is unbounded and `dueAt asc`, so
-      // taking the head of it filled a widget captioned "the next 30 days" with
-      // nothing but months-old rows — permanently, for any user carrying five
-      // unanswered bills.
+      // Ruling R6-23: the occurrence list is `dueAt asc`, so taking the head of
+      // it filled a widget captioned "the next 30 days" with nothing but
+      // months-old rows — permanently, for any user carrying five unanswered
+      // bills.
       const overdue = Array.from({ length: 7 }, (_, index) =>
         // Local midnight on 2–8 September in Ho Chi Minh City, oldest first.
         occurrence({
@@ -866,7 +873,7 @@ describe('buildDashboardViewModel', () => {
       )
 
       const vm = buildDashboardViewModel(
-        makeInput({ occurrences: [...overdue, ...upcoming] }),
+        makeInput({ occurrences: [...overdue, ...upcoming], overdueOccurrenceCount: 7 }),
         'vi',
       )
 
@@ -883,6 +890,75 @@ describe('buildDashboardViewModel', () => {
       expect(vm.overdueReminderCount).toBe(7)
     })
 
+    /**
+     * The bounded read (Phase 8, Task 4, fix round 1 — pre-flight B-6).
+     *
+     * The page used to hand over every PENDING occurrence and this builder
+     * counted the overdue ones itself. It now receives at most
+     * `DASHBOARD_OCCURRENCE_LIMITS.overdue + .upcoming` rows — the head of each
+     * half of that same list — plus the tally as a number from a `count` query.
+     * The widget must read identically either way, which is what this compares:
+     * one view model built the old way, one built the new way, same fixture.
+     */
+    it('renders the same rows from a bounded read plus a separate tally', () => {
+      // A user thirty bills behind, with six more coming: the shape where a
+      // single `take` over `dueAt asc` returns nothing but overdue rows.
+      const overdue = Array.from({ length: 30 }, (_, index) =>
+        occurrence({
+          id: `late${index + 1}`,
+          title: `Late ${index + 1}`,
+          // Local midnight, oldest first, ending on 13 September.
+          dueAt: new Date(Date.UTC(2026, 7, 14 + index, 17, 0, 0)),
+        }),
+      )
+      const upcoming = Array.from({ length: 6 }, (_, index) =>
+        occurrence({
+          id: `soon${index + 1}`,
+          title: `Soon ${index + 1}`,
+          dueAt: new Date(Date.UTC(2026, 8, 15 + index, 17, 0, 0)),
+        }),
+      )
+
+      // Old behaviour: the complete list, tally derived from it.
+      const fromEverything = buildDashboardViewModel(
+        makeInput({
+          occurrences: [...overdue, ...upcoming],
+          overdueOccurrenceCount: overdue.length,
+        }),
+        'vi',
+      )
+      // New behaviour: the head of each half, tally counted in the database.
+      const bounded = [
+        ...overdue.slice(0, DASHBOARD_OCCURRENCE_LIMITS.overdue),
+        ...upcoming.slice(0, DASHBOARD_OCCURRENCE_LIMITS.upcoming),
+      ]
+      const fromBounded = buildDashboardViewModel(
+        makeInput({ occurrences: bounded, overdueOccurrenceCount: overdue.length }),
+        'vi',
+      )
+
+      expect(fromBounded.upcomingReminders).toEqual(fromEverything.upcomingReminders)
+      expect(fromBounded.upcomingReminders.map((o) => [o.id, o.overdue])).toEqual([
+        ['late1', true],
+        ['late2', true],
+        ['soon1', false],
+        ['soon2', false],
+        ['soon3', false],
+      ])
+      // The tally is the whole backlog on both paths — never the rows on show.
+      expect(fromBounded.overdueReminderCount).toBe(30)
+      expect(fromEverything.overdueReminderCount).toBe(30)
+      // And the bounded input really was small: seven rows for a 36-row user.
+      expect(bounded).toHaveLength(7)
+    })
+
+    it('publishes the two caps the bounded read has to honour', () => {
+      // One place for both numbers: the page passes these to
+      // `listDashboardOccurrences` and this module slices with the same two,
+      // so the query and the widget can never be bounded differently.
+      expect(DASHBOARD_OCCURRENCE_LIMITS).toEqual({ overdue: 2, upcoming: 5 })
+    })
+
     it('shows a single overdue row beside a single upcoming one', () => {
       // The overdue allowance is a cap, not a reservation: one late bill takes
       // one slot, and nothing about the upcoming half changes.
@@ -892,6 +968,7 @@ describe('buildDashboardViewModel', () => {
             occurrence({ id: 'late', title: 'Rent', dueAt: new Date('2026-09-09T17:00:00Z') }),
             occurrence({ id: 'soon', title: 'Salary', dueAt: new Date('2026-09-15T17:00:00Z') }),
           ],
+          overdueOccurrenceCount: 1,
         }),
         'vi',
       )

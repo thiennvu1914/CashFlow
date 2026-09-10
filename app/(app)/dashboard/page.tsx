@@ -20,10 +20,10 @@ import { getAccountBalanceOverTime } from '@/lib/server/services/account-balance
 import { getActivitySummary, getCashFlowTrend } from '@/lib/server/services/activity'
 import { getBudgetProgressForMonth } from '@/lib/server/services/budget'
 import { getCurrentPosition } from '@/lib/server/services/position'
-import { listUpcomingOccurrences, OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/server/services/reminder'
+import { listDashboardOccurrences, OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/server/services/reminder'
 import { listSavingsGoals } from '@/lib/server/services/savings-goal'
 import { listTransactions } from '@/lib/server/services/transaction'
-import { buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
+import { DASHBOARD_OCCURRENCE_LIMITS, buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
 import { formatDate } from '@/lib/ui/format-date'
 import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
@@ -94,15 +94,19 @@ export default async function DashboardPage() {
   //   · 1 recent-transactions list                       (listTransactions)
   //   · 1 budget list + 1 month EXPENSE scan  (getBudgetProgressForMonth)
   //   · 1 goal list                                    (listSavingsGoals)
-  //   · 1 reminder scan + the PENDING occurrence rows it materializes
-  //                                            (listUpcomingOccurrences)
+  //   · 1 reminder scan, at most 1 batched insert, then 2 bounded occurrence
+  //     reads + 1 overdue count                (listDashboardOccurrences)
   // Nothing here is per-account or per-row, and no widget fetches on its own.
   //
-  // `listUpcomingOccurrences` is the one call on this page that WRITES: there
+  // `listDashboardOccurrences` is the one call on this page that WRITES: there
   // is no cron in this project, so the rows for the next 30 days are
   // materialized lazily by whoever reads them first (idempotently — a second
-  // read creates nothing). It is called once here and its result reused, for
-  // the same reason the Reminders page calls it once.
+  // read creates nothing, and it is one batched insert however many reminders
+  // the user keeps). It then reads only what the widget can render — at most
+  // two overdue rows and five upcoming ones — plus a `count` for the overdue
+  // tally beside the list, so the payload is constant rather than growing with
+  // the user's backlog of unanswered bills (pre-flight B-6). The Reminders
+  // page keeps the complete list, which is what it renders.
 
   // Resolved FIRST, on its own, and only then the rest.
   //
@@ -145,7 +149,7 @@ export default async function DashboardPage() {
       // nothing for them to degrade to. The Debt / Loan overview beside them is
       // the opposite case and comes from `position`, which already degraded.
       listSavingsGoals(user.id),
-      listUpcomingOccurrences(user.id, timezone, now),
+      listDashboardOccurrences(user.id, timezone, DASHBOARD_OCCURRENCE_LIMITS, now),
     ])
 
   // Resolved before `buildDashboardViewModel`: every figure and chart-axis
@@ -171,7 +175,10 @@ export default async function DashboardPage() {
       recentTransactions,
       budgets,
       goals,
-      occurrences,
+      occurrences: occurrences.rows,
+      // The tally the widget's muted line reports, from its own `count` query:
+      // `rows` above is capped at two overdue, so its length is not the answer.
+      overdueOccurrenceCount: occurrences.overdueCount,
     },
     locale,
   )

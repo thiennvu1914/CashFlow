@@ -6,14 +6,21 @@ import type { MockInstance } from 'vitest'
 import { formatInTimeZone } from 'date-fns-tz'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getAccountBalance } from '@/lib/server/services/balance'
+// The view model's own definition of "overdue", imported so the service's
+// `count` predicate is asserted against the very function the widget uses
+// rather than against a copy of it.
+import { toOccurrenceDto } from '@/lib/ui/reminder-view-model'
 import {
   InvalidReminderAccountError,
   InvalidReminderCategoryError,
   OCCURRENCE_LOOKAHEAD_DAYS,
   acknowledgeOccurrence,
+  countOverdueOccurrences,
   createReminder,
   dismissOccurrence,
+  listDashboardOccurrences,
   listOccurrences,
   listReminders,
   listUpcomingOccurrences,
@@ -1345,27 +1352,38 @@ describe('reminder service', () => {
   })
 
   /**
-   * Why the upcoming list is unbounded, pinned as a property (Phase 8, Task 4 —
-   * pre-flight finding B-6).
+   * The two reads of the same PENDING set (Phase 8, Task 4 — pre-flight
+   * finding B-6).
    *
-   * The dashboard widget shows five rows, at most two of them overdue, so a
-   * `take` of "overdue cap + display max" looks free. It is not: the same array
-   * is what `buildDashboardViewModel` derives `overdueReminderCount` from
-   * (`lib/ui/dashboard-view-model.ts` — "the widget's one muted line is the only
-   * place the user learns that the two rows above it are the tip of seven"), and
-   * `dueAt asc` puts the whole overdue backlog at the head of it. A user who
-   * ignores one weekly reminder for a year therefore has ~52 PENDING rows that
-   * are *all* required: the first two to render, the rest to be counted, and the
-   * upcoming rows behind them to fill the remaining three slots.
+   * `listUpcomingOccurrences` is the **Reminders page's** read and stays
+   * complete: that page groups rather than truncates, and states the true size
+   * of the overdue group above it (`reminders.overdueCount`), so a cap there
+   * would be the app quietly forgetting bills on the user's behalf.
    *
-   * This case builds that user honestly — a year of weekly reads, each
-   * materializing its own window — and asserts the read hands back every PENDING
-   * row in `dueAt` order. Any `take` smaller than the backlog would both
-   * understate the tally and push the genuinely-upcoming rows out of the widget,
-   * so bounding this read requires the page to fetch the count separately.
+   * `listDashboardOccurrences` is the **widget's** read and is bounded: five
+   * rows, at most two of them overdue. Because `dueAt asc` puts the whole
+   * overdue backlog at the head of the list, one `take` over that order cannot
+   * express the widget — a user a year behind on one weekly reminder has ~52
+   * overdue rows, so `take: 7` would return seven overdue rows and *no*
+   * upcoming ones, and the widget would render two rows instead of five while
+   * reporting "7 overdue" instead of 52. The bound is therefore one `take` per
+   * half over the same order, plus a `count` for the tally — three constant
+   * queries in place of one unbounded one.
+   *
+   * These cases build that user honestly (a year of weekly reads, each
+   * materializing its own window) and pin both contracts against each other:
+   * the bounded rows must be exactly the head of each half of the complete
+   * list, and the tally must be the complete overdue count.
    */
-  describe('upcoming list bounds', () => {
-    it('returns every PENDING occurrence, in dueAt order, however large the backlog', async () => {
+  describe('the two occurrence reads', () => {
+    /** The widget's caps, as `lib/ui/dashboard-view-model.ts` defines them. The
+     *  page passes the exported constant; a test may state the numbers. */
+    const LIMITS = { overdue: 2, upcoming: 5 }
+
+    /** A user who has ignored one weekly reminder for a year: 52 rows already
+     *  overdue and five still to come, accumulated the way a year of dashboard
+     *  views would have accumulated them. */
+    async function seedAYearOfIgnoredReads() {
       await createReminder(fx.userId, TEST_TIMEZONE, {
         ...BASE_REMINDER,
         title: 'Weekly savings',
@@ -1373,29 +1391,167 @@ describe('reminder service', () => {
         dayOfMonth: undefined,
         startDate: '2025-01-06',
       })
-      // A year of dashboard views the user never acted on. Each read
-      // materializes its own [one week back, 30 days ahead] window, and the
-      // 30-day step keeps them contiguous, so the backlog accumulates exactly as
-      // a real ignored reminder's would.
+      // Each read materializes its own [one week back, 30 days ahead] window,
+      // and the 30-day step keeps them contiguous.
       for (let day = -360; day <= 0; day += 30) {
         await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, at(day))
       }
+    }
+
+    /** The instant the viewer's calendar day begins — the boundary both the
+     *  service's `count` and the view model's `overdue` flag decide on. */
+    const dayStart = (timezone: string, now = NOW) =>
+      localCarrierToInstant(toLocalCalendarCarrier(now, timezone), timezone)
+
+    it('leaves the Reminders page’s read complete, however large the backlog', async () => {
+      await seedAYearOfIgnoredReads()
 
       const rows = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
 
-      // Nothing is dropped: the array the dashboard's overdue tally is counted
-      // from is the complete PENDING set.
+      // Nothing is dropped: the page's own list is the complete PENDING set.
       expect(rows).toHaveLength(await occurrenceCount())
-      // Comfortably past both candidate bounds — the widget's five rows and the
-      // "take 20" the finding suggests.
       expect(rows.length).toBeGreaterThan(50)
       // Ascending, so the backlog is at the head and the upcoming rows behind
-      // it — the order the widget's partition depends on.
+      // it — the order both pages' partitions depend on.
       expect(utcInstants(rows)).toEqual([...utcInstants(rows)].sort())
       expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
       // The oldest unanswered bill is still in the list a year later, which is
-      // the whole reason it is not clamped to the lookahead window.
+      // the whole reason this read is not clamped to the lookahead window.
       expect(localDays(rows)[0]).toBe('2025-03-17')
+    })
+
+    it('gives the dashboard the widget’s own rows and the complete tally', async () => {
+      await seedAYearOfIgnoredReads()
+      // The complete list the widget used to be built from, partitioned exactly
+      // as `buildDashboardViewModel` partitions it.
+      const complete = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      const boundary = dayStart(TEST_TIMEZONE)
+      const overdue = complete.filter((row) => row.dueAt < boundary)
+      const upcoming = complete.filter((row) => row.dueAt >= boundary)
+      expect(overdue.length).toBeGreaterThan(50)
+      expect(upcoming.length).toBeGreaterThanOrEqual(LIMITS.upcoming)
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // The head of each half, in one ascending list — the same rows, in the
+      // same order, that the widget selected out of the complete list.
+      expect(read.rows.map((row) => row.id)).toEqual([
+        ...overdue.slice(0, LIMITS.overdue).map((row) => row.id),
+        ...upcoming.slice(0, LIMITS.upcoming).map((row) => row.id),
+      ])
+      expect(utcInstants(read.rows)).toEqual([...utcInstants(read.rows)].sort())
+      expect(read.rows.length).toBeLessThanOrEqual(LIMITS.overdue + LIMITS.upcoming)
+      // And the tally is the whole backlog, not the two rows on show.
+      expect(read.overdueCount).toBe(overdue.length)
+    })
+
+    it('fetches at most cap + max rows, with a take on each half', async () => {
+      await seedAYearOfIgnoredReads()
+      const findMany = vi.spyOn(prisma.reminderOccurrence, 'findMany')
+      const count = vi.spyOn(prisma.reminderOccurrence, 'count')
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // Two bounded reads and one count, whatever the size of the backlog —
+      // the whole of finding B-6.
+      expect(findMany).toHaveBeenCalledTimes(2)
+      expect(findMany.mock.calls.map((call) => call[0]?.take)).toEqual([
+        LIMITS.overdue,
+        LIMITS.upcoming,
+      ])
+      expect(count).toHaveBeenCalledTimes(1)
+      expect(read.rows).toHaveLength(LIMITS.overdue + LIMITS.upcoming)
+    })
+
+    it('materializes first, so a first-ever view counts the rows it just created', async () => {
+      // The one ordering that matters: the tally is a `count`, and counting
+      // before the insert would report zero on the very first dashboard view.
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Late rent',
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // 1 March is behind 15 March, 1 April ahead of it.
+      expect(localDays(read.rows)).toEqual(['2026-03-01', '2026-04-01'])
+      expect(read.overdueCount).toBe(1)
+    })
+
+    it('counts exactly the rows the widget calls overdue, in either viewer zone', async () => {
+      await seedAYearOfIgnoredReads()
+      const rows = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      for (const timezone of [TEST_TIMEZONE, DST_TIMEZONE]) {
+        // The view model's own definition of late: two calendar days in the
+        // viewer's zone, compared as strings (`lib/ui/reminder-view-model.ts`).
+        const today = todayCalendarDateInZone(timezone, NOW)
+        const fromTheWidget = rows.filter(
+          (row) => toOccurrenceDto(row, timezone, today).overdue,
+        ).length
+
+        expect(await countOverdueOccurrences(fx.userId, timezone, NOW)).toBe(fromTheWidget)
+      }
+    })
+
+    it('treats an occurrence due today as not overdue, at the local-midnight boundary', async () => {
+      // Local midnight of the user's today is 17:00Z the previous day in UTC+7,
+      // which is exactly the instant a UTC-only comparison gets wrong: it reads
+      // as "yesterday" in UTC and would count today's bill as late.
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Due today',
+        frequency: 'ONE_TIME',
+        dayOfMonth: undefined,
+        startDate: '2026-03-15',
+      })
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Due yesterday',
+        frequency: 'ONE_TIME',
+        dayOfMonth: undefined,
+        startDate: '2026-03-14',
+      })
+      await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      // The user has the whole of today to pay today's bill.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(1)
+      expect(utcInstants(await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW))).toEqual([
+        '2026-03-13T17:00:00.000Z',
+        '2026-03-14T17:00:00.000Z',
+      ])
+    })
+
+    it('counts only PENDING rows, and only this user’s', async () => {
+      const other = await createReminderUser()
+      extraUserIds.push(other.userId)
+      await createReminder(other.userId, TEST_TIMEZONE, BASE_REMINDER)
+      await listUpcomingOccurrences(other.userId, TEST_TIMEZONE, NOW)
+      await createReminder(fx.userId, TEST_TIMEZONE, BASE_REMINDER)
+      const mine = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      // The 1 March row is overdue at `NOW`; the 1 April one is not.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(1)
+
+      await acknowledgeOccurrence(fx.userId, mine[0].id, NOW)
+
+      // An answered bill is no longer something the user is late for.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(0)
+      // And the other user's identical row was never in the tally.
+      expect(await countOverdueOccurrences(other.userId, TEST_TIMEZONE, NOW)).toBe(1)
+    })
+
+    it('materializes nothing when only the tally is asked for', async () => {
+      await createReminder(fx.userId, TEST_TIMEZONE, BASE_REMINDER)
+      const createMany = vi.spyOn(prisma.reminderOccurrence, 'createMany')
+
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(0)
+
+      // A count is a question about the past, and answering it must not write —
+      // the same rule `listOccurrences` follows.
+      expect(createMany).not.toHaveBeenCalled()
+      expect(await occurrenceCount()).toBe(0)
     })
   })
 
