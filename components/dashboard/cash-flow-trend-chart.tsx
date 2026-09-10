@@ -58,17 +58,13 @@ export function CashFlowTrendChart({
   /** Translated Legend/Tooltip series names. */
   seriesLabels: { income: string; expense: string; netIncome: string }
 }) {
+  /* `<figure aria-label>`: a named but NON-leaf wrapper, so the summary is
+     announced AND recharts' keyboard layer inside it still works. Full
+     reasoning in `account-balance-history-chart.tsx`. */
   return (
-    <div role="img" aria-label={summary}>
+    <figure aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        {/* See `account-balance-history-chart.tsx` for why the recharts
-            accessibility layer is off: inside `role="img"` it is five dead tab
-            stops and a live region that can never announce. */}
-        <LineChart
-          data={data}
-          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
-          accessibilityLayer={false}
-        >
+        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="label" {...AXIS_PROPS} />
           {/* Wrapped rather than passed directly: Recharts calls a
@@ -107,6 +103,6 @@ export function CashFlowTrendChart({
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </figure>
   )
 }

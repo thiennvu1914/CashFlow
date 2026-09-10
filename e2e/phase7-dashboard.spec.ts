@@ -230,10 +230,14 @@ test.describe
     }
 
     // The widget grid is not merely empty — it is not rendered: no chart
-    // anywhere (every chart wrapper is a `role="img"` div; the `EmptyState`'s
-    // own lucide icon is `aria-hidden` and carries no role), and the card's own
-    // `h2` is the only section heading on the page.
-    await expect(page.locator('main [role="img"]')).toHaveCount(0)
+    // anywhere (every chart wrapper is a `<figure aria-label>`; the
+    // `EmptyState`'s own lucide icon is `aria-hidden` and carries no role), and
+    // the card's own `h2` is the only section heading on the page.
+    //
+    // `figure`, not `[role="img"]`: Task 16 fix round 1 swapped the wrapper,
+    // because `role="img"` pruned recharts' keyboard layer out of the
+    // accessibility tree while leaving its plot in the tab order.
+    await expect(page.getByRole('figure')).toHaveCount(0)
     await expect(page.locator('main section h2')).toHaveCount(1)
     for (const text of ['Chưa có giao dịch', 'Chưa có dữ liệu số dư']) {
       await expect(page.getByText(text, { exact: true })).toHaveCount(0)
@@ -267,7 +271,7 @@ test.describe
     await expect(
       page.getByRole('heading', { name: /Giao dịch gần đây|Recent Transactions/ }),
     ).toBeVisible()
-    await expect(page.locator('main [role="img"]').first()).toBeVisible()
+    await expect(page.getByRole('figure').first()).toBeVisible()
   })
 
   test('a populated dashboard still shows one empty state, with one action, per widget that has nothing', async ({
@@ -301,7 +305,7 @@ test.describe
       await expect(section.getByText(empty, { exact: true })).toBeVisible()
       await expect(section.getByRole('link')).toHaveCount(1)
       await expect(section.getByRole('link', { name: action })).toBeVisible()
-      await expect(section.locator('[role="img"]')).toHaveCount(0)
+      await expect(section.getByRole('figure')).toHaveCount(0)
     }
   })
 

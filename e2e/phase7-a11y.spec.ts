@@ -2,7 +2,7 @@ import os from 'os'
 import path from 'path'
 import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
-import { PAGES, registerNewUser, createAccountViaUi } from './helpers'
+import { PAGES, registerNewUser, createAccountViaUi, createTransactionViaUi } from './helpers'
 
 /**
  * The accessibility guarantees spec §8 makes, as tests (Task 16).
@@ -80,17 +80,23 @@ function unlabelledControls(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     return [...document.querySelectorAll<HTMLElement>('input, select, textarea')]
       .filter((control) => {
-        // A hidden input, an `aria-hidden` one, and anything taken out of the
-        // tab order are not controls a person operates. Base UI's Select
-        // renders a 1×1 clipped `aria-hidden` `tabindex="-1"` input per
-        // combobox purely so the value posts with a native form; labelling it
-        // would be labelling a plumbing detail, and it is correctly invisible
-        // to assistive technology already.
+        // Exactly two exclusions, and no more than that. A `type="hidden"`
+        // input, an `aria-hidden` one and a clipped 1×1 one are not controls a
+        // person operates: Base UI's Select renders one such input per combobox
+        // purely so the value posts with a native form (`aria-hidden="true"`,
+        // `tabindex="-1"`, `clip-path: inset(50%)`, 1×1), and labelling it would
+        // be labelling a plumbing detail that assistive technology already
+        // cannot see.
+        //
+        // `tabIndex === -1` is deliberately NOT an exclusion (fix round 1): a
+        // VISIBLE control that has merely been taken out of the tab order is
+        // still read, and still operated, by a screen-reader user driving the
+        // virtual cursor — excluding it would let a real unlabelled field
+        // through on the strength of one attribute.
         if (control.getAttribute('type') === 'hidden') return false
         if (control.getAttribute('aria-hidden') === 'true') return false
-        if (control.tabIndex === -1) return false
         const rect = control.getBoundingClientRect()
-        return rect.width > 0 && rect.height > 0
+        return rect.width > 1 && rect.height > 1
       })
       .filter((control) => {
         const id = control.getAttribute('id')
@@ -250,6 +256,31 @@ test.describe.serial('Phase 7 — accessibility', () => {
     const page = await context.newPage()
     await registerNewUser(page, { emailPrefix: 'e2e-phase7-a11y' })
     await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    // One transaction, and it is load-bearing rather than decoration: Task 17
+    // replaced the dashboard's ten widgets with a three-step onboarding card
+    // for a user who has nothing (`app/(app)/dashboard/page.tsx`'s
+    // `showOnboarding`), so without a row there is no chart on the page to
+    // scan, to Tab into or to arrow through.
+    await createTransactionViaUi(page, {
+      type: 'EXPENSE',
+      accountName: 'Cash',
+      categoryName: 'Food & Dining',
+      amount: 120_000,
+    })
+    // A second, zero-balance account, archived: that is what renders the
+    // page-level `<details>`/`<summary>` disclosure whose 44 px touch box was
+    // routed here from Task 15. The same `<summary>` class serves all four
+    // (`/accounts`, `/goals`, `/debts`, `/loans`), so one real instance is
+    // enough to measure — and without it the assertion would be vacuous.
+    // Zero balance because `/accounts` refuses to archive anything else
+    // (spec §6.4).
+    await createAccountViaUi(page, { name: 'Vi cu', currency: 'VND', initialBalance: 0 })
+    await page.getByRole('button', { name: /Tác vụ cho Vi cu|Actions for Vi cu/ }).click()
+    await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
+    const archiveConfirm = page.getByRole('dialog', { name: /Lưu trữ Vi cu\?|Archive Vi cu\?/ })
+    await archiveConfirm.getByRole('button', { name: /^Lưu trữ$|^Archive$/ }).click()
+    await expect(page.getByText(/Tài khoản đã lưu trữ \(1\)|Archived accounts \(1\)/)).toBeVisible()
+
     await context.storageState({ path: STORAGE_STATE_PATH })
     await context.close()
   })
@@ -265,9 +296,19 @@ test.describe.serial('Phase 7 — accessibility', () => {
       page,
     }) => {
       await page.goto(url)
+      // Wait for the page itself, not Task 17's route-level `loading.tsx`
+      // skeleton: those render in the real layout while the page streams, and
+      // a skeleton legitimately has no `h1` and no section headings. The `h1`
+      // becoming visible is the page having arrived — a real condition, not a
+      // sleep.
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
       const shape = await structure(page)
       expect(shape.mainCount, 'exactly one main landmark').toBe(1)
       expect(shape.h1Count, 'exactly one h1').toBe(1)
+      // The count first, so "every nav is named" cannot pass on a page that has
+      // no nav at all (fix round 1). At 1440 that is the rail, plus whichever
+      // in-page SegmentedControls the page renders.
+      expect(shape.navLabels.length, 'at least one nav landmark').toBeGreaterThanOrEqual(1)
       expect(shape.navLabels, 'every nav landmark is named').not.toContain(null)
       expect(
         new Set(shape.navLabels).size,
@@ -296,6 +337,7 @@ test.describe.serial('Phase 7 — accessibility', () => {
       page,
     }) => {
       await page.goto(url)
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
       expect(await unlabelledControls(page)).toEqual([])
       expect(await unnamedControls(page)).toEqual([])
     })
@@ -390,6 +432,28 @@ test.describe.serial('Phase 7 — accessibility', () => {
     await expectFocusRing(page, 'a keyboard-highlighted menu item')
     await page.keyboard.press('Escape')
     await expect(trigger).toBeFocused()
+
+    // And a custom `Select`'s highlighted option, which carried the same
+    // `outline-none` as the menu items (fix round 1: it was measured but not
+    // asserted). `expectFocusRing` reads `document.activeElement`, so the
+    // option has to be confirmed as the active element FIRST — otherwise a
+    // pass could be the trigger's own ring, which is also present.
+    await page.goto('/transactions')
+    await expect(page.locator('fieldset[disabled]')).toHaveCount(0)
+    await page.keyboard.press('Tab')
+    const category = page.getByRole('combobox', { name: /Danh mục|^Category$/ })
+    await category.focus()
+    await expectFocusRing(page, 'a custom Select trigger')
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('option').first()).toBeVisible()
+    await page.keyboard.press('ArrowDown')
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')), {
+        message: 'a Select.Item is the active element',
+      })
+      .toBe('option')
+    await expectFocusRing(page, 'a keyboard-highlighted Select.Item (--surface-2)')
+    await page.keyboard.press('Escape')
   })
 
   test('a sheet is modal: aria-modal, a focus trap, Escape restores focus, an overlay click closes it', async ({
@@ -628,6 +692,95 @@ test.describe.serial('Phase 7 — accessibility', () => {
     const box = (await close.boundingBox())!
     expect(Math.round(box.width), 'close button width at 375').toBeGreaterThanOrEqual(44)
     expect(Math.round(box.height), 'close button height at 375').toBeGreaterThanOrEqual(44)
+    await page.keyboard.press('Escape')
+    await expect(more).toBeHidden()
+
+    // And the page-level `<summary>` disclosure, the other target Task 15
+    // routed here: it measured 42 px, 2 px short, and takes `max-md:min-h-11`.
+    // `/accounts` carries the instance the fixture archives an account to
+    // produce; the same class serves the disclosures on `/goals`, `/debts` and
+    // `/loans`.
+    await page.goto('/accounts')
+    const summaries = page.locator('main summary')
+    await expect(summaries, 'the archived-accounts disclosure is on the page').toHaveCount(1)
+    for (const summary of await summaries.all()) {
+      const summaryBox = (await summary.boundingBox())!
+      expect(
+        Math.round(summaryBox.height),
+        `summary "${(await summary.textContent())?.trim()}" height at 375`,
+      ).toBeGreaterThanOrEqual(44)
+    }
+  })
+
+  test('a dashboard chart is a named figure: Tab reaches every one, and the arrow keys walk its points', async ({
+    page,
+  }) => {
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    const figures = page.getByRole('figure')
+    // Five charts (cash-flow trend, expense by category, balance over time,
+    // income vs expense, account distribution) — `>=` rather than an exact
+    // count, so adding a sixth chart does not fail this, while every figure
+    // that exists is still checked individually below.
+    await expect(figures).not.toHaveCount(0)
+    const count = await figures.count()
+    expect(count, 'the dashboard renders its charts').toBeGreaterThanOrEqual(5)
+
+    // (c) each chart's accessible name IS the page's composed, translated
+    // summary — every one of the five `*Summary` keys opens "Biểu đồ …", so a
+    // fallback, an untranslated key path or an empty label all fail here.
+    for (let index = 0; index < count; index += 1) {
+      await expect(figures.nth(index)).toHaveAttribute('aria-label', /^Biểu đồ .{20,}/)
+    }
+
+    // One focusable element per figure — recharts' `role="application"` plot —
+    // and one live region per figure, which is the announcer that could never
+    // fire while the wrapper was a `role="img"` leaf.
+    const shape = await page.evaluate(() =>
+      [...document.querySelectorAll('figure')].map((figure) => ({
+        focusable: figure.querySelectorAll('[tabindex="0"]').length,
+        live: figure.querySelectorAll('[aria-live]').length,
+        plotRole: figure.querySelector('svg[tabindex="0"]')?.getAttribute('role') ?? null,
+      })),
+    )
+    for (const figure of shape) {
+      expect(figure, 'one focusable plot and one announcer per chart').toEqual({
+        focusable: 1,
+        live: 1,
+        plotRole: 'application',
+      })
+    }
+
+    // (a) reachable by Tab — every chart, not just the first. The rail is 16
+    // stops at 1440, so a bounded 70-press sweep covers the whole page.
+    await page.evaluate(() => document.body.focus())
+    const reached = new Set<string>()
+    for (let index = 0; index < 70; index += 1) {
+      await page.keyboard.press('Tab')
+      const label = await page.evaluate(
+        () => document.activeElement?.closest('figure')?.getAttribute('aria-label') ?? null,
+      )
+      if (label !== null) reached.add(label)
+    }
+    expect(reached.size, `charts reached by Tab: ${JSON.stringify([...reached])}`).toBe(count)
+
+    // (b) the arrow keys move recharts' active index, and the announcer says
+    // so. Focus is set directly here rather than tabbed to: (a) above has
+    // already proved Tab gets there, and this half is about what the keys do
+    // once you have arrived. The assertion is on the figure's own live region
+    // rather than on a `.recharts-*` class, because the live region is the
+    // part a screen-reader user actually receives.
+    const plot = page.locator('figure svg[tabindex="0"]').first()
+    await plot.focus()
+    const announced = () =>
+      page.evaluate(() => document.querySelector('figure [aria-live]')?.textContent?.trim() ?? '')
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(announced, { message: 'the first arrow announces a point' }).not.toBe('')
+    const firstPoint = await announced()
+    await page.keyboard.press('ArrowRight')
+    await expect
+      .poll(announced, { message: 'the next arrow moves to a different point' })
+      .not.toBe(firstPoint)
   })
 
   // ---------------------------------------------------------------------------
@@ -666,6 +819,21 @@ test.describe.serial('Phase 7 — accessibility', () => {
       .click()
     await expect(page.getByRole('menu')).toBeVisible()
     expect(await axeViolations(page), 'axe on an open menu in dark').toEqual([])
+  })
+
+  test('dark: a dashboard chart still takes focus and answers the arrow keys', async ({ page }) => {
+    await page.goto('/dashboard')
+    expect(
+      await page.evaluate(() => document.documentElement.classList.contains('dark')),
+      'this test runs after the dark switch above',
+    ).toBe(true)
+    const plot = page.locator('figure svg[tabindex="0"]').first()
+    await expect(plot).toHaveAttribute('role', 'application')
+    await plot.focus()
+    const announced = () =>
+      page.evaluate(() => document.querySelector('figure [aria-live]')?.textContent?.trim() ?? '')
+    await page.keyboard.press('ArrowRight')
+    await expect.poll(announced, { message: 'dark: an arrow announces a point' }).not.toBe('')
   })
 
   test('dark: the focus ring is painted on --surface and on --surface-2', async ({ page }) => {

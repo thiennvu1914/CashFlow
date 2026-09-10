@@ -57,18 +57,13 @@ export function ExpenseByCategoryChart({
   /** Translated Tooltip series name (the bar has no Legend). */
   seriesLabel: string
 }) {
+  /* `<figure aria-label>`: a named but NON-leaf wrapper, so the summary is
+     announced AND recharts' keyboard layer inside it still works. Full
+     reasoning in `account-balance-history-chart.tsx`. */
   return (
-    <div role="img" aria-label={summary}>
+    <figure aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        {/* See `account-balance-history-chart.tsx` for why the recharts
-            accessibility layer is off: inside `role="img"` it is five dead tab
-            stops and a live region that can never announce. */}
-        <BarChart
-          data={data}
-          layout="vertical"
-          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
-          accessibilityLayer={false}
-        >
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
           {/* Wrapped rather than passed directly: Recharts calls a
               `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s
@@ -89,6 +84,6 @@ export function ExpenseByCategoryChart({
           <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </figure>
   )
 }
