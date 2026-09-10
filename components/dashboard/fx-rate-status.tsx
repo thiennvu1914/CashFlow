@@ -55,7 +55,14 @@ export async function FxRateStatus({ status }: { status: FxStatus }) {
           </span>
         )}
       </span>
-      <span className="tabular-nums text-muted-foreground/80">
+      {/* `text-muted-foreground`, not `text-muted-foreground/80` (Task 16,
+          owner item G6). The 80 % dilution was the ONLY alpha-diluted text
+          colour in the product, and axe caught it as a real WCAG 1.4.3
+          failure at 12 px: 3.74:1 in light and 4.16:1 in dark against
+          `--background`. `--muted-foreground` itself is sized for exactly
+          4.5:1 with a small margin (5.79 light / 5.75 dark on the page), so
+          any alpha on top of it spends margin the token does not have. */}
+      <span className="tabular-nums text-muted-foreground">
         {t('dashboard.fxEffective', { date: status.effectiveDate })}
       </span>
     </span>
