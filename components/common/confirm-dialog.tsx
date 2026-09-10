@@ -79,9 +79,18 @@ export function ConfirmDialog({
             size="lg"
             disabled={pending}
             onClick={confirm}
-            className={
-              tone === 'negative' ? 'bg-negative text-white hover:bg-negative/90' : undefined
-            }
+            // The fill is overridden; the TEXT colour is not (Task 14 Step 3,
+            // finding 2). This used to say `text-white`, which tailwind-merge
+            // resolved over the `default` variant's own
+            // `text-primary-foreground` — fine in light, where
+            // `--primary-foreground` IS white, but in dark `--negative` is the
+            // lighter salmon #D0807C and white on it measures 2.97:1, far
+            // under the 4.5:1 text minimum (visibly washed out in the
+            // Transactions delete and Accounts archive dialogs). Letting the
+            // variant's `text-primary-foreground` stand gives #FFFFFF in light
+            // — byte-identical to before — and the dark charcoal
+            // `--background` in dark, which measures 5.80:1 on the same fill.
+            className={tone === 'negative' ? 'bg-negative hover:bg-negative/90' : undefined}
           >
             {pending ? pendingLabel : confirmLabel}
           </Button>

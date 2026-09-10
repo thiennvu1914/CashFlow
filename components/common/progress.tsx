@@ -62,7 +62,24 @@ export function Progress({
             'aria-valuetext': valueText,
             'aria-label': label,
           })}
-      className={cn('h-1.5 overflow-hidden rounded-full bg-muted', className)}
+      // `dark:bg-foreground/14` (Task 14 Step 3, finding 1): in dark,
+      // `bg-muted` resolves to #2C2829, which is 1.05:1 against `--surface`
+      // and 1.06:1 against `--surface-2` — the two surfaces this 6 px track is
+      // ever drawn on. Measured in the browser and confirmed in every dark
+      // screenshot: a 0 %-progress debt, a 0 %-progress loan and a 3 % Reports
+      // category bar showed no track at all, so the bar could not be read as
+      // "this far along a whole". A token nudge cannot fix it: `--muted` sits
+      // between `--surface` (min at ~6 %) and `--surface-2` (min at ~10 %), and
+      // moving it out of that dead zone in either direction breaks a text pair
+      // that `bg-muted` carries elsewhere (lighter costs `text-brand`/
+      // `text-muted-foreground` on it, darker costs its visibility against
+      // `--background`). The track is the one `bg-muted` surface with NO text
+      // on it (the fill is the only child, and the wrapper is either
+      // `role="progressbar"` or `aria-hidden`), so it can take a lighter wash
+      // for free. 14 % is `--border`'s own alpha, so the track reads exactly as
+      // present as a card hairline (1.53:1 on all three surfaces) — above
+      // light's 1.21:1, and calm. Light is untouched.
+      className={cn('h-1.5 overflow-hidden rounded-full bg-muted dark:bg-foreground/14', className)}
     >
       <div className={cn('h-full', TONE_CLASSES[tone])} style={{ width: `${width}%` }} />
     </div>
