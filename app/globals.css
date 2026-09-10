@@ -219,7 +219,6 @@
   --positive: oklch(0.518 0.091 160.408);
   --negative: oklch(0.55 0.14 25);
   --warning: oklch(0.55 0.11 78);
-  --radius: 0.5rem;
   /* Phase 7 §2. `--surface-2` is the raised surface for popovers, dialogs and
      sheets — one step further from the background than a card, so a layer
      above the page reads as above it without a large shadow.
@@ -286,7 +285,6 @@
 .dark {
   /* CashFlow base tokens (warm charcoal, never pure black) */
   --background: oklch(0.22 0.007 173.672);
-  --surface: oklch(0.274 0.008 164.376);
   --foreground: oklch(0.971 0.002 134.839);
   /* Step 5 measurement (controller-fix round): brand/surface measured
      4.29:1 against the spec-pinned #202724 --surface — under the 4.5:1 text
@@ -302,9 +300,11 @@
   --positive: oklch(0.635 0.105 160.924);
   --negative: oklch(0.683 0.1 23.252);
   --warning: oklch(0.736 0.1 79.908);
-  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. The
-     existing `--surface` was oklch(0.274 …) (#242926); the spec's ladder needs
-     the middle rung a shade darker so surface-2 is visibly distinct from it.
+  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. This
+     declaration is the ONLY `--surface` in `.dark`: an earlier draft declared
+     it twice, first as oklch(0.274 …) (#242926) and then again here, so the
+     first one was dead and the spec's ladder needs the middle rung a shade
+     darker than it anyway, for surface-2 to be visibly distinct.
      Step 5 measurement (2nd controller-fix round): the previous value here,
      oklch(0.253 0.007 164.376), actually converts to #1F2321 — off from the
      spec's #202724 by more than 2 units on the G/B channels (39/36 -> 35/33),
