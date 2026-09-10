@@ -17,7 +17,15 @@ export default async function SettingsPage() {
   const t = await getTranslations()
 
   return (
-    <div className="mx-auto flex w-full max-w-[30rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+    // `max-w-[42rem]` (672 px), not the `max-w-[30rem]` single-column form
+    // width every create sheet uses (Task 18, owner item I1). Settings is not
+    // one form in a sheet: it is three titled sections on a full page, and at
+    // 480 px they read as a narrow strip floating in the middle of a 1200 px
+    // content area — the one page in the product whose column looked like a
+    // mistake next to the 960 px list pages beside it. 672 is inside the
+    // owner's 640–720 range and keeps every section left-aligned to the same
+    // edge as the header above them.
+    <div className="mx-auto flex w-full max-w-[42rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
       <PageHeader title={t('settings.title')} />
 
       {/* ONE form spanning the first two cards, with its Save below them

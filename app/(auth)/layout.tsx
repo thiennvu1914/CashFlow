@@ -19,7 +19,15 @@ import { getTranslations } from 'next-intl/server'
 export default async function AuthLayout({ children }: { children: React.ReactNode }) {
   const t = await getTranslations()
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    // Optically upward from `sm` up (Task 18, owner item I2): a 250 px card
+    // dead-centred in a 900 px window sits visibly below the eye's resting
+    // line, and every real sign-in page places its card in the upper third.
+    // `sm:items-start` + `sm:pt-[12vh]` is the whole change — no hero, no
+    // split screen, no change to the card's own width or padding. Phones keep
+    // `items-center` (the card is nearly the whole viewport there, so there is
+    // nothing to optically centre) and keep `p-4`, which
+    // `e2e/phase7-auth.spec.ts` measures as `innerWidth - 32` at 375.
+    <div className="flex min-h-screen items-center justify-center bg-background p-4 sm:items-start sm:pt-[12vh]">
       {/* A `<main>`, not a `<div>` (Task 16, owner item G1: exactly one `main`
           per page). The four auth screens had NO main landmark at all — their
           `h1` and their form sat in plain divs — so a screen-reader user had
