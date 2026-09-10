@@ -1,0 +1,52 @@
+{
+  "transactionType": {
+    "INCOME": "Income",
+    "EXPENSE": "Expense",
+    "CASH_IN": "Cash In (other)",
+    "CASH_OUT": "Cash Out (other)",
+    "ADJUSTMENT_INCREASE": "Balance Adjustment — increase",
+    "ADJUSTMENT_DECREASE": "Balance Adjustment — decrease"
+  },
+  "categoryType": { "INCOME": "Income", "EXPENSE": "Expense" },
+  "recordStatus": { "ACTIVE": "Active", "ARCHIVED": "Archived" },
+  "budgetScope": { "OVERALL": "Overall", "CATEGORY": "Category" },
+  "budgetStatus": {
+    "ok": "Healthy",
+    "warning_50": "Over half used",
+    "warning_80": "Approaching limit",
+    "at_100": "At limit",
+    "exceeded": "Exceeded"
+  },
+  "goalStatus": { "ACTIVE": "In progress", "ACHIEVED": "Achieved", "ARCHIVED": "Archived" },
+  "debtDirection": { "RECEIVABLE": "Owes you", "PAYABLE": "You owe" },
+  "debtStatus": {
+    "OPEN": "Open",
+    "PARTIALLY_PAID": "Partly paid",
+    "PAID": "Paid",
+    "OVERDUE": "Overdue",
+    "WRITTEN_OFF": "Written off"
+  },
+  "loanStatus": {
+    "ACTIVE": "Active",
+    "OVERDUE": "Payment overdue",
+    "PAID_OFF": "Paid off",
+    "CLOSED": "Closed"
+  },
+  "paymentFrequency": { "WEEKLY": "Weekly", "MONTHLY": "Monthly", "YEARLY": "Yearly" },
+  "reminderType": { "INCOME": "Income", "EXPENSE": "Bill" },
+  "recurrence": {
+    "ONE_TIME": "One time",
+    "WEEKLY": "Every week",
+    "WEEKLY_N": "Every {count} weeks",
+    "MONTHLY": "Monthly",
+    "MONTHLY_N": "Every {count} months",
+    "YEARLY": "Yearly",
+    "YEARLY_N": "Every {count} years"
+  },
+  "occurrenceStatus": {
+    "PENDING": "Pending",
+    "ACKNOWLEDGED": "Acknowledged",
+    "DISMISSED": "Dismissed"
+  },
+  "currency": { "VND": "VND", "USD": "USD" }
+}

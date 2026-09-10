@@ -4,8 +4,20 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import ExcelJS from 'exceljs'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
-import { DEBT_ERROR_MESSAGES, LOAN_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
-import { createAccountViaUi, digitsOnly, registerNewUser, todayInZone } from './helpers'
+import { formatDate } from '@/lib/ui/format-date'
+import enErrors from '@/messages/en/errors.json'
+import viErrors from '@/messages/vi/errors.json'
+import {
+  createAccountViaUi,
+  createDebtViaUi,
+  createGoalViaUi,
+  createLoanViaUi,
+  createReminderViaUi,
+  digitsOnly,
+  eitherLocale,
+  registerNewUser,
+  todayInZone,
+} from './helpers'
 
 /**
  * Phase 6 Group 10: end-to-end coverage for the four planning modules
@@ -105,6 +117,31 @@ const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
 /** The day of the month the MONTHLY income reminder is anchored to. */
 const TODAY_DAY_OF_MONTH = Number(TODAY.slice(8, 10))
 
+/** The OVERPAYMENT server error, in both locales — the InlineAlert renders
+ *  `t(DEBT_ERROR_KEYS.OVERPAYMENT)`/`t(LOAN_ERROR_KEYS.OVERPAYMENT)`. The
+ *  temporary English `DEBT_ERROR_MESSAGES`/`LOAN_ERROR_MESSAGES` aliases this
+ *  spec used to import for its English half are gone (Task 13):
+ *  `messages/en/errors.json` is the source of that text now, read directly.
+ *  No `NEXT_LOCALE` cookie is ever set in this file, so every page renders in
+ *  the app's default locale (vi) — `eitherLocale` is what lets these
+ *  assertions hold in either locale without pinning which one is rendering. */
+const DEBT_OVERPAYMENT_MESSAGE = eitherLocale(viErrors.debt.OVERPAYMENT, enErrors.debt.OVERPAYMENT)
+const LOAN_OVERPAYMENT_MESSAGE = eitherLocale(viErrors.loan.OVERPAYMENT, enErrors.loan.OVERPAYMENT)
+
+/**
+ * A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,
+ * 'date')` actually displays it on a row — in either locale, since no
+ * `NEXT_LOCALE` cookie is ever set in this file. Never the raw carrier
+ * string itself, which is only what an `<input type="date">`'s VALUE holds,
+ * not what a row's rendered TEXT reads.
+ */
+function displayDate(carrier: string): RegExp {
+  return eitherLocale(
+    formatDate(carrier, { locale: 'vi', timeZone: TIMEZONE, style: 'date' }),
+    formatDate(carrier, { locale: 'en', timeZone: TIMEZONE, style: 'date' }),
+  )
+}
+
 /**
  * Spec §12's full workbook, complete as of Phase 6 — the exact list, in sheet
  * order, and the only place in the suite that asserts it whole. `phase5.spec.ts`
@@ -147,15 +184,20 @@ function namedRow(page: Page, root: Page | Locator, name: string): Locator {
 }
 
 /** The `<details>` whose `<summary>` reads exactly `summary` — the archived /
- *  written-off / closed history sections, and a row's own payment log. */
-function detailsFor(page: Page, summary: string): Locator {
+ *  written-off / closed history sections, and a row's own payment log.
+ *  `summary` may be a `RegExp` (a vi/en alternation) for a section whose
+ *  wording is now localised; `exact` is ignored by Playwright for a `RegExp`
+ *  match, same as `sectionFor`'s `heading`. */
+function detailsFor(page: Page, summary: string | RegExp): Locator {
   return page.locator('details').filter({ has: page.getByText(summary, { exact: true }) })
 }
 
 /** The `<section>` a Dashboard widget (or a Reminders page group) renders under
  *  `heading`. `exact` because "Due" is a substring of "Overdue", and accessible
- *  names match as substrings by default. */
-function sectionFor(page: Page, heading: string): Locator {
+ *  names match as substrings by default — ignored by Playwright when `heading`
+ *  is a `RegExp` (a dashboard widget's translated title), which is why the
+ *  three dashboard call sites below pass one instead of a literal string. */
+function sectionFor(page: Page, heading: string | RegExp): Locator {
   return page
     .locator('section')
     .filter({ has: page.getByRole('heading', { name: heading, exact: true }) })
@@ -178,113 +220,70 @@ async function openDetails(details: Locator): Promise<Locator> {
 }
 
 /* ------------------------------------------------------------------------- *
- * Create-form helpers.
+ * Create-form helpers — the row-menu and figure-line readers below are still
+ * local to this file.
  *
- * Local to this file rather than in `e2e/helpers.ts`: no other spec creates a
- * goal, a debt, a loan or a reminder, and a helper with one caller belongs
- * beside it. Each is used two or more times *within* this file, which is why
- * they are functions at all.
- *
- * Plain `fill`/`selectOption` with no verify-and-retry wrapper: every one of
- * these forms is inside a `<fieldset disabled>` until hydration finishes
- * (`useHydrated`, `lib/ui/use-hydrated.ts`), and Playwright's actionability
- * check treats a control in a disabled fieldset as disabled — so every action
- * below already waits for the earliest moment the app itself accepts input, and
- * nothing it accepts is ever thrown away afterwards. Each helper finishes on an
- * auto-retrying assertion that the form reset itself, which is the create
- * action's own confirmation that the row landed.
+ * `createGoalViaUi`, `createDebtViaUi`, `createLoanViaUi` and
+ * `createReminderViaUi` no longer live here: they were local while this was the
+ * only file creating a goal, a debt, a loan or a reminder, and Task 17 gave
+ * them a second caller (`e2e/phase7-confirm-dialogs.spec.ts` needs one of
+ * everything a destructive action can consume), so they moved to
+ * `e2e/helpers.ts` and are imported back at the top of this file — unchanged
+ * apart from the move, with this file's module-level `TODAY` becoming
+ * `SEED_TODAY` there. Their own doc comments, including the reasoning about the
+ * hydration gate and about each finishing on an auto-retrying assertion that
+ * the sheet closed, travelled with them.
  * ------------------------------------------------------------------------- */
 
-async function createGoalViaUi(
-  page: Page,
-  opts: { name: string; target: number; current?: number },
-): Promise<void> {
-  await page.goto('/goals')
-  const nameInput = page.getByLabel('Goal name')
-  await nameInput.fill(opts.name)
-  await page.getByLabel('Target amount').fill(String(opts.target))
-  if (opts.current !== undefined) {
-    await page.getByLabel('Current amount').fill(String(opts.current))
-  }
-  await page.getByRole('button', { name: 'Add goal' }).click()
-  await expect(nameInput).toHaveValue('')
+/**
+ * Opens a row's `…` menu. `name` is the row's own visible label as it reads in
+ * vi (a goal's name is the same in both locales, so `enName` defaults to the
+ * same value) — `common.rowActions` interpolates whichever the page is
+ * actually rendering into the trigger's accessible name.
+ */
+async function openRowMenu(page: Page, row: Locator, name: string, enName = name): Promise<void> {
+  await row
+    .getByRole('button', { name: eitherLocale(`Tác vụ cho ${name}`, `Actions for ${enName}`) })
+    .click()
 }
 
-async function createDebtViaUi(
-  page: Page,
-  opts: { direction: 'RECEIVABLE' | 'PAYABLE'; person: string; amount: number },
-): Promise<void> {
-  await page.goto('/debts')
-  // Selected explicitly even for RECEIVABLE, which is already the form's
-  // default: the two options are the only place the user states which way the
-  // money goes (`direction` is absent from `updateDebtSchema` and can never be
-  // corrected), so the wording is worth exercising in both directions.
-  await page.getByLabel('Direction').selectOption(opts.direction)
-  const personInput = page.getByLabel('Person', { exact: true })
-  await personInput.fill(opts.person)
-  await page.getByLabel('Original amount').fill(String(opts.amount))
-  await page.getByRole('button', { name: 'Add debt' }).click()
-  await expect(personInput).toHaveValue('')
+/**
+ * The debt row's figure line (`debts.figureLine`), in either locale: vi reads
+ * "còn {outstanding} / {original} VND", en reads "{outstanding} of {original}
+ * VND" — two different templates for the same pair of figures, so a single
+ * alternation on the whole line (rather than one word) is what proves the
+ * right template rendered with the right numbers together.
+ */
+function debtFigureLine(outstanding: string, original: string): RegExp {
+  return new RegExp(`^(còn )?${outstanding} (/|of) ${original} VND$`)
 }
 
-async function createLoanViaUi(
-  page: Page,
-  opts: {
-    lender: string
-    principal: number
-    interestRate: number
-    termMonths: number
-    scheduledPayment: number
-  },
-): Promise<void> {
-  await page.goto('/loans')
-  const lenderInput = page.getByLabel('Lender', { exact: true })
-  await lenderInput.fill(opts.lender)
-  await page.getByLabel('Principal', { exact: true }).fill(String(opts.principal))
-  await page.getByLabel('Interest rate (%)').fill(String(opts.interestRate))
-  await page.getByLabel('Start date').fill(TODAY)
-  await page.getByLabel('Term (months)').fill(String(opts.termMonths))
-  // MONTHLY is the *second* option, so the form carries an explicit
-  // `defaultValue` for it; selecting it here exercises the same value the
-  // server HTML claims (test 9 asserts that claim in the bytes).
-  await page.getByLabel('Payment frequency').selectOption('MONTHLY')
-  await page.getByLabel('Scheduled payment').fill(String(opts.scheduledPayment))
-  // Left at its pre-filled default rather than typed: the loan's whole schedule
-  // anchor comes from this field, and "today" is what the page seeded it with.
-  await expect(page.getByLabel('Next due date')).toHaveValue(TODAY)
-  await page.getByRole('button', { name: 'Add loan' }).click()
-  await expect(lenderInput).toHaveValue('')
+/**
+ * The loan row's dominant figure: a muted caption (`loans.outstandingLabel`,
+ * "Dư nợ gốc"/"Principal outstanding") above a `MoneyText` figure (fix round
+ * 1, finding 6 — split apart specifically so the caption can wrap at narrow
+ * widths instead of clipping, which `loans.outstandingLine`'s one
+ * `whitespace-nowrap` sentence used to do). The caption and the figure are
+ * SEPARATE elements with no text-node space between them in `.textContent()`
+ * (same reasoning as `debtFigureLine`'s neighbours), so `\s*` stands in for
+ * both "no space" and "a real space", and this still matches regardless of
+ * which of `MoneyText`'s two breakpoint copies `.textContent()` picks up.
+ */
+function loanOutstandingLine(outstanding: string): RegExp {
+  return new RegExp(`(Dư nợ gốc|Principal outstanding)\\s*${outstanding}\\s*VND`)
 }
 
-async function createReminderViaUi(
-  page: Page,
-  opts: {
-    title: string
-    type: 'EXPENSE' | 'INCOME'
-    amount: number
-    frequency: 'ONE_TIME' | 'WEEKLY' | 'MONTHLY' | 'YEARLY'
-    dayOfMonth?: number
-    startDate: string
-  },
-): Promise<void> {
-  await page.goto('/reminders')
-  const titleInput = page.getByLabel('Title')
-  await titleInput.fill(opts.title)
-  // `exact` on both selects: an accessible name matches as a substring by
-  // default, and this page's tab strip is a `<nav aria-label="Reminder type">`
-  // — which "Type" would otherwise also match.
-  await page.getByLabel('Type', { exact: true }).selectOption(opts.type)
-  await page.getByLabel('Expected amount').fill(String(opts.amount))
-  // Before `dayOfMonth`, never after: the frequency's `onChange` clears both
-  // recurrence anchors on every change (react-hook-form keeps the value of an
-  // unmounted field), so a day typed first would be wiped by the switch.
-  await page.getByLabel('Frequency', { exact: true }).selectOption(opts.frequency)
-  if (opts.dayOfMonth !== undefined) {
-    await page.getByLabel('Day of month').fill(String(opts.dayOfMonth))
-  }
-  await page.getByLabel('Start date').fill(opts.startDate)
-  await page.getByRole('button', { name: 'Add reminder' }).click()
-  await expect(titleInput).toHaveValue('')
+/**
+ * The occurrence row's due line (`reminders.dueLine`, "{due} · {date}"), in
+ * either locale — e.g. "Hôm nay · 09/09/2026" / "Today · Sep 9, 2026".
+ * `dueWordVi`/`dueWordEn` are the fixed pair from `messages/{vi,en}/reminders.json`
+ * (`dueToday`/`dueTomorrow`/`overdue`) — `dueInDays` is not needed by any case
+ * in this file and is left to `e2e/phase7-reminders.spec.ts`.
+ */
+function occurrenceDueLine(dueWordVi: string, dueWordEn: string, dateCarrier: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const datePattern = displayDate(dateCarrier).source
+  return new RegExp(`(${escape(dueWordVi)}|${escape(dueWordEn)}) · (${datePattern})`)
 }
 
 /* ------------------------------------------------------------------------- *
@@ -292,40 +291,12 @@ async function createReminderViaUi(
  *
  * The same technique as `e2e/transaction-form-hydration.spec.ts` — a
  * `page.request.get` with the context's session cookies, asserted on the bytes
- * the browser paints first, with no timing involved at all. Kept local (a
- * near-copy of that file's `selectMarkup`) rather than hoisted into
- * `e2e/helpers.ts`, because hoisting would mean editing an existing spec, which
- * this task does not do.
+ * the browser paints first, with no timing involved at all.
  * ------------------------------------------------------------------------- */
 
-/**
- * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- * nest, so the first `</select>` after the opening tag closes it. Scoping is
- * what makes a `selected=""` assertion mean anything on a page with several
- * selects.
- */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
-  const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
-  return html.slice(start, end + '</select>'.length)
-}
-
-/** The opening tag of one `<input>`, found by its `aria-label`. `<input>` is a
- *  void element, so the tag is all there is. */
-function inputMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<input', labelIndex)
-  const end = html.indexOf('>', labelIndex)
-  if (start === -1 || end === -1) throw new Error(`No <input> labelled "${ariaLabel}"`)
-  return html.slice(start, end + 1)
-}
-
-/** Every `<fieldset …>` opening tag in the document, so "exactly one gated
- *  form" can be asserted as a count rather than as a substring. */
+/** Every `<fieldset …>` opening tag in the document — so "no operable form
+ *  leaked into the initial HTML" can be asserted as a count (zero) rather than
+ *  as a substring search. */
 function fieldsetOpeningTags(html: string): string[] {
   return [...html.matchAll(/<fieldset[^>]*>/g)].map((match) => match[0])
 }
@@ -392,38 +363,66 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    const rail = page.locator('nav[aria-label="Primary"]')
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeVisible()
 
     // The rail's own DOM order, so "after Budgets, in this order" is asserted
     // as a fact about the navigation rather than as four independent
-    // visibility checks that would pass in any order.
+    // visibility checks that would pass in any order. Note: the rail's links
+    // now include the "Thêm giao dịch" action and the wordmark link, which are
+    // outside the `<nav>` — so scoping `allTextContents()` to the `nav` (as
+    // `rail` already does) still yields exactly the twelve destination labels,
+    // and the icon-rail's `sr-only` span still carries the label text at 1280.
     const labels = await rail.getByRole('link').allTextContents()
-    const budgetsIndex = labels.indexOf('Budgets')
+    const budgetsIndex = labels.findIndex((label) => /^(Ngân sách|Budgets)$/.test(label))
     expect(budgetsIndex).toBeGreaterThanOrEqual(0)
-    expect(labels.slice(budgetsIndex + 1, budgetsIndex + 5)).toEqual([
-      'Savings',
-      'Debts',
-      'Loans',
-      'Reminders',
-    ])
+    const nextFour = labels.slice(budgetsIndex + 1, budgetsIndex + 5)
+    // Position, not just membership: each of the four must be the SPECIFIC
+    // label at that index, not merely one of the four somewhere in the slice
+    // — a `toEqual(slice.filter(...))` comparison would let a duplicate
+    // through (e.g. two "Công nợ" and no "Tiết kiệm" would still pass a
+    // membership check).
+    expect(nextFour[0]).toMatch(/^(Tiết kiệm|Savings)$/)
+    expect(nextFour[1]).toMatch(/^(Công nợ|Debts)$/)
+    expect(nextFour[2]).toMatch(/^(Khoản vay|Loans)$/)
+    expect(nextFour[3]).toMatch(/^(Nhắc nhở|Reminders)$/)
 
     // Each link lands on its own page, and each page states what it has:
     // Savings is `/goals`' h1 (the route and the label differ on purpose).
-    const destinations = [
+    const destinations: {
+      label: RegExp
+      url: RegExp
+      heading: string | RegExp
+      empty: string | RegExp
+    }[] = [
       {
-        label: 'Savings',
+        label: /^(Tiết kiệm|Savings)$/,
         url: /\/goals/,
-        heading: 'Savings',
-        empty: 'No savings goals yet — add one below.',
+        heading: /Mục tiêu tiết kiệm|^Savings$/,
+        empty: /Chưa có mục tiêu tiết kiệm|No savings goals yet/,
       },
-      { label: 'Debts', url: /\/debts/, heading: 'Debts', empty: 'No debts yet — add one below.' },
-      { label: 'Loans', url: /\/loans/, heading: 'Loans', empty: 'No loans yet — add one below.' },
       {
-        label: 'Reminders',
+        label: /^(Công nợ|Debts)$/,
+        url: /\/debts/,
+        heading: /Công nợ|^Debts$/,
+        empty: /Chưa có công nợ|No debts yet/,
+      },
+      {
+        label: /^(Khoản vay|Loans)$/,
+        url: /\/loans/,
+        heading: /Khoản vay|^Loans$/,
+        empty: /Chưa có khoản vay|No loans yet/,
+      },
+      {
+        label: /^(Nhắc nhở|Reminders)$/,
         url: /\/reminders/,
-        heading: 'Reminders',
-        empty: 'No reminders yet — add one below.',
+        heading: /Nhắc nhở|^Reminders$/,
+        // The page opens on "Sắp đến hạn"/"Due" (spec §6.7's default tab), so
+        // this is the DUE empty message — the "Lịch nhắc"/"Schedule" tab's own
+        // ("Chưa có nhắc nhở"/"No reminders yet") is no longer visible
+        // simultaneously the way the old single-page layout showed both at
+        // once, so there is no longer a second empty state to check here.
+        empty: /Không có gì đến hạn trong 30 ngày tới|Nothing due in the next 30 days/,
       },
     ]
 
@@ -433,12 +432,6 @@ test.describe.serial('Phase 6 — planning modules', () => {
       await expect(page.getByRole('heading', { name: destination.heading, level: 1 })).toBeVisible()
       await expect(page.getByText(destination.empty, { exact: true })).toBeVisible()
     }
-
-    // `/reminders` has a second empty state — the Due list's — whose wording
-    // comes from the service's own lookahead constant.
-    await expect(
-      sectionFor(page, 'Due').getByText('Nothing due in the next 30 days.', { exact: true }),
-    ).toBeVisible()
   })
 
   test('2. savings goal: create, progress to achieved, rename, archive', async ({ page }) => {
@@ -450,55 +443,62 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Emergency fund')
     await expect(row).toBeVisible()
-    await expect(row.getByText('In progress', { exact: true })).toBeVisible()
-    // The pair, in the goal's own currency and never converted. The unescaped
-    // `.`s accept whatever thousands separator `formatMoney`'s locale uses.
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^2.500.000 \/ 10.000.000 VND$/,
+    await expect(row.getByText(/Đang thực hiện|In progress/, { exact: true })).toBeVisible()
+    // The pair, in the goal's own currency and never converted, now with the
+    // percent folded into the same figure line. The unescaped `.`s accept
+    // whatever thousands separator `formatMoney`'s locale uses.
+    await expect(row.locator('.tabular-nums').first()).toHaveText(
+      /^2.500.000 \/ 10.000.000 VND · 25 %$/,
     )
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
-    await expect(row.getByText('Remaining 7.500.000')).toBeVisible()
+    // No deadline was set, so the meta line is the "still to go" figure.
+    await expect(row).toContainText('7.500.000')
 
     // Update progress → the whole target, which is what flips the status.
-    await row.getByRole('button', { name: 'Update progress' }).click()
-    await page.getByLabel('New amount for Emergency fund').fill('10000000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await row.getByRole('button', { name: /Cập nhật tiến độ|Update progress/ }).click()
+    const progressDialog = page.getByRole('dialog')
+    await progressDialog.getByLabel(/Số tiền hiện có|Current amount/).fill('10000000')
+    await progressDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText('Achieved', { exact: true })).toBeVisible()
+    // "Đạt mục tiêu"/"Achieved" appears once — the status badge only; the meta
+    // line is omitted entirely for an achieved goal (fix round 1, finding 10),
+    // so this is a single-element match.
+    await expect(row.getByText(/Đạt mục tiêu|^Achieved$/, { exact: true })).toBeVisible()
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
     // Edit → the definition, not the progress: two panes, two intents.
-    await row.getByRole('button', { name: 'Edit' }).click()
-    await page.getByLabel('Edit name for Emergency fund').fill('Emergency fund 2')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await openRowMenu(page, row, 'Emergency fund')
+    await page.getByRole('menuitem', { name: /^Sửa$|^Edit$/ }).click()
+    const editDialog = page.getByRole('dialog')
+    await editDialog.getByLabel(/Tên mục tiêu|Goal name/).fill('Emergency fund 2')
+    await editDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
     const renamed = namedRow(page, page, 'Emergency fund 2')
     await expect(renamed).toBeVisible()
     await expect(namedRow(page, page, 'Emergency fund')).toHaveCount(0)
 
-    // Archive → confirmed, then the row moves into the read-only history.
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Archive this goal? Its history stays visible under Archived goals.',
-      )
-      return dialog.accept()
-    })
-    await renamed.getByRole('button', { name: 'Archive' }).click()
+    // Archive → confirmed through a ConfirmDialog, then the row moves into
+    // the read-only history.
+    await openRowMenu(page, renamed, 'Emergency fund 2')
+    await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: /^Lưu trữ$|^Archive$/ })
+      .click()
 
     // The live list is empty again, so the page shows its own empty state.
-    await expect(page.getByText('No savings goals yet — add one below.')).toBeVisible()
+    await expect(page.getByText(/Chưa có mục tiêu tiết kiệm|No savings goals yet/)).toBeVisible()
 
-    const archived = detailsFor(page, 'Archived goals (1)')
+    const archived = detailsFor(page, /Mục tiêu đã lưu trữ \(1\)|Archived goals \(1\)/)
     await expect(archived).toBeVisible()
     await openDetails(archived)
     const archivedRow = namedRow(page, archived, 'Emergency fund 2')
     await expect(archivedRow).toBeVisible()
-    await expect(archivedRow.getByText('Archived', { exact: true })).toBeVisible()
+    await expect(archivedRow.getByText(/Đã lưu trữ|^Archived$/, { exact: true })).toBeVisible()
     // An archived goal refuses every write, so it is offered no actions at all
-    // — showing them would be a promise the service breaks.
-    for (const action of ['Update progress', 'Edit', 'Archive']) {
-      await expect(archivedRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    // — showing them would be a promise the service breaks: no inline
+    // "Cập nhật tiến độ" button and no `…` menu trigger.
+    await expect(archivedRow.getByRole('button')).toHaveCount(0)
   })
 
   test('3. receivable: partial payment, refused overpayment, settled', async ({ page }) => {
@@ -506,86 +506,133 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Minh')
     await expect(row).toBeVisible()
-    await expect(row.getByText('Owes you', { exact: true })).toBeVisible()
-    await expect(row.getByText('Open', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^1.000.000 of 1.000.000 VND$/,
+    await expect(
+      row.getByText(eitherLocale('Họ nợ bạn', 'Owes you'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('1.000.000', '1.000.000'),
     )
 
-    // The per-currency subtotal strip — one row per currency, never a total.
-    const subtotal = page.locator('li').filter({ hasText: 'Owed to you' })
-    await expect(subtotal.locator('span.text-positive')).toHaveText(/^1.000.000$/)
-    await expect(subtotal.locator('span.text-negative')).toHaveText(/^0$/)
+    // The per-currency subtotal strip — one row per currency, never a total,
+    // now split across the two directional sections (spec §6.6): only the
+    // relevant half is shown under each direction's SectionHeader.
+    const receivableSubtotal = page
+      .locator('li')
+      .filter({ hasText: eitherLocale('Khoản phải thu', 'Owed to you') })
+    await expect(receivableSubtotal).toContainText('1.000.000')
 
-    // 400.000 back → partly paid, and the history opens under the row.
-    await row.getByRole('button', { name: 'Record payment' }).click()
-    await page.getByLabel('Payment amount for Minh').fill('400000')
-    await expect(page.getByLabel('Payment date for Minh')).toHaveValue(TODAY)
-    await page.getByRole('button', { name: 'Save' }).click()
+    // 400.000 back → partly paid, in the payment Dialog scoped by its title.
+    const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
+    await row.getByRole('button', { name: paymentAction }).click()
+    const dialog = page.getByRole('dialog', { name: paymentAction })
+    await dialog.getByLabel(/^Số tiền$|^Amount$/).fill('400000')
+    await expect(dialog.getByLabel(/Ngày thanh toán|Payment date/)).toHaveValue(TODAY)
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    await expect(row.getByText('Partly paid', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^600.000 of 1.000.000 VND$/)
+    await expect(
+      row.getByText(eitherLocale('Trả một phần', 'Partly paid'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('600.000', '1.000.000'),
+    )
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(
+      row.getByText(eitherLocale('Lần thanh toán (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // 700.000 against 600.000 outstanding → refused inline, nothing recorded.
-    await row.getByRole('button', { name: 'Record payment' }).click()
-    const amount = page.getByLabel('Payment amount for Minh')
+    // 700.000 against 600.000 outstanding → the friendly OVERPAYMENT message,
+    // not a raw server error, and nothing recorded.
+    await row.getByRole('button', { name: paymentAction }).click()
+    const amount = dialog.getByLabel(/^Số tiền$|^Amount$/)
     await amount.fill('700000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText(DEBT_ERROR_MESSAGES.OVERPAYMENT)).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^600.000 of 1.000.000 VND$/)
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(DEBT_OVERPAYMENT_MESSAGE)).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('600.000', '1.000.000'),
+    )
+    await expect(
+      row.getByText(eitherLocale('Lần thanh toán (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // Exactly what is left, in the pane the refusal left open → settled.
+    // Exactly what is left, in the dialog the refusal left open → settled.
     await amount.fill('600000')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    await expect(row.getByText('Paid', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(/^0 of 1.000.000 VND$/)
-    await expect(row.getByText('Payments (2)', { exact: true })).toBeVisible()
+    await expect(
+      row.getByText(eitherLocale('Đã thanh toán', 'Paid'), { exact: true }),
+    ).toBeVisible()
+    await expect(row.locator('div.tabular-nums').first()).toHaveText(
+      debtFigureLine('0', '1.000.000'),
+    )
+    // The payment history, inspectable through the row's own disclosure
+    // without permanently expanding it.
+    const historyToggle = row.getByText(eitherLocale('Lần thanh toán (2)', 'Payments (2)'), {
+      exact: true,
+    })
+    await expect(historyToggle).toBeVisible()
+    await historyToggle.click()
+    await expect(row.getByText('400.000')).toBeVisible()
+    await expect(row.getByText('600.000')).toBeVisible()
   })
 
-  test('4. payable: written off, out of the subtotals, history kept', async ({ page }) => {
+  test('4. payable: written off via ConfirmDialog, out of the subtotals, history kept', async ({
+    page,
+  }) => {
     await createDebtViaUi(page, { direction: 'PAYABLE', person: 'Landlord', amount: 2_000_000 })
 
     const row = namedRow(page, page, 'Landlord')
     await expect(row).toBeVisible()
-    await expect(row.getByText('You owe', { exact: true })).toBeVisible()
-    await expect(row.getByText('Open', { exact: true })).toBeVisible()
+    await expect(row.getByText(eitherLocale('Bạn nợ họ', 'You owe'), { exact: true })).toBeVisible()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
 
-    const subtotal = page.locator('li').filter({ hasText: 'Owed to you' })
-    // Minh is settled, so it contributes nothing: the strip's receivable side
-    // is 0 and the payable side is the new debt.
-    await expect(subtotal.locator('span.text-positive')).toHaveText(/^0$/)
-    await expect(subtotal.locator('span.text-negative')).toHaveText(/^2.000.000$/)
+    // Minh is settled, so its currency contributes nothing to the receivable
+    // side any more — no subtotal row is shown there at all, never a zero.
+    await expect(
+      page.locator('li').filter({ hasText: eitherLocale('Khoản phải thu', 'Owed to you') }),
+    ).toHaveCount(0)
+    const payableSubtotal = page
+      .locator('li')
+      .filter({ hasText: eitherLocale('Khoản phải trả', 'You owe') })
+    await expect(payableSubtotal).toContainText('2.000.000')
 
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Write off this debt? Payments already recorded stay in the history.',
-      )
-      return dialog.accept()
-    })
-    await row.getByRole('button', { name: 'Write off' }).click()
+    // Write off: `…` menu item behind a `ConfirmDialog`, never a native
+    // `window.confirm`. Cancel first, to prove it keeps the debt untouched.
+    await openRowMenu(page, row, 'Landlord')
+    await page.getByRole('menuitem', { name: eitherLocale('Xóa nợ', 'Write off') }).click()
+    const confirmDialog = page.getByRole('dialog')
+    await confirmDialog.getByRole('button', { name: eitherLocale('Hủy', 'Cancel') }).click()
+    await expect(row.getByText(eitherLocale('Đang mở', 'Open'), { exact: true })).toBeVisible()
 
-    const writtenOff = detailsFor(page, 'Written-off debts (1)')
+    await openRowMenu(page, row, 'Landlord')
+    await page.getByRole('menuitem', { name: eitherLocale('Xóa nợ', 'Write off') }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: eitherLocale('Xóa nợ', 'Write off') })
+      .click()
+
+    const writtenOff = detailsFor(page, eitherLocale('Công nợ đã xóa (1)', 'Written-off debts (1)'))
     await expect(writtenOff).toBeVisible()
     await openDetails(writtenOff)
     const writtenOffRow = namedRow(page, writtenOff, 'Landlord')
     await expect(writtenOffRow).toBeVisible()
-    await expect(writtenOffRow.getByText('Written off', { exact: true })).toBeVisible()
-    // A written-off debt refuses every write, so it carries no actions.
-    for (const action of ['Record payment', 'Edit', 'Write off']) {
-      await expect(writtenOffRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    await expect(
+      writtenOffRow.getByText(eitherLocale('Đã xóa nợ', 'Written off'), { exact: true }),
+    ).toBeVisible()
+    // A written-off debt refuses every write, so it carries no actions at all.
+    await expect(writtenOffRow.getByRole('button')).toHaveCount(0)
 
-    // Nothing is outstanding in any currency any more, so the strip is gone
-    // entirely rather than left behind as a row of zeroes.
-    await expect(page.getByText('Owed to you')).toHaveCount(0)
+    // Nothing is outstanding in any currency any more, so both subtotal strips
+    // are gone entirely rather than left behind as rows of zeroes.
+    await expect(
+      page.locator('li').filter({ hasText: eitherLocale('Khoản phải trả', 'You owe') }),
+    ).toHaveCount(0)
   })
 
-  test('5. loan: instalment split, advanced schedule, refused overpayment, closed', async ({
+  test('5. loan: instalment dialog with a live Tổng, advanced schedule, refused overpayment, closed via ConfirmDialog', async ({
     page,
   }) => {
     await createLoanViaUi(page, {
@@ -598,77 +645,109 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     const row = namedRow(page, page, 'Bank')
     await expect(row).toBeVisible()
-    await expect(row.getByText('Active', { exact: true })).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^12.000.000 of 12.000.000 VND$/,
-    )
+    await expect(row.getByText(eitherLocale('Đang trả', 'Active'), { exact: true })).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('12.000.000'))
     // Due today, so the schedule line is the "due soon" wording; the instalment
     // and cadence are on the same line.
-    await expect(row).toContainText(`Due soon — ${TODAY}`)
-    await expect(row).toContainText('Monthly')
-    await expect(row).toContainText('12 months from ' + TODAY)
-    for (const action of ['Record payment', 'Edit', 'Close loan']) {
-      await expect(row.getByRole('button', { name: action, exact: true })).toBeVisible()
-    }
+    await expect(row).toContainText(eitherLocale('Sắp đến hạn', 'Due soon'))
+    await expect(row).toContainText(displayDate(TODAY))
+    await expect(row).toContainText(eitherLocale('Hàng tháng', 'Monthly'))
+    await expect(row).toContainText(/12 (tháng từ|months from)/)
+    await expect(
+      row.getByRole('button', {
+        name: eitherLocale('Ghi nhận thanh toán', 'Record payment'),
+        exact: true,
+      }),
+    ).toBeVisible()
+    await openRowMenu(page, row, 'Bank')
+    await expect(page.getByRole('menuitem', { name: eitherLocale('Sửa', 'Edit') })).toBeVisible()
+    await expect(
+      page.getByRole('menuitem', { name: eitherLocale('Đóng khoản vay', 'Close loan') }),
+    ).toBeVisible()
+    await page.keyboard.press('Escape')
 
-    // The split: the user types the two parts and the total is derived — the
+    // The split: the user types the two parts and Tổng is derived — the
     // read-only field has to show it BEFORE the instalment is saved, because
-    // that figure is the one the resolver then submits.
-    await row.getByRole('button', { name: 'Record payment', exact: true }).click()
-    const total = page.getByLabel('Total payment for Bank')
-    await expect(total).toHaveValue('—')
-    await page.getByLabel('Principal for Bank').fill('1000000')
-    await page.getByLabel('Interest for Bank').fill('85000')
-    await expect(total).toHaveValue(/^1.085.000 VND$/)
-    await expect(page.getByLabel('Payment date for Bank')).toHaveValue(TODAY)
-    await page.getByRole('button', { name: 'Save' }).click()
+    // that figure is the one the resolver then submits, and it must be a
+    // FIGURE, never an em dash, at every point along the way.
+    const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
+    await row.getByRole('button', { name: paymentAction, exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: paymentAction })
+    const principal = dialog.getByLabel(/^Gốc$|^Principal$/)
+    const interest = dialog.getByLabel(/^Lãi$|^Interest$/)
+    const total = dialog.getByLabel(/^Tổng$|^Total$/)
+
+    // Both parts blank: Tổng reads a computed zero, never "—".
+    await expect(total).toHaveValue(/^0(,00)?\s?VND$/)
+    await expect(total).not.toHaveValue('—')
+
+    await principal.fill('1000000')
+    await interest.fill('85000')
+    await expect(total).toHaveValue(/1.085.000/)
+    await expect(total).not.toHaveValue('—')
+
+    // Clearing Gốc shows the interest alone rather than a dash — a blank part
+    // counts as zero for DISPLAY only (`displayTotal`); the schema still
+    // requires the real field before submitting.
+    await principal.fill('')
+    await expect(total).toHaveValue(/85.000/)
+    await expect(total).not.toHaveValue('—')
+    await principal.fill('1000000')
+
+    await expect(dialog.getByLabel(/Ngày trả|Payment date/)).toHaveValue(TODAY)
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    await expect(dialog).toBeHidden()
 
     // Principal came off the loan; interest is reported beside it and pays
     // nothing down; the schedule advanced exactly one calendar month.
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^11.000.000 of 12.000.000 VND$/,
-    )
-    await expect(row).toContainText(/85.000 VND paid so far/)
-    await expect(row).toContainText(`Next due ${NEXT_DUE_AFTER_ONE_PAYMENT}`)
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('11.000.000'))
+    await expect(row).toContainText(eitherLocale('đã trả lãi 85.000', '85.000 VND paid so far'))
+    await expect(row).toContainText(displayDate(NEXT_DUE_AFTER_ONE_PAYMENT))
+    await expect(
+      row.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
 
-    // One dong more principal than is outstanding → refused inline. Interest 0
-    // is legitimate (a final sweep of the principal carries none), so the only
-    // thing wrong with this instalment is the part the service checks.
-    await row.getByRole('button', { name: 'Record payment', exact: true }).click()
-    await page.getByLabel('Principal for Bank').fill('11000001')
-    await page.getByLabel('Interest for Bank').fill('0')
-    await page.getByRole('button', { name: 'Save' }).click()
+    // One dong more principal than is outstanding → the friendly OVERPAYMENT
+    // message, not a raw server error. Interest 0 is legitimate (a final
+    // sweep of the principal carries none), so the only thing wrong with this
+    // instalment is the part the service checks.
+    await row.getByRole('button', { name: paymentAction, exact: true }).click()
+    await principal.fill('11000001')
+    await interest.fill('0')
+    await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
-    await expect(row.getByText(LOAN_ERROR_MESSAGES.OVERPAYMENT)).toBeVisible()
-    await expect(row.locator('span.tabular-nums').first()).toHaveText(
-      /^11.000.000 of 12.000.000 VND$/,
-    )
-    await expect(row.getByText('Payments (1)', { exact: true })).toBeVisible()
+    await expect(dialog.getByText(LOAN_OVERPAYMENT_MESSAGE)).toBeVisible()
+    await expect(row).toContainText(loanOutstandingLine('11.000.000'))
+    await expect(
+      row.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
+    await dialog.getByRole('button', { name: /^Hủy$|^Cancel$/ }).click()
+    await expect(dialog).toBeHidden()
 
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toBe(
-        'Close this loan? Its payment history stays visible under Closed loans.',
-      )
-      return dialog.accept()
-    })
-    // `exact` because the open payment pane's toggle now reads "Close", and an
-    // accessible name matches as a substring by default.
-    await row.getByRole('button', { name: 'Close loan', exact: true }).click()
+    // Close: `…` menu item behind a `ConfirmDialog`, never a native
+    // `window.confirm`.
+    await openRowMenu(page, row, 'Bank')
+    await page.getByRole('menuitem', { name: eitherLocale('Đóng khoản vay', 'Close loan') }).click()
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: eitherLocale('Đóng khoản vay', 'Close loan') })
+      .click()
 
-    await expect(page.getByText('No loans yet — add one below.')).toBeVisible()
+    await expect(page.getByText(eitherLocale('Chưa có khoản vay', 'No loans yet'))).toBeVisible()
 
-    const closed = detailsFor(page, 'Closed loans (1)')
+    const closed = detailsFor(page, eitherLocale('Khoản vay đã đóng (1)', 'Closed loans (1)'))
     await expect(closed).toBeVisible()
     await openDetails(closed)
     const closedRow = namedRow(page, closed, 'Bank')
     await expect(closedRow).toBeVisible()
-    await expect(closedRow.getByText('Closed', { exact: true })).toBeVisible()
+    await expect(
+      closedRow.getByText(eitherLocale('Đã đóng', 'Closed'), { exact: true }),
+    ).toBeVisible()
     // The instalment really was paid, so closing the loan does not undo it.
-    await expect(closedRow.getByText('Payments (1)', { exact: true })).toBeVisible()
-    for (const action of ['Record payment', 'Edit', 'Close loan']) {
-      await expect(closedRow.getByRole('button', { name: action, exact: true })).toHaveCount(0)
-    }
+    await expect(
+      closedRow.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
+    ).toBeVisible()
+    await expect(closedRow.getByRole('button')).toHaveCount(0)
   })
 
   test('6. reminders: due list, tabs, acknowledge, dismiss, pause', async ({ page }) => {
@@ -680,13 +759,21 @@ test.describe.serial('Phase 6 — planning modules', () => {
       startDate: TODAY,
     })
 
-    const due = sectionFor(page, 'Due')
-    const definitions = sectionFor(page, 'Your reminders')
+    // Neither reminder created in this test is overdue, so both land in the
+    // Upcoming group (spec §6.7's Overdue/Upcoming split) — `sectionFor(page,
+    // 'Due')` no longer exists: the page has two TABS now (Sắp đến hạn / Lịch
+    // nhắc), not a single "Due" section, so this is scoped to the Upcoming
+    // group's own heading instead. The "Lịch nhắc" tab is a separate view with
+    // no wrapping `<section>` of its own, so its rows are found directly on
+    // `page`.
+    const upcoming = sectionFor(page, eitherLocale('Sắp tới', 'Upcoming'))
 
-    const internetDue = namedRow(page, due, 'Internet')
+    const internetDue = namedRow(page, upcoming, 'Internet')
     await expect(internetDue).toBeVisible()
-    await expect(internetDue).toContainText(`Today · ${TODAY}`)
-    await expect(internetDue.getByText('Bill', { exact: true })).toBeVisible()
+    await expect(internetDue).toContainText(occurrenceDueLine('Hôm nay', 'Today', TODAY))
+    await expect(
+      internetDue.getByText(eitherLocale('Hóa đơn', 'Bill'), { exact: true }),
+    ).toBeVisible()
 
     await createReminderViaUi(page, {
       title: 'Salary',
@@ -697,58 +784,120 @@ test.describe.serial('Phase 6 — planning modules', () => {
       startDate: TODAY,
     })
 
-    const salaryDue = namedRow(page, due, 'Salary').first()
+    // Collapsed to ONE row (spec §6.7): a monthly reminder anchored to today
+    // can already have next month's instance materialized inside the 30-day
+    // lookahead, and `clusterByReminder` is what keeps that a single row
+    // rather than two — `.first()` is defensive, not load-bearing here.
+    const salaryDue = namedRow(page, upcoming, 'Salary').first()
     await expect(salaryDue).toBeVisible()
-    await expect(salaryDue).toContainText('Monthly')
-    await expect(salaryDue.getByText('Income', { exact: true })).toBeVisible()
+    await expect(salaryDue).toContainText(eitherLocale('Hàng tháng', 'Monthly'))
+    await expect(
+      salaryDue.getByText(eitherLocale('Thu nhập', 'Income'), { exact: true }),
+    ).toBeVisible()
 
-    // The tabs live in the URL, so a filtered page is bookmarkable — and they
-    // filter the WHOLE page, both the due list and the definitions below it.
-    await page.goto('/reminders?tab=bills')
-    await expect(page.getByRole('link', { name: 'Bills' })).toHaveAttribute('aria-current', 'page')
-    await expect(namedRow(page, due, 'Internet')).toBeVisible()
-    await expect(namedRow(page, due, 'Salary')).toHaveCount(0)
-    await expect(namedRow(page, definitions, 'Internet')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Salary')).toHaveCount(0)
+    // The tabs and the chip row both live in the URL, so a filtered page is
+    // bookmarkable — and the chip is SECONDARY, filtering the due list only
+    // (spec §6.7, fix round 1 finding 3): "Lịch nhắc" always lists every
+    // definition and does not even render the chip row, so a `?type=` left
+    // over from the due tab has no effect there.
+    await page.goto('/reminders?view=due&type=bills')
+    await expect(
+      page.getByRole('link', { name: eitherLocale('Hóa đơn', 'Bills') }),
+    ).toHaveAttribute('aria-current', 'page')
+    await expect(namedRow(page, upcoming, 'Internet')).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Salary')).toHaveCount(0)
+    await page.goto('/reminders?view=schedule&type=bills')
+    await expect(page.getByRole('link', { name: eitherLocale('Hóa đơn', 'Bills') })).toHaveCount(0)
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
 
-    await page.goto('/reminders?tab=income')
-    await expect(page.getByRole('link', { name: 'Income' })).toHaveAttribute('aria-current', 'page')
-    await expect(namedRow(page, due, 'Salary').first()).toBeVisible()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
-    await expect(namedRow(page, definitions, 'Salary')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Internet')).toHaveCount(0)
+    await page.goto('/reminders?view=due&type=income')
+    await expect(
+      page.getByRole('link', { name: eitherLocale('Thu nhập', 'Income') }),
+    ).toHaveAttribute('aria-current', 'page')
+    await expect(namedRow(page, upcoming, 'Salary').first()).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
+    await page.goto('/reminders?view=schedule&type=income')
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
 
-    // Back to the unfiltered page to answer both occurrences. Each button
+    // Back to the unfiltered due tab to answer both occurrences. Each button
     // names its row by title AND due date, because a monthly reminder can have
-    // more than one unanswered occurrence on this page at once — which is
-    // exactly the case here: `Salary` is anchored to today and the 30-day
-    // lookahead can already have materialized next month's instance too.
-    await page.goto('/reminders')
-    await page.getByRole('button', { name: `Acknowledge Internet due ${TODAY}` }).click()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
+    // more than one unanswered occurrence — but collapsing groups those under
+    // one row, and the visible Acknowledge/Dismiss always act on the NEXT
+    // (soonest) one, which is today's.
+    await page.goto('/reminders?view=due&type=all')
+    // The accessible name reads the row's own VISIBLE date (fix round 1,
+    // finding 5 — `formatDate`, not the bare `yyyy-MM-dd` carrier), so the
+    // regex matches the same locale-formatted pattern `displayDate` builds.
+    const todayPattern = displayDate(TODAY).source
+    const acknowledgeInternet = new RegExp(`(Ghi nhận|Acknowledge).*Internet.*${todayPattern}`)
+    await page.getByRole('button', { name: acknowledgeInternet }).click()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
 
-    await page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` }).click()
-    await expect(page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` })).toHaveCount(0)
+    const dismissSalary = new RegExp(`(Bỏ qua|Dismiss).*Salary.*${todayPattern}`)
+    await page.getByRole('button', { name: dismissSalary }).click()
+    await expect(page.getByRole('button', { name: dismissSalary })).toHaveCount(0)
 
     // Materialization is idempotent and only ever inserts, so an answered
     // occurrence never comes back — an `upsert` there would silently reset it.
     await page.reload()
-    await expect(namedRow(page, due, 'Internet')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: `Dismiss Salary due ${TODAY}` })).toHaveCount(0)
-    // Both definitions are still there: answering an occurrence is not a delete.
-    await expect(namedRow(page, definitions, 'Internet')).toBeVisible()
-    await expect(namedRow(page, definitions, 'Salary')).toBeVisible()
+    await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: dismissSalary })).toHaveCount(0)
+
+    // Both definitions are still there: answering an occurrence is not a
+    // delete. The "Lịch nhắc" tab is a separate view now, so it is visited
+    // rather than found on the same page as the due list.
+    await page.goto('/reminders?view=schedule&type=all')
+    await expect(namedRow(page, page, 'Internet')).toBeVisible()
+    await expect(namedRow(page, page, 'Salary')).toBeVisible()
 
     // Pausing stops NEW occurrences and nothing else — the definition stays
     // listed, dimmed and labelled, because one the user cannot see is one they
     // cannot resume.
-    await page.getByRole('button', { name: 'Pause Salary' }).click()
-    const salaryDefinition = namedRow(page, definitions, 'Salary')
-    await expect(salaryDefinition.getByText('Paused', { exact: true })).toBeVisible()
-    await expect(salaryDefinition.getByRole('button', { name: 'Resume Salary' })).toBeVisible()
+    await page.getByRole('button', { name: new RegExp(`(Tạm dừng|Pause).*Salary`) }).click()
+    const salaryDefinition = namedRow(page, page, 'Salary')
     await expect(
-      namedRow(page, definitions, 'Internet').getByText('Active', { exact: true }),
+      salaryDefinition.getByText(eitherLocale('Tạm dừng', 'Paused'), { exact: true }),
     ).toBeVisible()
+    await expect(
+      salaryDefinition.getByRole('button', { name: new RegExp(`(Tiếp tục|Resume).*Salary`) }),
+    ).toBeVisible()
+    await expect(
+      namedRow(page, page, 'Internet').getByText(eitherLocale('Đang hoạt động', 'Active'), {
+        exact: true,
+      }),
+    ).toBeVisible()
+  })
+
+  test('a weekly reminder collapses to one row with a +n badge that expands', async ({ page }) => {
+    // A WEEKLY reminder starting today materializes ~5 occurrences in the
+    // 30-day window, so the list must show one row and a "+4 kỳ"/"+4 periods"
+    // badge (spec §6.7's headline change).
+    await createReminderViaUi(page, {
+      title: 'Gym membership',
+      type: 'EXPENSE',
+      amount: 500_000,
+      frequency: 'WEEKLY',
+      startDate: TODAY,
+    })
+    await page.goto('/reminders?view=due&type=all')
+    const rows = page.getByRole('listitem').filter({ hasText: 'Gym membership' })
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toContainText(/\+\d+ (kỳ|periods?)/)
+
+    // The disclosure — a `<summary>` naming the reminder and the count — opens
+    // to reveal every remaining occurrence, each with its own dated row.
+    const summary = rows.first().locator('summary')
+    await expect(summary).toContainText('Gym membership')
+    const firstRestRow = rows.first().locator('details ul li').first()
+    // Closed by default: present in the DOM but not visible, the same
+    // "nothing hidden, just collapsed" contract every other `<details>` on
+    // this page (goals/debts history) already keeps.
+    await expect(firstRestRow).not.toBeVisible()
+    await summary.click()
+    await expect(firstRestRow).toBeVisible()
+    await expect(rows.first().locator('details ul li')).not.toHaveCount(0)
   })
 
   test('7. dashboard: the three planning sections and Net Worth (desktop)', async ({ page }) => {
@@ -763,22 +912,27 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Widget order, read out of the DOM: the three planning sections sit after
     // Budget Progress and before Recent Transactions, which is last by design
     // (the ledger is what the user scrolls to in order to check the widgets
-    // above it).
-    const headings = await page.locator('section > h2').allTextContents()
-    expect(headings.slice(-5)).toEqual([
-      'Budget Progress',
-      'Savings Goals',
-      'Debt / Loan Overview',
-      'Upcoming Reminders',
-      'Recent Transactions',
-    ])
+    // above it). `section h2` (a descendant selector), not `section > h2`:
+    // `ChartContainer`'s `h2` now sits inside a nested `<div>`, not directly
+    // under the `<section>`.
+    const headings = await page.locator('section h2').allTextContents()
+    const lastFive = headings.slice(-5)
+    ;[
+      /Tiến độ ngân sách|Budget Progress/,
+      /Mục tiêu tiết kiệm|Savings Goals/,
+      /Công nợ và khoản vay|Debt \/ Loan Overview/,
+      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /Giao dịch gần đây|Recent Transactions/,
+    ].forEach((pattern, index) => expect(lastFive[index]).toMatch(pattern))
 
-    const goalsWidget = sectionFor(page, 'Savings Goals')
+    const goalsWidget = sectionFor(page, /Mục tiêu tiết kiệm|Savings Goals/)
     await expect(namedRow(page, goalsWidget, 'Laptop')).toBeVisible()
     await expect(namedRow(page, goalsWidget, 'Emergency fund 2')).toHaveCount(0)
 
-    const overview = sectionFor(page, 'Debt / Loan Overview')
-    await expect(overview.getByText('Included in Net Worth', { exact: true })).toBeVisible()
+    const overview = sectionFor(page, /Công nợ và khoản vay|Debt \/ Loan Overview/)
+    await expect(
+      overview.getByText(/Đã tính trong tài sản ròng|Included in Net Worth/),
+    ).toBeVisible()
 
     /**
      * One row of the overview's three-row `<dl>`, as digits.
@@ -788,28 +942,30 @@ test.describe.serial('Phase 6 — planning modules', () => {
      * refresh to race — the same reasoning `phase4.spec.ts` gives for its own
      * KPI reads.
      */
-    async function overviewValue(label: string): Promise<string> {
-      const pair = overview
-        .locator('dl > div')
-        .filter({ has: page.getByText(label, { exact: true }) })
+    async function overviewValue(label: string | RegExp): Promise<string> {
+      const pair = overview.locator('dl > div').filter({ has: page.getByText(label) })
       return digitsOnly((await pair.locator('dd span.tabular-nums').first().textContent()) ?? '')
     }
 
-    /** One KPI cell of the strip, as digits. */
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    /** One cell of the summary panel's `<dl>`, as digits. */
+    async function kpiValue(label: string | RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       return digitsOnly((await cell.locator('dd span.tabular-nums').first().textContent()) ?? '')
     }
 
     // Everything the earlier tests created has left the position: Minh is
     // repaid in full, Landlord is written off, and the Bank loan is closed —
     // so all three aggregates are a real zero rather than a missing figure.
-    expect(await overviewValue('Receivables')).toBe('0')
-    expect(await overviewValue('Payables')).toBe('0')
-    expect(await overviewValue('Outstanding loans')).toBe('0')
+    expect(await overviewValue(/Khoản phải thu|Receivables/)).toBe('0')
+    expect(await overviewValue(/Khoản phải trả|Payables/)).toBe('0')
+    expect(await overviewValue(/Dư nợ gốc|Outstanding loans/)).toBe('0')
     // Accounts only, and nothing else moving it: Net Worth equals the balance.
-    expect(await kpiValue('Total Account Balance')).toBe('5000000')
-    expect(await kpiValue('Net Worth')).toBe('5000000')
+    // "Total Balance", not "Total Account Balance" (spec §6.1): the KPI moved
+    // from a flat five-card strip to the summary panel, where it sits directly
+    // under Net Worth rather than beside it, and the shorter label is the
+    // deliberate wording change Task 4's brief calls out.
+    expect(await kpiValue(/Tổng số dư|Total Balance/)).toBe('5000000')
+    expect(await kpiValue(/Tài sản ròng|Net Worth/)).toBe('5000000')
 
     // A fresh receivable and a fresh loan, created AFTER the settlements above
     // so the expected figures cannot depend on which of them the services
@@ -833,18 +989,18 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     await page.goto('/dashboard')
 
-    expect(await overviewValue('Receivables')).toBe('500000')
-    expect(await overviewValue('Payables')).toBe('0')
-    expect(await overviewValue('Outstanding loans')).toBe('3000000')
+    expect(await overviewValue(/Khoản phải thu|Receivables/)).toBe('500000')
+    expect(await overviewValue(/Khoản phải trả|Payables/)).toBe('0')
+    expect(await overviewValue(/Dư nợ gốc|Outstanding loans/)).toBe('3000000')
     // 5.000.000 accounts + 500.000 receivable − 0 payable − 3.000.000 loan
     // principal. Interest is not part of it: it repays nothing.
-    expect(await kpiValue('Total Account Balance')).toBe('5000000')
-    expect(await kpiValue('Net Worth')).toBe('2500000')
+    expect(await kpiValue(/Tổng số dư|Total Balance/)).toBe('5000000')
+    expect(await kpiValue(/Tài sản ròng|Net Worth/)).toBe('2500000')
 
-    const remindersWidget = sectionFor(page, 'Upcoming Reminders')
+    const remindersWidget = sectionFor(page, /Nhắc nhở sắp tới|Upcoming Reminders/)
     const rentRow = namedRow(page, remindersWidget, 'Rent')
     await expect(rentRow).toBeVisible()
-    await expect(rentRow).toContainText(`Tomorrow · ${TOMORROW}`)
+    await expect(rentRow).toContainText(occurrenceDueLine('Ngày mai', 'Tomorrow', TOMORROW))
   })
 
   test('8. mobile (375x812): tab bar unchanged, More menu, no overflow', async ({ page }) => {
@@ -852,26 +1008,33 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await page.goto('/dashboard')
 
     // The four routes the bar shows are deliberately unchanged by Phase 6: a
-    // phone bar with nine targets is a bar with no targets. Read off the tab
-    // labels' own `<span>`s — the bar's fifth target, "Add transaction", is an
-    // icon with an `aria-label` and no text at all, so it is asserted by name.
-    const bar = page.locator('nav[aria-label="Primary (compact)"]')
+    // phone bar with nine targets is a bar with no targets. Checked per-tab by
+    // accessible name, rather than reading every `<a span>`'s text, because the
+    // bar's fifth target, "Thêm giao dịch"/"Add transaction", is an icon with
+    // an `aria-label` and no text at all.
+    const bar = page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ })
     await expect(bar).toBeVisible()
-    expect(await bar.locator('a span').allTextContents()).toEqual([
-      'Dashboard',
-      'Transactions',
-      'Accounts',
-      'Reports',
-    ])
-    await expect(bar.getByRole('link', { name: 'Add transaction' })).toBeVisible()
+    for (const label of [
+      /^(Tổng quan|Dashboard)$/,
+      /^(Giao dịch|Transactions)$/,
+      /^(Tài khoản|Accounts)$/,
+      /^(Báo cáo|Reports)$/,
+    ]) {
+      await expect(bar.getByRole('link', { name: label })).toBeVisible()
+    }
+    await expect(
+      bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
+    ).toBeVisible()
 
-    const moreButton = page.getByRole('button', { name: 'More navigation' })
-    await moreButton.click()
-    const panelId = await moreButton.getAttribute('aria-controls')
-    if (!panelId) throw new Error('More button has no aria-controls')
-    const morePanel = page.locator(`#${panelId}`)
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
-    for (const label of ['Savings', 'Debts', 'Loans', 'Reminders']) {
+    for (const label of [
+      /^(Tiết kiệm|Savings)$/,
+      /^(Công nợ|Debts)$/,
+      /^(Khoản vay|Loans)$/,
+      /^(Nhắc nhở|Reminders)$/,
+    ]) {
       await expect(morePanel.getByRole('link', { name: label })).toBeVisible()
     }
 
@@ -889,58 +1052,34 @@ test.describe.serial('Phase 6 — planning modules', () => {
   test('9. hydration gates and SSR defaults in the raw server HTML', async ({ page }) => {
     // Deterministic by construction: raw response bodies, no timing at all —
     // the same technique as `e2e/transaction-form-hydration.spec.ts`.
+    //
+    // `/goals`, `/debts` and `/loans` were dropped from this test in Task 7/8,
+    // and `/reminders` joins them now (this task): all four create forms live
+    // inside a `Sheet` opened from the header action, and a closed `Sheet`
+    // renders no popup content at all in the initial HTML — so there is no
+    // longer a gated `<fieldset>` (or a labelled `<select>` with a
+    // server-rendered selection) to probe on any of the four raw pages.
+    // `components/goals/goal-form.test.tsx`, `components/debts/debt-form.test.tsx`,
+    // `components/loans/loan-form.test.tsx` and (this task)
+    // `components/reminders/reminder-form.test.tsx` are what pin each form's
+    // own server markup now, mounted directly via `renderToStaticMarkup`
+    // rather than through a closed dialog — the same way `AccountForm`'s
+    // equivalent Wave 2 form, also Sheet-gated, has never had a raw-HTML
+    // check in this suite either.
+    //
+    // What is still worth asserting HERE, on the real rendered page rather
+    // than a mounted component, is the other half of that same claim: that a
+    // CLOSED `Sheet` truly emits nothing operable into the initial HTML at
+    // all — not a `<fieldset>` a CSS class merely hides visually, which a
+    // component-level test that only ever mounts an OPEN form would never
+    // catch.
     const pages = ['/goals', '/debts', '/loans', '/reminders'] as const
-    const bodies = new Map<string, string>()
     for (const url of pages) {
       const response = await page.request.get(url)
       expect(response.status(), url).toBe(200)
-      bodies.set(url, await response.text())
+      const html = await response.text()
+      expect(fieldsetOpeningTags(html), url).toHaveLength(0)
     }
-
-    // 1. The gate itself, in the bytes the browser paints first: each page has
-    //    exactly one form, nothing in it is operable, and assistive tech is
-    //    told the group is busy. Asserted as a count rather than a substring so
-    //    a second, ungated form could not hide behind a passing `toContain`.
-    for (const url of pages) {
-      const html = bodies.get(url)!
-      const tags = fieldsetOpeningTags(html)
-      expect(tags, url).toHaveLength(1)
-      expect(tags[0], url).toMatch(/\sdisabled=""/)
-      expect(tags[0], url).toMatch(/\saria-busy="true"/)
-    }
-
-    // 2. `/loans` — MONTHLY is the frequency select's SECOND option, so without
-    //    the explicit `defaultValue` the server HTML would select WEEKLY (a
-    //    `<select>`'s browser fallback) while `useForm` held MONTHLY, and a
-    //    submission before hydration would file a monthly loan as weekly.
-    const loans = bodies.get('/loans')!
-    expect(selectMarkup(loans, 'Payment frequency')).toMatch(
-      /<option[^>]*\svalue="MONTHLY"[^>]*\sselected=""/,
-    )
-    // The next due date is the schedule's anchor, so the server states it.
-    expect(inputMarkup(loans, 'Next due date')).toContain(`value="${TODAY}"`)
-    // And the start date is deliberately NOT pre-filled — asserted rather than
-    // skipped, so a `defaultValue` added to the wrong input would be caught.
-    expect(inputMarkup(loans, 'Start date')).not.toContain(`value="${TODAY}"`)
-
-    // 3. `/reminders` — same second-vs-third-option hazard on frequency
-    //    (MONTHLY is third here), and the start date IS pre-filled.
-    const reminders = bodies.get('/reminders')!
-    expect(selectMarkup(reminders, 'Frequency')).toMatch(
-      /<option[^>]*\svalue="MONTHLY"[^>]*\sselected=""/,
-    )
-    expect(inputMarkup(reminders, 'Start date')).toContain(`value="${TODAY}"`)
-
-    // 4. `/goals` and `/debts` have no date default at all (a target has no
-    //    start day, and a debt's due date is optional), and their selects
-    //    default to their own first option — so the marker must be on the value
-    //    the form actually holds and on nothing else.
-    expect(selectMarkup(bodies.get('/goals')!, 'Goal currency')).toMatch(
-      /<option[^>]*\svalue="VND"[^>]*\sselected=""/,
-    )
-    expect(selectMarkup(bodies.get('/debts')!, 'Direction')).toMatch(
-      /<option[^>]*\svalue="RECEIVABLE"[^>]*\sselected=""/,
-    )
   })
 
   test('10. full export: eleven sheets, planning history included; filtered unchanged', async ({
@@ -1010,9 +1149,11 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     // Reminders — the paused definition is listed with Active "No" (words, not
     // TRUE/FALSE: "paused" is a state the user set), and its answered
-    // occurrences are tallied rather than dropped.
+    // occurrences are tallied rather than dropped. Four rows, not three: the
+    // collapse test added earlier in this file (spec §6.7's headline change)
+    // creates a fourth, "Gym membership".
     const remindersRows = dataRows(sheetOf(fullWorkbook, 'Reminders'))
-    expect(remindersRows).toHaveLength(3)
+    expect(remindersRows).toHaveLength(4)
     const salary = rowWhere(remindersRows, 0, 'Salary')
     expect(salary[1]).toBe('Income')
     expect(salary[4]).toBe('Monthly')
@@ -1023,6 +1164,15 @@ test.describe.serial('Phase 6 — planning modules', () => {
     expect(internet[6]).toBe('Yes')
     expect(internet[8]).toBe(1)
     expect(rowWhere(remindersRows, 0, 'Rent')[6]).toBe('Yes')
+    // The collapsed weekly reminder is still one DEFINITION on this sheet
+    // (the export has no notion of "collapse" at all — that is a UI-only
+    // concept — it tallies every occurrence WEEKLY materialized, five of
+    // them, none yet answered).
+    const gym = rowWhere(remindersRows, 0, 'Gym membership')
+    expect(gym[1]).toBe('Bill')
+    expect(gym[4]).toBe('Every week')
+    expect(gym[6]).toBe('Yes')
+    expect(gym[7]).toBe(5) // Pending — none of its five occurrences answered
 
     // The filtered workbook is historical end to end and gains none of the six:
     // every one of them is denominated in its record's own currency, so there is

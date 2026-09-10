@@ -1,6 +1,7 @@
-import type { Prisma } from '@prisma/client'
+import { Prisma, type TransactionType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
+import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
@@ -10,6 +11,7 @@ import type { OccurrenceRow } from '@/lib/server/services/reminder'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import type { listTransactions } from '@/lib/server/services/transaction'
 import { type BudgetProgressDto, toBudgetProgressDto } from './budget-view-model'
+import { formatDate } from './format-date'
 import { formatMoney, formatRate } from './format-money'
 import { type OccurrenceDto, toOccurrenceDto } from './reminder-view-model'
 import { type SavingsGoalDto, toSavingsGoalDto } from './savings-goal-view-model'
@@ -109,11 +111,15 @@ export interface DashboardInput {
 }
 
 export interface KpiDto {
-  label: string
+  /**
+   * A key in `dashboard.json`. The view model is a pure function with a unit
+   * test and no translator; the component that renders the panel has one.
+   */
+  labelKey: string
   /** The formatted figure, or `null` when there is no honest one to show. */
   value: string | null
-  /** Rendered in place of a `null` value, explaining the gap. */
-  hint?: string
+  /** Key for the line rendered in place of a `null` value, explaining the gap. */
+  hintKey?: string
   /** Below zero — rendered in the negative colour. */
   negative: boolean
 }
@@ -161,15 +167,22 @@ export interface BalancePointDto {
 export interface NamedAmountDto {
   name: string
   value: number
+  /** Set instead of `name` for a synthesised row the component must translate. */
+  nameKey?: string
 }
 
 export interface RecentTransactionDto {
   id: string
-  /** The category, or the transaction type when there is none. */
-  title: string
+  /** The category when there is one; `null` when the TYPE is the meaning. */
+  categoryName: string | null
+  /**
+   * The raw type. Rendered through `transactionTypeLabelKey` by the component —
+   * which is what stopped `CASH_OUT` appearing on the dashboard verbatim.
+   */
+  type: TransactionType
   accountName: string
-  /** `yyyy-MM-dd HH:mm` in the user's zone. */
-  when: string
+  /** The instant; the component formats it in the reader's locale and zone. */
+  date: Date
   /** Already signed — the sign comes from `type`, never from the amount. */
   amount: string
   currency: Currency
@@ -196,10 +209,14 @@ export interface DebtLoanOverviewDto {
 
 export interface DashboardViewModel {
   displayCurrency: Currency
-  /** e.g. `September 2026`. */
-  monthLabel: string
-  /** e.g. `September 2026 · VND`. */
-  subtitle: string
+  /**
+   * The current local month as a `Date` the page formats — no longer a
+   * pre-baked string. The header's month-and-currency line is assembled by the
+   * page from `formatDate(monthStart, { locale, timeZone, style: 'monthYear' })`
+   * and `dashboard.subtitle`, because "September 2026 · VND" is a sentence in
+   * one language and a view model has no locale.
+   */
+  monthStart: Date
   kpis: KpiDto[]
   fxStatus: FxStatus
   cashFlowTrend: TrendPointDto[]
@@ -240,8 +257,34 @@ export interface DashboardViewModel {
   overdueReminderCount: number
 }
 
-/** Shown instead of a figure that would need a rate we do not have. */
-const FX_UNAVAILABLE_HINT = 'FX unavailable'
+/** Key for the line shown instead of a figure that would need a rate we do not have. */
+const FX_UNAVAILABLE_HINT_KEY = 'dashboard.fxUnavailableHint'
+
+/** How many category bars the widget shows before bucketing the rest. */
+const EXPENSE_CATEGORY_LIMIT = 8
+
+/** The bucket's name is a KEY; the component translates it. */
+const OTHER_CATEGORY_KEY = 'dashboard.expenseByCategoryOther'
+
+/**
+ * At most eight slices plus an "other" bucket (spec §6.1): a horizontal bar
+ * chart with twenty rows is a table pretending to be a picture. The source is
+ * already largest-first with a stable tiebreak (`getActivitySummary`), so the
+ * tail is genuinely the smallest categories and the bucket's total is their
+ * exact sum — a `Decimal` sum taken before `toNumber()`.
+ */
+function bucketExpenseCategories(rows: MonthSummary['byCategory']): NamedAmountDto[] {
+  if (rows.length <= EXPENSE_CATEGORY_LIMIT) {
+    return rows.map((row) => ({ name: row.name, value: row.total.toNumber() }))
+  }
+  const head = rows.slice(0, EXPENSE_CATEGORY_LIMIT - 1)
+  const tail = rows.slice(EXPENSE_CATEGORY_LIMIT - 1)
+  const tailTotal = tail.reduce((sum, row) => sum.add(row.total), new Prisma.Decimal(0))
+  return [
+    ...head.map((row) => ({ name: row.name, value: row.total.toNumber() })),
+    { name: '', nameKey: OTHER_CATEGORY_KEY, value: tailTotal.toNumber() },
+  ]
+}
 
 /**
  * How many rows the two list widgets show.
@@ -268,7 +311,22 @@ const WIDGET_ROW_LIMIT = 5
  */
 const WIDGET_OVERDUE_ROW_LIMIT = 2
 
-export function buildDashboardViewModel(input: DashboardInput): DashboardViewModel {
+export function buildDashboardViewModel(
+  input: DashboardInput,
+  /**
+   * The reader's locale (fix round 1, finding 1). REQUIRED, not optional
+   * (Task 13 fix round 1, Minor): this builder is the one place on the
+   * dashboard that formats figures from five different mappers at once, and
+   * a default here is exactly how four of them stayed Vietnamese under an
+   * English page — a missing `locale` at a call site is now a compile error
+   * rather than a silent `vi` fallback. `formatMoney`/`formatRate`/
+   * `formatDate` keep their own optional-trailing-locale shape (they are
+   * called from many more places, most of which already resolve one); this
+   * function is not. The page passes the resolved locale once it has one
+   * (`resolveLocale()`); every existing caller already does.
+   */
+  locale: Locale,
+): DashboardViewModel {
   const {
     displayCurrency: currency,
     timezone,
@@ -284,31 +342,36 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     occurrences,
   } = input
 
-  const monthLabel = formatInTimeZone(now, timezone, 'LLLL yyyy')
-
   /** A current-position KPI: a figure, or a gap with the reason for it. */
-  function positionKpi(label: string, value: Prisma.Decimal | undefined): KpiDto {
+  function positionKpi(labelKey: string, value: Prisma.Decimal | undefined): KpiDto {
     if (!position || value === undefined) {
-      return { label, value: null, hint: FX_UNAVAILABLE_HINT, negative: false }
+      return { labelKey, value: null, hintKey: FX_UNAVAILABLE_HINT_KEY, negative: false }
     }
-    return { label, value: formatMoney(value, currency), negative: value.isNegative() }
+    return { labelKey, value: formatMoney(value, currency, locale), negative: value.isNegative() }
   }
 
+  // Net Worth FIRST: it is the panel's dominant figure (spec §6.1), with Total
+  // Balance beneath it, and the three monthly metrics after. The old order put
+  // Total Account Balance first because the five sat in a flat strip where
+  // nothing was dominant.
   const kpis: KpiDto[] = [
-    // "Total Account Balance", not "Total Balance": the figure is the sum of the
-    // *account* balances (spec §5.2), and Phase 6's Net Worth widens beyond
-    // them — a card labelled just "Total Balance" would then read as the wrong
-    // total. The export's Summary sheet says the same thing.
-    positionKpi('Total Account Balance', position?.totalBalance),
-    positionKpi('Net Worth', position?.netWorth),
-    { label: 'Monthly Income', value: formatMoney(monthly.income, currency), negative: false },
-    // Expense is stored and aggregated as a positive magnitude, so it is never
-    // "negative" — it is red-by-meaning, not red-by-sign, and the strip does
-    // not colour it.
-    { label: 'Monthly Expense', value: formatMoney(monthly.expense, currency), negative: false },
+    positionKpi('dashboard.netWorth', position?.netWorth),
+    positionKpi('dashboard.totalBalance', position?.totalBalance),
     {
-      label: 'Net Income',
-      value: formatMoney(monthly.netIncome, currency),
+      labelKey: 'dashboard.monthlyIncome',
+      value: formatMoney(monthly.income, currency, locale),
+      negative: false,
+    },
+    // Expense is stored and aggregated as a positive magnitude, so it is never
+    // "negative" — red by meaning, not by sign, and the panel does not colour it.
+    {
+      labelKey: 'dashboard.monthlyExpense',
+      value: formatMoney(monthly.expense, currency, locale),
+      negative: false,
+    },
+    {
+      labelKey: 'dashboard.netIncome',
+      value: formatMoney(monthly.netIncome, currency, locale),
       negative: monthly.netIncome.isNegative(),
     },
   ]
@@ -319,7 +382,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
   // R6-7). Re-deriving it here to save formatting the rows the widget will not
   // show would be a second definition of "late", which is the one thing this
   // page must not have; the Reminders page maps the same list in full.
-  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today))
+  const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today, locale))
   const overdueOccurrences = allOccurrences.filter((occurrence) => occurrence.overdue)
   // Both halves keep the service's `dueAt asc` order — oldest overdue first,
   // soonest upcoming first — exactly as the Reminders page groups them.
@@ -327,12 +390,16 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
 
   return {
     displayCurrency: currency,
-    monthLabel,
-    subtitle: `${monthLabel} · ${currency}`,
+    monthStart: now,
     kpis,
-    fxStatus: buildFxStatus(position, timezone),
+    fxStatus: buildFxStatus(position, timezone, locale),
+    // `monthShort`/`monthYearShort` (fix round 1, finding 2): a plain
+    // `formatInTimeZone(..., 'LLL')` always formats in date-fns' own default
+    // locale (English) regardless of the reader's — the exact bug this fix
+    // exists for, since "Apr … Sep" ticks under a Vietnamese dashboard is
+    // exactly the kind of un-translated surface the rest of this task removes.
     cashFlowTrend: cashFlowTrend.map((point) => ({
-      label: formatInTimeZone(point.startUtc, timezone, 'LLL'),
+      label: formatDate(point.startUtc, { locale, timeZone: timezone, style: 'monthShort' }),
       income: point.income.toNumber(),
       expense: point.expense.toNumber(),
       netIncome: point.netIncome.toNumber(),
@@ -344,23 +411,21 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     // shorter than two points yields whatever it has rather than a fabricated
     // zero month.
     incomeVsExpense: cashFlowTrend.slice(-2).map((point) => ({
-      period: formatInTimeZone(point.startUtc, timezone, 'LLL yyyy'),
+      period: formatDate(point.startUtc, { locale, timeZone: timezone, style: 'monthYearShort' }),
       income: point.income.toNumber(),
       expense: point.expense.toNumber(),
     })),
     balanceOverTime: balanceOverTime.map((point) => ({
-      label: formatInTimeZone(point.asOf, timezone, 'LLL'),
+      label: formatDate(point.asOf, { locale, timeZone: timezone, style: 'monthShort' }),
       // Preserved as `null`, never coerced to 0: a month with no known rate is
       // a hole in the line, and a zero would draw a cliff that never happened.
       balance: point.balance === null ? null : point.balance.toNumber(),
     })),
     // The same month aggregate the three monthly KPIs come from, so the slices
     // sum to the Monthly Expense card by construction. Already largest-first
-    // with a stable tiebreak (`getActivitySummary`).
-    expenseByCategory: monthly.byCategory.map((row) => ({
-      name: row.name,
-      value: row.total.toNumber(),
-    })),
+    // with a stable tiebreak (`getActivitySummary`). At most eight slices plus
+    // an "other" bucket (spec §6.1) — see `bucketExpenseCategories`.
+    expenseByCategory: bucketExpenseCategories(monthly.byCategory),
     distribution:
       position === null
         ? null
@@ -380,13 +445,16 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       const positive = isBalanceIncreasing(tx.type)
       return {
         id: tx.id,
-        title: tx.category?.name ?? tx.type,
+        // The NAME or `null` — never `?? tx.type`, which is how `CASH_OUT`
+        // used to reach the screen. The component renders the type's label.
+        categoryName: tx.category?.name ?? null,
+        type: tx.type,
         accountName: tx.account.name,
-        when: formatInTimeZone(tx.date, timezone, 'yyyy-MM-dd HH:mm'),
+        date: tx.date,
         // The sign is derived from `type` here and prefixed to the formatted
         // magnitude — `amount` itself is always positive and no arithmetic
         // negates it.
-        amount: `${positive ? '+' : '−'}${formatMoney(tx.amount, tx.currency)}`,
+        amount: `${positive ? '+' : '−'}${formatMoney(tx.amount, tx.currency, locale)}`,
         currency: tx.currency,
         positive,
       }
@@ -396,8 +464,16 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     // the same `BudgetProgressList` fed by the same function, so a percentage
     // or a status label cannot read one way on one page and another way on the
     // other. `displayCurrency` is deliberately not passed — a budget is shown
-    // in its own currency.
-    budgets: budgets.map(toBudgetProgressDto),
+    // in its own currency; `locale` IS passed (fix round 1, finding 2 — an
+    // earlier comment here claimed staying at the DTO's default `vi` was
+    // intentional, which was wrong: the dashboard has a real reader locale
+    // right here, and there is no reason a budget figure should ignore it
+    // when every other figure on this page does not).
+    // Wrapped rather than passed bare: `Array#map` calls its callback with
+    // `(element, index, array)`, and `toBudgetProgressDto`'s second parameter
+    // is `locale` — passed bare, `map`'s own index would land there as
+    // `locale` for every row after the first.
+    budgets: budgets.map((progress) => toBudgetProgressDto(progress, locale)),
     // Delegated to the Savings page's own DTO mapper, for the reason the
     // budgets line gives: the widget's compact rows and the page's full rows
     // are the same `GoalList` fed by the same function, so a percentage or a
@@ -411,7 +487,7 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
     savingsGoals: goals
       .filter((goal) => goal.status !== 'ARCHIVED')
       .slice(0, WIDGET_ROW_LIMIT)
-      .map((goal) => toSavingsGoalDto(goal, today)),
+      .map((goal) => toSavingsGoalDto(goal, today, locale)),
     // The three figures the position already converted, formatted once here.
     // `null` propagates the position's own refusal: three outstanding amounts
     // that could not be restated in one currency cannot be compared, and a
@@ -420,9 +496,9 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
       position === null
         ? null
         : {
-            receivables: formatMoney(position.receivables, currency),
-            payables: formatMoney(position.payables, currency),
-            loanOutstanding: formatMoney(position.loanOutstanding, currency),
+            receivables: formatMoney(position.receivables, currency, locale),
+            payables: formatMoney(position.payables, currency, locale),
+            loanOutstanding: formatMoney(position.loanOutstanding, currency, locale),
           },
     // At most two overdue rows, then whatever is genuinely coming, five in all.
     // The single `slice` at the end is what makes the overdue half a *cap*
@@ -440,14 +516,18 @@ export function buildDashboardViewModel(input: DashboardInput): DashboardViewMod
   }
 }
 
-function buildFxStatus(position: CurrentPosition | null, timezone: string): FxStatus {
+function buildFxStatus(
+  position: CurrentPosition | null,
+  timezone: string,
+  locale: Locale,
+): FxStatus {
   // A null position means the conversion was required and refused — distinct
   // from a position that simply never needed one.
   if (position === null) return { kind: 'unavailable' }
   if (position.fx === null) return { kind: 'not-needed' }
   const { fx } = position
   const details: FxRateDetails = {
-    rate: formatRate(fx.rateDecimal),
+    rate: formatRate(fx.rateDecimal, locale),
     // The rate's own day, in UTC: `effectiveDate` is a UTC start-of-day marker
     // (see the `ExchangeRate` model), not an instant to re-project.
     effectiveDate: formatInTimeZone(fx.effectiveDate, 'UTC', 'yyyy-MM-dd'),

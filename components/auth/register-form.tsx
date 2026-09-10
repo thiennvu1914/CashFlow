@@ -2,21 +2,23 @@
 
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { authClient } from '@/lib/auth/client'
 import { registerSchema, type RegisterInput } from '@/lib/validation/auth'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-const GENERIC_ERROR = 'Something went wrong. Please try again.'
-const EMAIL_TAKEN_ERROR = 'An account with that email already exists.'
-
 /**
- * Maps a Better Auth error onto one of two fixed strings. The server's own
- * `error.message` is never rendered: it is library text we do not control, it
- * can change between versions, and it can carry detail (a database or provider
- * message) that has no business on a public sign-up form.
+ * Maps a Better Auth error onto one of three fixed message KEYS. The server's
+ * own `error.message` is never rendered: it is library text we do not
+ * control, it can change between versions, and it can carry detail (a
+ * database or provider message) that has no business on a public sign-up
+ * form.
  *
  * `POST /sign-up/email` answers a duplicate address with
  * `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` — verified in
@@ -32,65 +34,113 @@ const EMAIL_TAKEN_ERROR = 'An account with that email already exists.'
  * account), and a useless generic error here just sends people in circles. The
  * endpoints where enumeration actually matters — sign-in and
  * request-password-reset — stay uniform.
+ *
+ * `status === 429` (Task 13, D3) is checked before the code: Better Auth's own
+ * rate limiter (`lib/auth/create-auth.ts`) answers a burst of sign-ups the
+ * same way it answers a burst of sign-ins, and a visitor who tripped it needs
+ * to know to wait, not "check the highlighted fields" or a generic failure —
+ * mirroring the login form's identical `error.status === 429` branch.
  */
-function registerErrorMessage(code: string | undefined): string {
-  if (code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' || code === 'USER_ALREADY_EXISTS') {
-    return EMAIL_TAKEN_ERROR
+function registerErrorKey(
+  error: { code?: string; status?: number } | undefined,
+): 'auth.tooManyAttempts' | 'auth.emailTaken' | 'errors.generic' {
+  if (error?.status === 429) return 'auth.tooManyAttempts'
+  if (
+    error?.code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' ||
+    error?.code === 'USER_ALREADY_EXISTS'
+  ) {
+    return 'auth.emailTaken'
   }
-  return GENERIC_ERROR
+  return 'errors.generic'
 }
 
+/**
+ * No `useHydrated()` gate: none of the three fields has a `defaultValues`
+ * entry, so react-hook-form reads the DOM into form state on mount instead of
+ * writing over it (`lib/ui/use-hydrated.ts` documents the defect this gate
+ * exists for) — there is nothing here for it to guard against.
+ * `e2e/helpers.ts`'s `registerNewUser` relies on exactly that: it fills every
+ * field before this form has finished hydrating.
+ */
 export function RegisterForm() {
+  const t = useTranslations()
   const router = useRouter()
+  const submit = useSubmitState()
   const {
     register,
     handleSubmit,
     setError,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<RegisterInput>({ resolver: zodResolver(registerSchema) })
 
   async function onSubmit(values: RegisterInput) {
-    try {
-      const { error } = await authClient.signUp.email({
-        email: values.email,
-        password: values.password,
-        name: values.name,
-      })
-      if (error) {
-        setError('root', { message: registerErrorMessage(error.code) })
+    await submit.run(async () => {
+      try {
+        const { error } = await authClient.signUp.email({
+          email: values.email,
+          password: values.password,
+          name: values.name,
+        })
+        if (error) {
+          setError('root', { message: t(registerErrorKey(error)) })
+          return
+        }
+      } catch {
+        console.error('Registration request failed')
+        setError('root', { message: t('errors.generic') })
         return
       }
-    } catch {
-      console.error('Registration request failed')
-      setError('root', { message: GENERIC_ERROR })
-      return
-    }
-    router.push('/dashboard')
-    router.refresh()
+      router.push('/dashboard')
+      router.refresh()
+    })
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-      <div>
-        <Input placeholder="Name" {...register('name')} />
-        {errors.name && <p className="text-sm text-negative">{errors.name.message}</p>}
-      </div>
-      <div>
-        <Input type="email" placeholder="Email" {...register('email')} />
-        {errors.email && <p className="text-sm text-negative">{errors.email.message}</p>}
-      </div>
-      <div>
-        <Input type="password" placeholder="Password" {...register('password')} />
-        {errors.password && <p className="text-sm text-negative">{errors.password.message}</p>}
-      </div>
-      {errors.root && <p className="text-sm text-negative">{errors.root.message}</p>}
-      <Button type="submit" disabled={isSubmitting}>
-        {isSubmitting ? 'Creating account…' : 'Create account'}
-      </Button>
-      <p className="text-sm text-muted-foreground">
-        Already have an account?{' '}
-        <Link href="/login" className="text-primary underline-offset-4 hover:underline">
-          Sign in
+      <fieldset
+        disabled={submit.locked}
+        aria-busy={submit.busy}
+        className="flex min-w-0 flex-col gap-4"
+      >
+        <legend className="sr-only">{t('auth.registerTitle')}</legend>
+
+        <FormField id="register-name" label={t('auth.name')} error={errors.name?.message}>
+          {(aria) => <Input {...aria} autoComplete="name" {...register('name')} />}
+        </FormField>
+
+        <FormField id="register-email" label={t('auth.email')} error={errors.email?.message}>
+          {(aria) => <Input {...aria} type="email" autoComplete="email" {...register('email')} />}
+        </FormField>
+
+        <FormField
+          id="register-password"
+          label={t('auth.password')}
+          error={errors.password?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="password"
+              autoComplete="new-password"
+              {...register('password')}
+            />
+          )}
+        </FormField>
+
+        {errors.root && <InlineAlert tone="negative">{errors.root.message}</InlineAlert>}
+
+        <Button type="submit" className="w-full">
+          {submit.pending ? t('auth.creatingAccount') : t('auth.createAccount')}
+        </Button>
+      </fieldset>
+
+      {/* Below the fieldset, not inside it: navigation, not a member of the
+          "Tạo tài khoản CashFlow" form group a screen reader announces the
+          fieldset's contents as. */}
+      <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
+        {t('auth.haveAccount')}{' '}
+        <Link href="/login" className="text-brand underline-offset-4 hover:underline">
+          {t('auth.signIn')}
         </Link>
       </p>
     </form>

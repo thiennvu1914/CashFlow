@@ -1,14 +1,22 @@
+import { getTranslations } from 'next-intl/server'
+import { HandCoins } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
+import { resolveLocale } from '@/lib/i18n/config'
 import { getDebtsWithOutstanding } from '@/lib/server/services/debt'
 import { debtSubtotalsByCurrency, toDebtDto, type DebtDto } from '@/lib/ui/debt-view-model'
+import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { DebtForm } from '@/components/debts/debt-form'
+import { DebtCreateButton } from '@/components/debts/debt-create-button'
 import { DebtList } from '@/components/debts/debt-list'
-import { DebtRowActions } from '@/components/debts/debt-row-actions'
+import { DebtPaymentButton, DebtRowMenu } from '@/components/debts/debt-row-actions'
+import { EmptyState } from '@/components/common/empty-state'
+import { MoneyText } from '@/components/common/money-text'
+import { PageHeader } from '@/components/common/page-header'
+import { SectionHeader } from '@/components/common/section-header'
 
 /**
- * Debts (spec §4.9): money someone owes the user, and money the user owes
+ * Debts (spec §4.9, §6.6): money someone owes the user, and money the user owes
  * someone else, each in its own currency and never converted to
  * `User.baseCurrency` (ledger ruling R5-3).
  *
@@ -43,6 +51,8 @@ export default async function DebtsPage() {
   // so this page redirects on its own. `user.id` scopes the only query below.
   const user = await requireUserOrRedirect()
   const { timezone } = resolveProfileDefaults(user)
+  const t = await getTranslations()
+  const locale = await resolveLocale()
   // The one place the user's zone enters: whether a debt is overdue is a
   // comparison of calendar dates, never of instants (ruling R6-7). The same
   // `today` seeds the payment form's date, so "today" means one thing on this
@@ -54,76 +64,135 @@ export default async function DebtsPage() {
   // Subtotals are taken from the service rows — `Prisma.Decimal` sums, one per
   // currency — before anything is formatted, so the strip can never be the
   // result of adding up strings.
-  const subtotals = debtSubtotalsByCurrency(rows)
+  const subtotals = debtSubtotalsByCurrency(rows, locale)
+  // "Nothing outstanding in this direction/currency" reads as no row at all,
+  // never a fabricated "0" — the same figure `formatMoney` would print for an
+  // actual zero, so a currency that only ever appears in the OTHER direction
+  // is filtered out of each section rather than shown here as a zero.
+  const zeroOf = { VND: formatMoney(0, 'VND', locale), USD: formatMoney(0, 'USD', locale) }
+  const receivableSubtotals = subtotals.filter((s) => s.receivable !== zeroOf[s.currency])
+  const payableSubtotals = subtotals.filter((s) => s.payable !== zeroOf[s.currency])
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders `DebtDto`s.
-  const dtos = rows.map(toDebtDto)
+  const dtos = rows.map((row) => toDebtDto(row, locale))
   const active = dtos
     .filter((dto) => dto.active)
     .sort((a, b) => displayRank(a.status) - displayRank(b.status))
+  const receivable = active.filter((dto) => dto.direction === 'RECEIVABLE')
+  const payable = active.filter((dto) => dto.direction === 'PAYABLE')
   const writtenOff = dtos.filter((dto) => !dto.active)
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-8 p-6">
-      <div className="flex flex-col gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Debts</h1>
-          <p className="text-sm text-muted-foreground">
-            Receivables and payables you track by hand — recording a payment here never moves money
-            between your accounts
-          </p>
-        </div>
+    <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('debts.title')}
+        description={t('debts.description')}
+        actions={<DebtCreateButton />}
+      />
 
-        {/* One row per currency, never a single total: there is no rate on this
-            page, and 500 USD plus 1.000.000 VND is two facts. Omitted entirely
-            when nothing is outstanding, rather than shown as a row of zeroes. */}
-        {subtotals.length > 0 && (
-          <ul className="flex flex-col gap-1">
-            {subtotals.map((subtotal) => (
-              <li
-                key={subtotal.currency}
-                className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm"
-              >
-                <span className="font-medium">{subtotal.currency}</span>
-                <span className="text-muted-foreground">
-                  Owed to you{' '}
-                  <span className="text-positive tabular-nums">{subtotal.receivable}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  You owe <span className="text-negative tabular-nums">{subtotal.payable}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+      {active.length === 0 ? (
+        <EmptyState
+          icon={HandCoins}
+          size="page"
+          title={t('debts.emptyTitle')}
+          description={t('debts.emptyBody')}
+        />
+      ) : (
+        <>
+          {receivable.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <SectionHeader
+                title={t('debts.sectionReceivable')}
+                right={
+                  // One row per currency, never a single total: there is no
+                  // rate on this page, and 500 USD plus 1.000.000 VND is two
+                  // facts. Omitted entirely when nothing is outstanding,
+                  // rather than shown as a row of zeroes.
+                  receivableSubtotals.length > 0 && (
+                    <ul className="flex flex-col items-end gap-1">
+                      {receivableSubtotals.map((subtotal) => (
+                        <li key={subtotal.currency} className="text-[0.8125rem]/[1.125rem]">
+                          <span className="text-muted-foreground">
+                            {subtotal.currency} · {t('debts.subtotalReceivable')}{' '}
+                          </span>
+                          <MoneyText value={subtotal.receivable} tone="positive" />
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                }
+              />
+              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <DebtList
+                  debts={receivable}
+                  locale={locale}
+                  timeZone={timezone}
+                  renderActions={(debt) => ({
+                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    actions: <DebtRowMenu debt={debt} />,
+                  })}
+                />
+              </div>
+            </div>
+          )}
 
-        {active.length === 0 ? (
-          <p className="text-sm text-foreground/60">No debts yet — add one below.</p>
-        ) : (
-          <DebtList
-            debts={active}
-            renderActions={(debt) => <DebtRowActions debt={debt} today={today} />}
-          />
-        )}
-      </div>
-
-      <div id="new" className="scroll-mt-6">
-        <h2 className="mb-3 text-lg font-semibold">Add debt</h2>
-        <DebtForm />
-      </div>
+          {payable.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <SectionHeader
+                title={t('debts.sectionPayable')}
+                right={
+                  payableSubtotals.length > 0 && (
+                    <ul className="flex flex-col items-end gap-1">
+                      {payableSubtotals.map((subtotal) => (
+                        <li key={subtotal.currency} className="text-[0.8125rem]/[1.125rem]">
+                          <span className="text-muted-foreground">
+                            {subtotal.currency} · {t('debts.subtotalPayable')}{' '}
+                          </span>
+                          <MoneyText value={subtotal.payable} tone="negative" />
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                }
+              />
+              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <DebtList
+                  debts={payable}
+                  locale={locale}
+                  timeZone={timezone}
+                  renderActions={(debt) => ({
+                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    actions: <DebtRowMenu debt={debt} />,
+                  })}
+                />
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {writtenOff.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-foreground/60">
-            Written-off debts ({writtenOff.length})
+        <details className="rounded-lg border border-border bg-surface">
+          {/* A heading element as a `<summary>`'s label is explicit content
+              model (a `<summary>` may include one `h1`–`h6` as its label),
+              which is what gives this disclosure's own section a real
+              heading rather than a clickable paragraph — spec a11y AC: "h2 on
+              each `<details>`". */}
+          {/* `max-md:min-h-11` is the 44 px touch target below the icon
+              rail — routed from Task 15, which measured this summary at
+              42 px and deferred it. +2 px on a phone, nothing from `md`. */}
+          <summary className="cursor-pointer px-4 py-3 max-md:min-h-11">
+            <h2 className="inline text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+              {t('debts.writtenOffSection', { count: writtenOff.length })}
+            </h2>
           </summary>
           {/* Read-only, like the archived accounts on `/accounts`: a written-off
               debt refuses every write (`DebtNotActiveError`), so no actions are
               offered here. The payment history stays — the money really did
               arrive, and writing the rest off does not undo that. */}
-          <div className="mt-3 opacity-70">
-            <DebtList debts={writtenOff} />
+          <div className="border-t border-border opacity-70">
+            <DebtList debts={writtenOff} locale={locale} timeZone={timezone} />
           </div>
         </details>
       )}

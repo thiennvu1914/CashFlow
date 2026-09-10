@@ -1,13 +1,18 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
 import { createLoanSchema, type CreateLoanInput } from '@/lib/validation/loan'
 import { createLoanAction } from '@/lib/server/actions/loan-actions'
-import { LOAN_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { paymentFrequencyLabelKey } from '@/lib/ui/labels'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -46,16 +51,20 @@ function defaultValues(today: string): Partial<CreateLoanInput> {
   return { lender: '', currency: 'VND', paymentFrequency: 'MONTHLY', nextDueDate: today }
 }
 
-export function LoanForm({ today }: { today: string }) {
+export function LoanForm({ today, onCreated }: { today: string; onCreated?: () => void }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `loan-${name}-${uid}`
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<CreateLoanInput>({
     resolver: zodResolver(createLoanSchema),
     defaultValues: defaultValues(today),
@@ -63,18 +72,21 @@ export function LoanForm({ today }: { today: string }) {
 
   async function onSubmit(values: CreateLoanInput) {
     setError(null)
-    try {
-      const result = await createLoanAction(values)
-      if (!result.ok) {
-        setError(LOAN_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await createLoanAction(values)
+        if (!result.ok) {
+          setError(t(LOAN_ERROR_KEYS[result.error]))
+          return
+        }
+        reset(defaultValues(today))
+        router.refresh()
+        onCreated?.()
+      } catch {
+        console.error('LoanForm: create failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      reset(defaultValues(today))
-      router.refresh()
-    } catch {
-      console.error('LoanForm: create failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
@@ -82,139 +94,170 @@ export function LoanForm({ today }: { today: string }) {
       {/* The hydration gate — same mechanism, same reasoning, as `DebtForm`'s;
           `lib/ui/use-hydrated.ts` documents the defect. */}
       <fieldset
-        disabled={!hydrated}
-        aria-busy={hydrated ? undefined : true}
+        disabled={!hydrated || submit.locked}
+        aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-3"
       >
-        <legend className="sr-only">New loan</legend>
-        <div>
-          <Input aria-label="Lender" placeholder="Who (e.g. Vietcombank)" {...register('lender')} />
-          {errors.lender && <p className="text-sm text-negative">{errors.lender.message}</p>}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Principal"
-            placeholder="Amount borrowed"
-            {...register('principal', { valueAsNumber: true })}
-          />
-          {errors.principal && <p className="text-sm text-negative">{errors.principal.message}</p>}
-        </div>
-        <div>
-          {/* `defaultValue` (never `value` — that would make this controlled).
-              VND is already the first option, so react-dom would land here
-              anyway; it is passed so the server HTML states the form's own
-              default rather than relying on a browser fallback. */}
-          <select
-            {...register('currency')}
-            defaultValue="VND"
-            aria-label="Loan currency"
-            className="rounded-md border p-2"
-          >
-            <option value="VND">VND</option>
-            <option value="USD">USD</option>
-          </select>
-          {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-        </div>
-        <div>
+        <legend className="sr-only">{t('loans.createTitle')}</legend>
+
+        <FormField
+          id={fieldId('lender')}
+          label={t('loans.lender')}
+          helper={t('loans.lenderPlaceholder')}
+          error={errors.lender?.message}
+        >
+          {(aria) => <Input {...aria} {...register('lender')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('principal')}
+          label={t('loans.principal')}
+          error={errors.principal?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('principal', { valueAsNumber: true })}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('loans.currency')}
+          error={errors.currency?.message}
+        >
+          {/* `defaultValue` (never `value` — that would make this
+              controlled). VND is already the first option, so react-dom would
+              land here anyway; it is passed so the server HTML states the
+              form's own default rather than relying on a browser fallback. */}
+          {(aria) => (
+            <select {...aria} {...register('currency')} defaultValue="VND" className={SELECT_CLASS}>
+              <option value="VND">VND</option>
+              <option value="USD">USD</option>
+            </select>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('interest-rate')}
+          label={t('loans.interestRate')}
+          error={errors.interestRate?.message}
+        >
           {/* `step="0.001"`, matching `Decimal(6, 3)` and the schema's
               three-decimal refine, so the browser's own stepper cannot produce
               a value the schema then rejects. */}
-          <Input
-            type="number"
-            step="0.001"
-            aria-label="Interest rate (%)"
-            placeholder="Percent per year (e.g. 8.5)"
-            {...register('interestRate', { valueAsNumber: true })}
-          />
-          {errors.interestRate && (
-            <p className="text-sm text-negative">{errors.interestRate.message}</p>
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.001"
+              {...register('interestRate', { valueAsNumber: true })}
+            />
           )}
-        </div>
-        <div>
+        </FormField>
+
+        <FormField
+          id={fieldId('start-date')}
+          label={t('loans.startDate')}
+          error={errors.startDate?.message}
+        >
           {/* A calendar date as a string, never `valueAsDate`: the value that
               travels is `yyyy-MM-dd` and the carrier is built server-side by
               `calendarDateToUtcCarrier` (ruling R6-7). `valueAsDate` would hand
               over an instant the browser's zone had already coloured. */}
-          <Input type="date" aria-label="Start date" {...register('startDate')} />
-          {errors.startDate && <p className="text-sm text-negative">{errors.startDate.message}</p>}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="1"
-            aria-label="Term (months)"
-            placeholder="Term in months (e.g. 60)"
-            {...register('termMonths', { valueAsNumber: true })}
-          />
-          {errors.termMonths && (
-            <p className="text-sm text-negative">{errors.termMonths.message}</p>
+          {(aria) => <Input {...aria} type="date" {...register('startDate')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('term-months')}
+          label={t('loans.termMonths')}
+          error={errors.termMonths?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="1"
+              {...register('termMonths', { valueAsNumber: true })}
+            />
           )}
-        </div>
-        <div>
+        </FormField>
+
+        <FormField
+          id={fieldId('payment-frequency')}
+          label={t('loans.paymentFrequency')}
+          error={errors.paymentFrequency?.message}
+        >
           {/* The options are in the Prisma enum's own order, which puts the
               default *second* — hence the explicit `defaultValue`. See the
               module comment. */}
-          <select
-            {...register('paymentFrequency')}
-            defaultValue="MONTHLY"
-            aria-label="Payment frequency"
-            className="rounded-md border p-2"
-          >
-            <option value="WEEKLY">Weekly</option>
-            <option value="MONTHLY">Monthly</option>
-            <option value="YEARLY">Yearly</option>
-          </select>
-          {errors.paymentFrequency && (
-            <p className="text-sm text-negative">{errors.paymentFrequency.message}</p>
+          {(aria) => (
+            <select
+              {...aria}
+              {...register('paymentFrequency')}
+              defaultValue="MONTHLY"
+              className={SELECT_CLASS}
+            >
+              <option value="WEEKLY">{t(paymentFrequencyLabelKey('WEEKLY'))}</option>
+              <option value="MONTHLY">{t(paymentFrequencyLabelKey('MONTHLY'))}</option>
+              <option value="YEARLY">{t(paymentFrequencyLabelKey('YEARLY'))}</option>
+            </select>
           )}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Scheduled payment"
-            placeholder="Instalment amount"
-            {...register('scheduledPaymentAmount', { valueAsNumber: true })}
-          />
-          {errors.scheduledPaymentAmount && (
-            <p className="text-sm text-negative">{errors.scheduledPaymentAmount.message}</p>
+        </FormField>
+
+        <FormField
+          id={fieldId('scheduled-payment')}
+          label={t('loans.scheduledPayment')}
+          error={errors.scheduledPaymentAmount?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('scheduledPaymentAmount', { valueAsNumber: true })}
+            />
           )}
-        </div>
-        <div>
+        </FormField>
+
+        <FormField
+          id={fieldId('next-due-date')}
+          label={t('loans.nextDueDate')}
+          error={errors.nextDueDate?.message}
+        >
           {/* Pre-filled with the user's own today, and the source of the
               schedule's anchor: the service reads this date's day of the month
               into `dueDayOfMonth` and advances from that anchor after every
               payment, so a loan due on the 31st goes Jan 31 → Feb 28 → Mar 31
               rather than drifting (ruling R6-6a). */}
-          <Input
-            type="date"
-            aria-label="Next due date"
-            {...register('nextDueDate')}
-            defaultValue={today}
-          />
-          {errors.nextDueDate && (
-            <p className="text-sm text-negative">{errors.nextDueDate.message}</p>
+          {(aria) => (
+            <Input {...aria} type="date" {...register('nextDueDate')} defaultValue={today} />
           )}
-        </div>
-        <div>
-          <Input
-            aria-label="Notes"
-            placeholder="Notes (optional)"
-            {...register('notes', {
-              // `''` means "no notes", so it is normalised to `undefined` here
-              // and the service stores `null` — otherwise an untouched field
-              // would write an empty string that reads back as a value.
-              setValueAs: (v: string) => (v === '' ? undefined : v),
-            })}
-          />
-          {errors.notes && <p className="text-sm text-negative">{errors.notes.message}</p>}
-        </div>
-        <Button type="submit" disabled={isSubmitting}>
-          Add loan
+        </FormField>
+
+        <FormField id={fieldId('notes')} label={t('loans.notes')} error={errors.notes?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('notes', {
+                // `''` means "no notes", so it is normalised to `undefined`
+                // here and the service stores `null` — otherwise an untouched
+                // field would write an empty string that reads back as a
+                // value.
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        <Button type="submit" className="self-start">
+          {submit.pending ? t('loans.createPending') : t('loans.createAction')}
         </Button>
-        {error && <p className="text-sm text-negative">{error}</p>}
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
       </fieldset>
     </form>
   )

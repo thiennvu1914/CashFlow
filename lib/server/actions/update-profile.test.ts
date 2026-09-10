@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
 const updateMock = vi.hoisted(() => vi.fn())
+const cookieSetMock = vi.hoisted(() => vi.fn())
 
 class MockUnauthorizedError extends Error {
   constructor() {
@@ -26,6 +27,10 @@ vi.mock('@/lib/auth/require-user', () => ({
 
 vi.mock('@/lib/prisma', () => ({
   prisma: { user: { update: updateMock } },
+}))
+
+vi.mock('next/headers', () => ({
+  cookies: async () => ({ set: cookieSetMock }),
 }))
 
 const { updateProfile } = await import('./update-profile')
@@ -51,6 +56,7 @@ const expectedData = {
 beforeEach(() => {
   requireUserMock.mockReset()
   updateMock.mockReset()
+  cookieSetMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
   updateMock.mockResolvedValue(undefined)
 })
@@ -65,6 +71,21 @@ describe('updateProfile', () => {
       where: { id: 'user_1' },
       data: expectedData,
     })
+  })
+
+  it('mirrors the parsed locale and theme into their cookies', async () => {
+    await updateProfile(validInput)
+
+    expect(cookieSetMock).toHaveBeenCalledWith(
+      'NEXT_LOCALE',
+      'en',
+      expect.objectContaining({ path: '/', sameSite: 'lax' }),
+    )
+    expect(cookieSetMock).toHaveBeenCalledWith(
+      'cashflow-theme',
+      'dark',
+      expect.objectContaining({ path: '/', sameSite: 'lax' }),
+    )
   })
 
   it('never lets an injected isDemo or userId reach prisma, and the where.id comes only from requireUser()', async () => {

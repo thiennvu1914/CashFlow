@@ -24,7 +24,7 @@ export function isValidIanaTimezone(value: string): boolean {
 // strips unknown keys by default, so an `isDemo`/`userId` present in the raw
 // input simply has no path into `ProfileInput`.
 export const profileSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(100),
+  name: z.string().min(1, 'Name is required').max(100, 'Keep the name under 100 characters'),
   baseCurrency: z.enum(['VND', 'USD']),
   locale: z.enum(['vi', 'en']),
   theme: z.enum(['light', 'dark']),
@@ -43,7 +43,10 @@ export type ProfileInput = z.infer<typeof profileSchema>
 // input than creating one.
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Current password is required'),
-  newPassword: z.string().min(8, 'Password must be at least 8 characters').max(128),
+  newPassword: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(128, 'Keep the password under 128 characters'),
 })
 
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>

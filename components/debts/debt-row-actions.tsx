@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
 import {
   recordDebtPaymentSchema,
   updateDebtSchema,
@@ -15,15 +16,40 @@ import {
   updateDebtAction,
   writeOffDebtAction,
 } from '@/lib/server/actions/debt-actions'
-import { DEBT_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { DEBT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { DebtDto } from '@/lib/ui/debt-view-model'
+import { ConfirmDialog } from '@/components/common/confirm-dialog'
+import { Dialog } from '@/components/common/dialog'
+import { FormField } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
+import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Record payment / Edit / Write off for one debt row. Rendered only by the
- * Debts page, through `DebtList`'s `renderActions` slot — the Dashboard's
- * compact list passes no `renderActions`, so this never mounts there.
+ * Record payment / Edit / Write off for one debt row — split into two
+ * independent pieces (fix round 1, findings 4/5/6/7), rendered by `DebtList`
+ * into two different `PlanningRow` slots:
+ *
+ *  - `DebtPaymentButton` — the row's one inline action, passed as
+ *    `inlineAction`. `variant="outline"` (not filled): the header's "Thêm
+ *    công nợ" is the page's one primary action, and a filled button on every
+ *    row competed with it (fix round 1, finding 4 — the same treatment
+ *    `GoalProgressButton` already got). Hidden entirely once the debt is PAID
+ *    (`outstanding` is zero): the service refuses any further payment as
+ *    OVERPAYMENT regardless of amount, so the button would offer nothing but
+ *    a guaranteed refusal (fix round 1, finding 5).
+ *  - `DebtRowMenu` — Edit/Write off, passed as `actions`. Its write-off
+ *    failure is reported through `useRowError` rather than a local
+ *    `useState`: `DebtList` renders this into `actions` and a `RowErrorAlert`
+ *    into `extra` (under the row), and only a shared Context can connect a
+ *    menu click to an alert that renders elsewhere in the tree.
+ *
+ * Neither ever mounts on the Dashboard's compact list (no `renderActions`
+ * there) or in the page's written-off section (a written-off debt refuses
+ * every write; offering the actions would be a promise the service breaks).
  *
  * Nothing here moves money. Recording a repayment writes a `DebtPayment` row
  * and nothing else: no Transaction, no Transfer, no account balance. Whether
@@ -33,70 +59,125 @@ import { Input } from '@/components/ui/input'
  *
  * A payment and an edit are two forms, not one, because they are two user
  * intents — "Minh paid me 250.000 on the 2nd" and "the name was wrong" — and a
- * single form would make either an accidental submission of the other. Only one
- * pane is open at a time.
+ * single form would make either an accidental submission of the other.
  *
- * Both forms mount on click rather than staying mounted hidden, so `useForm`
- * snapshots the *current* row as its defaults; there is no stale-default
- * problem to gate for, and no `useHydrated` here (a click cannot happen before
- * hydration).
+ * Both forms mount only while their `Dialog` is open, so `useForm` snapshots
+ * the *current* row as its defaults; there is no stale-default problem to gate
+ * for, and no `useHydrated` here — a click cannot happen before hydration.
  */
-type OpenPane = 'none' | 'payment' | 'edit'
+export function DebtPaymentButton({ debt, today }: { debt: DebtDto; today: string }) {
+  const t = useTranslations()
+  const [paymentOpen, setPaymentOpen] = useState(false)
 
-export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }) {
+  // A written-off debt refuses every write (`DebtNotActiveError`); guarded
+  // here as well as by the page (which renders the written-off section
+  // without a `renderActions` slot), because this component is the one that
+  // knows what its button does. A fully PAID debt keeps its menu (Edit stays
+  // useful) but drops this button: `outstanding` is zero, and the service
+  // rejects any further payment as OVERPAYMENT no matter what is typed.
+  if (!debt.active || debt.status === 'PAID') return null
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        // Height only: `size="sm"`'s 36 px is a mouse target, and spec §8
+        // wants 44 px under a thumb — so this inline row action is 44 px
+        // below the icon rail and the compact 36 px from `md` up.
+        className="h-11 md:h-9"
+        aria-label={`${t('debts.paymentAction')} · ${debt.person}`}
+        onClick={() => setPaymentOpen(true)}
+      >
+        {t('debts.paymentAction')}
+      </Button>
+
+      <Dialog
+        open={paymentOpen}
+        onOpenChange={setPaymentOpen}
+        title={t('debts.paymentTitle', { name: debt.person })}
+        // The same "nothing here moves money" copy the page's subtitle
+        // carries, repeated at the point of action.
+        description={t('debts.description')}
+        closeLabel={t('common.close')}
+      >
+        {paymentOpen && (
+          <DebtPaymentForm debt={debt} today={today} onDone={() => setPaymentOpen(false)} />
+        )}
+      </Dialog>
+    </>
+  )
+}
+
+export function DebtRowMenu({ debt }: { debt: DebtDto }) {
   const router = useRouter()
-  const [pane, setPane] = useState<OpenPane>('none')
-  const [error, setError] = useState<string | null>(null)
+  const t = useTranslations()
+  const [editOpen, setEditOpen] = useState(false)
+  const [writingOff, setWritingOff] = useState(false)
+  const { setError } = useRowError()
+  const writeOffSubmit = useSubmitState()
 
-  // A written-off debt refuses every write (`DebtNotActiveError`), so it is
-  // offered no buttons at all — showing them would be a promise the service
-  // breaks. Guarded here as well as by the page (which renders the written-off
-  // section without a `renderActions` slot), because this component is the one
-  // that knows what its buttons do.
   if (!debt.active) return null
 
-  async function handleWriteOff() {
-    if (!window.confirm('Write off this debt? Payments already recorded stay in the history.')) {
-      return
-    }
+  async function confirmWriteOff() {
     setError(null)
-    try {
-      const result = await writeOffDebtAction(debt.id)
-      if (!result.ok) {
-        setError(DEBT_ERROR_MESSAGES[result.error])
-        return
+    await writeOffSubmit.run(async () => {
+      try {
+        const result = await writeOffDebtAction(debt.id)
+        if (!result.ok) {
+          setWritingOff(false)
+          setError(t(DEBT_ERROR_KEYS[result.error]))
+          return
+        }
+        setWritingOff(false)
+        router.refresh()
+      } catch {
+        console.error('DebtRowMenu: write-off failed')
+        setWritingOff(false)
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-    } catch {
-      console.error('DebtRowActions: write-off failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
-  }
-
-  function toggle(next: Exclude<OpenPane, 'none'>) {
-    setError(null)
-    setPane((current) => (current === next ? 'none' : next))
+    })
   }
 
   return (
-    <div className="flex w-full flex-col items-end gap-2">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => toggle('payment')}>
-          {pane === 'payment' ? 'Close' : 'Record payment'}
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => toggle('edit')}>
-          {pane === 'edit' ? 'Close' : 'Edit'}
-        </Button>
-        <Button type="button" variant="destructive" size="sm" onClick={handleWriteOff}>
-          Write off
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
-      {pane === 'payment' && (
-        <DebtPaymentForm debt={debt} today={today} onDone={() => setPane('none')} />
-      )}
-      {pane === 'edit' && <DebtEditForm debt={debt} onDone={() => setPane('none')} />}
-    </div>
+    <>
+      <RowActionsMenu
+        label={t('common.rowActions', { name: debt.person })}
+        actions={[
+          { id: 'edit', label: t('debts.editAction'), onSelect: () => setEditOpen(true) },
+          {
+            id: 'writeOff',
+            label: t('debts.writeOffAction'),
+            tone: 'negative',
+            onSelect: () => {
+              setError(null)
+              setWritingOff(true)
+            },
+          },
+        ]}
+      />
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        title={t('debts.editTitle', { name: debt.person })}
+        closeLabel={t('common.close')}
+      >
+        {editOpen && <DebtEditForm debt={debt} onDone={() => setEditOpen(false)} />}
+      </Dialog>
+
+      <ConfirmDialog
+        open={writingOff}
+        onOpenChange={setWritingOff}
+        title={t('debts.writeOffConfirmTitle', { name: debt.person })}
+        description={t('debts.writeOffConfirmBody')}
+        confirmLabel={t('debts.writeOffAction')}
+        cancelLabel={t('common.cancel')}
+        pendingLabel={t('debts.writeOffPending')}
+        onConfirm={confirmWriteOff}
+      />
+    </>
   )
 }
 
@@ -104,10 +185,16 @@ export function DebtRowActions({ debt, today }: { debt: DebtDto; today: string }
  * "How much came back, and when?" — the only write that moves a debt's
  * outstanding amount.
  *
+ * States the current outstanding above the amount field (owner requirement
+ * G4: "current outstanding, payment amount, payment date, optional note") so
+ * the OVERPAYMENT refusal below is predictable rather than a surprise — the
+ * figure the service is about to compare against is right there while the
+ * user types.
+ *
  * The service refuses a payment above what is still owed, under a row lock, so
  * OVERPAYMENT is a genuinely reachable answer here (two tabs, a double-click,
- * or simply a typo) and it is shown inline under the form rather than as a
- * banner somewhere else on the page.
+ * or simply a typo) and it is shown inline under the form's fields, with the
+ * outstanding figure still visible on the row behind the dialog.
  */
 function DebtPaymentForm({
   debt,
@@ -121,15 +208,15 @@ function DebtPaymentForm({
   onDone: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  // Two debts can be with the same person, so a person-only `aria-describedby`
-  // target would be ambiguous between rows; `useId` makes the association per
-  // row.
-  const uid = useId()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `debt-payment-${name}-${uid}`
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<RecordDebtPaymentInput>({
     resolver: zodResolver(recordDebtPaymentSchema),
     // No default for `amount`: a pre-filled `0` is the one value the schema
@@ -139,78 +226,83 @@ function DebtPaymentForm({
 
   async function onSubmit(values: RecordDebtPaymentInput) {
     setError(null)
-    try {
-      const result = await recordDebtPaymentAction(debt.id, values)
-      if (!result.ok) {
-        setError(DEBT_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await recordDebtPaymentAction(debt.id, values)
+        if (!result.ok) {
+          setError(t(DEBT_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone()
+      } catch {
+        console.error('DebtPaymentForm: record failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone()
-    } catch {
-      console.error('DebtPaymentForm: record failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="flex w-full max-w-xs flex-col gap-2 border-t border-border pt-2"
-    >
-      <div>
-        <Input
-          type="number"
-          step="0.01"
-          aria-label={`Payment amount for ${debt.person}`}
-          aria-describedby={errors.amount ? `${uid}-amount-error` : undefined}
-          placeholder={`Amount (${debt.currency})`}
-          {...register('amount', { valueAsNumber: true })}
-        />
-        {errors.amount && (
-          <p id={`${uid}-amount-error`} className="text-sm text-negative">
-            {errors.amount.message}
-          </p>
-        )}
-      </div>
-      <div>
-        {/* Defaulted to the user's today, and editable: a repayment is often
-            recorded a day or two after it happened, and which day it was is
-            what the history is for. */}
-        <Input
-          type="date"
-          aria-label={`Payment date for ${debt.person}`}
-          aria-describedby={errors.date ? `${uid}-date-error` : undefined}
-          {...register('date')}
-        />
-        {errors.date && (
-          <p id={`${uid}-date-error`} className="text-sm text-negative">
-            {errors.date.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          aria-label={`Payment note for ${debt.person}`}
-          placeholder="Note (optional)"
-          {...register('note', {
-            setValueAs: (v: string) => (v === '' ? undefined : v),
-          })}
-        />
-        {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isSubmitting}>
-          Save
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-      {/* Where OVERPAYMENT lands: "That payment is more than what is still
-          owed." right under the amount the user typed, with the outstanding
-          figure still on the row above it. */}
-      {error && <p className="text-sm text-negative">{error}</p>}
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('debts.paymentAction')}</legend>
+
+        <p className="text-sm text-muted-foreground">
+          {t('debts.paymentOutstanding', { amount: debt.outstanding, currency: debt.currency })}
+        </p>
+
+        <FormField
+          id={fieldId('amount')}
+          label={t('debts.paymentAmount')}
+          error={errors.amount?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              <Input
+                {...aria}
+                type="number"
+                step="0.01"
+                className="pr-14"
+                {...register('amount', { valueAsNumber: true })}
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                {debt.currency}
+              </span>
+            </div>
+          )}
+        </FormField>
+
+        <FormField id={fieldId('date')} label={t('debts.paymentDate')} error={errors.date?.message}>
+          {/* Defaulted to the user's today, and editable: a repayment is often
+              recorded a day or two after it happened, and which day it was is
+              what the history is for. */}
+          {(aria) => <Input {...aria} type="date" {...register('date')} />}
+        </FormField>
+
+        <FormField id={fieldId('note')} label={t('debts.paymentNote')} error={errors.note?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('note', {
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        {/* Where OVERPAYMENT lands: "That payment is more than what is still
+            owed." right under the fields the user typed. */}
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit">
+            {submit.pending ? t('debts.paymentPending') : t('common.save')}
+          </Button>
+        </div>
+      </fieldset>
     </form>
   )
 }
@@ -228,12 +320,15 @@ function DebtPaymentForm({
  */
 function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const uid = useId()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `debt-edit-${name}-${uid}`
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<UpdateDebtInput>({
     resolver: zodResolver(updateDebtSchema),
     defaultValues: {
@@ -250,84 +345,74 @@ function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
 
   async function onSubmit(values: UpdateDebtInput) {
     setError(null)
-    try {
-      const result = await updateDebtAction(debt.id, values)
-      if (!result.ok) {
-        setError(DEBT_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await updateDebtAction(debt.id, values)
+        if (!result.ok) {
+          setError(t(DEBT_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone()
+      } catch {
+        console.error('DebtEditForm: update failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone()
-    } catch {
-      console.error('DebtEditForm: update failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="flex w-full max-w-xs flex-col gap-2 border-t border-border pt-2"
-    >
-      <div>
-        <Input
-          aria-label={`Edit person for ${debt.person}`}
-          aria-describedby={errors.person ? `${uid}-person-error` : undefined}
-          {...register('person')}
-        />
-        {errors.person && (
-          <p id={`${uid}-person-error`} className="text-sm text-negative">
-            {errors.person.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          aria-label={`Edit description for ${debt.person}`}
-          aria-describedby={errors.description ? `${uid}-description-error` : undefined}
-          placeholder="What it was for (optional)"
-          {...register('description', {
-            setValueAs: (v: string) => (v === '' ? undefined : v),
-          })}
-        />
-        {errors.description && (
-          <p id={`${uid}-description-error`} className="text-sm text-negative">
-            {errors.description.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          type="date"
-          aria-label={`Edit due date for ${debt.person}`}
-          aria-describedby={errors.dueDate ? `${uid}-due-date-error` : undefined}
-          {...register('dueDate')}
-        />
-        {errors.dueDate && (
-          <p id={`${uid}-due-date-error`} className="text-sm text-negative">
-            {errors.dueDate.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          aria-label={`Edit notes for ${debt.person}`}
-          placeholder="Notes (optional)"
-          {...register('notes', {
-            setValueAs: (v: string) => (v === '' ? undefined : v),
-          })}
-        />
-        {errors.notes && <p className="text-sm text-negative">{errors.notes.message}</p>}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isSubmitting}>
-          Save
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('debts.editAction')}</legend>
+
+        <FormField id={fieldId('person')} label={t('debts.person')} error={errors.person?.message}>
+          {(aria) => <Input {...aria} {...register('person')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('description')}
+          label={t('debts.descriptionField')}
+          error={errors.description?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('description', {
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('due-date')}
+          label={t('debts.dueDate')}
+          error={errors.dueDate?.message}
+        >
+          {(aria) => <Input {...aria} type="date" {...register('dueDate')} />}
+        </FormField>
+
+        <FormField id={fieldId('notes')} label={t('debts.notes')} error={errors.notes?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('notes', {
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit">{submit.pending ? t('common.saving') : t('common.save')}</Button>
+        </div>
+      </fieldset>
     </form>
   )
 }

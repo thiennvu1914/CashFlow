@@ -74,7 +74,7 @@ vi.mock('next/cache', () => ({
 
 const { createLoanAction, updateLoanAction, recordLoanPaymentAction, closeLoanAction } =
   await import('./loan-actions')
-const { LOAN_ERROR_MESSAGES } = await import('@/lib/ui/action-error-messages')
+const { LOAN_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -469,17 +469,22 @@ describe('closeLoanAction', () => {
   })
 })
 
-describe('LOAN_ERROR_MESSAGES', () => {
-  it('has product copy for every code an action can return, and no Zod text', () => {
-    // Typed `Record<LoanActionError, string>`, so a new code is a compile error
-    // until it has a message; this pins the wording itself, which is what the
-    // forms render verbatim.
-    expect(LOAN_ERROR_MESSAGES).toEqual({
-      OVERPAYMENT: 'That principal payment is more than the principal still outstanding.',
-      NOT_ACTIVE: 'This loan is closed and can no longer be changed.',
-      SPLIT_MISMATCH: 'Total must equal principal plus interest.',
-      INVALID_INPUT: 'Check the highlighted fields.',
-      NOT_FOUND: 'That loan no longer exists.',
+describe('LOAN_ERROR_KEYS', () => {
+  // The temporary English `LOAN_ERROR_MESSAGES` alias this test used to pin
+  // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
+  // in `messages/{vi,en}/errors.json`, and `lib/i18n/messages.test.ts` already
+  // proves the two locales carry the same key set with no empty value. What
+  // is still this layer's job to prove is narrower: every `LoanActionError` a
+  // component can receive maps to a key in the `errors.loan` namespace, typed
+  // as `Record<LoanActionError, string>` so a new code is a compile error
+  // until it has one.
+  it('has a message key for every code an action can return', () => {
+    expect(LOAN_ERROR_KEYS).toEqual({
+      OVERPAYMENT: 'errors.loan.OVERPAYMENT',
+      NOT_ACTIVE: 'errors.loan.NOT_ACTIVE',
+      SPLIT_MISMATCH: 'errors.loan.SPLIT_MISMATCH',
+      INVALID_INPUT: 'errors.loan.INVALID_INPUT',
+      NOT_FOUND: 'errors.loan.NOT_FOUND',
     })
   })
 })

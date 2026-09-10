@@ -1,8 +1,11 @@
 'use server'
 
+import { cookies } from 'next/headers'
 import { requireUser } from '@/lib/auth/require-user'
 import { prisma } from '@/lib/prisma'
 import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
+import { LOCALE_COOKIE } from '@/lib/i18n/config'
+import { THEME_COOKIE } from '@/lib/theme/config'
 
 export type UpdateProfileResult = { ok: true } | { ok: false; error: 'INVALID_INPUT' }
 
@@ -31,6 +34,29 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
       theme: parsed.data.theme,
       timezone: parsed.data.timezone,
     },
+  })
+
+  // The database row is the source of truth; these two cookies are its mirror,
+  // and they exist for the pages that have no session to ask — login, register,
+  // forgot/reset password (spec §3, §4). Written here because this action is
+  // the only client-reachable writer of `locale`/`theme`, so the mirror cannot
+  // drift from the row.
+  //
+  // Not `httpOnly`: both are presentation preferences with nothing to protect,
+  // and a flag that guards nothing only blocks a future client-side read.
+  // `sameSite: 'lax'` and `path: '/'` are what make them arrive on every
+  // navigation, including the very next one.
+  const cookieStore = await cookies()
+  const oneYearSeconds = 60 * 60 * 24 * 365
+  cookieStore.set(LOCALE_COOKIE, parsed.data.locale, {
+    path: '/',
+    sameSite: 'lax',
+    maxAge: oneYearSeconds,
+  })
+  cookieStore.set(THEME_COOKIE, parsed.data.theme, {
+    path: '/',
+    sameSite: 'lax',
+    maxAge: oneYearSeconds,
   })
 
   return { ok: true }

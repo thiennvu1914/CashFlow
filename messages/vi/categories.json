@@ -1,0 +1,19 @@
+{
+  "title": "Danh mục",
+  "description": "Loại tài khoản và danh mục thu chi của bạn.",
+  "accountTypes": "Loại tài khoản",
+  "expenseCategories": "Danh mục chi",
+  "incomeCategories": "Danh mục thu",
+  "addLabelAccountTypes": "Thêm loại tài khoản",
+  "addLabelExpenseCategories": "Thêm danh mục chi",
+  "addLabelIncomeCategories": "Thêm danh mục thu",
+  "addPlaceholder": "Tên mới",
+  "addAction": "Thêm",
+  "addPending": "Đang thêm…",
+  "archiveAction": "Lưu trữ",
+  "archiveConfirmTitle": "Lưu trữ {name}?",
+  "archiveConfirmBody": "Mục đã lưu trữ không còn xuất hiện khi chọn, nhưng các bản ghi cũ vẫn giữ nguyên.",
+  "archivePending": "Đang lưu trữ…",
+  "emptyTitle": "Chưa có mục nào",
+  "emptyBody": "Dùng ô bên dưới để thêm mục đầu tiên."
+}

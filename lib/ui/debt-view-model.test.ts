@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { DebtRow, DebtWithOutstanding } from '@/lib/server/services/debt'
-import {
-  DEBT_DIRECTION_LABELS,
-  DEBT_STATUS_LABELS,
-  debtSubtotalsByCurrency,
-  toDebtDto,
-} from './debt-view-model'
+import { debtSubtotalsByCurrency, toDebtDto } from './debt-view-model'
 
 /**
  * Pure mapping — no database, no session, no renderer. These cases pin the one
@@ -112,15 +107,13 @@ describe('toDebtDto', () => {
     expect(dto.id).toBe('debt_1')
     expect(dto.person).toBe('Minh')
     expect(dto.direction).toBe('RECEIVABLE')
-    expect(dto.directionLabel).toBe('Owes you')
     expect(dto.currency).toBe('VND')
     expect(dto.original).toBe('1.000.000')
     expect(dto.paid).toBe('0')
     expect(dto.outstanding).toBe('1.000.000')
     expect(dto.percentPaid).toBe(0)
-    expect(dto.percentLabel).toBe('0 %')
+    expect(dto.percentLabel).toBe('0 %')
     expect(dto.status).toBe('OPEN')
-    expect(dto.statusLabel).toBe('Open')
     expect(dto.active).toBe(true)
     expect(dto.dueDate).toBeNull()
     expect(dto.description).toBeNull()
@@ -128,12 +121,10 @@ describe('toDebtDto', () => {
     expect(dto.payments).toEqual([])
   })
 
-  it('labels a payable from the user’s side of the agreement', () => {
+  it('keeps the direction as the raw enum, for the component to label', () => {
     const dto = toDebtDto(row({ direction: 'PAYABLE' }))
 
     expect(dto.direction).toBe('PAYABLE')
-    // Never "Owed to" — the row is read by the person who owes it.
-    expect(dto.directionLabel).toBe('You owe')
   })
 
   it('formats a USD debt with its two decimals, never converted to VND', () => {
@@ -153,7 +144,7 @@ describe('toDebtDto', () => {
     expect(dto.paid).toBe('1.500,50')
     expect(dto.outstanding).toBe('499,50')
     expect(dto.currency).toBe('USD')
-    expect(dto.statusLabel).toBe('Partly paid')
+    expect(dto.status).toBe('PARTIALLY_PAID')
   })
 
   it('reports a part-paid debt as its share of the original', () => {
@@ -164,7 +155,7 @@ describe('toDebtDto', () => {
     expect(dto.paid).toBe('250.000')
     expect(dto.outstanding).toBe('750.000')
     expect(dto.percentPaid).toBe(25)
-    expect(dto.percentLabel).toBe('25 %')
+    expect(dto.percentLabel).toBe('25 %')
   })
 
   it('rounds the label half-up on the Decimal, not on a float', () => {
@@ -179,7 +170,7 @@ describe('toDebtDto', () => {
       ),
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percentPaid).toBeCloseTo(66.6667, 3)
@@ -190,9 +181,9 @@ describe('toDebtDto', () => {
       row({ payments: [payment({ amount: new Prisma.Decimal('1000000') })] }, 'PAID'),
     )
     expect(settled.percentPaid).toBe(100)
-    expect(settled.percentLabel).toBe('100 %')
+    expect(settled.percentLabel).toBe('100 %')
     expect(settled.outstanding).toBe('0')
-    expect(settled.statusLabel).toBe('Paid')
+    expect(settled.status).toBe('PAID')
 
     // The service refuses an overpayment under a row lock, so this is only
     // reachable by writing rows around it — the bar must still not overflow
@@ -201,7 +192,7 @@ describe('toDebtDto', () => {
       row({ payments: [payment({ amount: new Prisma.Decimal('1200000') })] }, 'PAID'),
     )
     expect(overpaid.percentPaid).toBe(100)
-    expect(overpaid.percentLabel).toBe('120 %')
+    expect(overpaid.percentLabel).toBe('120 %')
   })
 
   it('reads the due date in UTC, so a carrier is the day the user picked', () => {
@@ -211,17 +202,32 @@ describe('toDebtDto', () => {
 
     expect(dto.dueDate).toBe('2026-04-01')
     expect(dto.status).toBe('OVERDUE')
-    expect(dto.statusLabel).toBe('Overdue')
   })
 
-  it('marks a written-off debt inactive and labels it as written off', () => {
+  it('marks a written-off debt inactive, keeping the raw status enum', () => {
     const dto = toDebtDto(row({ status: 'WRITTEN_OFF' }, 'WRITTEN_OFF'))
 
     expect(dto.status).toBe('WRITTEN_OFF')
-    expect(dto.statusLabel).toBe('Written off')
     // What the page keys the row actions off: a written-off debt refuses every
     // write, so no button may be offered for it.
     expect(dto.active).toBe(false)
+  })
+
+  it('carries no English direction/status literal, an enum key, and nothing else', () => {
+    const dto = toDebtDto(row({ direction: 'PAYABLE' }, 'OVERDUE'))
+
+    // No `directionLabel`/`statusLabel` (or any other translated string) on the
+    // DTO at all — the component calls `debtDirectionLabelKey`/
+    // `debtStatusLabelKey`.
+    expect(Object.keys(dto)).not.toContain('directionLabel')
+    expect(Object.keys(dto)).not.toContain('statusLabel')
+
+    // `\b` word boundaries so a field NAME (`percentPaid`) cannot false-positive
+    // this check — only a translated ENGLISH LABEL as a JSON *value* can.
+    const serialized = JSON.stringify(dto)
+    expect(serialized).not.toMatch(
+      /\bOpen\b|\bPartly paid\b|\bPaid\b|\bOverdue\b|\bWritten off\b|\bReceivable\b|\bPayable\b/,
+    )
   })
 
   it('maps the payment history to strings, oldest first, keeping the service order', () => {
@@ -416,18 +422,5 @@ describe('debtSubtotalsByCurrency', () => {
     // the figure the user was reading.
     expect(debtSubtotalsByCurrency([usd, vnd]).map((s) => s.currency)).toEqual(['VND', 'USD'])
     expect(debtSubtotalsByCurrency([vnd, usd]).map((s) => s.currency)).toEqual(['VND', 'USD'])
-  })
-})
-
-describe('label maps', () => {
-  it('has copy for every direction and every display status', () => {
-    expect(DEBT_DIRECTION_LABELS).toEqual({ RECEIVABLE: 'Owes you', PAYABLE: 'You owe' })
-    expect(DEBT_STATUS_LABELS).toEqual({
-      OPEN: 'Open',
-      PARTIALLY_PAID: 'Partly paid',
-      PAID: 'Paid',
-      OVERDUE: 'Overdue',
-      WRITTEN_OFF: 'Written off',
-    })
   })
 })

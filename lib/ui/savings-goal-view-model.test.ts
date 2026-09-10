@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
-import { SAVINGS_GOAL_STATUS_LABELS, toSavingsGoalDto } from './savings-goal-view-model'
+import { toSavingsGoalDto } from './savings-goal-view-model'
 
 /**
  * Pure mapping — no database, no session, no renderer. These cases pin the one
@@ -41,14 +41,14 @@ describe('toSavingsGoalDto', () => {
     expect(dto.name).toBe('MacBook')
     expect(dto.currency).toBe('VND')
     expect(dto.status).toBe('ACTIVE')
-    expect(dto.statusLabel).toBe('In progress')
     expect(dto.target).toBe('50.000.000')
     expect(dto.progress).toBe('20.000.000')
     expect(dto.remaining).toBe('30.000.000')
     expect(dto.percent).toBe(40)
-    expect(dto.percentLabel).toBe('40 %')
+    expect(dto.percentLabel).toBe('40 %')
     expect(dto.deadline).toBeNull()
     expect(dto.deadlinePassed).toBe(false)
+    expect(dto.daysToDeadline).toBeNull()
   })
 
   it('formats a USD goal with its two decimals, never converted to VND', () => {
@@ -68,6 +68,14 @@ describe('toSavingsGoalDto', () => {
     expect(dto.currency).toBe('USD')
   })
 
+  it('formats every money field in the caller-supplied locale', () => {
+    const dto = toSavingsGoalDto(goal(), TODAY, 'en')
+
+    expect(dto.target).toBe('50,000,000')
+    expect(dto.progress).toBe('20,000,000')
+    expect(dto.remaining).toBe('30,000,000')
+  })
+
   it('clamps the bar at 100 % while the label tells the truth about over-saving', () => {
     const dto = toSavingsGoalDto(
       goal({
@@ -81,16 +89,16 @@ describe('toSavingsGoalDto', () => {
     // The bar cannot overflow its track…
     expect(dto.percent).toBe(100)
     // …but the figure the user saved is not hidden by that.
-    expect(dto.percentLabel).toBe('120 %')
+    expect(dto.percentLabel).toBe('120 %')
     // Nothing is "remaining" on an over-saved goal — never a negative figure.
     expect(dto.remaining).toBe('0')
-    expect(dto.statusLabel).toBe('Achieved')
+    expect(dto.status).toBe('ACHIEVED')
   })
 
   it('reports 0 % for an untouched goal and 100 % at exactly the target', () => {
     const untouched = toSavingsGoalDto(goal({ currentProgress: new Prisma.Decimal('0') }), TODAY)
     expect(untouched.percent).toBe(0)
-    expect(untouched.percentLabel).toBe('0 %')
+    expect(untouched.percentLabel).toBe('0 %')
     expect(untouched.remaining).toBe('50.000.000')
 
     const exact = toSavingsGoalDto(
@@ -102,7 +110,7 @@ describe('toSavingsGoalDto', () => {
       TODAY,
     )
     expect(exact.percent).toBe(100)
-    expect(exact.percentLabel).toBe('100 %')
+    expect(exact.percentLabel).toBe('100 %')
     expect(exact.remaining).toBe('0')
   })
 
@@ -116,28 +124,31 @@ describe('toSavingsGoalDto', () => {
       TODAY,
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percent).toBeCloseTo(66.6667, 3)
   })
 
-  it('marks a deadline in the past as passed while the goal is still unmet', () => {
+  it('marks a deadline in the past as passed while the goal is still unmet, with a negative day count', () => {
     const dto = toSavingsGoalDto(goal({ deadline: new Date('2026-03-14T00:00:00.000Z') }), TODAY)
 
     expect(dto.deadline).toBe('2026-03-14')
     expect(dto.deadlinePassed).toBe(true)
+    expect(dto.daysToDeadline).toBe(-1)
   })
 
-  it('does not mark today, or a future day, as passed', () => {
+  it('does not mark today, or a future day, as passed, and gives a non-negative day count', () => {
     const today = toSavingsGoalDto(goal({ deadline: new Date('2026-03-15T00:00:00.000Z') }), TODAY)
     expect(today.deadline).toBe('2026-03-15')
     // A deadline of today has not been missed — the day is not over.
     expect(today.deadlinePassed).toBe(false)
+    expect(today.daysToDeadline).toBe(0)
 
     const future = toSavingsGoalDto(goal({ deadline: new Date('2026-12-31T00:00:00.000Z') }), TODAY)
     expect(future.deadline).toBe('2026-12-31')
     expect(future.deadlinePassed).toBe(false)
+    expect(future.daysToDeadline).toBe(291)
   })
 
   it('never marks an achieved goal as having missed its deadline', () => {
@@ -208,17 +219,17 @@ describe('toSavingsGoalDto', () => {
     )
 
     expect(dto.status).toBe('ARCHIVED')
-    expect(dto.statusLabel).toBe('Archived')
     expect(dto.percent).toBe(100)
   })
-})
 
-describe('SAVINGS_GOAL_STATUS_LABELS', () => {
-  it('has copy for every stored status', () => {
-    expect(SAVINGS_GOAL_STATUS_LABELS).toEqual({
-      ACTIVE: 'In progress',
-      ACHIEVED: 'Achieved',
-      ARCHIVED: 'Archived',
-    })
+  it('carries no DTO field that is an English status literal, an enum key, and nothing else', () => {
+    const dto = toSavingsGoalDto(goal({ status: 'ACHIEVED' }), TODAY)
+
+    // No `statusLabel` (or any other translated string) on the DTO at all —
+    // the component calls `goalStatusLabelKey`.
+    expect(Object.keys(dto)).not.toContain('statusLabel')
+
+    const serialized = JSON.stringify(dto)
+    expect(serialized).not.toMatch(/In progress|Achieved|Archived/)
   })
 })

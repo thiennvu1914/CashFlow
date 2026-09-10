@@ -1,10 +1,12 @@
+import { getTranslations } from 'next-intl/server'
 import { RegisterForm } from '@/components/auth/register-form'
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  const t = await getTranslations()
   return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-4">
-      <h1 className="text-xl font-semibold">Create your CashFlow account</h1>
+    <>
+      <h1 className="text-2xl/[1.875rem] font-semibold">{t('auth.registerTitle')}</h1>
       <RegisterForm />
-    </div>
+    </>
   )
 }

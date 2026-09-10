@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
 import { ResetPasswordForm } from '@/components/auth/reset-password-form'
 
 /**
@@ -13,6 +14,7 @@ export default async function ResetPasswordPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  const t = await getTranslations()
   const params = await searchParams
   // A repeated `?token=` arrives as an array; treat anything that is not a
   // single non-empty string as no token at all rather than guessing which one
@@ -22,26 +24,25 @@ export default async function ResetPasswordPage({
 
   if (error !== undefined || token === null) {
     return (
-      <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-4">
-        <h1 className="text-xl font-semibold">Reset link is invalid or expired</h1>
-        <p className="text-sm text-muted-foreground">
-          Reset links expire after one hour and can only be used once. Request a new one to
-          continue.
+      <>
+        <h1 className="text-2xl/[1.875rem] font-semibold">{t('auth.invalidTokenTitle')}</h1>
+        <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
+          {t('auth.invalidTokenBody')}
         </p>
         <Link
           href="/forgot-password"
-          className="text-sm text-primary underline-offset-4 hover:underline"
+          className="text-sm text-brand underline-offset-4 hover:underline"
         >
-          Request a new reset link
+          {t('auth.requestNewLink')}
         </Link>
-      </div>
+      </>
     )
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-4">
-      <h1 className="text-xl font-semibold">Set a new password</h1>
+    <>
+      <h1 className="text-2xl/[1.875rem] font-semibold">{t('auth.resetTitle')}</h1>
       <ResetPasswordForm token={token} />
-    </div>
+    </>
   )
 }

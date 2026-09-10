@@ -1,6 +1,10 @@
-import { cn } from 'cn'
+import type { Prisma } from '@prisma/client'
+import { PieChart, Wallet } from 'lucide-react'
+import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isRealCalendarDate } from '@/lib/datetime/calendar-date'
+import { resolveLocale } from '@/lib/i18n/config'
+import type { Locale } from '@/lib/i18n/locale'
 import {
   InvalidReportRangeError,
   describeRange,
@@ -9,13 +13,19 @@ import {
   type ReportRange,
 } from '@/lib/reports/report-range'
 import { getActivitySummary } from '@/lib/server/services/activity'
-import { formatMoney } from '@/lib/ui/format-money'
+import { formatDate } from '@/lib/ui/format-date'
+import { formatMoney, formatPercent } from '@/lib/ui/format-money'
 import type { KpiDto } from '@/lib/ui/dashboard-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
-import { DashboardEmpty, DashboardSection } from '@/components/dashboard/dashboard-section'
-import { KpiStrip } from '@/components/dashboard/kpi-strip'
+import { ChartContainer } from '@/components/common/chart-container'
+import { EmptyState } from '@/components/common/empty-state'
+import { InlineAlert } from '@/components/common/inline-alert'
+import { PageHeader } from '@/components/common/page-header'
+import { SummaryPanel } from '@/components/dashboard/summary-panel'
+import { AccountTable } from '@/components/reports/account-table'
+import { CategoryBars } from '@/components/reports/category-bars'
+import { ExportMenu } from '@/components/reports/export-menu'
 import { PeriodFilter } from '@/components/reports/period-filter'
-import { buttonVariants } from '@/components/ui/button'
 
 /**
  * Reports (spec §5.6): one window of history, three ways — the headline totals,
@@ -37,6 +47,14 @@ import { buttonVariants } from '@/components/ui/button'
 type ReportsSearchParams = Record<string, string | string[] | undefined>
 
 /**
+ * The invalid-range `InlineAlert`'s id (fix round 1, promoted minor) — both
+ * date inputs in `PeriodFilter`'s custom-range form point `aria-describedby`
+ * at it, so a screen-reader user tabbing into From/To hears why the range
+ * they typed did not apply.
+ */
+const RANGE_ERROR_ID = 'report-range-error'
+
+/**
  * A raw `from`/`to` echoed back into the form after a rejected range, so the
  * user can correct one field instead of retyping both. Only a value that is
  * already a real calendar date is echoed: there is nothing to preserve about
@@ -44,6 +62,31 @@ type ReportsSearchParams = Record<string, string | string[] | undefined>
  */
 function echoableDate(value: string | string[] | undefined): string {
   return typeof value === 'string' && isRealCalendarDate(value) ? value : ''
+}
+
+/**
+ * A category's share of total expense, as a rounded percent string.
+ *
+ * Explicitly guarded (fix round 1, promoted minor) rather than the previous
+ * `expenseTotal.isZero() ? total : expenseTotal` fallback, which still
+ * reached `0/0` — a literal "NaN %" — whenever a zero-total row somehow
+ * appeared alongside zero total expense. `getActivitySummary`'s aggregation
+ * should never produce a zero-total category row in practice (a category
+ * only enters the map when a transaction adds to it), but this is the number
+ * a screen reader announces for `CategoryBars`' now-decorative bar, so it
+ * does not get to rely on an implicit invariant elsewhere.
+ */
+function categoryPercentLabel(
+  total: Prisma.Decimal,
+  expenseTotal: Prisma.Decimal,
+  locale: Locale,
+): string {
+  // Rounded on the `Decimal` first (unchanged rounding semantics — decimal.js'
+  // default mode is ROUND_HALF_UP); `formatPercent` only formats that
+  // already-rounded whole number for the reader's locale and appends the
+  // sign, never a rounding of its own.
+  if (expenseTotal.isZero()) return formatPercent(0, locale)
+  return formatPercent(total.div(expenseTotal).mul(100).toDecimalPlaces(0), locale)
 }
 
 export default async function ReportsPage({
@@ -57,6 +100,8 @@ export default async function ReportsPage({
   const user = await requireUserOrRedirect()
   const { baseCurrency: displayCurrency, timezone } = resolveProfileDefaults(user)
   const params = await searchParams
+  const t = await getTranslations()
+  const locale = await resolveLocale()
 
   let range: ReportRange
   try {
@@ -66,17 +111,52 @@ export default async function ReportsPage({
     // `?period=weekly` is the user's mistake and deserves a sentence, while a
     // database fault is not and must still surface as an error.
     if (!(error instanceof InvalidReportRangeError)) throw error
+    // The specific reason is not lost, it just stops being shown to the
+    // reader: it goes to the server log, where a developer chasing a bad link
+    // can still read which of the six checks refused it.
+    //
+    // `warn`, not `error`: a hand-typed query parameter that the resolver
+    // rejected is a handled input, not a fault — and in `next dev` a
+    // `console.error` during a server render is counted by the dev overlay's
+    // issue badge, which would put a red "1 Issue" on screen every time
+    // someone typed a bad range.
+    console.warn(`Reports: invalid range — ${error.message}`)
     return (
-      <div className="flex flex-col gap-6 p-4 md:p-6">
-        <ReportsHeader subtitle={`Choose a period · ${displayCurrency}`} exportQuery={null} />
+      <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
+        <PageHeader
+          title={t('reports.title')}
+          description={t('reports.chooseRange', { currency: displayCurrency })}
+          meta={t('reports.conversionNote')}
+          actions={
+            <ExportMenu
+              label={t('reports.export')}
+              filteredHref={null}
+              filteredLabel={t('reports.exportRange')}
+              fullHref="/api/reports/export?mode=full"
+              fullLabel={t('reports.exportAll')}
+            />
+          }
+        />
         <PeriodFilter
-          activeKind={null}
+          activeKind="custom"
           from={echoableDate(params.from)}
           to={echoableDate(params.to)}
+          errorId={RANGE_ERROR_ID}
         />
-        <p className="text-sm text-negative" role="alert">
-          {error.message}
-        </p>
+        {/* One localized sentence, not `error.message` (Task 17 fix round 1,
+            controller item): `InvalidReportRangeError` carries only a
+            developer message — English, written for a stack trace, and thrown
+            from six call sites ("Unknown period \"weekly\" — expected one of
+            day, week, month, quarter, year or custom") — so rendering it put
+            app-internal text on a Vietnamese screen. It exposes no CODE to map
+            per reason, and re-deriving which of the six failed would mean
+            duplicating the resolver's logic here, so this is deliberately ONE
+            sentence naming both things the reader can do; the control above
+            and the echoed dates below are what they act on. `lib/reports/` is
+            untouched. */}
+        <InlineAlert id={RANGE_ERROR_ID} tone="negative">
+          {t('reports.invalidRange')}
+        </InlineAlert>
       </div>
     )
   }
@@ -86,159 +166,113 @@ export default async function ReportsPage({
 
   // The only place a `Decimal` becomes a string on this page.
   const kpis: KpiDto[] = [
-    { label: 'Income', value: formatMoney(summary.income, displayCurrency), negative: false },
+    {
+      labelKey: 'reports.income',
+      value: formatMoney(summary.income, displayCurrency, locale),
+      negative: false,
+    },
     // Expense is aggregated as a positive magnitude — red by meaning, not by
     // sign — so it is never marked negative here.
-    { label: 'Expense', value: formatMoney(summary.expense, displayCurrency), negative: false },
     {
-      label: 'Net Income',
-      value: formatMoney(summary.netIncome, displayCurrency),
+      labelKey: 'reports.expense',
+      value: formatMoney(summary.expense, displayCurrency, locale),
+      negative: false,
+    },
+    {
+      labelKey: 'reports.netIncome',
+      value: formatMoney(summary.netIncome, displayCurrency, locale),
       negative: summary.netIncome.isNegative(),
     },
   ]
 
+  // Bars are relative to the LARGEST category, not the total — see CategoryBars.
+  const largest = summary.byCategory[0]?.total
+  const categoryRows = summary.byCategory.map((row) => ({
+    id: row.categoryId ?? 'uncategorized',
+    name: row.name,
+    amount: formatMoney(row.total, displayCurrency, locale),
+    percent: largest && !largest.isZero() ? row.total.div(largest).mul(100).toNumber() : 0,
+    percentLabel: categoryPercentLabel(row.total, summary.expense, locale),
+  }))
+
+  const accountRows = summary.byAccount.map((row) => ({
+    id: row.accountId,
+    name: row.name,
+    income: formatMoney(row.income, displayCurrency, locale),
+    expense: formatMoney(row.expense, displayCurrency, locale),
+    netIncome: formatMoney(row.netIncome, displayCurrency, locale),
+    netNegative: row.netIncome.isNegative(),
+  }))
+
   return (
-    <div className="flex flex-col gap-6 p-4 md:p-6">
-      <ReportsHeader
-        subtitle={`${fromLabel} – ${toLabelInclusive} · ${displayCurrency}`}
-        exportQuery={rangeToQueryString(range)}
+    <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
+      <PageHeader
+        title={t('reports.title')}
+        description={t('reports.rangeText', {
+          from: formatDate(fromLabel, { locale, timeZone: timezone, style: 'date' }),
+          to: formatDate(toLabelInclusive, { locale, timeZone: timezone, style: 'date' }),
+          currency: displayCurrency,
+        })}
+        // Always shown, though it only bites for a user with accounts in more
+        // than one currency: every figure on this page is history, restated at
+        // the rate each row snapshotted when it was entered — never at today's
+        // rate. Someone comparing a report against a bank statement, or against
+        // the same report run last month, needs to know that up front, and a
+        // caption that appeared only sometimes would be missed exactly when it
+        // mattered.
+        meta={t('reports.conversionNote')}
+        actions={
+          <ExportMenu
+            label={t('reports.export')}
+            filteredHref={`/api/reports/export?mode=filtered&${rangeToQueryString(range)}`}
+            filteredLabel={t('reports.exportRange')}
+            fullHref="/api/reports/export?mode=full"
+            fullLabel={t('reports.exportAll')}
+          />
+        }
       />
 
       <PeriodFilter
         activeKind={range.kind}
-        from={range.kind === 'custom' ? range.from : fromLabel}
-        to={range.kind === 'custom' ? range.to : toLabelInclusive}
+        from={range.kind === 'custom' ? range.from : ''}
+        to={range.kind === 'custom' ? range.to : ''}
       />
 
-      <KpiStrip kpis={kpis} currency={displayCurrency} />
+      <SummaryPanel
+        variant="flat"
+        kpis={kpis}
+        currency={displayCurrency}
+        labels={{
+          'reports.income': t('reports.income'),
+          'reports.expense': t('reports.expense'),
+          'reports.netIncome': t('reports.netIncome'),
+        }}
+        hints={{}}
+      />
 
-      <DashboardSection
-        title="By Category"
-        caption="Expenses only — an income row has no place in a spending breakdown"
-      >
-        {summary.byCategory.length === 0 ? (
-          <DashboardEmpty>No expenses in this range</DashboardEmpty>
+      <ChartContainer title={t('reports.byCategory')} caption={t('reports.byCategoryCaption')}>
+        {categoryRows.length === 0 ? (
+          <EmptyState icon={PieChart} title={t('reports.emptyCategory')} />
         ) : (
-          <ul className="divide-y divide-border">
-            {summary.byCategory.map((category) => (
-              <li
-                key={category.categoryId ?? 'uncategorized'}
-                className="flex items-baseline justify-between gap-4 py-2 text-sm"
-              >
-                <span className="min-w-0 truncate">{category.name}</span>
-                <span className="tabular-nums">{formatMoney(category.total, displayCurrency)}</span>
-              </li>
-            ))}
-          </ul>
+          <CategoryBars rows={categoryRows} currency={displayCurrency} />
         )}
-      </DashboardSection>
+      </ChartContainer>
 
-      <DashboardSection title="By Account">
-        {summary.byAccount.length === 0 ? (
-          <DashboardEmpty>No activity in this range</DashboardEmpty>
+      <ChartContainer title={t('reports.byAccount')} caption={displayCurrency}>
+        {accountRows.length === 0 ? (
+          <EmptyState icon={Wallet} title={t('reports.emptyAccount')} />
         ) : (
-          // The table can outgrow a phone; it scrolls inside its own box rather
-          // than widening the page.
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[22rem] text-sm">
-              <thead>
-                <tr className="border-b border-border text-xs tracking-wide text-muted-foreground uppercase">
-                  <th scope="col" className="py-2 text-left font-medium">
-                    Account
-                  </th>
-                  <th scope="col" className="py-2 text-right font-medium">
-                    Income
-                  </th>
-                  <th scope="col" className="py-2 text-right font-medium">
-                    Expense
-                  </th>
-                  <th scope="col" className="py-2 text-right font-medium">
-                    Net Income
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {summary.byAccount.map((account) => (
-                  <tr key={account.accountId}>
-                    <th scope="row" className="py-2 pr-4 text-left font-normal">
-                      {account.name}
-                    </th>
-                    <td className="py-2 pl-4 text-right tabular-nums">
-                      {formatMoney(account.income, displayCurrency)}
-                    </td>
-                    <td className="py-2 pl-4 text-right tabular-nums">
-                      {formatMoney(account.expense, displayCurrency)}
-                    </td>
-                    <td
-                      className={cn(
-                        'py-2 pl-4 text-right font-medium tabular-nums',
-                        account.netIncome.isNegative() && 'text-negative',
-                      )}
-                    >
-                      {formatMoney(account.netIncome, displayCurrency)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AccountTable
+            rows={accountRows}
+            labels={{
+              account: t('reports.account'),
+              income: t('reports.income'),
+              expense: t('reports.expense'),
+              netIncome: t('reports.netIncome'),
+            }}
+          />
         )}
-      </DashboardSection>
+      </ChartContainer>
     </div>
-  )
-}
-
-/**
- * The page title, the window it covers, and the two export links.
- *
- * The links are plain anchors, not `next/link`: the response is a file
- * download, not a route, so a client-side navigation is the wrong mechanism.
- *
- * The filtered link's query string is built from `rangeToQueryString(range)` —
- * the *resolved* range, not the raw parameters — because that is what
- * guarantees `/api/reports/export` re-resolves the identical window through the
- * same `resolveReportRange` and exports exactly the rows this page is showing.
- */
-function ReportsHeader({
-  subtitle,
-  exportQuery,
-}: {
-  subtitle: string
-  /** `null` when no range resolved — there is nothing to export a filter of. */
-  exportQuery: string | null
-}) {
-  return (
-    <header className="flex flex-col gap-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
-      <div>
-        <h1 className="text-xl font-semibold">Reports</h1>
-        <p className="text-sm text-muted-foreground">{subtitle}</p>
-        {/* Always shown, though it only bites for a user with accounts in more
-            than one currency: every figure on this page is history, restated at
-            the rate each row snapshotted when it was entered — never at today's
-            rate. Someone comparing a report against a bank statement, or
-            against the same report run last month, needs to know that up front,
-            and a caption that appeared only sometimes would be missed exactly
-            when it mattered. */}
-        <p className="text-xs text-muted-foreground">
-          Converted at each transaction&rsquo;s exchange rate at entry
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {exportQuery !== null && (
-          <a
-            href={`/api/reports/export?mode=filtered&${exportQuery}`}
-            className={buttonVariants({ variant: 'secondary' })}
-          >
-            Export this range (.xlsx)
-          </a>
-        )}
-        <a
-          href="/api/reports/export?mode=full"
-          className={buttonVariants({ variant: 'secondary' })}
-        >
-          Export all data (.xlsx)
-        </a>
-      </div>
-    </header>
   )
 }

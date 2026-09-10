@@ -34,28 +34,34 @@ import type { DebtLoanOverviewDto } from '@/lib/ui/dashboard-view-model'
  * between green and red.
  */
 const ROWS = [
-  { key: 'receivables', label: 'Receivables', tone: 'text-positive' },
-  { key: 'payables', label: 'Payables', tone: 'text-negative' },
-  { key: 'loanOutstanding', label: 'Outstanding loans', tone: 'text-negative' },
-] as const satisfies readonly { key: keyof DebtLoanOverviewDto; label: string; tone: string }[]
+  { key: 'receivables', labelKey: 'dashboard.receivables', tone: 'text-positive' },
+  { key: 'payables', labelKey: 'dashboard.payables', tone: 'text-negative' },
+  { key: 'loanOutstanding', labelKey: 'dashboard.loanOutstanding', tone: 'text-negative' },
+] as const satisfies readonly { key: keyof DebtLoanOverviewDto; labelKey: string; tone: string }[]
 
 export function DebtLoanOverview({
   data,
   currency,
+  labels,
+  footnote,
 }: {
   data: DebtLoanOverviewDto
   /** The currency all three figures are already stated in. */
   currency: Currency
+  /** Already-translated labels, keyed by each row's `labelKey`. */
+  labels: Record<string, string>
+  /** Already-translated: `dashboard.debtLoanIncluded`. */
+  footnote: string
 }) {
   return (
     <div className="flex flex-col gap-3">
       <dl className="flex flex-col gap-2">
-        {ROWS.map(({ key, label, tone }) => (
+        {ROWS.map(({ key, labelKey, tone }) => (
           // A wrapper `div` per pair, as in `KpiStrip`: a `dl` may contain only
           // `dt`/`dd` (or `div`s of them), and it is what lets each row be one
           // flex line.
           <div key={key} className="flex items-baseline justify-between gap-2">
-            <dt className="text-sm text-muted-foreground">{label}</dt>
+            <dt className="text-sm text-muted-foreground">{labels[labelKey]}</dt>
             {/* `tabular-nums` so the three figures' digits line up into a
                 column that can be compared at a glance, and `whitespace-nowrap`
                 so a figure never breaks mid-number — only the currency suffix
@@ -67,7 +73,7 @@ export function DebtLoanOverview({
           </div>
         ))}
       </dl>
-      <p className="text-xs text-muted-foreground">Included in Net Worth</p>
+      <p className="text-xs text-muted-foreground">{footnote}</p>
     </div>
   )
 }

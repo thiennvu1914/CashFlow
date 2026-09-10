@@ -17,9 +17,17 @@ import { DebtLoanOverview } from './debt-loan-overview'
  */
 
 const DATA = { receivables: '2.500.000', payables: '750.000', loanOutstanding: '18.000.000' }
+const LABELS = {
+  'dashboard.receivables': 'Receivables',
+  'dashboard.payables': 'Payables',
+  'dashboard.loanOutstanding': 'Outstanding loans',
+}
+const FOOTNOTE = 'Included in Net Worth'
 
 function render(): string {
-  return renderToStaticMarkup(<DebtLoanOverview data={DATA} currency="VND" />)
+  return renderToStaticMarkup(
+    <DebtLoanOverview data={DATA} currency="VND" labels={LABELS} footnote={FOOTNOTE} />,
+  )
 }
 
 /** The markup between a `dt` and the `dd` that follows it — one row of the

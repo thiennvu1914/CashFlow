@@ -2,8 +2,9 @@ import { Prisma } from '@prisma/client'
 import type { DebtDirection } from '@prisma/client'
 import type { Currency } from '@/lib/currency/provider'
 import { formatCalendarDate } from '@/lib/datetime/calendar-date'
+import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { DebtDisplayStatus, DebtWithOutstanding } from '@/lib/server/services/debt'
-import { formatMoney } from './format-money'
+import { formatMoney, formatPercent } from './format-money'
 
 /**
  * The Debts page's DTO boundary, as two pure functions.
@@ -27,6 +28,12 @@ import { formatMoney } from './format-money'
  * user's `today` (`deriveDebtDisplayStatus`), and a second definition of
  * "overdue" in the UI is exactly the kind of drift that makes a badge and a
  * total disagree; this file only labels what it is given.
+ *
+ * No status/direction copy is baked in here at all (Phase 7): this module
+ * returns the bare `direction`/`status` enums and the component that renders a
+ * row translates them via `debtDirectionLabelKey`/`debtStatusLabelKey`
+ * (`lib/ui/labels.ts`) — this stays a pure function with no translator of its
+ * own.
  */
 export interface DebtPaymentDto {
   id: string
@@ -40,8 +47,6 @@ export interface DebtDto {
   id: string
   person: string
   direction: DebtDirection
-  /** 'Owes you' / 'You owe' — read from the user's side of the agreement. */
-  directionLabel: string
   currency: Currency
   /** All three formatted in the debt's own currency, never converted. */
   original: string
@@ -53,7 +58,6 @@ export interface DebtDto {
    *  NOT clamped: the bar's width may not overflow, the figure may. */
   percentLabel: string
   status: DebtDisplayStatus
-  statusLabel: string
   /** The *stored* status is ACTIVE — what the page keys the row actions off. A
    *  written-off debt refuses every write, so offering it a button would be a
    *  promise the service breaks. Not derivable from `status` alone once a
@@ -78,24 +82,14 @@ export interface DebtDto {
 }
 
 /**
- * Fixed English copy (Phase 7 replaces these literals with i18n keys, same as
- * `lib/ui/action-error-messages.ts`).
- *
- * Written from the reader's point of view rather than the ledger's: the person
- * looking at the row is the user, so a RECEIVABLE is "Owes you" and not
- * "Receivable" — a word that would need explaining — and a PAYABLE is "You
- * owe" rather than the passive "Owed to".
- */
-export const DEBT_DIRECTION_LABELS: Record<DebtDirection, string> = {
-  RECEIVABLE: 'Owes you',
-  PAYABLE: 'You owe',
-}
-
-/**
- * "Partly paid" rather than "Partially paid": the badge sits in a row of
- * figures and the shorter word reads the same. Each label also differs in
- * wording as well as colour, so no state depends on seeing colour to be
- * understood.
+ * Fixed English copy for each stored status, kept ONLY because
+ * `lib/server/export/build-debts-sheet.ts` (frozen this phase) still imports it
+ * for the Excel export's `Status` column, which is English regardless of the
+ * reader's locale (spec §12 says nothing about localising a workbook, and Phase
+ * 7's own export sheets are out of scope). No UI component reads this:
+ * `toDebtDto` below returns the bare `status` enum, and every renderer calls
+ * `debtStatusLabelKey` instead. "Partly paid" rather than "Partially paid": a
+ * badge sits in a row of figures and the shorter word reads the same.
  */
 export const DEBT_STATUS_LABELS: Record<DebtDisplayStatus, string> = {
   OPEN: 'Open',
@@ -109,12 +103,10 @@ export const DEBT_STATUS_LABELS: Record<DebtDisplayStatus, string> = {
 const MAX_PERCENT = 100
 const MIN_PERCENT = 0
 
-export function toDebtDto({
-  debt,
-  paid,
-  outstanding,
-  displayStatus,
-}: DebtWithOutstanding): DebtDto {
+export function toDebtDto(
+  { debt, paid, outstanding, displayStatus }: DebtWithOutstanding,
+  locale: Locale = DEFAULT_LOCALE,
+): DebtDto {
   const currency = debt.currency
   // Safe without a zero guard: `Debt_originalAmount_positive` (the CHECK in
   // this model's migration) and `createDebtSchema` both forbid an original
@@ -126,20 +118,24 @@ export function toDebtDto({
     id: debt.id,
     person: debt.person,
     direction: debt.direction,
-    directionLabel: DEBT_DIRECTION_LABELS[debt.direction],
     currency,
-    original: formatMoney(debt.originalAmount, currency),
-    paid: formatMoney(paid, currency),
+    original: formatMoney(debt.originalAmount, currency, locale),
+    paid: formatMoney(paid, currency, locale),
     // Not clamped at zero, unlike a savings goal's "remaining": this is the
     // authoritative derived figure the service's own overpayment check compares
     // against, and it can only go negative if rows were written around the
     // service — in which case showing a negative is how the user finds out,
     // rather than a tidy "0" hiding it.
-    outstanding: formatMoney(outstanding, currency),
+    outstanding: formatMoney(outstanding, currency, locale),
     percentPaid: Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, ratio.mul(100).toNumber())),
-    percentLabel: `${ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toString()} %`,
+    // Rounded on the `Decimal` first (unchanged rounding semantics);
+    // `formatPercent` only formats that already-rounded whole number for the
+    // reader's locale and appends the sign -- it does no rounding of its own.
+    percentLabel: formatPercent(
+      ratio.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP),
+      locale,
+    ),
     status: displayStatus,
-    statusLabel: DEBT_STATUS_LABELS[displayStatus],
     active: debt.status === 'ACTIVE',
     dueDate,
     description: debt.description,
@@ -147,7 +143,7 @@ export function toDebtDto({
     payments: debt.payments.map((p) => ({
       id: p.id,
       date: formatCalendarDate(p.date),
-      amount: formatMoney(p.amount, currency),
+      amount: formatMoney(p.amount, currency, locale),
       note: p.note,
     })),
     editable: {
@@ -187,7 +183,10 @@ export interface CurrencySubtotalDto {
  */
 const SUBTOTAL_CURRENCY_ORDER: Currency[] = ['VND', 'USD']
 
-export function debtSubtotalsByCurrency(rows: DebtWithOutstanding[]): CurrencySubtotalDto[] {
+export function debtSubtotalsByCurrency(
+  rows: DebtWithOutstanding[],
+  locale: Locale = DEFAULT_LOCALE,
+): CurrencySubtotalDto[] {
   const totals = new Map<Currency, { receivable: Prisma.Decimal; payable: Prisma.Decimal }>()
 
   for (const { debt, outstanding } of rows) {
@@ -211,8 +210,8 @@ export function debtSubtotalsByCurrency(rows: DebtWithOutstanding[]): CurrencySu
     const { receivable, payable } = totals.get(currency)!
     return {
       currency,
-      receivable: formatMoney(receivable, currency),
-      payable: formatMoney(payable, currency),
+      receivable: formatMoney(receivable, currency, locale),
+      payable: formatMoney(payable, currency, locale),
     }
   })
 }

@@ -2,6 +2,7 @@
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { Currency } from '@/lib/currency/provider'
+import type { Locale } from '@/lib/i18n/locale'
 import type { NamedAmountDto } from '@/lib/ui/dashboard-view-model'
 import { formatChartValue, formatCompactAmount } from '@/lib/ui/format-money'
 import {
@@ -9,48 +10,97 @@ import {
   BAR_CURSOR,
   BAR_PROPS,
   CHART_COLORS,
-  CHART_HEIGHT,
   TOOLTIP_CONTENT_STYLE,
   TOOLTIP_LABEL_STYLE,
 } from './chart-theme'
-import { DashboardEmpty } from './dashboard-section'
 
 /**
- * This month's spending, largest category first.
+ * This month's spending, largest category first — at most eight bars plus an
+ * "Other" bucket (spec §6.1), already assembled by the view model
+ * (`bucketExpenseCategories`); the page translates any `nameKey` before
+ * handing rows here (`row.nameKey ? t(row.nameKey) : row.name`).
  *
  * Horizontal bars rather than a pie: category names are words, and words read
  * along a left-hand axis without a legend, a leader line or a colour key. The
  * service already ordered the rows (with an id tiebreak), so the chart draws
  * them in the order it was given.
+ *
+ * `summary` and `seriesLabel` arrive already translated from the page (fix
+ * round 1, finding 2) — see `CashFlowTrendChart`'s doc comment for why.
+ *
+ * `CHART_COLORS.distribution`, not `.expense` (Task 14 Step 3, finding 3):
+ * this is one quantity — the month's spending — split into its parts, which is
+ * the `distribution` slot in the convention `chart-theme.ts` documents, not the
+ * `expense` slot (that one is for the series that stands opposite an income
+ * series, as on the cash-flow trend and the income-vs-expense bars). It had
+ * been `.expense`, which put the very same breakdown of the very same numbers
+ * in salmon here and in muted blue on the Reports page
+ * (`components/reports/category-bars.tsx`, `tone="accent"`), and its own doc
+ * comment already argued for the neutral reading. The sign is stated by the
+ * card's title and by every figure beside the bars; the hue does not need to
+ * repeat it.
  */
 export function ExpenseByCategoryChart({
   data,
   currency,
+  locale,
+  height,
+  summary,
+  seriesLabel,
 }: {
   data: NamedAmountDto[]
   currency: Currency
+  locale: Locale
+  height: number
+  /** The chart's accessible name, fully translated and interpolated by the page. */
+  summary: string
+  /** Translated Tooltip series name (the bar has no Legend). */
+  seriesLabel: string
 }) {
-  if (data.length === 0) return <DashboardEmpty>No expenses this month</DashboardEmpty>
-
+  /* `<figure aria-label>`: a named but NON-leaf wrapper, so the summary is
+     announced AND recharts' keyboard layer inside it still works. Full
+     reasoning in `account-balance-history-chart.tsx`. */
   return (
-    <div
-      role="img"
-      aria-label={`Horizontal bar chart of this month's expenses by category in ${currency}, ${data.length} categories, largest first`}
-    >
-      <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+    <figure aria-label={summary}>
+      <ResponsiveContainer width="100%" height={height}>
+        {/* `title={summary}` (Task 18, routed from the Task 16 re-review):
+            recharts renders its root `<svg>` with `role="application"` and
+            `tabIndex=0` when its accessibility layer is on (the default in
+            v3 — `node_modules/recharts/lib/container/RootSurface.js`), and
+            it always emits a `<title>` element inside that svg. With no
+            `title` prop that element was EMPTY, so the one focusable node in
+            the chart had no accessible name of its own — the `<figure>`'s
+            `aria-label` names the figure, not the plot a keyboard user
+            actually lands on. Same translated sentence, so the figure and
+            the plot cannot disagree. `desc` is deliberately left unset: it
+            would repeat that sentence as the plot's description and be read
+            twice. */}
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          title={summary}
+        >
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
-          <XAxis type="number" {...AXIS_PROPS} tickFormatter={formatCompactAmount} />
+          {/* Wrapped rather than passed directly: Recharts calls a
+              `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s
+              `locale` second parameter is a different type than Recharts'
+              `index`, so passing the function itself does not type-check. */}
+          <XAxis
+            type="number"
+            {...AXIS_PROPS}
+            tickFormatter={(value) => formatCompactAmount(value, locale)}
+          />
           <YAxis type="category" dataKey="name" {...AXIS_PROPS} width={104} />
           <Tooltip
             cursor={BAR_CURSOR}
             contentStyle={TOOLTIP_CONTENT_STYLE}
             labelStyle={TOOLTIP_LABEL_STYLE}
-            formatter={(value) => formatChartValue(value, currency)}
+            formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name="Spent" fill={CHART_COLORS.expense} />
+          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
         </BarChart>
       </ResponsiveContainer>
-    </div>
+    </figure>
   )
 }

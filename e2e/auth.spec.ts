@@ -39,20 +39,26 @@ test('register, log out, forgot password with a real reset round trip, then log 
   const newPassword = 'correct-horse-battery-staple-2'
 
   await page.goto('/register')
-  await page.getByPlaceholder('Name').fill('E2E Test User')
-  await page.getByPlaceholder('Email').fill(email)
-  await page.getByPlaceholder('Password').fill(oldPassword)
-  await page.getByRole('button', { name: 'Create account' }).click()
+  await page.getByLabel(/^Tên$|^Name$/).fill('E2E Test User')
+  await page.getByLabel(/^Email$/).fill(email)
+  await page.getByLabel(/Mật khẩu|^Password$/).fill(oldPassword)
+  await page.getByRole('button', { name: /Tạo tài khoản|Create account/ }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 
-  await page.getByRole('button', { name: 'Log out' }).click()
+  // Log out is now translated (default locale vi: "Đăng xuất") — see the same
+  // vi/en alternation `phase4.spec.ts` etc. use for every other nav selector
+  // Phase 7 moved.
+  await page.getByRole('button', { name: /^Đăng xuất$|^Log out$/ }).click()
   await expect(page).toHaveURL(/\/login/)
 
   await page.goto('/forgot-password')
-  await page.getByPlaceholder('Email').fill(email)
-  await page.getByRole('button', { name: 'Send reset link' }).click()
+  await page.getByLabel(/^Email$/).fill(email)
+  await page.getByRole('button', { name: /Gửi liên kết đặt lại|Send reset link/ }).click()
+  // The message now continues past the full stop ("...and can only be used
+  // once."), so an exact-string match would miss it — assert a vi/en
+  // alternation on the leading clause instead.
   await expect(
-    page.getByText('If an account exists for that email, a reset link has been sent.'),
+    page.getByText(/Nếu có tài khoản dùng email đó|If an account exists for that email/),
   ).toBeVisible()
 
   // Poll the file outbox for the reset email (the dev server writes it
@@ -74,19 +80,21 @@ test('register, log out, forgot password with a real reset round trip, then log 
   // redirects to /reset-password?token=... on success.
   await page.goto(resetUrl!)
   await expect(page).toHaveURL(/\/reset-password\?token=/)
-  await page.getByPlaceholder('New password').fill(newPassword)
-  await page.getByRole('button', { name: 'Set new password' }).click()
+  await page.getByLabel(/Mật khẩu mới|New password/).fill(newPassword)
+  await page.getByRole('button', { name: /Đặt mật khẩu mới|Set new password/ }).click()
   await expect(page).toHaveURL(/\/login/)
 
   // The old password must no longer work.
-  await page.getByPlaceholder('Email').fill(email)
-  await page.getByPlaceholder('Password').fill(oldPassword)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByText('Invalid email or password')).toBeVisible()
+  await page.getByLabel(/^Email$/).fill(email)
+  await page.getByLabel(/Mật khẩu|^Password$/).fill(oldPassword)
+  await page.getByRole('button', { name: /Đăng nhập|Sign in/ }).click()
+  await expect(
+    page.getByText(/Email hoặc mật khẩu không đúng|Invalid email or password/),
+  ).toBeVisible()
 
   // The new password does.
-  await page.getByPlaceholder('Password').fill(newPassword)
-  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.getByLabel(/Mật khẩu|^Password$/).fill(newPassword)
+  await page.getByRole('button', { name: /Đăng nhập|Sign in/ }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 })
 
@@ -96,4 +104,14 @@ test('a logged-out visitor is redirected to /login from protected routes', async
 
   await page.goto('/settings')
   await expect(page).toHaveURL(/\/login/)
+})
+
+test('reset-password with an invalid or expired token shows an explicit invalid-token state', async ({
+  page,
+}) => {
+  await page.goto('/reset-password?error=INVALID_TOKEN')
+  await expect(page.getByRole('heading', { name: /không hợp lệ|invalid or expired/ })).toBeVisible()
+  await expect(
+    page.getByRole('link', { name: /Yêu cầu liên kết mới|Request a new reset link/ }),
+  ).toHaveAttribute('href', '/forgot-password')
 })

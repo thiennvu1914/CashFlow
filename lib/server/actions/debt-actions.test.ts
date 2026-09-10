@@ -66,7 +66,7 @@ vi.mock('next/cache', () => ({
 
 const { createDebtAction, updateDebtAction, recordDebtPaymentAction, writeOffDebtAction } =
   await import('./debt-actions')
-const { DEBT_ERROR_MESSAGES } = await import('@/lib/ui/action-error-messages')
+const { DEBT_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -378,16 +378,21 @@ describe('writeOffDebtAction', () => {
   })
 })
 
-describe('DEBT_ERROR_MESSAGES', () => {
-  it('has product copy for every code an action can return, and no Zod text', () => {
-    // Typed `Record<DebtActionError, string>`, so a new code is a compile error
-    // until it has a message; this pins the wording itself, which is what the
-    // forms render verbatim.
-    expect(DEBT_ERROR_MESSAGES).toEqual({
-      OVERPAYMENT: 'That payment is more than what is still owed.',
-      NOT_ACTIVE: 'This debt has been written off and can no longer be changed.',
-      INVALID_INPUT: 'Check the highlighted fields.',
-      NOT_FOUND: 'That debt no longer exists.',
+describe('DEBT_ERROR_KEYS', () => {
+  // The temporary English `DEBT_ERROR_MESSAGES` alias this test used to pin
+  // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
+  // in `messages/{vi,en}/errors.json`, and `lib/i18n/messages.test.ts` already
+  // proves the two locales carry the same key set with no empty value. What
+  // is still this layer's job to prove is narrower: every `DebtActionError` a
+  // component can receive maps to a key in the `errors.debt` namespace, typed
+  // as `Record<DebtActionError, string>` so a new code is a compile error
+  // until it has one.
+  it('has a message key for every code an action can return', () => {
+    expect(DEBT_ERROR_KEYS).toEqual({
+      OVERPAYMENT: 'errors.debt.OVERPAYMENT',
+      NOT_ACTIVE: 'errors.debt.NOT_ACTIVE',
+      INVALID_INPUT: 'errors.debt.INVALID_INPUT',
+      NOT_FOUND: 'errors.debt.NOT_FOUND',
     })
   })
 })

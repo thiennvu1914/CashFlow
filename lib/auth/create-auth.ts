@@ -107,8 +107,24 @@ export function createAuth(options: CreateAuthOptions) {
     // always wins over those built-ins when present, so the values below are
     // the ones actually enforced for these two paths, not Better Auth's
     // (stricter) defaults.
+    //
+    // `/sign-up/email` has no `customRules` entry, so it is left on Better
+    // Auth's built-in special rule of 3 requests per 10s (same file, same
+    // function). That is deliberately strict for production, but the
+    // Playwright e2e suite registers a brand-new user in almost every test
+    // across many spec files run with `workers: 1`, so several sign-ups can
+    // land inside one 10s window and the 4th (or later) gets 429 — which
+    // `components/auth/register-form.tsx` shows as the generic "Something
+    // went wrong" and strands the test on `/register`. `playwright.config.ts`
+    // sets `CASHFLOW_E2E_DISABLE_RATE_LIMIT=1` only in the env of the dev
+    // server IT spawns, so this check disables rate limiting only for that
+    // process — never for `npm run dev` on its own, never in production
+    // (nothing sets the variable there), and never for the unit tests in this
+    // directory (`rate-limit.test.ts` and the others call `createAuth`
+    // directly with no env override, so they keep exercising the real
+    // limiter).
     rateLimit: {
-      enabled: true,
+      enabled: process.env.CASHFLOW_E2E_DISABLE_RATE_LIMIT !== '1',
       window: 60,
       max: 10,
       customRules: {

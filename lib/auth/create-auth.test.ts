@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { makeTestAuth, nextTestIp, post, signUp } from './__testing__/auth-harness'
 
 /**
@@ -131,5 +131,58 @@ describe('createAuth', () => {
     // categories — and gets exactly one set of them.
     expect(db.user).toHaveLength(1)
     expect(seeded).toEqual([db.user[0].id])
+  })
+})
+
+/**
+ * `playwright.config.ts` sets `CASHFLOW_E2E_DISABLE_RATE_LIMIT=1` only in the
+ * env of the dev server it spawns for the e2e suite, so that the suite's many
+ * sequential sign-ups don't trip Better Auth's built-in 3-per-10s special rule
+ * for `/sign-up/email` (see the comment on `rateLimit` in `create-auth.ts`).
+ * These tests pin that the flag is read, and read exactly, by asserting on
+ * `auth.options.rateLimit` — the same options object Better Auth's rate
+ * limiter middleware consults at request time.
+ */
+describe('CASHFLOW_E2E_DISABLE_RATE_LIMIT', () => {
+  const ENV_KEY = 'CASHFLOW_E2E_DISABLE_RATE_LIMIT'
+  const originalValue = process.env[ENV_KEY]
+
+  afterEach(() => {
+    if (originalValue === undefined) delete process.env[ENV_KEY]
+    else process.env[ENV_KEY] = originalValue
+  })
+
+  it('leaves rate limiting enabled when the flag is unset', () => {
+    delete process.env[ENV_KEY]
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(true)
+  })
+
+  it('leaves rate limiting enabled when the flag is set to anything other than the exact string "1"', () => {
+    process.env[ENV_KEY] = 'true'
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(true)
+  })
+
+  it('disables rate limiting only when the flag is exactly "1"', () => {
+    process.env[ENV_KEY] = '1'
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(false)
+  })
+
+  it('lets a 4th sign-up within 10s succeed when the flag is set, unlike the default', async () => {
+    process.env[ENV_KEY] = '1'
+    const { auth } = makeTestAuth()
+    const ip = nextTestIp()
+
+    // `signUp` asserts the 200 itself, so a regression here fails loudly at
+    // the 4th call rather than needing a duplicate assertion.
+    for (let n = 1; n <= 4; n++) {
+      await signUp(
+        auth,
+        { email: `flagged-${n}@example.com`, password: 'correct-horse-battery-staple' },
+        { ip },
+      )
+    }
   })
 })

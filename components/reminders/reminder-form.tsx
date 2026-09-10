@@ -1,13 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { createReminderSchema, type CreateReminderInput } from '@/lib/validation/reminder'
 import { createReminderAction } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_MESSAGE, REMINDER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { type Locale, INTL_LOCALE } from '@/lib/i18n/locale'
+import { recurrenceLabelKey, reminderTypeLabelKey } from '@/lib/ui/labels'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -34,15 +41,16 @@ const MIN_INTERVAL = 1
 const MAX_INTERVAL = 99
 
 /**
- * The word after the interval, so "Every 2" is never ambiguous. ONE_TIME has no
- * entry the user can see — the field is not rendered for it (see below) — and
- * is present only so this map is total over the enum.
+ * The message key for the word after the interval, so "Mỗi 2" / "Every 2" is
+ * never ambiguous. ONE_TIME has no entry the user can see — the field is not
+ * rendered for it (see below) — and is present only so this map is total over
+ * the enum.
  */
-const INTERVAL_UNITS: Record<ReminderFrequency, string> = {
+const INTERVAL_UNIT_KEYS: Record<ReminderFrequency, string> = {
   ONE_TIME: '',
-  WEEKLY: 'weeks',
-  MONTHLY: 'months',
-  YEARLY: 'years',
+  WEEKLY: 'reminders.intervalUnitWeeks',
+  MONTHLY: 'reminders.intervalUnitMonths',
+  YEARLY: 'reminders.intervalUnitYears',
 }
 
 /**
@@ -53,26 +61,6 @@ const INTERVAL_UNITS: Record<ReminderFrequency, string> = {
  * *rejects* a value on any other frequency.
  */
 const DAY_OF_MONTH_FREQUENCIES = new Set<ReminderFrequency>(['MONTHLY', 'YEARLY'])
-
-/**
- * Fixed English copy (Phase 7 replaces these literals with i18n keys). The
- * value posted is the human 1–12 the column stores, not JavaScript's 0–11 —
- * an off-by-one here would move every yearly reminder back a month.
- */
-const MONTH_LABELS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-]
 
 /**
  * The create form for a recurring reminder.
@@ -100,6 +88,16 @@ const MONTH_LABELS = [
  * change, the same technique (and for the same reason) as
  * `transaction-form.tsx`'s category reset: react-hook-form keeps the values of
  * unmounted fields, so hiding the input is not clearing it.
+ *
+ * ## Phase 7: twelve visible labels, one month formatter
+ *
+ * Every field used to be labelled only via `aria-label` — invisible copy a
+ * sighted user never saw at all. `FormField` gives each one a real `<label
+ * for>`, and the twelfth ("Month") gets its options from
+ * `new Intl.DateTimeFormat(INTL_LOCALE[locale], { month: 'long', timeZone:
+ * 'UTC' })` rather than the old hard-coded English `MONTH_LABELS` array — 2026
+ * is an arbitrary anchor year for the formatter and is never displayed; only
+ * the month name is.
  */
 function defaultValues(today: string): Partial<CreateReminderInput> {
   return {
@@ -119,28 +117,40 @@ function defaultValues(today: string): Partial<CreateReminderInput> {
 
 export function ReminderForm({
   today,
+  locale,
   expenseCategories,
   incomeCategories,
   accounts,
+  onCreated,
 }: {
   today: string
+  /** For the Month select's names — `Intl.DateTimeFormat`, not a hard-coded
+   *  English array. */
+  locale: Locale
   /** The user's ACTIVE expense and income categories, kept apart so the select
    *  can switch with the type without a round trip. */
   expenseCategories: Category[]
   incomeCategories: Category[]
   accounts: Account[]
+  /** The create sheet closes itself on success. */
+  onCreated?: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
+  /** Spec §9: the same fieldset is locked while a mutation is in flight. */
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `reminder-${name}-${uid}`
   const {
     register,
     control,
     handleSubmit,
     reset,
     setValue,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<CreateReminderInput>({
     resolver: zodResolver(createReminderSchema),
     defaultValues: defaultValues(today),
@@ -148,25 +158,40 @@ export function ReminderForm({
 
   const type = useWatch({ control, name: 'type' })
   const frequency = useWatch({ control, name: 'frequency' })
+  const currency = useWatch({ control, name: 'currency' })
   const categories = type === 'INCOME' ? incomeCategories : expenseCategories
   const showInterval = frequency !== 'ONE_TIME'
   const showDayOfMonth = DAY_OF_MONTH_FREQUENCIES.has(frequency)
   const showMonth = frequency === 'YEARLY'
 
+  /** The twelve month names, from the reader's own locale — never English
+   *  regardless of which is showing. 2026 is an arbitrary leap-free anchor: no
+   *  year is ever rendered, only the month. */
+  const monthFormatter = new Intl.DateTimeFormat(INTL_LOCALE[locale], {
+    month: 'long',
+    timeZone: 'UTC',
+  })
+  const monthNames = Array.from({ length: 12 }, (_, index) =>
+    monthFormatter.format(new Date(Date.UTC(2026, index, 1))),
+  )
+
   async function onSubmit(values: CreateReminderInput) {
     setError(null)
-    try {
-      const result = await createReminderAction(values)
-      if (!result.ok) {
-        setError(REMINDER_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await createReminderAction(values)
+        if (!result.ok) {
+          setError(t(REMINDER_ERROR_KEYS[result.error]))
+          return
+        }
+        reset(defaultValues(today))
+        router.refresh()
+        onCreated?.()
+      } catch {
+        console.error('ReminderForm: create failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      reset(defaultValues(today))
-      router.refresh()
-    } catch {
-      console.error('ReminderForm: create failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
@@ -174,258 +199,347 @@ export function ReminderForm({
       {/* The hydration gate — same mechanism, same reasoning, as `LoanForm`'s;
           `lib/ui/use-hydrated.ts` documents the defect. */}
       <fieldset
-        disabled={!hydrated}
-        aria-busy={hydrated ? undefined : true}
+        disabled={!hydrated || submit.locked}
+        aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-3"
       >
-        <legend className="sr-only">New reminder</legend>
-        <div>
-          <Input
-            aria-label="Title"
-            placeholder="What (e.g. Internet bill)"
-            {...register('title')}
-          />
-          {errors.title && <p className="text-sm text-negative">{errors.title.message}</p>}
-        </div>
-        <div>
-          {/* `defaultValue` (never `value` — that would make this controlled).
-              EXPENSE is already the first option, so react-dom would land here
-              anyway; it is passed so the server HTML states the form's own
-              default rather than relying on a browser fallback. */}
-          <select
-            {...register('type', {
-              // Runs after react-hook-form has stored the new type, so the
-              // category is cleared on EVERY type change — the same defect
-              // `transaction-form.tsx` documents: an EXPENSE category left in
-              // form state under an INCOME reminder is a submission the service
-              // refuses with `InvalidReminderCategoryError`, and the list below
-              // has already stopped showing it.
-              onChange: () => setValue('categoryId', undefined),
-            })}
-            defaultValue={DEFAULT_TYPE}
-            aria-label="Type"
-            className="rounded-md border p-2"
-          >
-            {/* "Bill", not "Expense": EXPENSE is the ledger's word for a
-                transaction that already happened, and nothing here has. */}
-            <option value="EXPENSE">Bill (expense)</option>
-            <option value="INCOME">Income</option>
-          </select>
-          {errors.type && <p className="text-sm text-negative">{errors.type.message}</p>}
-        </div>
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <Input
-              type="number"
-              step="0.01"
-              aria-label="Expected amount"
-              placeholder="What you expect to pay or receive"
-              {...register('expectedAmount', { valueAsNumber: true })}
-            />
-            {errors.expectedAmount && (
-              <p className="text-sm text-negative">{errors.expectedAmount.message}</p>
-            )}
-          </div>
-          <div>
-            {/* The reminder's own currency, and the one every figure on the page
-                is shown in — nothing here is converted to `User.baseCurrency`,
-                which is display-only (ledger ruling R5-3). */}
-            <select
-              {...register('currency')}
-              defaultValue="VND"
-              aria-label="Reminder currency"
-              className="rounded-md border p-2"
-            >
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
-            {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-          </div>
-        </div>
-        <div>
-          {/* The options are in the Prisma enum's own order, which puts the
-              default *third* — hence the explicit `defaultValue`. See the
-              module comment for the clearing this `onChange` does. */}
-          <select
-            {...register('frequency', {
-              onChange: () => {
-                // Unconditional, so the result does not depend on which
-                // frequency the user came from: react-hook-form keeps the value
-                // of an unmounted field, so a `dayOfMonth` typed under MONTHLY
-                // would still be in form state after a switch to WEEKLY — and
-                // the schema rejects it there. Resetting the interval to 1 is
-                // what makes ONE_TIME (whose only legal interval is 1)
-                // submittable after "every 3 months".
-                setValue('dayOfMonth', undefined)
-                setValue('month', undefined)
-                setValue('interval', DEFAULT_INTERVAL)
-              },
-            })}
-            defaultValue={DEFAULT_FREQUENCY}
-            aria-label="Frequency"
-            className="rounded-md border p-2"
-          >
-            <option value="ONE_TIME">Once</option>
-            <option value="WEEKLY">Weekly</option>
-            <option value="MONTHLY">Monthly</option>
-            <option value="YEARLY">Yearly</option>
-          </select>
-          {errors.frequency && <p className="text-sm text-negative">{errors.frequency.message}</p>}
-        </div>
-        {showInterval && (
-          <div>
-            <div className="flex items-center gap-2">
+        <legend className="sr-only">{t('reminders.createTitle')}</legend>
+
+        <FormField
+          id={fieldId('title')}
+          label={t('reminders.titleField')}
+          helper={t('reminders.titlePlaceholder')}
+          error={errors.title?.message}
+        >
+          {(aria) => <Input {...aria} {...register('title')} />}
+        </FormField>
+
+        <FormField id={fieldId('type')} label={t('reminders.type')} error={errors.type?.message}>
+          {(aria) => (
+            <div className="relative">
+              {/* `defaultValue` (never `value` — that would make this
+                  controlled). EXPENSE is already the first option, so
+                  react-dom would land here anyway; it is passed so the server
+                  HTML states the form's own default rather than relying on a
+                  browser fallback. */}
+              <select
+                {...aria}
+                {...register('type', {
+                  // Runs after react-hook-form has stored the new type, so the
+                  // category is cleared on EVERY type change — the same defect
+                  // `transaction-form.tsx` documents: an EXPENSE category left
+                  // in form state under an INCOME reminder is a submission the
+                  // service refuses with `InvalidReminderCategoryError`, and
+                  // the list below has already stopped showing it.
+                  onChange: () => setValue('categoryId', undefined),
+                })}
+                defaultValue={DEFAULT_TYPE}
+                className={SELECT_CLASS}
+              >
+                {/* "Bill", not "Expense": EXPENSE is the ledger's word for a
+                    transaction that already happened, and nothing here has. */}
+                <option value="EXPENSE">{t(reminderTypeLabelKey('EXPENSE'))}</option>
+                <option value="INCOME">{t(reminderTypeLabelKey('INCOME'))}</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('expected-amount')}
+          label={t('reminders.expectedAmount')}
+          error={errors.expectedAmount?.message}
+        >
+          {(aria) => (
+            <div className="relative">
               <Input
+                {...aria}
+                type="number"
+                step="0.01"
+                className="pr-14"
+                {...register('expectedAmount', { valueAsNumber: true })}
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                {currency}
+              </span>
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('reminders.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              {/* The reminder's own currency, and the one every figure on the
+                  page is shown in — nothing here is converted to
+                  `User.baseCurrency`, which is display-only (ledger ruling
+                  R5-3). */}
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue="VND"
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('frequency')}
+          label={t('reminders.frequency')}
+          error={errors.frequency?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              {/* The options are in the Prisma enum's own order, which puts
+                  the default *third* — hence the explicit `defaultValue`. See
+                  the module comment for the clearing this `onChange` does. */}
+              <select
+                {...aria}
+                {...register('frequency', {
+                  onChange: () => {
+                    // Unconditional, so the result does not depend on which
+                    // frequency the user came from: react-hook-form keeps the
+                    // value of an unmounted field, so a `dayOfMonth` typed
+                    // under MONTHLY would still be in form state after a
+                    // switch to WEEKLY — and the schema rejects it there.
+                    // Resetting the interval to 1 is what makes ONE_TIME
+                    // (whose only legal interval is 1) submittable after
+                    // "every 3 months".
+                    setValue('dayOfMonth', undefined)
+                    setValue('month', undefined)
+                    setValue('interval', DEFAULT_INTERVAL)
+                  },
+                })}
+                defaultValue={DEFAULT_FREQUENCY}
+                className={SELECT_CLASS}
+              >
+                <option value="ONE_TIME">{t(recurrenceLabelKey('ONE_TIME', 1))}</option>
+                <option value="WEEKLY">{t(recurrenceLabelKey('WEEKLY', 1))}</option>
+                <option value="MONTHLY">{t(recurrenceLabelKey('MONTHLY', 1))}</option>
+                <option value="YEARLY">{t(recurrenceLabelKey('YEARLY', 1))}</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        {showInterval && (
+          <FormField
+            id={fieldId('interval')}
+            label={t('reminders.interval')}
+            error={errors.interval?.message}
+          >
+            {(aria) => (
+              <div className="flex items-center gap-2">
+                <Input
+                  {...aria}
+                  type="number"
+                  step="1"
+                  min={MIN_INTERVAL}
+                  max={MAX_INTERVAL}
+                  className="w-24"
+                  {...register('interval', { valueAsNumber: true })}
+                  // `register()` emits no default of its own, so without this
+                  // the server HTML would ship an empty box while `useForm`
+                  // held 1 — and a submit before hydration would send `NaN`.
+                  defaultValue={DEFAULT_INTERVAL}
+                />
+                <span className="text-sm text-muted-foreground">
+                  {t(INTERVAL_UNIT_KEYS[frequency])}
+                </span>
+              </div>
+            )}
+          </FormField>
+        )}
+
+        {showDayOfMonth && (
+          <FormField
+            id={fieldId('day-of-month')}
+            label={t('reminders.dayOfMonth')}
+            helper={t('reminders.dayOfMonthHelper')}
+            error={errors.dayOfMonth?.message}
+          >
+            {(aria) => (
+              <Input
+                {...aria}
                 type="number"
                 step="1"
-                min={MIN_INTERVAL}
-                max={MAX_INTERVAL}
-                aria-label="Every"
-                className="w-24"
-                {...register('interval', { valueAsNumber: true })}
-                // `register()` emits no default of its own, so without this the
-                // server HTML would ship an empty box while `useForm` held 1 —
-                // and a submit before hydration would send `NaN`.
-                defaultValue={DEFAULT_INTERVAL}
+                min={1}
+                max={31}
+                {...register('dayOfMonth', {
+                  // `setValueAs` rather than `valueAsNumber` (the two are
+                  // mutually exclusive, and `valueAsNumber` wins): an untouched
+                  // optional field's DOM value is `''`, which `valueAsNumber`
+                  // would hand to Zod as `NaN` — a spurious error under a
+                  // field the user is entitled to skip, and which the service
+                  // defaults from the start date.
+                  setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
+                })}
               />
-              <span className="text-sm text-muted-foreground">{INTERVAL_UNITS[frequency]}</span>
-            </div>
-            {errors.interval && <p className="text-sm text-negative">{errors.interval.message}</p>}
-          </div>
+            )}
+          </FormField>
         )}
-        {showDayOfMonth && (
-          <div>
+
+        {showMonth && (
+          <FormField
+            id={fieldId('month')}
+            label={t('reminders.month')}
+            error={errors.month?.message}
+          >
+            {(aria) => (
+              <div className="relative">
+                {/* YEARLY only (ruling R6-18). A monthly reminder recurs in
+                    every month, so it has no anchor month to name — and the
+                    schema rejects one rather than dropping it. */}
+                <select
+                  {...aria}
+                  {...register('month', {
+                    setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
+                  })}
+                  defaultValue=""
+                  className={SELECT_CLASS}
+                >
+                  <option value="">{t('reminders.monthPlaceholder')}</option>
+                  {monthNames.map((label, index) => (
+                    <option key={label} value={index + 1}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+                />
+              </div>
+            )}
+          </FormField>
+        )}
+
+        <FormField
+          id={fieldId('start-date')}
+          label={t('reminders.startDate')}
+          error={errors.startDate?.message}
+        >
+          {/* A calendar date as a string, never `valueAsDate`: the value that
+              travels is `yyyy-MM-dd` and the instant of local midnight is
+              built server-side, in the user's own zone (ruling R6-7).
+              `valueAsDate` would hand over an instant the browser's zone had
+              already coloured. */}
+          {(aria) => (
+            <Input {...aria} type="date" {...register('startDate')} defaultValue={today} />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('category')}
+          label={t('reminders.categoryOptional')}
+          error={errors.categoryId?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              {/* Filtered by the selected type: the service refuses a
+                  category whose type does not match the reminder's, so
+                  offering one would be a choice that can only fail. Optional —
+                  a reminder is useful with no category at all ("Renew
+                  passport fee"). */}
+              <select
+                {...aria}
+                {...register('categoryId', {
+                  // An untouched select's DOM value is `''` (the "None"
+                  // option); `undefined` is what the schema and the service
+                  // read as "no category", so an empty string never travels
+                  // as an id.
+                  setValueAs: (v: string) => (v === '' ? undefined : v),
+                })}
+                defaultValue=""
+                className={SELECT_CLASS}
+              >
+                <option value="">{t('reminders.none')}</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('account')}
+          label={t('reminders.accountOptional')}
+          error={errors.accountId?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              {/* Which account the user *expects* to pay from — a label, not a
+                  link that debits anything. The page passes
+                  `listActiveFinancialAccounts`, so this component filters
+                  nothing itself. */}
+              <select
+                {...aria}
+                {...register('accountId', {
+                  setValueAs: (v: string) => (v === '' ? undefined : v),
+                })}
+                defaultValue=""
+                className={SELECT_CLASS}
+              >
+                <option value="">{t('reminders.none')}</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField id={fieldId('note')} label={t('reminders.note')} error={errors.note?.message}>
+          {(aria) => (
             <Input
-              type="number"
-              step="1"
-              min={1}
-              max={31}
-              aria-label="Day of month"
-              placeholder="Day of the month (defaults to the start date's)"
-              {...register('dayOfMonth', {
-                // `setValueAs` rather than `valueAsNumber` (the two are
-                // mutually exclusive, and `valueAsNumber` wins): an untouched
-                // optional field's DOM value is `''`, which `valueAsNumber`
-                // would hand to Zod as `NaN` — "Enter the day of the month"
-                // under a field the user is entitled to skip, and which the
-                // service defaults from the start date.
-                setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
+              {...aria}
+              {...register('note', {
+                // `''` means "no note", so it is normalised to `undefined` here
+                // and the service stores `null` — otherwise an untouched field
+                // would write an empty string that reads back as a value.
+                setValueAs: (v: string) => (v === '' ? undefined : v),
               })}
             />
-            {errors.dayOfMonth && (
-              <p className="text-sm text-negative">{errors.dayOfMonth.message}</p>
-            )}
-          </div>
-        )}
-        {showMonth && (
-          <div>
-            {/* YEARLY only (ruling R6-18). A monthly reminder recurs in every
-                month, so it has no anchor month to name — and the schema
-                rejects one rather than dropping it. */}
-            <select
-              {...register('month', {
-                setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
-              })}
-              defaultValue=""
-              aria-label="Month"
-              className="rounded-md border p-2"
-            >
-              <option value="">Month of the start date</option>
-              {MONTH_LABELS.map((label, index) => (
-                <option key={label} value={index + 1}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            {errors.month && <p className="text-sm text-negative">{errors.month.message}</p>}
-          </div>
-        )}
-        <div>
-          {/* A calendar date as a string, never `valueAsDate`: the value that
-              travels is `yyyy-MM-dd` and the instant of local midnight is built
-              server-side, in the user's own zone (ruling R6-7). `valueAsDate`
-              would hand over an instant the browser's zone had already
-              coloured. */}
-          <Input
-            type="date"
-            aria-label="Start date"
-            {...register('startDate')}
-            defaultValue={today}
-          />
-          {errors.startDate && <p className="text-sm text-negative">{errors.startDate.message}</p>}
-        </div>
-        <div>
-          {/* Filtered by the selected type: the service refuses a category
-              whose type does not match the reminder's, so offering one would be
-              a choice that can only fail. Optional — a reminder is useful with
-              no category at all ("Renew passport fee"). */}
-          <select
-            {...register('categoryId', {
-              // An untouched select's DOM value is `''` (the "None" option);
-              // `undefined` is what the schema and the service read as "no
-              // category", so an empty string never travels as an id.
-              setValueAs: (v: string) => (v === '' ? undefined : v),
-            })}
-            defaultValue=""
-            aria-label="Category"
-            className="rounded-md border p-2"
-          >
-            <option value="">None</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-          {errors.categoryId && (
-            <p className="text-sm text-negative">{errors.categoryId.message}</p>
           )}
-        </div>
-        <div>
-          {/* Which account the user *expects* to pay from — a label, not a link
-              that debits anything. The page passes
-              `listActiveFinancialAccounts`, so this component filters nothing
-              itself. */}
-          <select
-            {...register('accountId', {
-              setValueAs: (v: string) => (v === '' ? undefined : v),
-            })}
-            defaultValue=""
-            aria-label="Account"
-            className="rounded-md border p-2"
-          >
-            <option value="">None</option>
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.name}
-              </option>
-            ))}
-          </select>
-          {errors.accountId && <p className="text-sm text-negative">{errors.accountId.message}</p>}
-        </div>
-        <div>
-          {/* There is no `Textarea` in `components/ui/`, and adding one for a
-              single optional line would be a component with one caller. */}
-          <Input
-            aria-label="Note"
-            placeholder="Note (optional)"
-            {...register('note', {
-              // `''` means "no note", so it is normalised to `undefined` here
-              // and the service stores `null` — otherwise an untouched field
-              // would write an empty string that reads back as a value.
-              setValueAs: (v: string) => (v === '' ? undefined : v),
-            })}
-          />
-          {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
-        </div>
-        <Button type="submit" disabled={isSubmitting}>
-          Add reminder
+        </FormField>
+
+        <Button type="submit" className="self-start">
+          {submit.pending ? t('reminders.createPending') : t('reminders.createAction')}
         </Button>
-        {error && (
-          <p role="alert" className="text-sm text-negative">
-            {error}
-          </p>
-        )}
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
       </fieldset>
     </form>
   )

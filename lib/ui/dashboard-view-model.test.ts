@@ -274,50 +274,143 @@ function occurrence(overrides: {
 }
 
 describe('buildDashboardViewModel', () => {
-  it('labels the page with the current local month and the display currency', () => {
-    const vm = buildDashboardViewModel(makeInput())
+  it('hands the month out as an instant, not a pre-baked English string', () => {
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
-    expect(vm.monthLabel).toBe('September 2026')
-    expect(vm.subtitle).toBe('September 2026 · VND')
+    expect(vm.monthStart).toBeInstanceOf(Date)
+    expect(vm).not.toHaveProperty('monthLabel')
+    expect(vm).not.toHaveProperty('subtitle')
   })
 
-  it('reports all five KPIs, in order, with "Net Income" as the fifth label', () => {
-    const vm = buildDashboardViewModel(makeInput())
+  it('labels every KPI with a message key, never display text', () => {
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
+    expect(vm.kpis.map((kpi) => kpi.labelKey)).toEqual([
+      'dashboard.netWorth',
+      'dashboard.totalBalance',
+      'dashboard.monthlyIncome',
+      'dashboard.monthlyExpense',
+      'dashboard.netIncome',
+    ])
+    for (const kpi of vm.kpis) {
+      expect(kpi).not.toHaveProperty('label')
+    }
+  })
 
-    expect(vm.kpis.map((k) => [k.label, k.value])).toEqual([
-      ['Total Account Balance', '12.000.000'],
-      ['Net Worth', '12.000.000'],
-      ['Monthly Income', '30.000.000'],
-      ['Monthly Expense', '8.000.000'],
-      ['Net Income', '22.000.000'],
+  it('puts Net Worth first — the panel’s dominant figure (spec §6.1)', () => {
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
+    expect(vm.kpis[0].labelKey).toBe('dashboard.netWorth')
+    expect(vm.kpis[1].labelKey).toBe('dashboard.totalBalance')
+  })
+
+  it('reports all five KPIs, in order, with net income last', () => {
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
+
+    expect(vm.kpis.map((k) => [k.labelKey, k.value])).toEqual([
+      ['dashboard.netWorth', '12.000.000'],
+      ['dashboard.totalBalance', '12.000.000'],
+      ['dashboard.monthlyIncome', '30.000.000'],
+      ['dashboard.monthlyExpense', '8.000.000'],
+      ['dashboard.netIncome', '22.000.000'],
     ])
     expect(vm.kpis.every((k) => k.negative === false)).toBe(true)
   })
 
   it('marks a negative Net Income, and never marks the expense magnitude', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: { ...input.monthly, netIncome: decimal('-4000000') },
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: { ...input.monthly, netIncome: decimal('-4000000') },
+      },
+      'vi',
+    )
 
-    const byLabel = new Map(vm.kpis.map((k) => [k.label, k]))
-    expect(byLabel.get('Net Income')).toMatchObject({ value: '-4.000.000', negative: true })
-    expect(byLabel.get('Monthly Expense')?.negative).toBe(false)
+    const byLabel = new Map(vm.kpis.map((k) => [k.labelKey, k]))
+    expect(byLabel.get('dashboard.netIncome')).toMatchObject({
+      value: '-4.000.000',
+      negative: true,
+    })
+    expect(byLabel.get('dashboard.monthlyExpense')?.negative).toBe(false)
+  })
+
+  it('hands a null KPI a hint KEY rather than English text', () => {
+    const vm = buildDashboardViewModel({ ...makeInput(), position: null }, 'vi')
+    expect(vm.kpis[0].value).toBeNull()
+    expect(vm.kpis[0].hintKey).toBe('dashboard.fxUnavailableHint')
+  })
+
+  it('formats every figure with the reader’s locale, not always vi (fix round 1, finding 1)', () => {
+    // The trailing `locale` parameter is REQUIRED (see the builder's own doc
+    // comment, and Task 13 fix round 1's Minor): a default `vi` is exactly how
+    // four of this builder's five mappers stayed Vietnamese under an English
+    // page, so a missing `locale` is now a compile error. Every other test in
+    // this file passes `'vi'` explicitly and gets the grouping it always had;
+    // this one passes `'en'` and must get the reader's.
+    const vm = buildDashboardViewModel(makeInput(), 'en')
+
+    const netWorth = vm.kpis.find((k) => k.labelKey === 'dashboard.netWorth')
+    // vi would read '12.000.000' (period-grouped) — en groups with commas.
+    expect(netWorth?.value).toBe('12,000,000')
+
+    const [expenseRow] = vm.recentTransactions
+    // vi would read '−250.000'.
+    expect(expenseRow.amount).toBe('−250,000')
+  })
+
+  it('formats the budget and goal widgets with the reader’s locale too (fix round 1, finding 2)', () => {
+    // The two call sites this finding named directly: `budgets.map(...)` and
+    // `savingsGoals...map(...)` were dropping the `locale` this function
+    // already holds, so an English dashboard still showed Vietnamese-grouped
+    // budget/goal figures. Both DTOs' own locale threading is unit-tested
+    // already (`budget-view-model.test.ts`, `savings-goal-view-model.test.ts`)
+    // — this pins that the DASHBOARD actually passes it through.
+    const vm = buildDashboardViewModel(
+      makeInput({
+        budgets: [
+          budgetProgress({
+            id: 'b1',
+            currency: 'VND',
+            amount: '1000000',
+            spent: '500000',
+            status: 'warning_50',
+          }),
+        ],
+        goals: [savingsGoal({ id: 'g1', target: '1000000', progress: '250000' })],
+      }),
+      'en',
+    )
+
+    // vi would read '1.000.000'/'500.000'/'250.000'.
+    expect(vm.budgets[0].amount).toBe('1,000,000')
+    expect(vm.budgets[0].spent).toBe('500,000')
+    expect(vm.savingsGoals[0].target).toBe('1,000,000')
+    expect(vm.savingsGoals[0].progress).toBe('250,000')
+  })
+
+  it('never puts a raw transaction type in a recent-transaction row', () => {
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
+    for (const row of vm.recentTransactions) {
+      expect(row).not.toHaveProperty('title')
+      expect(row).toHaveProperty('type')
+      // `categoryName` may be null — the COMPONENT then renders the type's label.
+      expect(row.categoryName === null || typeof row.categoryName === 'string').toBe(true)
+    }
+    const uncategorised = vm.recentTransactions.find((row) => row.categoryName === null)
+    expect(uncategorised?.type).toMatch(/^[A-Z_]+$/)
   })
 
   describe('when the current position is unavailable', () => {
-    const vm = buildDashboardViewModel(makeInput({ position: null }))
+    const vm = buildDashboardViewModel(makeInput({ position: null }), 'vi')
 
     it('withholds the two converted KPIs and says why', () => {
-      const byLabel = new Map(vm.kpis.map((k) => [k.label, k]))
-      expect(byLabel.get('Total Account Balance')).toEqual({
-        label: 'Total Account Balance',
+      const byLabel = new Map(vm.kpis.map((k) => [k.labelKey, k]))
+      expect(byLabel.get('dashboard.totalBalance')).toEqual({
+        labelKey: 'dashboard.totalBalance',
         value: null,
-        hint: 'FX unavailable',
+        hintKey: 'dashboard.fxUnavailableHint',
         negative: false,
       })
-      expect(byLabel.get('Net Worth')?.value).toBeNull()
+      expect(byLabel.get('dashboard.netWorth')?.value).toBeNull()
     })
 
     it('reports the FX status as unavailable and hides the distribution', () => {
@@ -326,7 +419,7 @@ describe('buildDashboardViewModel', () => {
     })
 
     it('leaves every historical figure exactly as it was — FX cannot reach them', () => {
-      const withFx = buildDashboardViewModel(makeInput())
+      const withFx = buildDashboardViewModel(makeInput(), 'vi')
       expect(vm.kpis.slice(2)).toEqual(withFx.kpis.slice(2))
       expect(vm.cashFlowTrend).toEqual(withFx.cashFlowTrend)
       expect(vm.expenseByCategory).toEqual(withFx.expenseByCategory)
@@ -336,7 +429,7 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('reports a live rate with its effective day and our fetch time', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.fxStatus).toEqual({
       kind: 'available',
@@ -351,10 +444,13 @@ describe('buildDashboardViewModel', () => {
     const input = makeInput()
     const position = input.position
     if (!position?.fx) throw new Error('fixture must carry an fx result')
-    const vm = buildDashboardViewModel({
-      ...input,
-      position: { ...position, fx: { ...position.fx, isFallback: true } },
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        position: { ...position, fx: { ...position.fx, isFallback: true } },
+      },
+      'vi',
+    )
 
     expect(vm.fxStatus).toMatchObject({ kind: 'fallback', rate: '25.000' })
   })
@@ -363,26 +459,26 @@ describe('buildDashboardViewModel', () => {
     const input = makeInput()
     const position = input.position
     if (!position) throw new Error('fixture must carry a position')
-    const vm = buildDashboardViewModel({ ...input, position: { ...position, fx: null } })
+    const vm = buildDashboardViewModel({ ...input, position: { ...position, fx: null } }, 'vi')
 
     expect(vm.fxStatus).toEqual({ kind: 'not-needed' })
   })
 
   it('keeps a missing balance point as a gap rather than a zero', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.balanceOverTime).toEqual([
-      { label: 'Aug', balance: null },
-      { label: 'Sep', balance: 12000000 },
+      { label: 'Tháng 8', balance: null },
+      { label: 'Tháng 9', balance: 12000000 },
     ])
   })
 
   it('compares the previous month against this one, by name', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.incomeVsExpense).toEqual([
-      { period: 'Aug 2026', income: 20000000, expense: 25000000 },
-      { period: 'Sep 2026', income: 30000000, expense: 8000000 },
+      { period: 'thg 8 2026', income: 20000000, expense: 25000000 },
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
     ])
   })
 
@@ -396,16 +492,19 @@ describe('buildDashboardViewModel', () => {
       expense: decimal('2'),
       netIncome: decimal('-1'),
     }
-    const vm = buildDashboardViewModel({
-      ...input,
-      cashFlowTrend: [july, ...input.cashFlowTrend],
-    })
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        cashFlowTrend: [july, ...input.cashFlowTrend],
+      },
+      'vi',
+    )
 
     // Three points in, two bars out — the *last* two, and July is not one of them.
     expect(vm.cashFlowTrend).toHaveLength(3)
     expect(vm.incomeVsExpense).toEqual([
-      { period: 'Aug 2026', income: 20000000, expense: 25000000 },
-      { period: 'Sep 2026', income: 30000000, expense: 8000000 },
+      { period: 'thg 8 2026', income: 20000000, expense: 25000000 },
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
     ])
     // The comparison's right-hand bar and the trend's final point are the same
     // window, so they cannot disagree.
@@ -416,25 +515,33 @@ describe('buildDashboardViewModel', () => {
 
   it('shows a single bar when only one month of trend exists', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({ ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) })
+    const vm = buildDashboardViewModel(
+      { ...input, cashFlowTrend: input.cashFlowTrend.slice(-1) },
+      'vi',
+    )
 
     // One point, one bar — never an invented zero month beside it.
-    expect(vm.incomeVsExpense).toEqual([{ period: 'Sep 2026', income: 30000000, expense: 8000000 }])
+    expect(vm.incomeVsExpense).toEqual([
+      { period: 'thg 9 2026', income: 30000000, expense: 8000000 },
+    ])
   })
 
   it('takes Expense by Category from the same month aggregate as the KPIs', () => {
     const input = makeInput()
-    const vm = buildDashboardViewModel({
-      ...input,
-      monthly: {
-        ...input.monthly,
-        expense: decimal('9000000'),
-        byCategory: [
-          { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
-          { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
-        ],
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: {
+          ...input.monthly,
+          expense: decimal('9000000'),
+          byCategory: [
+            { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
+            { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
+          ],
+        },
       },
-    })
+      'vi',
+    )
 
     expect(vm.expenseByCategory).toEqual([
       { name: 'Rent', value: 6000000 },
@@ -445,8 +552,51 @@ describe('buildDashboardViewModel', () => {
     expect(sliceTotal).toBe(9000000)
   })
 
+  it('buckets categories past the eighth into one "other" slice, summed exactly', () => {
+    const input = makeInput()
+    const byCategory = Array.from({ length: 9 }, (_, index) => ({
+      categoryId: `c${index}`,
+      name: `Category ${index}`,
+      total: decimal(String(1000000 - index * 1000)),
+    }))
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: { ...input.monthly, byCategory },
+      },
+      'vi',
+    )
+
+    expect(vm.expenseByCategory).toHaveLength(8)
+    expect(vm.expenseByCategory.slice(0, 7)).toEqual(
+      byCategory.slice(0, 7).map((row) => ({ name: row.name, value: row.total.toNumber() })),
+    )
+    const last = vm.expenseByCategory[7]
+    expect(last.nameKey).toBe('dashboard.expenseByCategoryOther')
+    expect(last.name).toBe('')
+    const tailTotal = byCategory.slice(7).reduce((sum, row) => sum + row.total.toNumber(), 0)
+    expect(last.value).toBe(tailTotal)
+  })
+
+  it('leaves eight or fewer categories unbucketed', () => {
+    const input = makeInput()
+    const vm = buildDashboardViewModel(
+      {
+        ...input,
+        monthly: {
+          ...input.monthly,
+          byCategory: [{ categoryId: 'c1', name: 'Food', total: decimal('1000000') }],
+        },
+      },
+      'vi',
+    )
+
+    expect(vm.expenseByCategory).toEqual([{ name: 'Food', value: 1000000 }])
+    expect(vm.expenseByCategory[0]).not.toHaveProperty('nameKey')
+  })
+
   it('orders the distribution largest first, using converted balances', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.distribution).toEqual([
       { name: 'Dollars', value: 10000000 },
@@ -455,24 +605,26 @@ describe('buildDashboardViewModel', () => {
   })
 
   it('signs recent transactions from their type and shows each in its own currency', () => {
-    const vm = buildDashboardViewModel(makeInput())
+    const vm = buildDashboardViewModel(makeInput(), 'vi')
 
     expect(vm.recentTransactions).toEqual([
       {
         id: 't1',
-        title: 'Food',
+        categoryName: 'Food',
+        type: 'EXPENSE',
         accountName: 'Wallet',
-        when: '2026-09-14 09:15',
+        date: new Date('2026-09-14T02:15:00Z'),
         amount: '−250.000',
         currency: 'VND',
         positive: false,
       },
       {
         id: 't2',
-        // No category on this row, so the type stands in for one.
-        title: 'INCOME',
+        // No category on this row, so the component renders the type's label.
+        categoryName: null,
+        type: 'INCOME',
         accountName: 'Dollars',
-        when: '2026-09-13 16:00',
+        date: new Date('2026-09-13T09:00:00Z'),
         amount: '+1.500,25',
         currency: 'USD',
         positive: true,
@@ -503,23 +655,24 @@ describe('buildDashboardViewModel', () => {
           }),
         ],
       }),
+      'vi',
     )
 
     expect(vm.displayCurrency).toBe('VND')
-    expect(vm.budgets.map((b) => [b.id, b.label, b.currency, b.amount, b.spent])).toEqual([
-      ['b1', 'Overall', 'VND', '1.000.000', '500.000'],
+    expect(vm.budgets.map((b) => [b.id, b.categoryName, b.currency, b.amount, b.spent])).toEqual([
+      ['b1', null, 'VND', '1.000.000', '500.000'],
       // USD grouping and cents, under a VND dashboard.
       ['b2', 'Food', 'USD', '100,00', '84,50'],
     ])
-    expect(vm.budgets.map((b) => [b.percentLabel, b.statusLabel, b.over])).toEqual([
-      ['50 %', 'Over half used', false],
+    expect(vm.budgets.map((b) => [b.percentLabel, b.status, b.over])).toEqual([
+      ['50 %', 'warning_50', false],
       // 84.5 % rounds half-up on the Decimal, before any widening to a float.
-      ['85 %', 'Approaching limit', false],
+      ['85 %', 'warning_80', false],
     ])
   })
 
   it('maps no budgets to an empty list — the widget says so rather than charting nothing', () => {
-    expect(buildDashboardViewModel(makeInput({ budgets: [] })).budgets).toEqual([])
+    expect(buildDashboardViewModel(makeInput({ budgets: [] }), 'vi').budgets).toEqual([])
   })
 
   describe('savings goals', () => {
@@ -543,6 +696,7 @@ describe('buildDashboardViewModel', () => {
             }),
           ],
         }),
+        'vi',
       )
 
       // A USD goal under a VND dashboard stays in USD — a goal is never
@@ -552,9 +706,9 @@ describe('buildDashboardViewModel', () => {
         ['g1', 'Emergency fund', 'VND', '5.000.000', '20.000.000'],
         ['g2', 'New laptop', 'USD', '2.000,00', '2.000,00'],
       ])
-      expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.statusLabel])).toEqual([
-        [25, '25 %', 'In progress'],
-        [100, '100 %', 'Achieved'],
+      expect(vm.savingsGoals.map((g) => [g.percent, g.percentLabel, g.status])).toEqual([
+        [25, '25 %', 'ACTIVE'],
+        [100, '100 %', 'ACHIEVED'],
       ])
     })
 
@@ -563,7 +717,7 @@ describe('buildDashboardViewModel', () => {
         savingsGoal({ id: `g${index}`, target: '100', progress: '10' }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ goals }))
+      const vm = buildDashboardViewModel(makeInput({ goals }), 'vi')
 
       // A widget, not the Savings page: the page itself lists every goal.
       expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
@@ -579,13 +733,14 @@ describe('buildDashboardViewModel', () => {
             ),
           ],
         }),
+        'vi',
       )
 
       expect(vm.savingsGoals.map((g) => g.id)).toEqual(['g0', 'g1', 'g2', 'g3', 'g4'])
     })
 
     it('maps no goals to an empty list', () => {
-      expect(buildDashboardViewModel(makeInput()).savingsGoals).toEqual([])
+      expect(buildDashboardViewModel(makeInput(), 'vi').savingsGoals).toEqual([])
     })
   })
 
@@ -594,15 +749,18 @@ describe('buildDashboardViewModel', () => {
       const input = makeInput()
       const position = input.position
       if (!position) throw new Error('fixture must carry a position')
-      const vm = buildDashboardViewModel({
-        ...input,
-        position: {
-          ...position,
-          receivables: decimal('2500000'),
-          payables: decimal('750000'),
-          loanOutstanding: decimal('18000000'),
+      const vm = buildDashboardViewModel(
+        {
+          ...input,
+          position: {
+            ...position,
+            receivables: decimal('2500000'),
+            payables: decimal('750000'),
+            loanOutstanding: decimal('18000000'),
+          },
         },
-      })
+        'vi',
+      )
 
       expect(vm.debtLoanOverview).toEqual({
         receivables: '2.500.000',
@@ -617,13 +775,15 @@ describe('buildDashboardViewModel', () => {
     it('has no overview at all when the position is unavailable', () => {
       // The three figures are current-position aggregates, so they degrade with
       // it: an FX outage leaves nothing honest to compare.
-      expect(buildDashboardViewModel(makeInput({ position: null })).debtLoanOverview).toBeNull()
+      expect(
+        buildDashboardViewModel(makeInput({ position: null }), 'vi').debtLoanOverview,
+      ).toBeNull()
     })
 
     it('reports zeroes as figures, not as a missing overview', () => {
       // Nothing owed either way is an answer — "0" — and not the same fact as
       // "we cannot say".
-      expect(buildDashboardViewModel(makeInput()).debtLoanOverview).toEqual({
+      expect(buildDashboardViewModel(makeInput(), 'vi').debtLoanOverview).toEqual({
         receivables: '0',
         payables: '0',
         loanOutstanding: '0',
@@ -650,18 +810,19 @@ describe('buildDashboardViewModel', () => {
             }),
           ],
         }),
+        'vi',
       )
 
       expect(
-        vm.upcomingReminders.map((o) => [o.id, o.title, o.dueDate, o.dueLabel, o.overdue]),
+        vm.upcomingReminders.map((o) => [o.id, o.title, o.dueDate, o.daysToDue, o.overdue]),
       ).toEqual([
-        ['o1', 'Rent', '2026-09-10', 'Overdue', true],
-        ['o2', 'Salary', '2026-09-16', 'Tomorrow', false],
+        ['o1', 'Rent', '2026-09-10', -5, true],
+        ['o2', 'Salary', '2026-09-16', 1, false],
       ])
       // Each in its reminder's own currency, never converted.
-      expect(vm.upcomingReminders.map((o) => [o.amount, o.currency, o.typeLabel])).toEqual([
-        ['500.000', 'VND', 'Bill'],
-        ['1.200,00', 'USD', 'Income'],
+      expect(vm.upcomingReminders.map((o) => [o.amount, o.currency, o.type])).toEqual([
+        ['500.000', 'VND', 'EXPENSE'],
+        ['1.200,00', 'USD', 'INCOME'],
       ])
     })
 
@@ -675,7 +836,7 @@ describe('buildDashboardViewModel', () => {
         }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ occurrences }))
+      const vm = buildDashboardViewModel(makeInput({ occurrences }), 'vi')
 
       // The Reminders page is the unbounded list; the widget is the next five.
       expect(vm.upcomingReminders.map((o) => o.id)).toEqual(['o0', 'o1', 'o2', 'o3', 'o4'])
@@ -704,7 +865,10 @@ describe('buildDashboardViewModel', () => {
         }),
       )
 
-      const vm = buildDashboardViewModel(makeInput({ occurrences: [...overdue, ...upcoming] }))
+      const vm = buildDashboardViewModel(
+        makeInput({ occurrences: [...overdue, ...upcoming] }),
+        'vi',
+      )
 
       // Two overdue — the two oldest — and then everything genuinely coming.
       expect(vm.upcomingReminders.map((o) => [o.id, o.overdue])).toEqual([
@@ -729,11 +893,12 @@ describe('buildDashboardViewModel', () => {
             occurrence({ id: 'soon', title: 'Salary', dueAt: new Date('2026-09-15T17:00:00Z') }),
           ],
         }),
+        'vi',
       )
 
-      expect(vm.upcomingReminders.map((o) => [o.id, o.dueLabel])).toEqual([
-        ['late', 'Overdue'],
-        ['soon', 'Tomorrow'],
+      expect(vm.upcomingReminders.map((o) => [o.id, o.daysToDue])).toEqual([
+        ['late', -5],
+        ['soon', 1],
       ])
       expect(vm.overdueReminderCount).toBe(1)
     })
@@ -741,14 +906,14 @@ describe('buildDashboardViewModel', () => {
     it('is unaffected by an FX outage — a reminder needs no rate', () => {
       const occurrences = [occurrence({ id: 'o1', dueAt: new Date('2026-09-15T17:00:00Z') })]
 
-      const withFx = buildDashboardViewModel(makeInput({ occurrences }))
-      const withoutFx = buildDashboardViewModel(makeInput({ occurrences, position: null }))
+      const withFx = buildDashboardViewModel(makeInput({ occurrences }), 'vi')
+      const withoutFx = buildDashboardViewModel(makeInput({ occurrences, position: null }), 'vi')
 
       expect(withoutFx.upcomingReminders).toEqual(withFx.upcomingReminders)
     })
 
     it('maps no occurrences to an empty list', () => {
-      const vm = buildDashboardViewModel(makeInput())
+      const vm = buildDashboardViewModel(makeInput(), 'vi')
 
       // Both empty together: the widget's "nothing due" sentence is reachable
       // only in this state, never with pending rows hidden behind a cap.

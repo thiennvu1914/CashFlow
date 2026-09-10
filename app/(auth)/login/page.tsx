@@ -1,10 +1,12 @@
+import { getTranslations } from 'next-intl/server'
 import { LoginForm } from '@/components/auth/login-form'
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  const t = await getTranslations()
   return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-4">
-      <h1 className="text-xl font-semibold">Sign in to CashFlow</h1>
+    <>
+      <h1 className="text-2xl/[1.875rem] font-semibold">{t('auth.loginTitle')}</h1>
       <LoginForm />
-    </div>
+    </>
   )
 }

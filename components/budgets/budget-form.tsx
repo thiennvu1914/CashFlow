@@ -1,13 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { budgetFormSchema, type BudgetFormInput } from '@/lib/validation/budget'
 import { createBudgetAction } from '@/lib/server/actions/budget-actions'
-import { BUDGET_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -56,23 +61,30 @@ export function BudgetForm({
   month,
   categories,
   overallExists,
+  onCreated,
 }: {
   year: number
   month: number
   categories: Category[]
   overallExists: boolean
+  /** The create sheet closes itself on success. */
+  onCreated?: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `budget-${name}-${uid}`
   const {
     register,
     control,
     handleSubmit,
     reset,
     setValue,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<BudgetFormInput>({
     resolver: zodResolver(budgetFormSchema),
     defaultValues: defaultValues(overallExists),
@@ -86,22 +98,25 @@ export function BudgetForm({
 
   async function onSubmit(values: BudgetFormInput) {
     setError(null)
-    try {
-      // `year`/`month` are read here, from the props this render was given —
-      // the month the user is looking at — never from form state.
-      const result = await createBudgetAction({ ...values, year, month })
-      if (!result.ok) {
-        setError(BUDGET_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        // `year`/`month` are read here, from the props this render was given —
+        // the month the user is looking at — never from form state.
+        const result = await createBudgetAction({ ...values, year, month })
+        if (!result.ok) {
+          setError(t(BUDGET_ERROR_KEYS[result.error]))
+          return
+        }
+        // A reset back to the same month's defaults rather than a bare `reset()`,
+        // so a second budget for the same month does not require re-navigating.
+        reset(defaultValues(overallExists))
+        router.refresh()
+        onCreated?.()
+      } catch {
+        console.error('BudgetForm: create failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      // A reset back to the same month's defaults rather than a bare `reset()`,
-      // so a second budget for the same month does not require re-navigating.
-      reset(defaultValues(overallExists))
-      router.refresh()
-    } catch {
-      console.error('BudgetForm: create failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
@@ -111,78 +126,111 @@ export function BudgetForm({
           A live pre-fix probe reverted this form's scope 5/5 times and its
           amount 5/5 times when they were set before hydration finished. */}
       <fieldset
-        disabled={!hydrated}
-        aria-busy={hydrated ? undefined : true}
+        disabled={!hydrated || submit.locked}
+        aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-3"
       >
-        <legend className="sr-only">Budget details</legend>
-        <div>
-          {/* `defaultValue` (never `value` — that would make this controlled)
-              so the server renders `selected` on whichever option the form
-              state already holds; with an Overall budget already on this month
-              that is CATEGORY, the *second* option. */}
-          <select
-            {...register('scope')}
-            defaultValue={defaultScope(overallExists)}
-            aria-label="Budget scope"
-            className="rounded-md border p-2"
-          >
-            <option value="OVERALL">Overall</option>
-            <option value="CATEGORY">Category</option>
-          </select>
-          {errors.scope && <p className="text-sm text-negative">{errors.scope.message}</p>}
-        </div>
+        <legend className="sr-only">{t('budgets.createTitle')}</legend>
+
+        <FormField id={fieldId('scope')} label={t('budgets.scope')} error={errors.scope?.message}>
+          {(aria) => (
+            // `defaultValue` (never `value` — that would make this controlled)
+            // so the server renders `selected` on whichever option the form
+            // state already holds; with an Overall budget already on this
+            // month that is CATEGORY, the *second* option.
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('scope')}
+                defaultValue={defaultScope(overallExists)}
+                className={SELECT_CLASS}
+              >
+                <option value="OVERALL">{t('labels.budgetScope.OVERALL')}</option>
+                <option value="CATEGORY">{t('labels.budgetScope.CATEGORY')}</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
         {scope === 'CATEGORY' && (
-          <div>
-            <select
-              {...register('categoryId', {
-                // An emptied/untouched select's DOM value is `""` (the
-                // placeholder option) — converting that to `undefined` here is
-                // what lets the schema's own "Category is required" refine
-                // message fire instead of a generic one.
-                setValueAs: (v: string) => (v === '' ? undefined : v),
-              })}
-              aria-label="Budget category"
-              defaultValue=""
-              className="rounded-md border p-2"
-            >
-              <option value="">Select a category</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            {errors.categoryId && (
-              <p className="text-sm text-negative">{errors.categoryId.message}</p>
-            )}
-          </div>
-        )}
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Budget amount"
-            placeholder="Amount"
-            {...register('amount', { valueAsNumber: true })}
-          />
-          {errors.amount && <p className="text-sm text-negative">{errors.amount.message}</p>}
-        </div>
-        <div>
-          <select
-            {...register('currency')}
-            aria-label="Budget currency"
-            className="rounded-md border p-2"
+          <FormField
+            id={fieldId('category')}
+            label={t('budgets.category')}
+            error={errors.categoryId?.message}
           >
-            <option value="VND">VND</option>
-            <option value="USD">USD</option>
-          </select>
-          {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-        </div>
-        <Button type="submit" disabled={isSubmitting}>
-          Add budget
+            {(aria) => (
+              <div className="relative">
+                <select
+                  {...aria}
+                  {...register('categoryId', {
+                    // An emptied/untouched select's DOM value is `""` (the
+                    // placeholder option) — converting that to `undefined`
+                    // here is what lets the schema's own "Category is
+                    // required" refine message fire instead of a generic one.
+                    setValueAs: (v: string) => (v === '' ? undefined : v),
+                  })}
+                  defaultValue=""
+                  className={SELECT_CLASS}
+                >
+                  <option value="">{t('budgets.categoryPlaceholder')}</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                />
+              </div>
+            )}
+          </FormField>
+        )}
+
+        <FormField
+          id={fieldId('amount')}
+          label={t('budgets.amount')}
+          error={errors.amount?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('amount', { valueAsNumber: true })}
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('budgets.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            <div className="relative">
+              <select {...aria} {...register('currency')} className={SELECT_CLASS}>
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <Button type="submit" className="self-start">
+          {submit.pending ? t('budgets.createPending') : t('budgets.createAction')}
         </Button>
-        {error && <p className="text-sm text-negative">{error}</p>}
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
       </fieldset>
     </form>
   )

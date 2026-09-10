@@ -1,5 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import type { Currency } from '@/lib/currency/provider'
+import { DEFAULT_LOCALE, INTL_LOCALE, type Locale } from '@/lib/i18n/locale'
+import enCommon from '@/messages/en/common.json'
+import viCommon from '@/messages/vi/common.json'
 
 /**
  * The presentation boundary for money.
@@ -9,11 +12,15 @@ import type { Currency } from '@/lib/currency/provider'
  * the *only* place a money value is handed to `Number`, and nothing it returns
  * is ever read back into a calculation.
  *
- * Grouping is Vietnamese in both currencies (`1.234.567,89`) because the
- * separators belong to the reader's locale, not to the money's: a Vietnamese
- * user reading a USD balance still reads "." as thousands. Precision, on the
- * other hand, belongs to the currency — VND has no minor unit, so a whole
- * number of dong is shown whole rather than padded with a meaningless ",00".
+ * Grouping follows the READER's locale (spec §4, open decision 1): `vi-VN`
+ * gives `1.234.567,89` and `en-US` gives `1,234,567.89`. Precision still
+ * belongs to the currency — VND has no minor unit, so a whole number of dong
+ * is shown whole rather than padded with a meaningless ",00".
+ *
+ * `locale` is the LAST parameter and defaults to `vi`, deliberately: every
+ * pre-Phase-7 caller — and every Phase 2–6 test asserting Vietnamese grouping —
+ * keeps working untouched, and a caller that knows the reader's locale passes
+ * it. Task 13 threads it through the view models.
  */
 
 /** How many decimals each currency shows when the amount has none of its own. */
@@ -27,15 +34,31 @@ const MIN_FRACTION_DIGITS: Record<Currency, number> = { VND: 0, USD: 2 }
  */
 const MAX_FRACTION_DIGITS = 2
 
-const FORMATTERS: Record<Currency, Intl.NumberFormat> = {
-  VND: new Intl.NumberFormat('vi-VN', {
-    minimumFractionDigits: MIN_FRACTION_DIGITS.VND,
-    maximumFractionDigits: MAX_FRACTION_DIGITS,
-  }),
-  USD: new Intl.NumberFormat('vi-VN', {
-    minimumFractionDigits: MIN_FRACTION_DIGITS.USD,
-    maximumFractionDigits: MAX_FRACTION_DIGITS,
-  }),
+function numberFormat(locale: Locale, options: Intl.NumberFormatOptions): Intl.NumberFormat {
+  return new Intl.NumberFormat(INTL_LOCALE[locale], options)
+}
+
+const FORMATTERS: Record<Locale, Record<Currency, Intl.NumberFormat>> = {
+  vi: {
+    VND: numberFormat('vi', {
+      minimumFractionDigits: MIN_FRACTION_DIGITS.VND,
+      maximumFractionDigits: MAX_FRACTION_DIGITS,
+    }),
+    USD: numberFormat('vi', {
+      minimumFractionDigits: MIN_FRACTION_DIGITS.USD,
+      maximumFractionDigits: MAX_FRACTION_DIGITS,
+    }),
+  },
+  en: {
+    VND: numberFormat('en', {
+      minimumFractionDigits: MIN_FRACTION_DIGITS.VND,
+      maximumFractionDigits: MAX_FRACTION_DIGITS,
+    }),
+    USD: numberFormat('en', {
+      minimumFractionDigits: MIN_FRACTION_DIGITS.USD,
+      maximumFractionDigits: MAX_FRACTION_DIGITS,
+    }),
+  },
 }
 
 /**
@@ -47,11 +70,15 @@ const FORMATTERS: Record<Currency, Intl.NumberFormat> = {
  * a chart tooltip only ever has the number the page already converted for the
  * chart and re-widening it to a Decimal to format it would be theatre.
  */
-export function formatMoney(value: Prisma.Decimal | string | number, currency: Currency): string {
+export function formatMoney(
+  value: Prisma.Decimal | string | number,
+  currency: Currency,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
   // The one sanctioned `Number()` on a money value in the codebase. `String()`
   // first so a `Decimal` goes through its own exact serialisation rather than
   // `valueOf`, and so the same code path handles all three input shapes.
-  return FORMATTERS[currency].format(Number(String(value)))
+  return FORMATTERS[locale][currency].format(Number(String(value)))
 }
 
 /** Stands in for a figure that does not exist or cannot be read as a number. */
@@ -71,13 +98,17 @@ const NO_VALUE = '—'
  * dash. It must never become `0`: a tooltip reading "0 VND" over a gap in the
  * balance line would assert a measurement nobody took.
  */
-export function formatChartValue(value: unknown, currency: Currency): string {
+export function formatChartValue(
+  value: unknown,
+  currency: Currency,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
   const scalar = Array.isArray(value) ? value[0] : value
   if (scalar === null || scalar === undefined || scalar === '') return NO_VALUE
   if (typeof scalar !== 'number' && typeof scalar !== 'string') return NO_VALUE
   const asNumber = Number(scalar)
   if (!Number.isFinite(asNumber)) return NO_VALUE
-  return `${FORMATTERS[currency].format(asNumber)} ${currency}`
+  return `${FORMATTERS[locale][currency].format(asNumber)} ${currency}`
 }
 
 /**
@@ -86,10 +117,88 @@ export function formatChartValue(value: unknown, currency: Currency): string {
  * quoted, never spent: this is not `formatMoney` because a rate is not an
  * amount of money in a currency, and rounding rules for the two differ.
  */
-const RATE_FORMATTER = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 })
+const RATE_FORMATTERS: Record<Locale, Intl.NumberFormat> = {
+  vi: numberFormat('vi', { maximumFractionDigits: 2 }),
+  en: numberFormat('en', { maximumFractionDigits: 2 }),
+}
 
-export function formatRate(rate: Prisma.Decimal | string | number): string {
-  return RATE_FORMATTER.format(Number(String(rate)))
+export function formatRate(
+  rate: Prisma.Decimal | string | number,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  return RATE_FORMATTERS[locale].format(Number(String(rate)))
+}
+
+/**
+ * `common.rateLine`'s own template ("1 {from} = {rate} {to}"), read directly
+ * off the message files rather than duplicated as a literal here — the two
+ * can never drift apart, and this module has no `next-intl` context to call
+ * `t()` with (it is imported by both server and client code, `TransferList`
+ * and `TransferForm` alike).
+ */
+const RATE_LINE_TEMPLATES: Record<Locale, string> = { vi: viCommon.rateLine, en: enCommon.rateLine }
+
+/**
+ * A transfer's rate, quoted the way a person reads it — always USD-per-1,
+ * e.g. "1 USD = 25.000 VND", never "1 VND = 0,00004 USD" — regardless of
+ * which currency the transfer actually moved FROM.
+ *
+ * `exchangeRateUsed` (or, for `TransferForm`'s live preview, the ratio of the
+ * two amounts the user has typed so far) is stored/derived destination-per-
+ * source: a VND→USD transfer's rate is USD-per-VND, e.g. 0.00004. Printing
+ * that verbatim is technically true and useless — nobody quotes the dong
+ * that way — so the pair is normalised to USD-per-1 and the reciprocal is
+ * taken whenever the source account is NOT USD. This function only
+ * reformats that stored/derived figure for display; it never computes a new
+ * rate, and nothing it returns is read back into a calculation.
+ *
+ * Shared by `TransferList` (the historical `exchangeRateUsed`) and
+ * `TransferForm` (a live preview ratio, same shape) so the two can never
+ * quote the same pair in different directions.
+ */
+export function formatReadableRate(
+  fromCurrency: Currency,
+  toCurrency: Currency,
+  rateUsed: Prisma.Decimal | string | number | null,
+  locale: Locale = DEFAULT_LOCALE,
+): string | null {
+  if (rateUsed === null) return null
+  const sourceIsUsd = fromCurrency === 'USD'
+  const rate = sourceIsUsd ? Number(String(rateUsed)) : 1 / Number(String(rateUsed))
+  const [from, to] = sourceIsUsd ? [fromCurrency, toCurrency] : [toCurrency, fromCurrency]
+  return RATE_LINE_TEMPLATES[locale]
+    .replace('{from}', from)
+    .replace('{rate}', formatRate(rate, locale))
+    .replace('{to}', to)
+}
+
+/**
+ * A percentage or an interest rate — `value` is already on the 0–100 scale
+ * (a `percentLabel`'s `ratio.mul(100)`, or a stored interest rate like
+ * `8.500`), never a 0–1 ratio: this function only formats and appends the
+ * sign, it never multiplies.
+ *
+ * `fractionDigits` is a MAXIMUM, not a fixed precision — `Intl.NumberFormat`
+ * trims trailing zeros the same way the old ad-hoc `RATE_FORMATTER` did
+ * (`8.500` renders as "8,5 %", not "8,500 %"). The default of 0 is every
+ * `percentLabel`'s shape, which is already rounded to a whole number on the
+ * `Decimal` itself with `ROUND_HALF_UP` before it ever reaches here — this
+ * function does no rounding of its own and must never be given the un-rounded
+ * ratio.
+ *
+ * A non-breaking space (U+00A0) separates the figure from the `%`, in every
+ * locale: an ordinary space lets the figure and the sign land on two
+ * different lines, which a bare `${n} %` template used to do.
+ */
+export function formatPercent(
+  value: Prisma.Decimal | string | number,
+  locale: Locale = DEFAULT_LOCALE,
+  fractionDigits = 0,
+): string {
+  const formatted = numberFormat(locale, { maximumFractionDigits: fractionDigits }).format(
+    Number(String(value)),
+  )
+  return `${formatted} %`
 }
 
 /**
@@ -98,11 +207,11 @@ export function formatRate(rate: Prisma.Decimal | string | number): string {
  * notation is a *label*, never a value — the tooltip and every KPI still show
  * `formatMoney`'s exact figure.
  */
-const COMPACT_FORMATTER = new Intl.NumberFormat('vi-VN', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
+const COMPACT_FORMATTERS: Record<Locale, Intl.NumberFormat> = {
+  vi: numberFormat('vi', { notation: 'compact', maximumFractionDigits: 1 }),
+  en: numberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }),
+}
 
-export function formatCompactAmount(value: number): string {
-  return COMPACT_FORMATTER.format(value)
+export function formatCompactAmount(value: number, locale: Locale = DEFAULT_LOCALE): string {
+  return COMPACT_FORMATTERS[locale].format(value)
 }

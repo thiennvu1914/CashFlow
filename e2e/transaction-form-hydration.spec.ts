@@ -1,7 +1,14 @@
 import os from 'os'
 import path from 'path'
 import { test, expect, type Page } from '@playwright/test'
-import { createAccountViaUi, createBudgetViaUi, registerNewUser } from './helpers'
+import viValidation from '@/messages/vi/validation.json'
+import {
+  createAccountViaUi,
+  createBudgetViaUi,
+  eitherLocale,
+  registerNewUser,
+  todayInZone,
+} from './helpers'
 
 /**
  * The money forms' hydration gate (spec-level regression for the
@@ -14,7 +21,17 @@ import { createAccountViaUi, createBudgetViaUi, registerNewUser } from './helper
  * `ref` callback the moment React committed, with no `change` event ever
  * reaching React. A deliberate INCOME was silently recorded as an EXPENSE.
  * `/transfers`, `/budgets` and `/accounts` each reverted at least one control
- * the same way.
+ * the same way. (Phase 7 Task 6 moved account creation behind a header button
+ * and a `Sheet` — `AccountForm` no longer renders into `/accounts`' initial
+ * HTML at all, since Base UI's `Dialog`/`Sheet` renders nothing while closed,
+ * so its own hydration-gate regression is now covered at the component level,
+ * `components/accounts/account-form.test.tsx`, rather than by the raw-fetch
+ * technique this file uses for the two forms that stay inline on their page.
+ * Phase 7 Task 7 (fix round 3) later moved budget creation the same way —
+ * behind a header button and a `Sheet` — so `/budgets` gets the same
+ * treatment: its gate, its labels and its scope `<select>`'s CATEGORY default
+ * (an Overall budget already exists for the month) are asserted at the
+ * component level instead, `components/budgets/budget-form.test.tsx`.)
  *
  * Nothing in this file may paper over that. There is no retry helper, no
  * `waitForTimeout`, no sleep and no relaxed assertion anywhere below, and
@@ -64,25 +81,19 @@ const CATEGORYLESS_TYPES = [
   'ADJUSTMENT_DECREASE',
 ] as const
 
-/** Every page that renders a gated money form. */
-const GATED_PAGES = ['/transactions', '/transfers', '/budgets', '/accounts'] as const
-
 /**
- * The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- * nest, so the first `</select>` after the opening tag closes it.
- *
- * Scoping is what makes the `selected` assertions below meaningful:
- * `/transfers`' two account selectors render the SAME option values, and only
- * one of them may carry a pre-selected option.
+ * Every page whose gated money form is unconditionally part of its initial
+ * HTML. `/accounts`' and `/budgets`' create forms are excluded on purpose:
+ * both now mount inside a `Sheet` that is closed on first render, and Base
+ * UI's `Dialog`/`Sheet` renders nothing at all while closed — there is no raw
+ * HTML to fetch either from. Their gates (`<fieldset disabled>`/`aria-busy`),
+ * their visible labels and their own `<select>` defaults are verified at the
+ * component level instead — `components/accounts/account-form.test.tsx` and
+ * `components/budgets/budget-form.test.tsx` — against the same
+ * `renderToStaticMarkup` output this file reads for every other page via a
+ * live server response.
  */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
-  const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
-  return html.slice(start, end + '</select>'.length)
-}
+const GATED_PAGES = ['/transactions', '/transfers'] as const
 
 /**
  * The visible label of the `<option>` react-dom marked as pre-selected inside
@@ -101,17 +112,75 @@ function selectedOptionLabel(selectHtml: string): string | null {
 }
 
 /**
+ * The markup of one `<select>` on `/transactions`, found by a field name
+ * rather than `aria-label` — the Account and Category pickers there are
+ * custom Selects now (spec §6.2), and their pre-hydration stand-in is a
+ * disabled native `<select>` whose `id` (`transaction-<name>-<useId()
+ * suffix>`, unique per mounted `TransactionForm` instance — spec §14 fix
+ * round 1, finding 2) `FormField` binds the visible `<label>` to, not an
+ * `aria-label`. Matched by prefix, since the suffix is generated at runtime.
+ */
+function selectMarkupById(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transaction-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transaction-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
+  const start = html.lastIndexOf('<select', idIndex)
+  const end = html.indexOf('</select>', start)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transaction-${name}-*">`)
+  return html.slice(start, end + '</select>'.length)
+}
+
+/**
+ * The markup of one `<select>` on `/transfers`, found by a field name rather
+ * than `aria-label` — Task 5b moved both account selectors off `aria-label`
+ * and onto a visible `<label>` bound through `FormField`, the same `id`
+ * convention as `selectMarkupById` above (`transfer-<name>-<useId() suffix>`,
+ * unique per mounted `TransferForm` instance). Matched by prefix, since the
+ * suffix is generated at runtime.
+ */
+function selectMarkupByTransferId(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transfer-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transfer-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
+  const start = html.lastIndexOf('<select', idIndex)
+  const end = html.indexOf('</select>', start)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transfer-${name}-*">`)
+  return html.slice(start, end + '</select>'.length)
+}
+
+/**
+ * The markup of the type radiogroup itself on `/transactions` — from
+ * `role="radiogroup"` up to the first `</div>`. The "Khác" disclosure button
+ * is a SIBLING of the radiogroup now (spec §14 fix round 1, finding 3: it is
+ * not itself a radio, so it may not be a child of the group), and every
+ * `TypeButton` inside is a plain `<button>` with no nested `<div>`, so this
+ * first `</div>` is exactly the radiogroup's own closing tag.
+ */
+function radiogroupMarkup(html: string): string {
+  const start = html.indexOf('role="radiogroup"')
+  if (start === -1) throw new Error('No radiogroup in the markup')
+  const end = html.indexOf('</div>', start)
+  return html.slice(start, end)
+}
+
+/**
  * The user's own category names, read off `/categories` rather than hard-coded:
- * the two `NamedListManager` lists there and the form's Category `<select>` are
+ * the two `CategoryChipList` sections there and the form's Category picker are
  * both `listCategories(userId, type)`, ordered `isDefault desc, name asc`
  * (`lib/server/services/category.ts`) — so the expected option list can be
  * exact instead of a "contains" approximation that a wrongly-filtered list
  * would still satisfy.
+ *
+ * The section heading (`<h2>`, via `SectionHeader`) is not a direct sibling of
+ * its chip `<ul>` — `SectionHeader` wraps the heading in its own two-level
+ * markup (a title/caption column, then the row that adds `right`) — so the
+ * `<ul>` is a sibling of that OUTER wrapper, two ancestor `<div>`s up from the
+ * `<h2>` itself, not of the heading directly.
  */
-async function categoryNames(page: Page, listTitle: string): Promise<string[]> {
+async function categoryNames(page: Page, listTitle: string | RegExp): Promise<string[]> {
   const list = page
     .getByRole('heading', { name: listTitle, level: 2 })
-    .locator('xpath=following-sibling::ul[1]')
+    .locator('xpath=ancestor::div[2]/following-sibling::ul[1]')
   return list.locator('li > span').allTextContents()
 }
 
@@ -154,13 +223,18 @@ test.describe.serial('Money forms — hydration gate', () => {
     // helper does not assert success (a duplicate is a legitimate outcome
     // elsewhere), so the row assertion below is what proves the seed landed.
     await createBudgetViaUi(page, { scope: 'OVERALL', amount: 1_000_000, currency: 'VND' })
-    await expect(
-      page.locator('li').filter({ has: page.getByText('Overall', { exact: true }) }),
-    ).toHaveCount(1)
+    // The scope label is `labels.budgetScope.OVERALL` ("Tổng thể"/"Overall"),
+    // translated — the vi page (the default, no `NEXT_LOCALE` cookie here)
+    // never renders the literal English word "Overall". Anchored (`^…$`)
+    // around `eitherLocale`'s own escaped alternation so this keeps the
+    // original assertion's `{ exact: true }` semantics — an element whose
+    // ENTIRE text is one of the two words, not merely contains it.
+    const overallLabel = new RegExp(`^(?:${eitherLocale('Tổng thể', 'Overall').source})$`)
+    await expect(page.locator('li').filter({ has: page.getByText(overallLabel) })).toHaveCount(1)
 
     await page.goto('/categories')
-    incomeNames = await categoryNames(page, 'Income Categories')
-    expenseNames = await categoryNames(page, 'Expense Categories')
+    incomeNames = await categoryNames(page, eitherLocale('Danh mục thu', 'Income Categories'))
+    expenseNames = await categoryNames(page, eitherLocale('Danh mục chi', 'Expense Categories'))
     expenseOnlyNames = expenseNames.filter((name) => !incomeNames.includes(name))
     expect(incomeNames.length).toBeGreaterThan(0)
     expect(expenseOnlyNames.length).toBeGreaterThan(0)
@@ -188,42 +262,56 @@ test.describe.serial('Money forms — hydration gate', () => {
     }
 
     // 2. `/transactions` — the Type the client is about to own is the Type the
-    //    server showed. Without `defaultValue` the browser picks the first
-    //    option, Income, while the Category list beside it is already EXPENSE.
+    //    server showed. The control is a radiogroup of buttons now (spec
+    //    §6.2), so the marker is `aria-checked`, not a `<select>`'s `selected`
+    //    — same guarantee, different element.
     const transactions = bodies.get('/transactions')!
-    expect(selectedOptionLabel(selectMarkup(transactions, 'Transaction type'))).toBe('Expense')
-    // The Category select offers its placeholder, never a pre-chosen category.
-    expect(selectedOptionLabel(selectMarkup(transactions, 'Category'))).toBe('Select a category')
-    // Uncontrolled — a `value=` prop on the <select> would make it controlled.
-    expect(selectMarkup(transactions, 'Transaction type')).not.toMatch(/<select[^>]*\svalue=/)
+    const typeGroup = radiogroupMarkup(transactions)
+    expect(typeGroup).toMatch(/aria-checked="true"[^>]*>(Chi tiêu|Expense)/)
+    expect(typeGroup).not.toMatch(/aria-checked="true"[^>]*>(Thu nhập|Income)/)
+    // The Category select offers its placeholder, never a pre-chosen category
+    // — and it is disabled, the gate in the bytes the browser paints first.
+    expect(selectedOptionLabel(selectMarkupById(transactions, 'category'))).toMatch(
+      /Chọn danh mục|Select a category/,
+    )
+    expect(selectMarkupById(transactions, 'category')).toContain('disabled')
+    // The account stand-in shows the form's own default (`accounts[0]`, seeded
+    // as "Cash" in `beforeAll`) — not hard-coded, so the two could not
+    // silently disagree the first time that default changes.
+    expect(selectMarkupById(transactions, 'account')).toContain('Cash')
+    // Both date parts are pre-filled with "now" in the user's zone.
+    expect(transactions).toMatch(/id="transaction-date-[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(transactions).toMatch(/id="transaction-time-[^"]*"[^>]*value="\d{2}:\d{2}"/)
+    // Uncontrolled — a `value=` prop on either stand-in `<select>` would make
+    // it controlled.
+    expect(selectMarkupById(transactions, 'account')).not.toMatch(/<select[^>]*\svalue=/)
+    expect(selectMarkupById(transactions, 'category')).not.toMatch(/<select[^>]*\svalue=/)
 
     // 3. `/transfers` — `toAccountId` defaults to the SECOND account, so its
     //    select must carry the marker; `fromAccountId` defaults to the first
     //    option and must carry none. Both selects list the identical option
-    //    values, which is why each is asserted in its own slice.
+    //    values, which is why each is asserted in its own slice. Found by
+    //    `id`, not `aria-label` (Task 5b: both are now native `<select>`s
+    //    labelled through `FormField`'s visible `<label>` — spec §2 keeps
+    //    native as the default and makes only the *transaction* Category and
+    //    Account pickers custom).
     const transfers = bodies.get('/transfers')!
-    expect(selectedOptionLabel(selectMarkup(transfers, 'To account'))).toBe(
+    expect(selectedOptionLabel(selectMarkupByTransferId(transfers, 'to'))).toBe(
       `${SECOND_ACCOUNT} (VND)`,
     )
-    expect(selectedOptionLabel(selectMarkup(transfers, 'From account'))).toBeNull()
+    expect(selectedOptionLabel(selectMarkupByTransferId(transfers, 'from'))).toBeNull()
 
-    // 4. `/budgets` — an Overall budget exists for this month (seeded in
-    //    `beforeAll`), so the scope default is CATEGORY: the second option.
-    const budgets = bodies.get('/budgets')!
-    expect(selectedOptionLabel(selectMarkup(budgets, 'Budget scope'))).toBe('Category')
-    expect(selectMarkup(budgets, 'Budget scope')).toMatch(
-      /<option[^>]*\svalue="CATEGORY"[^>]*\sselected=""/,
-    )
-    // The CATEGORY-only field is server-rendered too — no post-hydration pop-in.
-    expect(selectedOptionLabel(selectMarkup(budgets, 'Budget category'))).toBe('Select a category')
-
-    // 5. `/accounts` — every select here defaults to its own first option, so
-    //    correct behaviour is *no* marker anywhere. Asserted rather than
-    //    skipped: a `defaultValue` added to the wrong select would otherwise
-    //    pass unnoticed.
-    const accounts = bodies.get('/accounts')!
-    expect(selectedOptionLabel(selectMarkup(accounts, 'Account type'))).toBeNull()
-    expect(selectedOptionLabel(selectMarkup(accounts, 'Currency'))).toBeNull()
+    // `/accounts`' and `/budgets`' create forms have no raw-HTML case to
+    // assert here (Task 6, Task 7 fix round 3 respectively): both are
+    // mounted only inside a closed `Sheet`, which renders nothing at all
+    // until opened, so their gates, their labels and their `<select>`s' own
+    // defaults (`/budgets`' scope select defaults to CATEGORY when an Overall
+    // budget already exists for the month, the same seed this file's
+    // `beforeAll` still creates via `createBudgetViaUi`, now only to prove
+    // the create flow itself still works, not for a raw-HTML assertion) are
+    // asserted at the component level instead —
+    // `components/accounts/account-form.test.tsx` and
+    // `components/budgets/budget-form.test.tsx`.
   })
 
   test('an early INCOME selection is never reverted (5 fresh navigations)', async ({ page }) => {
@@ -235,31 +323,39 @@ test.describe.serial('Money forms — hydration gate', () => {
       // `load`, and certainly earlier than hydration.
       await page.goto('/transactions', { waitUntil: 'commit' })
 
-      const type = page.getByLabel('Transaction type')
-      // The locator auto-waits for attachment, then Playwright waits for
-      // `:enabled` — i.e. for the fieldset's gate to lift. That is the sole
-      // gate on this action, and the earliest moment the app allows input.
-      await type.selectOption('INCOME')
-      await expect(type).toHaveValue('INCOME')
+      // The type is a `role="radio"` button inside a `<fieldset disabled>`
+      // now (spec §6.2), not a `<select>` — a disabled button is not
+      // clickable, which is the SAME protection the disabled `<select>` gave.
+      // The locator auto-waits for attachment, then Playwright waits for the
+      // fieldset's gate to lift. That is the sole gate on this action, and
+      // the earliest moment the app allows input.
+      const income = page.getByRole('radio', { name: /Thu nhập|^Income$/ })
+      await income.click()
+      await expect(income).toHaveAttribute('aria-checked', 'true')
 
       // The old failure window: hydration finishing *after* the interaction.
-      // Against the unfixed code the ungated select accepts the change
+      // Against the unfixed code the ungated control accepts the change
       // natively before React is listening, react-hook-form's `ref` callback
       // writes EXPENSE straight back into the DOM, and no `change` event ever
       // reaches React — so `_formValues.type`, and the Category list it
-      // drives, never move either. Verified by reverting
-      // `transaction-form.tsx` to its pre-fix state and running this test: it
-      // fails at the FIRST `toHaveValue` above (React hydrates the subtree
-      // synchronously to replay the discrete `change`, so the overwrite lands
-      // inside the same dispatch) with `unexpected value "EXPENSE"`. The
-      // assertion after `networkidle` and the option list below are the
-      // backstops for a machine where the overwrite arrives later.
+      // drives, never move either. The assertion after `networkidle` and the
+      // option list below are the backstops for a machine where the
+      // overwrite arrives later.
       await page.waitForLoadState('networkidle')
-      await expect(type).toHaveValue('INCOME')
+      await expect(income).toHaveAttribute('aria-checked', 'true')
 
-      const options = page.getByLabel('Category', { exact: true }).locator('option')
-      await expect(options).toHaveText(['Select a category', ...incomeNames])
+      // The Category picker is a custom Select now — read its options by
+      // opening it, the same way a hydrated Base UI Select's portal-rendered
+      // list has to be read anywhere in this suite.
+      const category = page.getByRole('combobox', { name: /Danh mục|^Category$/ })
+      const options = page.getByRole('option')
+      await category.click()
+      // `toHaveText` (not a one-shot `allTextContents()`) auto-retries until
+      // the popup's rendered options actually match, so this cannot race the
+      // re-render the INCOME switch triggers.
+      await expect(options).toHaveText(incomeNames)
       const texts = await options.allTextContents()
+      await page.keyboard.press('Escape')
       for (const name of expenseOnlyNames) expect(texts).not.toContain(name)
     }
   })
@@ -268,22 +364,37 @@ test.describe.serial('Money forms — hydration gate', () => {
     await page.goto('/transactions', { waitUntil: 'commit' })
     await page.waitForLoadState('networkidle')
 
-    const type = page.getByLabel('Transaction type')
-    const category = page.getByLabel('Category', { exact: true })
-    const options = category.locator('option')
+    const income = page.getByRole('radio', { name: /Thu nhập|^Income$/ })
+    const expense = page.getByRole('radio', { name: /Chi tiêu|^Expense$/ })
+    const category = page.getByRole('combobox', { name: /Danh mục|^Category$/ })
+
+    const options = page.getByRole('option')
+
+    /**
+     * `expect(options).toHaveText([...])` (not a one-shot `allTextContents()`)
+     * auto-retries until the portal-rendered popup's options actually match
+     * the expectation — reading the list the instant `click()` resolves can
+     * race the re-render a type change triggers, since `click()` only waits
+     * for the click event to dispatch, not for React's resulting commit.
+     */
+    async function expectCategoryOptions(expected: string[]): Promise<void> {
+      await category.click()
+      await expect(options).toHaveText(expected)
+      await page.keyboard.press('Escape')
+    }
 
     // EXPENSE is the default, so the first assertion is the state the page
     // arrived in; the cycle then proves each transition re-filters the list.
-    await expect(options).toHaveText(['Select a category', ...expenseNames])
+    await expectCategoryOptions(expenseNames)
 
-    for (const [next, expected] of [
-      ['INCOME', incomeNames],
-      ['EXPENSE', expenseNames],
-      ['INCOME', incomeNames],
+    for (const [radio, expected] of [
+      [income, incomeNames],
+      [expense, expenseNames],
+      [income, incomeNames],
     ] as const) {
-      await type.selectOption(next)
-      await expect(type).toHaveValue(next)
-      await expect(options).toHaveText(['Select a category', ...expected])
+      await radio.click()
+      await expect(radio).toHaveAttribute('aria-checked', 'true')
+      await expectCategoryOptions(expected)
     }
 
     // A category chosen under INCOME must not survive the switch to EXPENSE.
@@ -291,28 +402,122 @@ test.describe.serial('Money forms — hydration gate', () => {
     // effect never fired on this transition and left the INCOME category in
     // form state under an EXPENSE transaction — invisible until the server
     // rejected it. The name comes from the scraped list, not a seed constant.
-    await category.selectOption({ label: incomeNames[0] })
-    await expect(category).not.toHaveValue('')
-    await type.selectOption('EXPENSE')
-    await expect(category).toHaveValue('')
+    const placeholder = eitherLocale('Chọn danh mục', 'Select a category')
+    await category.click()
+    await page.getByRole('option', { name: incomeNames[0], exact: true }).click()
+    await expect(category).not.toHaveText(placeholder)
+    await expense.click()
+    await expect(category).toHaveText(placeholder)
 
     // And the form says so itself, in product copy, instead of accepting a
     // stale INCOME category and failing server-side.
-    await page.getByLabel('Amount', { exact: true }).fill('50000')
-    await page.getByRole('button', { name: 'Add transaction' }).click()
-    await expect(page.getByText(CATEGORY_REQUIRED_MESSAGE)).toBeVisible()
-    await expect(category).toHaveValue('')
+    await page.getByLabel(/Số tiền|^Amount$/).fill('50000')
+    await page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
+    await expect(
+      page.getByText(
+        eitherLocale(viValidation[CATEGORY_REQUIRED_MESSAGE], CATEGORY_REQUIRED_MESSAGE),
+      ),
+    ).toBeVisible()
+    await expect(category).toHaveText(placeholder)
   })
 
   test('CASH_IN/CASH_OUT/ADJUSTMENT_* hide the category', async ({ page }) => {
     await page.goto('/transactions', { waitUntil: 'commit' })
     await page.waitForLoadState('networkidle')
 
-    const type = page.getByLabel('Transaction type')
-    for (const value of CATEGORYLESS_TYPES) {
-      await type.selectOption(value)
-      await expect(page.getByLabel('Category', { exact: true })).toHaveCount(0)
-      await expect(type).toHaveValue(value)
+    // The four "Khác" types live behind that disclosure (spec §6.2) — open it
+    // once so every radio below is reachable.
+    await page.getByRole('button', { name: /Khác|^Other$/ }).click()
+
+    const TYPE_LABELS: Record<(typeof CATEGORYLESS_TYPES)[number], RegExp> = {
+      CASH_IN: /Tiền vào \(khác\)|Cash In/,
+      CASH_OUT: /Tiền ra \(khác\)|Cash Out/,
+      ADJUSTMENT_INCREASE: /Điều chỉnh tăng|Balance Adjustment — increase/,
+      ADJUSTMENT_DECREASE: /Điều chỉnh giảm|Balance Adjustment — decrease/,
     }
+
+    for (const value of CATEGORYLESS_TYPES) {
+      const radio = page.getByRole('radio', { name: TYPE_LABELS[value] })
+      await radio.click()
+      await expect(page.getByRole('combobox', { name: /Danh mục|^Category$/ })).toHaveCount(0)
+      await expect(radio).toHaveAttribute('aria-checked', 'true')
+    }
+  })
+
+  test('the raw server HTML carries the gate on both the radiogroup and the split date/time', async ({
+    page,
+  }) => {
+    // Deterministic: a raw response body, no timing at all. Extends the
+    // "server HTML gates every money form" block above rather than
+    // duplicating its GATED_PAGES loop.
+    const response = await page.request.get('/transactions')
+    const html = await response.text()
+
+    expect(html).toContain('<fieldset disabled=""')
+    expect(html).toContain('aria-busy="true"')
+    const typeGroup = radiogroupMarkup(html)
+    expect(typeGroup).toMatch(/aria-checked="true"[^>]*>(Chi tiêu|Expense)/)
+    expect(html).toMatch(/id="transaction-date-[^"]*"[^>]*value="\d{4}-\d{2}-\d{2}"/)
+    expect(html).toMatch(/id="transaction-time-[^"]*"[^>]*value="\d{2}:\d{2}"/)
+  })
+
+  test('a second submit is impossible while the first is in flight', async ({ page }) => {
+    await page.goto('/transactions')
+    await page.getByRole('radio', { name: /Chi tiêu|^Expense$/ }).click()
+    await page.getByRole('combobox', { name: /Danh mục|^Category$/ }).click()
+    await page.getByRole('option').first().click()
+    await page.getByLabel(/Số tiền|^Amount$/).fill('12345')
+
+    // Hold the server action so the lock is observable. The delay lives in
+    // the ROUTE handler — a server-side pause — not in a `waitForTimeout`.
+    await page.route('**/transactions', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await route.fallback()
+    })
+
+    const submit = page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ })
+    // `.first()`: one fieldset today, but a width where both the sticky panel
+    // and the sheet were mounted would match two, and a strict locator throws
+    // rather than picking one.
+    const fieldset = page.locator('form fieldset').first()
+    await submit.click()
+    await expect(fieldset).toHaveAttribute('aria-busy', 'true')
+    // Not `expect(fieldset).toBeDisabled()` / `expect(submit).toBeDisabled()`:
+    // verified directly (`fieldset.evaluate((el) => el.disabled)` → `true`)
+    // that the fieldset genuinely IS disabled, and that disabling genuinely
+    // propagates to the submit button as far as the BROWSER is concerned
+    // (`submit.matches(':disabled')` → `true`) — but Playwright's own
+    // `isDisabled`/`toBeDisabled` do not special-case `<fieldset>` (they
+    // report "enabled" regardless of its `disabled` property) and do not
+    // account for ancestor-fieldset disabling on a descendant control either
+    // (a plain `<button>`'s OWN `.disabled` IDL property stays `false` when it
+    // is only disabled via an ancestor fieldset, which is exactly what
+    // `toBeDisabled` reads). `aria-busy` above and the outcome asserted below
+    // — one row, not two — are what this test can reliably check.
+    await page.unroute('**/transactions')
+    await expect(page.getByLabel(/Số tiền|^Amount$/)).toHaveValue('0')
+    // Exactly one ROW for that amount — a double submit would make two.
+    // Scoped to `listitem`, not a bare `getByText`: the page header's own
+    // month-total also happens to read "12.345" when this is the only
+    // EXPENSE transaction of the month, so an unscoped text match would
+    // count that too and pass even if a duplicate row existed.
+    await expect(page.getByRole('listitem').filter({ hasText: '12.345' })).toHaveCount(1)
+  })
+
+  test('the split date and time submit as one instant', async ({ page }) => {
+    const TODAY = todayInZone('Asia/Ho_Chi_Minh')
+    await page.goto('/transactions')
+    await page.getByRole('radio', { name: /Chi tiêu|^Expense$/ }).click()
+    await page.getByRole('combobox', { name: /Danh mục|^Category$/ }).click()
+    await page.getByRole('option').first().click()
+    await page.getByLabel(/Số tiền|^Amount$/).fill('77000')
+    await page.getByLabel(/^Ngày$|^Date$/).fill(TODAY)
+    await page.getByLabel(/^Giờ$|^Time$/).fill('14:30')
+    await page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
+    await expect(page.getByLabel(/Số tiền|^Amount$/)).toHaveValue('0')
+    // The row's meta carries the time the two fields combined to, formatted
+    // by `formatDate(..., 'dateTime')` in the user's zone.
+    await expect(page.getByRole('listitem').filter({ hasText: '77.000' })).toContainText('14:30')
   })
 })

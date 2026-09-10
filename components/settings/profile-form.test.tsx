@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
+import { loadMessages } from '@/lib/i18n/messages'
 import type { ProfileInput } from '@/lib/validation/profile'
 
 /**
@@ -54,17 +56,31 @@ const APP_DEFAULTS: ProfileInput = {
   timezone: 'Asia/Ho_Chi_Minh',
 }
 
-function render(defaultValues: ProfileInput): string {
-  return renderToStaticMarkup(<ProfileForm defaultValues={defaultValues} />)
+const LABELS = {
+  profileTitle: 'Profile',
+  profileDescription: 'The name shown throughout the app.',
+  preferencesTitle: 'Preferences',
+  preferencesDescription: 'How CashFlow displays your figures.',
+}
+
+const EMAIL = 'probe@example.com'
+
+const messages = await loadMessages('vi')
+
+function render(defaultValues: ProfileInput = APP_DEFAULTS): string {
+  return renderToStaticMarkup(
+    <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+      <ProfileForm defaultValues={defaultValues} email={EMAIL} labels={LABELS} />
+    </NextIntlClientProvider>,
+  )
 }
 
 /**
  * The markup of one `<select>`, found by the `name` attribute `register()`
- * emits — these selects carry no accessible name today, and that is out of
- * scope for a hydration patch. `<select>`s cannot nest, so the first
- * `</select>` after the opening tag closes it. Scoping matters: the three
- * selects each render their own options, and an assertion against the whole
- * document could not tell them apart.
+ * emits. `<select>`s cannot nest, so the first `</select>` after the opening
+ * tag closes it. Scoping matters: the four selects each render their own
+ * options, and an assertion against the whole document could not tell them
+ * apart.
  */
 function selectMarkup(html: string, name: string): string {
   const nameIndex = html.indexOf(`name="${name}"`)
@@ -93,28 +109,42 @@ function inputMarkup(html: string, name: string): string {
   return html.slice(start, end + 1)
 }
 
+/** The `<input>` markup carrying the given `id` attribute — for the email
+ *  field, which (deliberately) carries no `name`/`register()` at all. */
+function inputMarkupById(html: string, id: string): string {
+  const idIndex = html.indexOf(`id="${id}"`)
+  if (idIndex === -1) throw new Error(`No element with id "${id}" in the markup`)
+  const start = html.lastIndexOf('<input', idIndex)
+  const end = html.indexOf('>', idIndex)
+  if (start === -1 || end === -1) throw new Error(`No <input> with id "${id}"`)
+  return html.slice(start, end + 1)
+}
+
 function countOf(html: string, needle: string): number {
   return html.split(needle).length - 1
 }
 
 describe('ProfileForm hydration gate', () => {
-  it('ships the form gated: a disabled, aria-busy fieldset with an sr-only legend', () => {
-    const html = render(PROBE)
+  it('ships both groups gated: disabled fieldsets with sr-only legends', () => {
+    const html = render()
 
-    expect(html).toContain('<fieldset disabled=""')
-    expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">Profile</legend>')
+    // `aria-busy` tracks the in-flight SUBMIT, not the hydration gate (spec's
+    // accessibility criteria: "disabled + aria-busy while saving") — so on the
+    // very first, pre-submit render it is absent even though both fieldsets
+    // are already `disabled` by the hydration gate.
+    expect(html.match(/<fieldset disabled=""/g)).toHaveLength(2)
+    expect(html).toContain('<legend class="sr-only">Hồ sơ</legend>')
+    expect(html).toContain('<legend class="sr-only">Tùy chọn hiển thị</legend>')
   })
 
-  it('moves the form layout onto the fieldset, so lifting the gate shifts nothing', () => {
-    const html = render(PROBE)
+  it("moves each group's layout onto its fieldset, so lifting the gate shifts nothing", () => {
+    const html = render()
 
-    // The flex column lives on the fieldset (the new flex container), not on
-    // the <form> — a <fieldset> wrapping a flex form's children without taking
+    // The flex column lives on each fieldset (the flex container), not on the
+    // <form> — a <fieldset> wrapping a flex form's children without taking
     // over its layout would re-flow every field the moment the gate lifts.
-    expect(html).toContain('class="flex min-w-0 flex-col gap-4"')
-    expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
-    expect(html).not.toMatch(/<form[^>]*class=/)
+    expect(countOf(html, 'class="flex min-w-0 flex-col gap-4"')).toBe(2)
+    expect(html).toMatch(/<form[^>]*>[\s\S]*?<fieldset/)
   })
 })
 
@@ -127,7 +157,6 @@ describe('ProfileForm server-rendered defaults', () => {
     // `defaultValue` these arrive EMPTY and the user's stored name only
     // appears once hydration has run.
     expect(inputMarkup(html, 'name')).toContain('value="Probe User"')
-    expect(inputMarkup(html, 'timezone')).toContain('value="Europe/London"')
 
     // Selects: without a `defaultValue` the browser shows the FIRST option, so
     // a USD/en/dark profile was displayed as VND/vi/light until hydration.
@@ -144,6 +173,12 @@ describe('ProfileForm server-rendered defaults', () => {
       expect(countOf(markup, 'selected=""'), field).toBe(1)
       expect(markup, field).not.toMatch(/<select[^>]*\svalue=/)
     }
+
+    // Timezone: a grouped native select, so the stored zone is asserted as the
+    // hoisted leading option rather than via `inputMarkup`.
+    const timezoneMarkup = selectMarkup(html, 'timezone')
+    expect(timezoneMarkup).toMatch(selectedOption('Europe/London'))
+    expect(countOf(timezoneMarkup, 'selected=""')).toBe(1)
   })
 
   it('renders the app defaults as the selected options too', () => {
@@ -162,6 +197,61 @@ describe('ProfileForm server-rendered defaults', () => {
       expect(countOf(markup, 'selected=""'), field).toBe(1)
     }
     expect(inputMarkup(html, 'name')).toContain('value="Default User"')
-    expect(inputMarkup(html, 'timezone')).toContain('value="Asia/Ho_Chi_Minh"')
+    const timezoneMarkup = selectMarkup(html, 'timezone')
+    expect(timezoneMarkup).toMatch(selectedOption('Asia/Ho_Chi_Minh'))
+  })
+})
+
+describe('ProfileForm — one form, two groups, one Save', () => {
+  it('renders the server-stored profile in ONE form with two gated fieldsets', () => {
+    const html = render()
+    expect(html.match(/<form/g)).toHaveLength(1)
+    expect(html.match(/<fieldset/g)).toHaveLength(2)
+    // Both gated before hydration. `aria-busy` is NOT asserted here — it
+    // tracks the in-flight SUBMIT, not the hydration gate, so on this
+    // pre-submit render it is absent (see the "hydration gate" describe
+    // block above for that distinction spelled out).
+    expect(html.match(/<fieldset disabled/g)).toHaveLength(2)
+    expect(html.match(/<legend class="sr-only"/g)).toHaveLength(2)
+  })
+
+  it('has exactly one submit button, outside both fieldsets', () => {
+    const html = render()
+    expect(html.match(/type="submit"/g)).toHaveLength(1)
+    // The button follows the second `</fieldset>`, so it inherits neither
+    // group's `disabled` — which is why it carries its own.
+    expect(html.lastIndexOf('</fieldset>')).toBeLessThan(html.indexOf('type="submit"'))
+  })
+
+  it('gives all five controls a visible label bound to their id', () => {
+    const html = render()
+    for (const id of [
+      'settings-name',
+      'settings-base-currency',
+      'settings-locale',
+      'settings-theme',
+      'settings-timezone',
+    ]) {
+      expect(html).toContain(`for="${id}"`)
+      expect(html).toContain(`id="${id}"`)
+    }
+  })
+
+  it('shows the signed-in email as a labelled, read-only, non-editable field', () => {
+    const html = render()
+    expect(html).toContain('for="settings-email"')
+    const emailMarkup = inputMarkupById(html, 'settings-email')
+    expect(emailMarkup).toContain(`value="${EMAIL}"`)
+    expect(emailMarkup).toMatch(/\bdisabled=""/)
+    // Not one of the five `ProfileInput` fields `register()` wires up — it
+    // carries no `name` attribute at all, so it could never be posted by
+    // `updateProfile`.
+    expect(emailMarkup).not.toMatch(/\sname="/)
+  })
+
+  it('hoists the stored timezone into the leading optgroup', () => {
+    const html = render()
+    const firstGroup = html.slice(html.indexOf('<optgroup'), html.indexOf('</optgroup>'))
+    expect(firstGroup).toContain('Asia/Ho_Chi_Minh')
   })
 })

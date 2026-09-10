@@ -77,80 +77,88 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await page.goto('/dashboard')
 
-    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: /Tổng quan|^Dashboard$/, level: 1 }),
+    ).toBeVisible()
 
-    const rail = page.locator('nav[aria-label="Primary"]')
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeVisible()
     for (const label of [
-      'Dashboard',
-      'Transactions',
-      'Transfers',
-      'Accounts',
-      'Budgets',
-      'Savings',
-      'Debts',
-      'Loans',
-      'Reminders',
-      'Categories',
-      'Reports',
-      'Settings',
+      /^(Tổng quan|Dashboard)$/,
+      /^(Giao dịch|Transactions)$/,
+      /^(Chuyển tiền|Transfers)$/,
+      /^(Tài khoản|Accounts)$/,
+      /^(Ngân sách|Budgets)$/,
+      /^(Tiết kiệm|Savings)$/,
+      /^(Công nợ|Debts)$/,
+      /^(Khoản vay|Loans)$/,
+      /^(Nhắc nhở|Reminders)$/,
+      /^(Danh mục|Categories)$/,
+      /^(Báo cáo|Reports)$/,
+      /^(Cài đặt|Settings)$/,
     ]) {
       await expect(rail.getByRole('link', { name: label })).toBeVisible()
     }
 
-    // Scoped to the KPI strip's <dl>: "Net Income" (and, on other pages,
+    // Scoped to the summary panel's <dl>: "Net Income" (and, on other pages,
     // "Income"/"Expense") also appear as recharts legend text elsewhere on
     // this page, which a page-wide getByText would ambiguously match too.
-    const kpiStrip = page.locator('dl')
+    // `getByText` with a regex, not `{ exact: true }`, because "Thu nhập ròng"
+    // and "Thu nhập tháng" share a prefix and the exact-match form no longer
+    // applies to a regex.
+    const summary = page.locator('dl').first()
     for (const label of [
-      'Total Account Balance',
-      'Net Worth',
-      'Monthly Income',
-      'Monthly Expense',
-      'Net Income',
+      /Tài sản ròng|Net Worth/,
+      /Tổng số dư|Total Balance/,
+      /Thu nhập tháng|Monthly Income/,
+      /Chi tiêu tháng|Monthly Expense/,
+      /Thu nhập ròng|Net Income/,
     ]) {
-      await expect(kpiStrip.getByText(label, { exact: true })).toBeVisible()
+      await expect(summary.getByText(label)).toBeVisible()
     }
 
     for (const heading of [
-      'Cash Flow Trend',
-      'Income vs Expense',
-      'Account Balance Over Time',
-      'Expense by Category',
-      'Account Balance Distribution',
+      /Dòng tiền theo tháng|Cash Flow Trend/,
+      /Thu và chi|Income vs Expense/,
+      /Số dư theo thời gian|Account Balance Over Time/,
+      /Chi tiêu theo danh mục|Expense by Category/,
+      /Phân bổ số dư|Account Balance Distribution/,
       // The planning widgets, in the order the page renders them, with Recent
       // Transactions kept last (directive Z's hierarchy).
-      'Budget Progress',
-      'Savings Goals',
-      'Debt / Loan Overview',
-      'Upcoming Reminders',
-      'Recent Transactions',
+      /Tiến độ ngân sách|Budget Progress/,
+      /Mục tiêu tiết kiệm|Savings Goals/,
+      /Công nợ và khoản vay|Debt \/ Loan Overview/,
+      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /Giao dịch gần đây|Recent Transactions/,
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()
     }
 
     const recentSection = page
       .locator('section')
-      .filter({ has: page.getByRole('heading', { name: 'Recent Transactions' }) })
+      .filter({ has: page.getByRole('heading', { name: /Giao dịch gần đây|Recent Transactions/ }) })
     await expect(recentSection.getByText('Salary')).toBeVisible()
     await expect(recentSection.getByText('Food & Dining')).toBeVisible()
 
-    // FX status region: the component renders exactly one <p> after the
-    // subtitle <p>, in one of four exhaustive shapes. Scoped to `main`'s own
+    // FX status region: `FxRateStatus` renders one <span> inside `PageHeader`'s
+    // `meta` slot, in one of four exhaustive shapes. Scoped to `main`'s own
     // header — the mobile top bar is a second, hidden-but-present `<header>`
-    // earlier in the DOM (`md:hidden` only hides it visually) with no <p> at
-    // all, so a bare `page.locator('header')` picks the wrong one.
-    const fxStatusText = await page.locator('main header p').last().textContent()
+    // earlier in the DOM (`md:hidden` only hides it visually) with no such
+    // span at all, so a bare `page.locator('header')` picks the wrong one.
+    const fxStatusText = await page
+      .locator('main header')
+      .getByText(/USD = |Chưa có tỷ giá|FX rate unavailable|Không cần quy đổi|No conversion needed/)
+      .first()
+      .textContent()
     expect(fxStatusText).toMatch(
-      /cached rate|FX rate unavailable|USD = .* VND|No conversion needed/,
+      /tỷ giá lưu tạm|cached rate|Chưa có tỷ giá|FX rate unavailable|USD = .* VND|Không cần quy đổi|No conversion needed/,
     )
 
-    // Total Account Balance must be a formatted number or the "unknown"
-    // placeholder — never a raw NaN/undefined leaking through the
-    // FX-unavailable fallback.
+    // Total Balance must be a formatted number or the "unknown" placeholder —
+    // never a raw NaN/undefined leaking through the FX-unavailable fallback.
     const totalBalanceCell = page
       .locator('dl > div')
-      .filter({ has: page.getByText('Total Account Balance', { exact: true }) })
+      .filter({ has: page.getByText(/Tổng số dư|Total Balance/) })
     const totalBalanceValue = (
       await totalBalanceCell.locator('dd span.tabular-nums').first().textContent()
     )?.trim()
@@ -162,51 +170,77 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       () => document.documentElement.scrollWidth <= window.innerWidth,
     )
     expect(overflow).toBe(true)
+
+    // The spec's 12-column grid (§6.1): Cash Flow Trend is 8/12 (≈ 66.7 %) and
+    // Recent Transactions is 12/12 (full width) at 1440. `boundingBox()` reads
+    // the rendered geometry directly, so this pins the grid rather than the
+    // class names that produce it.
+    const trendSection = page
+      .locator('section')
+      .filter({ has: page.getByRole('heading', { name: /Dòng tiền theo tháng|Cash Flow Trend/ }) })
+    const gridBox = await page.locator('main > div > div').last().boundingBox()
+    const trendBox = await trendSection.boundingBox()
+    const recentBox = await recentSection.boundingBox()
+    // Explicit, not an `if` guard around the assertions: a `null` box (the
+    // element detached or never rendered) must fail this test loudly, not
+    // silently skip the very assertions it exists to make.
+    expect(gridBox, 'grid container bounding box').not.toBeNull()
+    expect(trendBox, 'Cash Flow Trend section bounding box').not.toBeNull()
+    expect(recentBox, 'Recent Transactions section bounding box').not.toBeNull()
+    const trendFraction = trendBox!.width / gridBox!.width
+    const recentFraction = recentBox!.width / gridBox!.width
+    expect(trendFraction).toBeGreaterThan(0.6)
+    expect(trendFraction).toBeLessThan(0.7)
+    expect(recentFraction).toBeGreaterThan(0.95)
   })
 
   test('dashboard (mobile, 375x812): compact nav, More menu, tab navigation', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 })
     await page.goto('/dashboard')
 
-    const rail = page.locator('nav[aria-label="Primary"]')
+    const rail = page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ })
     await expect(rail).toBeHidden()
 
-    const bar = page.locator('nav[aria-label="Primary (compact)"]')
+    const bar = page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ })
     await expect(bar).toBeVisible()
-    await expect(bar.getByRole('link', { name: 'Add transaction' })).toBeVisible()
+    await expect(
+      bar.getByRole('link', { name: /^(Thêm giao dịch|Add transaction)$/ }),
+    ).toBeVisible()
 
-    const moreButton = page.getByRole('button', { name: 'More navigation' })
-    await moreButton.click()
-    const panelId = await moreButton.getAttribute('aria-controls')
-    if (!panelId) throw new Error('More button has no aria-controls')
-    const morePanel = page.locator(`#${panelId}`)
-
-    await expect(morePanel.getByRole('link', { name: 'Transfers' })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: 'Budgets' })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: 'Categories' })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: 'Settings' })).toBeVisible()
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
+    const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
+    await expect(morePanel.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Danh mục|Categories)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Cài đặt|Settings)$/ })).toBeVisible()
 
     await page.keyboard.press('Escape')
     await expect(morePanel).toBeHidden()
 
-    // Re-open it, then navigate via a bottom-bar tab while it is open: the
-    // route change must close it, not leave it hanging open on the new page.
-    await moreButton.click()
+    // Re-open it, then dismiss it before using the bar underneath: the sheet
+    // is now a real modal overlay (focus trap + full-viewport backdrop), so —
+    // unlike the hand-rolled disclosure this replaces — it deliberately
+    // intercepts clicks on the page behind it; a bottom-bar tap cannot reach
+    // through it. The "a route change closes an open sheet" guarantee is
+    // instead proven in `e2e/phase7-shell.spec.ts`, via a link INSIDE the
+    // sheet, which is the only navigation a modal dialog actually permits.
+    await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     await expect(morePanel).toBeVisible()
-    await bar.getByRole('link', { name: 'Accounts' }).click()
-    await expect(page).toHaveURL(/\/accounts/)
+    await page.keyboard.press('Escape')
     await expect(morePanel).toBeHidden()
+    await bar.getByRole('link', { name: /^(Tài khoản|Accounts)$/ }).click()
+    await expect(page).toHaveURL(/\/accounts/)
 
     // The rightmost tab specifically: the bottom-right corner is where a
     // floating dev overlay would land, and it would swallow this tap rather
     // than navigate. Reports is the tab that occupies it.
-    await bar.getByRole('link', { name: 'Reports' }).click()
+    await bar.getByRole('link', { name: /^(Báo cáo|Reports)$/ }).click()
     await expect(page).toHaveURL(/\/reports/)
-    await expect(page.getByRole('heading', { name: 'Reports', level: 1 })).toBeVisible()
+    // Now translated (Task 10): "Báo cáo" by default, "Reports" in English.
+    await expect(page.getByRole('heading', { name: /^Báo cáo$|^Reports$/, level: 1 })).toBeVisible()
 
-    await bar.getByRole('link', { name: 'Dashboard' }).click()
+    await bar.getByRole('link', { name: /^(Tổng quan|Dashboard)$/ }).click()
     await expect(page).toHaveURL(/\/dashboard/)
-    await expect(morePanel).toBeHidden()
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -218,8 +252,12 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     await page.setViewportSize({ width: 768, height: 1024 })
     await page.goto('/dashboard')
 
-    await expect(page.locator('nav[aria-label="Primary"]')).toBeVisible()
-    await expect(page.locator('nav[aria-label="Primary (compact)"]')).toBeHidden()
+    await expect(
+      page.getByRole('navigation', { name: /^(Điều hướng chính|Primary)$/ }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('navigation', { name: /^(Điều hướng nhanh|Primary \(compact\))$/ }),
+    ).toBeHidden()
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -230,29 +268,38 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
   test('reports: default month period shows the seeded totals', async ({ page }) => {
     await page.goto('/reports')
 
-    await expect(page.getByRole('link', { name: 'month', exact: true })).toHaveAttribute(
+    // Raw lowercase period names ('month') are gone: the segments are now
+    // translated ("Tháng"/"Month") by `PeriodFilter` (Task 10).
+    await expect(page.getByRole('link', { name: /^Tháng$|^Month$/ })).toHaveAttribute(
       'aria-current',
       'page',
     )
 
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    async function kpiValue(label: RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       const text = await cell.locator('dd span.tabular-nums').first().textContent()
       return digitsOnly(text ?? '')
     }
 
-    expect(await kpiValue('Income')).toBe('500000')
-    expect(await kpiValue('Expense')).toBe('200000')
-    expect(await kpiValue('Net Income')).toBe('300000')
+    // Anchored: "Thu nhập" (Income) is a strict prefix of "Thu nhập ròng" (Net
+    // Income), so an unanchored regex would match the wrong cell first.
+    expect(await kpiValue(/^Thu nhập$|^Income$/)).toBe('500000')
+    expect(await kpiValue(/^Chi tiêu$|^Expense$/)).toBe('200000')
+    expect(await kpiValue(/^Thu nhập ròng$|^Net Income$/)).toBe('300000')
   })
 
   test('reports: custom range via the form updates the URL and keeps totals', async ({ page }) => {
     await page.goto('/reports')
     const today = todayInZone(TIMEZONE)
 
-    await page.getByLabel('From', { exact: true }).fill(today)
-    await page.getByLabel('To', { exact: true }).fill(today)
-    await page.getByRole('button', { name: 'Apply' }).click()
+    // The From/To pair now appears only once the "Tùy chọn"/"Custom" segment
+    // is selected (Task 10) — clicking it with no from/to yet lands on the
+    // resolver's own invalid-range branch, which still renders the same
+    // `PeriodFilter` (with `activeKind="custom"`) and its form.
+    await page.getByRole('link', { name: /^Tùy chọn$|^Custom$/ }).click()
+    await page.getByLabel(/^Từ ngày$|^From$/).fill(today)
+    await page.getByLabel(/^Đến ngày$|^To$/).fill(today)
+    await page.getByRole('button', { name: /^Áp dụng$|^Apply$/ }).click()
 
     await expect(page).toHaveURL(/\/reports\?/)
     const url = new URL(page.url())
@@ -260,15 +307,29 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     expect(url.searchParams.get('from')).toBe(today)
     expect(url.searchParams.get('to')).toBe(today)
 
-    async function kpiValue(label: string): Promise<string> {
-      const cell = page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
+    // The pre-flight finding: a custom range must leave the "Tùy chọn" segment
+    // itself selected, not none of the six.
+    await expect(page.getByRole('link', { name: /^Tùy chọn$|^Custom$/ })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    // One export control, whose menu holds both items now that a resolvable
+    // range makes the "this range" item available.
+    const exportButton = page.getByRole('button', { name: /Xuất Excel|Export Excel/ })
+    await expect(exportButton).toBeVisible()
+    await exportButton.click()
+    await expect(page.getByRole('menuitem')).toHaveCount(2)
+    await page.keyboard.press('Escape')
+
+    async function kpiValue(label: RegExp): Promise<string> {
+      const cell = page.locator('dl > div').filter({ has: page.getByText(label) })
       const text = await cell.locator('dd span.tabular-nums').first().textContent()
       return digitsOnly(text ?? '')
     }
 
-    expect(await kpiValue('Income')).toBe('500000')
-    expect(await kpiValue('Expense')).toBe('200000')
-    expect(await kpiValue('Net Income')).toBe('300000')
+    expect(await kpiValue(/^Thu nhập$|^Income$/)).toBe('500000')
+    expect(await kpiValue(/^Chi tiêu$|^Expense$/)).toBe('200000')
+    expect(await kpiValue(/^Thu nhập ròng$|^Net Income$/)).toBe('300000')
   })
 
   test('reports: an unknown named period renders an inline alert, not a crash', async ({

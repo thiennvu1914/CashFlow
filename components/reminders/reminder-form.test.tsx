@@ -1,17 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
+import { loadMessages } from '@/lib/i18n/messages'
+import viLabels from '@/messages/vi/labels.json'
+import viReminders from '@/messages/vi/reminders.json'
 
 /**
- * A markup test, exactly like `components/loans/loan-form.test.tsx` —
+ * A markup test, exactly like `components/debts/debt-form.test.tsx` —
  * `renderToStaticMarkup`, no jsdom, no Testing Library, no new dependency.
  *
  * What it pins down is the server HTML, which is where this form's half of the
  * hydration-race fix lives (`lib/ui/use-hydrated.ts`): the gate that stops the
  * form accepting input it would silently discard, every field being present and
- * labelled in the first paint rather than popping in after hydration, and — the
- * case this form shares with the loan form — that the frequency select's
- * server-rendered selection is MONTHLY even though MONTHLY is *not* its first
- * option.
+ * VISIBLY labelled (a `<label for>`, not just an `aria-label` — spec §6.7's a11y
+ * acceptance criterion for all twelve fields) in the first paint rather than
+ * popping in after hydration, and — the case this form shares with the loan
+ * form — that the frequency select's server-rendered selection is MONTHLY even
+ * though MONTHLY is *not* its first option.
  *
  * It also pins the two conditional fields, which are this form's own hazard.
  * `createReminderSchema` *rejects* an anchor the frequency has no meaning for
@@ -21,7 +26,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
  * fill in.
  *
  * `useRouter` throws outside a mounted app router and the action module pulls
- * in Prisma, so both are mocked — same reasoning as the loans test.
+ * in Prisma, so both are mocked — same reasoning as the debt/loan tests.
  */
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -46,34 +51,43 @@ const ACCOUNTS = [
   { id: 'acc_cash', name: 'Cash wallet' },
 ]
 
+const messages = await loadMessages('vi')
+
 function render(): string {
   return renderToStaticMarkup(
-    <ReminderForm
-      today={TODAY}
-      expenseCategories={EXPENSE_CATEGORIES}
-      incomeCategories={INCOME_CATEGORIES}
-      accounts={ACCOUNTS}
-    />,
+    <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+      <ReminderForm
+        today={TODAY}
+        locale="vi"
+        expenseCategories={EXPENSE_CATEGORIES}
+        incomeCategories={INCOME_CATEGORIES}
+        accounts={ACCOUNTS}
+      />
+    </NextIntlClientProvider>,
   )
 }
 
-/** The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- *  nest, so the first `</select>` after the opening tag closes it. */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
+/** The markup of one `<select>`, found by an `id=` that starts with `prefix` —
+ *  `<select>`s cannot nest, so the first `</select>` after the opening tag
+ *  closes it. Ids are `useId()`-generated, so only the stable prefix this
+ *  form's own `fieldId` helper writes can be matched. */
+function selectMarkupById(html: string, prefix: string): string {
+  const idMatch = html.match(new RegExp(`id="${prefix}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element whose id starts with "${prefix}-" in the markup`)
+  const start = html.lastIndexOf('<select', html.indexOf(idMatch[0]))
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
+  if (start === -1 || end === -1) throw new Error(`No <select> with id "${prefix}-…"`)
   return html.slice(start, end + '</select>'.length)
 }
 
-/** The one `<input …>` tag carrying this `aria-label`. */
-function inputMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
+/** The opening tag of the one `<input>` whose id starts with `prefix`.
+ *  `<input>` is a void element, so the tag is all there is. */
+function inputMarkupById(html: string, prefix: string): string {
+  const idMatch = html.match(new RegExp(`id="${prefix}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element whose id starts with "${prefix}-" in the markup`)
+  const labelIndex = html.indexOf(idMatch[0])
   const start = html.lastIndexOf('<input', labelIndex)
-  if (start === -1) throw new Error(`No <input> labelled "${ariaLabel}"`)
+  if (start === -1) throw new Error(`No <input> with id "${prefix}-…"`)
   return html.slice(start, html.indexOf('>', labelIndex) + 1)
 }
 
@@ -91,37 +105,41 @@ describe('ReminderForm', () => {
 
     expect(html).toContain('<fieldset disabled=""')
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">New reminder</legend>')
+    expect(html).toContain(`<legend class="sr-only">${viReminders.createTitle}</legend>`)
     // The flex column lives on the fieldset, so nothing re-flows when the gate
     // lifts (same guarantee as `LoanForm`'s).
     expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
   })
 
-  it('server-renders every field the default frequency needs, each labelled', () => {
+  it('renders a visible <label for> naming every one of the twelve fields, against the vi strings themselves', () => {
     const html = render()
+    // title, type, expected amount, currency, frequency, interval, day of
+    // month, start date, category, account, note — eleven at the default
+    // frequency (month is YEARLY-only and not rendered under MONTHLY).
+    const labelCount = (html.match(/<label for="/g) ?? []).length
+    expect(labelCount).toBe(11)
 
     for (const label of [
-      'Title',
-      'Type',
-      'Expected amount',
-      'Reminder currency',
-      'Frequency',
-      'Every',
-      'Day of month',
-      'Start date',
-      'Category',
-      'Account',
-      'Note',
+      viReminders.titleField,
+      viReminders.type,
+      viReminders.expectedAmount,
+      viReminders.currency,
+      viReminders.frequency,
+      viReminders.interval,
+      viReminders.dayOfMonth,
+      viReminders.startDate,
+      viReminders.categoryOptional,
+      viReminders.accountOptional,
+      viReminders.note,
     ]) {
-      expect(html).toContain(`aria-label="${label}"`)
+      expect(html).toContain(`>${label}</label>`)
     }
-    expect(html).toContain('Add reminder')
   })
 
   it('server-renders MONTHLY as the selected frequency, though it is not the first option', () => {
     const html = render()
-    const frequency = selectMarkup(html, 'Frequency')
+    const frequency = selectMarkupById(html, 'reminder-frequency')
 
     // The case this test exists for. The options are in the Prisma enum's own
     // order (ONE_TIME, WEEKLY, MONTHLY, YEARLY) so the control reads as the
@@ -137,44 +155,50 @@ describe('ReminderForm', () => {
     // Uncontrolled: a `value=` prop on the <select> would make it controlled.
     expect(frequency).not.toMatch(/<select[^>]*\svalue=/)
     // The enum's order, stated as an assertion rather than left to the reader.
-    expect(frequency.indexOf('value="ONE_TIME"')).toBeLessThan(frequency.indexOf('value="WEEKLY"'))
-    expect(frequency.indexOf('value="WEEKLY"')).toBeLessThan(frequency.indexOf('value="MONTHLY"'))
-    expect(frequency.indexOf('value="MONTHLY"')).toBeLessThan(frequency.indexOf('value="YEARLY"'))
+    expect(frequency.indexOf(`>${viLabels.recurrence.ONE_TIME}<`)).toBeLessThan(
+      frequency.indexOf(`>${viLabels.recurrence.WEEKLY}<`),
+    )
+    expect(frequency.indexOf(`>${viLabels.recurrence.WEEKLY}<`)).toBeLessThan(
+      frequency.indexOf(`>${viLabels.recurrence.MONTHLY}<`),
+    )
+    expect(frequency.indexOf(`>${viLabels.recurrence.MONTHLY}<`)).toBeLessThan(
+      frequency.indexOf(`>${viLabels.recurrence.YEARLY}<`),
+    )
     // Exactly one such select — the marker above is meaningless if a second
     // frequency control is hiding elsewhere in the form.
-    expect(html.split('aria-label="Frequency"')).toHaveLength(2)
+    expect(html.match(/id="reminder-frequency-[^"]*"/g)).toHaveLength(1)
   })
 
   it('server-renders EXPENSE as the selected type, and lists the bill first', () => {
     const html = render()
-    const type = selectMarkup(html, 'Type')
+    const type = selectMarkupById(html, 'reminder-type')
 
     // EXPENSE is already the first option — a reminder is usually a bill — and
     // the marker is passed anyway so the server HTML states the form's own
     // default rather than relying on a browser fallback that happens to agree
-    // with it. The wording says "Bill (expense)" because the user is being
-    // reminded of a bill, not shown a ledger entry that already exists.
+    // with it. The row's own wording (`labels.reminderType.*`) is what names
+    // it "Hóa đơn"/"Bill", not a form-only literal.
     expect(type).toMatch(selectedOption('EXPENSE'))
     expect(type).not.toMatch(selectedOption('INCOME'))
     expect(type).not.toMatch(/<select[^>]*\svalue=/)
-    expect(type).toContain('Bill (expense)')
-    expect(type).toContain('Income')
+    expect(type).toContain(`>${viLabels.reminderType.EXPENSE}<`)
+    expect(type).toContain(`>${viLabels.reminderType.INCOME}<`)
     expect(type.indexOf('value="EXPENSE"')).toBeLessThan(type.indexOf('value="INCOME"'))
-    expect(html.split('aria-label="Type"')).toHaveLength(2)
+    expect(html.match(/id="reminder-type-[^"]*"/g)).toHaveLength(1)
   })
 
   it('server-renders VND as the selected currency, from a single currency select', () => {
     const html = render()
-    const currency = selectMarkup(html, 'Reminder currency')
+    const currency = selectMarkupById(html, 'reminder-currency')
 
     expect(currency).toMatch(selectedOption('VND'))
     expect(currency).not.toMatch(selectedOption('USD'))
     expect(currency).not.toMatch(/<select[^>]*\svalue=/)
-    expect(html.split('aria-label="Reminder currency"')).toHaveLength(2)
+    expect(html.match(/id="reminder-currency-[^"]*"/g)).toHaveLength(1)
   })
 
   it("pre-fills the start date with the user's own today", () => {
-    const startDate = inputMarkup(render(), 'Start date')
+    const startDate = inputMarkupById(render(), 'reminder-start-date')
 
     // `today` comes from `todayCalendarDateInZone` on the page, never from
     // `new Date()` in the browser — whose zone is not the profile's. It is
@@ -189,12 +213,12 @@ describe('ReminderForm', () => {
     // A reminder for nothing is nothing to remind anyone of, and 0 is the one
     // value `createReminderSchema` always rejects — so it may not be what the
     // field starts at.
-    expect(inputMarkup(render(), 'Expected amount')).not.toMatch(/\svalue=/)
+    expect(inputMarkupById(render(), 'reminder-expected-amount')).not.toMatch(/\svalue=/)
   })
 
   it("starts the interval at 1, bounded to what the schema accepts, with the frequency's own unit", () => {
     const html = render()
-    const every = inputMarkup(html, 'Every')
+    const every = inputMarkupById(html, 'reminder-interval')
 
     expect(every).toContain('type="number"')
     expect(every).toContain('value="1"')
@@ -202,8 +226,8 @@ describe('ReminderForm', () => {
     // stepper cannot produce a value the schema then rejects.
     expect(every).toContain('min="1"')
     expect(every).toContain('max="99"')
-    // The unit follows the frequency, so "Every 2" is never ambiguous.
-    expect(html).toContain('>months<')
+    // The unit follows the frequency, so "Mỗi 2" is never ambiguous.
+    expect(html).toContain(`>${viReminders.intervalUnitMonths}<`)
   })
 
   it('hides the Month field unless the frequency is YEARLY (ruling R6-18)', () => {
@@ -213,16 +237,16 @@ describe('ReminderForm', () => {
     // it: a monthly reminder recurs in every month, so it has no anchor month
     // to name. Rendering the field here would invite a value the schema
     // refuses.
-    expect(html).not.toContain('aria-label="Month"')
+    expect(html).not.toContain(`>${viReminders.month}</label>`)
     // The day of the month *is* meaningful for MONTHLY, and optional — the
     // service defaults it from the start date.
-    expect(html).toContain('aria-label="Day of month"')
-    expect(inputMarkup(html, 'Day of month')).not.toMatch(/\svalue=/)
+    expect(html).toContain(`>${viReminders.dayOfMonth}</label>`)
+    expect(inputMarkupById(html, 'reminder-day-of-month')).not.toMatch(/\svalue=/)
   })
 
   it("offers only the selected type's categories, with None chosen", () => {
     const html = render()
-    const category = selectMarkup(html, 'Category')
+    const category = selectMarkupById(html, 'reminder-category')
 
     // The default type is EXPENSE, so an INCOME category must not be on offer:
     // the service refuses a category whose type does not match the reminder's
@@ -234,18 +258,18 @@ describe('ReminderForm', () => {
     // Optional, and the placeholder is the *first* option and the selected one,
     // so an untouched form sends no category at all.
     expect(category.indexOf('value=""')).toBeLessThan(category.indexOf('value="cat_utilities"'))
-    expect(category).toMatch(/<option[^>]*selected=""[^>]*>None</)
+    expect(category).toMatch(new RegExp(`<option[^>]*selected=""[^>]*>${viReminders.none}<`))
   })
 
   it('offers the active accounts, with None chosen', () => {
-    const account = selectMarkup(render(), 'Account')
+    const account = selectMarkupById(render(), 'reminder-account')
 
     // The page passes `listActiveFinancialAccounts`, so this list is the user's
     // own ACTIVE accounts and nothing else; the component filters nothing.
     expect(account).toContain('>Vietcombank<')
     expect(account).toContain('>Cash wallet<')
     expect(account.indexOf('value=""')).toBeLessThan(account.indexOf('value="acc_vcb"'))
-    expect(account).toMatch(/<option[^>]*selected=""[^>]*>None</)
+    expect(account).toMatch(new RegExp(`<option[^>]*selected=""[^>]*>${viReminders.none}<`))
   })
 
   it('renders a usable form with no categories and no accounts at all', () => {
@@ -253,12 +277,24 @@ describe('ReminderForm', () => {
     // able to add a reminder — unlike the transaction form, which has nothing
     // to record a transaction *to* without an account.
     const html = renderToStaticMarkup(
-      <ReminderForm today={TODAY} expenseCategories={[]} incomeCategories={[]} accounts={[]} />,
+      <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+        <ReminderForm
+          today={TODAY}
+          locale="vi"
+          expenseCategories={[]}
+          incomeCategories={[]}
+          accounts={[]}
+        />
+      </NextIntlClientProvider>,
     )
 
-    expect(html).toContain('aria-label="Title"')
-    expect(html).toContain('Add reminder')
-    expect(selectMarkup(html, 'Category')).toMatch(/<option[^>]*selected=""[^>]*>None</)
-    expect(selectMarkup(html, 'Account')).toMatch(/<option[^>]*selected=""[^>]*>None</)
+    expect(html).toContain(`>${viReminders.titleField}</label>`)
+    expect(html).toContain(viReminders.createAction)
+    expect(selectMarkupById(html, 'reminder-category')).toMatch(
+      new RegExp(`<option[^>]*selected=""[^>]*>${viReminders.none}<`),
+    )
+    expect(selectMarkupById(html, 'reminder-account')).toMatch(
+      new RegExp(`<option[^>]*selected=""[^>]*>${viReminders.none}<`),
+    )
   })
 })

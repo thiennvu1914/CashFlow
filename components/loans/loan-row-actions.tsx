@@ -4,6 +4,8 @@ import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useWatch, type FieldPath, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import type { Locale } from '@/lib/i18n/locale'
 import {
   recordLoanPaymentSchema,
   updateLoanSchema,
@@ -15,16 +17,47 @@ import {
   recordLoanPaymentAction,
   updateLoanAction,
 } from '@/lib/server/actions/loan-actions'
-import { LOAN_ERROR_MESSAGES, GENERIC_ERROR_MESSAGE } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { LoanDto } from '@/lib/ui/loan-view-model'
+import { ConfirmDialog } from '@/components/common/confirm-dialog'
+import { Dialog } from '@/components/common/dialog'
+import { FormField } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
+import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Record payment / Edit / Close loan for one loan row. Rendered only by the
- * Loans page, through `LoanList`'s `renderActions` slot — the Dashboard's
- * compact list passes no `renderActions`, so this never mounts there.
+ * Record payment / Edit / Close loan for one loan row — split into two
+ * independent pieces (fix round 1, findings 4/5/6/7), rendered by `LoanList`
+ * into two different `PlanningRow` slots:
+ *
+ *  - `LoanPaymentButton` — the row's one inline action, passed as
+ *    `inlineAction`. `variant="outline"` (not filled): the header's "Thêm
+ *    khoản vay" is the page's one primary action, and a filled button on
+ *    every row competed with it (fix round 1, finding 4 — the same treatment
+ *    `GoalProgressButton` already got). Needs the reader's `locale` (threaded
+ *    from the page, same convention as `AccountList`/`TransactionList`) to
+ *    format Tổng in the same language the rest of the dialog reads in (fix
+ *    round 1, finding 1) — a formatted VND figure is not itself English or
+ *    Vietnamese, but its DIGIT GROUPING is a locale, and `formatMoney`'s
+ *    locale parameter defaults to `vi` when omitted, which is what silently
+ *    produced Vietnamese grouping inside an otherwise-English dialog.
+ *  - `LoanRowMenu` — Edit/Close loan, passed as `actions`. Its close failure
+ *    is reported through `useRowError` rather than a local `useState`:
+ *    `LoanList` renders this into `actions` and a `RowErrorAlert` into
+ *    `extra` (under the row), and only a shared Context can connect a menu
+ *    click to an alert that renders elsewhere in the tree.
+ *
+ * Neither ever mounts on the Dashboard's compact list (no `renderActions`
+ * there) or in the page's closed section (a closed loan refuses every write;
+ * offering the actions would be a promise the service breaks). A PAID_OFF
+ * loan is *not* closed and keeps both: a final interest charge can still be
+ * recorded (ruling R6-6), and closing it is how the user says they are
+ * finished with it.
  *
  * Nothing here moves money. Recording an instalment writes a `LoanPayment` row
  * and advances the loan's `nextDueDate`, and nothing else: no Transaction, no
@@ -35,74 +68,134 @@ import { Input } from '@/components/ui/input'
  * An instalment and an edit are two forms, not one, because they are two user
  * intents — "I paid the April instalment" and "the instalment changed after the
  * rate review" — and a single form would make either an accidental submission
- * of the other. Only one pane is open at a time.
+ * of the other.
  *
- * Both forms mount on click rather than staying mounted hidden, so `useForm`
- * snapshots the *current* row as its defaults; there is no stale-default
- * problem to gate for, and no `useHydrated` here (a click cannot happen before
- * hydration).
- *
- * Every field's `aria-label` names the lender, because the page renders one of
- * these per loan and "Principal" alone would be ambiguous across a dozen rows.
+ * Both forms mount only while their `Dialog` is open, so `useForm` snapshots
+ * the *current* row as its defaults; there is no stale-default problem to gate
+ * for, and no `useHydrated` here — a click cannot happen before hydration.
  */
-type OpenPane = 'none' | 'payment' | 'edit'
+export function LoanPaymentButton({
+  loan,
+  today,
+  locale,
+}: {
+  loan: LoanDto
+  today: string
+  locale: Locale
+}) {
+  const t = useTranslations()
+  const [paymentOpen, setPaymentOpen] = useState(false)
 
-export function LoanRowActions({ loan, today }: { loan: LoanDto; today: string }) {
-  const router = useRouter()
-  const [pane, setPane] = useState<OpenPane>('none')
-  const [error, setError] = useState<string | null>(null)
-
-  // A closed loan refuses every write (`LoanNotActiveError`), so it is offered
-  // no buttons at all — showing them would be a promise the service breaks.
-  // Guarded here as well as by the page (which renders the closed section
-  // without a `renderActions` slot), because this component is the one that
-  // knows what its buttons do. A PAID_OFF loan is *not* closed and keeps its
-  // buttons: a final interest charge can still be recorded, and closing it is
-  // how the user says they are finished with it.
+  // A closed loan refuses every write (`LoanNotActiveError`); guarded here as
+  // well as by the page (which renders the closed section without a
+  // `renderActions` slot), because this component is the one that knows what
+  // its button does.
   if (!loan.active) return null
 
-  async function handleClose() {
-    if (!window.confirm('Close this loan? Its payment history stays visible under Closed loans.')) {
-      return
-    }
-    setError(null)
-    try {
-      const result = await closeLoanAction(loan.id)
-      if (!result.ok) {
-        setError(LOAN_ERROR_MESSAGES[result.error])
-        return
-      }
-      router.refresh()
-    } catch {
-      console.error('LoanRowActions: close failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
-  }
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        // Height only: `size="sm"`'s 36 px is a mouse target, and spec §8
+        // wants 44 px under a thumb — so this inline row action is 44 px
+        // below the icon rail and the compact 36 px from `md` up.
+        className="h-11 md:h-9"
+        aria-label={`${t('loans.paymentAction')} · ${loan.lender}`}
+        onClick={() => setPaymentOpen(true)}
+      >
+        {t('loans.paymentAction')}
+      </Button>
 
-  function toggle(next: Exclude<OpenPane, 'none'>) {
+      <Dialog
+        open={paymentOpen}
+        onOpenChange={setPaymentOpen}
+        title={t('loans.paymentTitle', { name: loan.lender })}
+        description={t('loans.description')}
+        closeLabel={t('common.close')}
+      >
+        {paymentOpen && (
+          <LoanPaymentForm
+            loan={loan}
+            today={today}
+            locale={locale}
+            onDone={() => setPaymentOpen(false)}
+          />
+        )}
+      </Dialog>
+    </>
+  )
+}
+
+export function LoanRowMenu({ loan }: { loan: LoanDto }) {
+  const router = useRouter()
+  const t = useTranslations()
+  const [editOpen, setEditOpen] = useState(false)
+  const [closing, setClosing] = useState(false)
+  const { setError } = useRowError()
+  const closeSubmit = useSubmitState()
+
+  if (!loan.active) return null
+
+  async function confirmClose() {
     setError(null)
-    setPane((current) => (current === next ? 'none' : next))
+    await closeSubmit.run(async () => {
+      try {
+        const result = await closeLoanAction(loan.id)
+        if (!result.ok) {
+          setClosing(false)
+          setError(t(LOAN_ERROR_KEYS[result.error]))
+          return
+        }
+        setClosing(false)
+        router.refresh()
+      } catch {
+        console.error('LoanRowMenu: close failed')
+        setClosing(false)
+        setError(t(GENERIC_ERROR_KEY))
+      }
+    })
   }
 
   return (
-    <div className="flex w-full flex-col items-end gap-2">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => toggle('payment')}>
-          {pane === 'payment' ? 'Close' : 'Record payment'}
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => toggle('edit')}>
-          {pane === 'edit' ? 'Close' : 'Edit'}
-        </Button>
-        <Button type="button" variant="destructive" size="sm" onClick={handleClose}>
-          Close loan
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
-      {pane === 'payment' && (
-        <LoanPaymentForm loan={loan} today={today} onDone={() => setPane('none')} />
-      )}
-      {pane === 'edit' && <LoanEditForm loan={loan} onDone={() => setPane('none')} />}
-    </div>
+    <>
+      <RowActionsMenu
+        label={t('common.rowActions', { name: loan.lender })}
+        actions={[
+          { id: 'edit', label: t('loans.editAction'), onSelect: () => setEditOpen(true) },
+          {
+            id: 'close',
+            label: t('loans.closeAction'),
+            tone: 'negative',
+            onSelect: () => {
+              setError(null)
+              setClosing(true)
+            },
+          },
+        ]}
+      />
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        title={t('loans.editTitle', { name: loan.lender })}
+        closeLabel={t('common.close')}
+      >
+        {editOpen && <LoanEditForm loan={loan} onDone={() => setEditOpen(false)} />}
+      </Dialog>
+
+      <ConfirmDialog
+        open={closing}
+        onOpenChange={setClosing}
+        title={t('loans.closeConfirmTitle', { name: loan.lender })}
+        description={t('loans.closeConfirmBody')}
+        confirmLabel={t('loans.closeAction')}
+        cancelLabel={t('common.cancel')}
+        pendingLabel={t('loans.closePending')}
+        onConfirm={confirmClose}
+      />
+    </>
   )
 }
 
@@ -119,7 +212,10 @@ const cents = (value: number) => Math.round(value * 100)
  *
  * `null` when either part is missing or not a number — an emptied number field
  * arrives as `NaN` through `valueAsNumber` — because a total of "0" for a form
- * the user has not filled in would state a figure nobody entered.
+ * the user has not filled in would state a figure nobody entered. This is the
+ * value that is SUBMITTED (via `paymentResolver`, below); `displayTotal` is
+ * what the read-only field SHOWS while the user is still typing, and the two
+ * deliberately differ — see its own doc comment.
  *
  * Added in exact cents and divided back, so 3.500.000,01 + 1.499.999,99 is
  * 5.000.000 and not 5.000.000,0000001.
@@ -127,6 +223,22 @@ const cents = (value: number) => Math.round(value * 100)
 export function totalFromParts(principal: number, interest: number): number | null {
   if (!Number.isFinite(principal) || !Number.isFinite(interest)) return null
   return (cents(principal) + cents(interest)) / 100
+}
+
+/**
+ * What the read-only Tổng field SHOWS while the user is still typing.
+ *
+ * `totalFromParts` answers `null` when a part is not a finite number, which is
+ * right for validation and wrong for a field the user is watching: a dash
+ * where a number should be reads as "this is broken" the moment they clear one
+ * box to retype it. So a blank part counts as zero for DISPLAY only — the
+ * submitted `total` still comes from `totalFromParts`, and
+ * `createLoanPaymentSchema`'s split refine is still the authority on whether
+ * gốc + lãi = tổng.
+ */
+export function displayTotal(principal: number, interest: number): number {
+  const safe = (value: number) => (Number.isFinite(value) ? value : 0)
+  return safe(principal) + safe(interest)
 }
 
 /**
@@ -214,8 +326,8 @@ export const paymentResolver: Resolver<RecordLoanPaymentInput> = async (
  * A missing part makes the derived total `NaN`, and the schema rejects that
  * with the very same "Enter an amount" it has already put under the part
  * itself. One mistake, reported twice, the second time under a `readOnly` field
- * the user cannot act on — so the second copy is dropped and the Total simply
- * shows its em dash, which already says "no total yet".
+ * the user cannot act on — so the second copy is dropped, and the Total field
+ * shows `displayTotal`'s zero-for-blank figure instead.
  *
  * The guard is structural rather than argued: the error is removed only while
  * at least one *other* error survives to block the submit. That matters because
@@ -242,34 +354,51 @@ function dropDuplicateTotalError(
  * "How much of this instalment paid the loan down, how much was interest, and
  * when?" — the only write that moves a loan's outstanding principal.
  *
+ * States the current outstanding principal above the fields (owner
+ * requirement G4, mirroring `DebtPaymentForm`'s outstanding line) so the
+ * OVERPAYMENT refusal below is predictable — the figure the service is about
+ * to compare the Gốc field against is right there while the user types.
+ *
+ * Three visible fields, Gốc / Lãi / Tổng, in that order (spec §6.6): the user
+ * types the split and Tổng is read-only, computed live from `displayTotal` and
+ * bound to the two inputs via `aria-describedby` on a note explaining it is
+ * computed. Tổng NEVER shows an em dash for a valid number, including two
+ * zeros — see `displayTotal`'s own doc comment. `locale` (threaded from the
+ * page) is what keeps Tổng's digit grouping in the reader's own language
+ * (fix round 1, finding 1) — `formatMoney`'s locale parameter defaults to
+ * `vi` when omitted, which is exactly the bug this closes: an English-locale
+ * reader was shown Vietnamese grouping inside an otherwise English dialog.
+ *
  * The service refuses a principal payment above what is still outstanding,
  * under a row lock, so OVERPAYMENT is a genuinely reachable answer here (two
- * tabs, a double-click, or simply a typo) and it is shown inline under the form
- * rather than as a banner somewhere else on the page. The interest part is
- * never compared against anything: a repaid loan can still owe a final charge.
+ * tabs, a double-click, or simply a typo) and it is shown inline under the
+ * form's fields. The interest part is never compared against anything: a
+ * repaid loan can still owe a final charge.
  */
 function LoanPaymentForm({
   loan,
   today,
+  locale,
   onDone,
 }: {
   loan: LoanDto
   /** The user's own calendar day, from `todayCalendarDateInZone` on the page —
    *  never `new Date()` in the browser, whose zone is not the profile's. */
   today: string
+  locale: Locale
   onDone: () => void
 }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  // Two loans can be with the same lender, so a lender-only `aria-describedby`
-  // target would be ambiguous between rows; `useId` makes the association per
-  // row.
-  const uid = useId()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `loan-payment-${name}-${uid}`
   const {
     control,
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<RecordLoanPaymentInput>({
     resolver: paymentResolver,
     // No default for either amount: a pre-filled `0` would be written into the
@@ -281,124 +410,160 @@ function LoanPaymentForm({
 
   // Watched rather than read on submit, so the total updates as the user types
   // and they can see the arithmetic agree with their own statement before
-  // saving. `valueAsNumber` makes an emptied field `NaN`, which
-  // `totalFromParts` reports as "no total yet".
+  // saving. `valueAsNumber` makes an emptied field `NaN`, which `displayTotal`
+  // treats as zero for THIS read-only field — never an em dash.
   const principalAmount = useWatch({ control, name: 'principalAmount' })
   const interestAmount = useWatch({ control, name: 'interestAmount' })
-  const total = totalFromParts(principalAmount, interestAmount)
+  const total = displayTotal(principalAmount, interestAmount)
 
   async function onSubmit(values: RecordLoanPaymentInput) {
     setError(null)
-    try {
-      // `values` is the resolver's output, so `values.totalAmount` is the
-      // derived figure the read-only field showed — not a fourth number.
-      const result = await recordLoanPaymentAction(loan.id, values)
-      if (!result.ok) {
-        setError(LOAN_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        // `values` is the resolver's output, so `values.totalAmount` is the
+        // derived figure the read-only field showed — not a fourth number.
+        const result = await recordLoanPaymentAction(loan.id, values)
+        if (!result.ok) {
+          setError(t(LOAN_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone()
+      } catch {
+        console.error('LoanPaymentForm: record failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone()
-    } catch {
-      console.error('LoanPaymentForm: record failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="flex w-full max-w-xs flex-col gap-2 border-t border-border pt-2"
-    >
-      <div>
-        <Input
-          type="number"
-          step="0.01"
-          aria-label={`Principal for ${loan.lender}`}
-          aria-describedby={errors.principalAmount ? `${uid}-principal-error` : undefined}
-          placeholder={`Principal (${loan.currency})`}
-          {...register('principalAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
-        />
-        {errors.principalAmount && (
-          <p id={`${uid}-principal-error`} className="text-sm text-negative">
-            {errors.principalAmount.message}
-          </p>
-        )}
-      </div>
-      <div>
-        {/* Zero is valid on both parts: an interest-only instalment is what
-            every grace period and the early months of many loans look like
-            (ruling R6-6), and a final sweep of the principal carries no
-            interest. */}
-        <Input
-          type="number"
-          step="0.01"
-          aria-label={`Interest for ${loan.lender}`}
-          aria-describedby={errors.interestAmount ? `${uid}-interest-error` : undefined}
-          placeholder={`Interest (${loan.currency})`}
-          {...register('interestAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
-        />
-        {errors.interestAmount && (
-          <p id={`${uid}-interest-error`} className="text-sm text-negative">
-            {errors.interestAmount.message}
-          </p>
-        )}
-      </div>
-      <div>
-        {/* Read-only and unregistered: the total is derived, not entered. See
-            `paymentResolver` above for the derivation and for the three layers
-            that still enforce the split. An em dash rather than "0" while a
-            part is missing, so the field never states a figure nobody typed. */}
-        <Input
-          readOnly
-          aria-label={`Total payment for ${loan.lender}`}
-          aria-describedby={errors.totalAmount ? `${uid}-total-error` : undefined}
-          value={total === null ? '—' : `${formatMoney(total, loan.currency)} ${loan.currency}`}
-          className="tabular-nums"
-        />
-        {errors.totalAmount && (
-          <p id={`${uid}-total-error`} className="text-sm text-negative">
-            {errors.totalAmount.message}
-          </p>
-        )}
-      </div>
-      <div>
-        {/* Defaulted to the user's today, and editable: an instalment is often
-            recorded a day or two after it was paid, and which day it was is
-            what the history is for. */}
-        <Input
-          type="date"
-          aria-label={`Payment date for ${loan.lender}`}
-          aria-describedby={errors.paymentDate ? `${uid}-date-error` : undefined}
-          {...register('paymentDate')}
-        />
-        {errors.paymentDate && (
-          <p id={`${uid}-date-error`} className="text-sm text-negative">
-            {errors.paymentDate.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          aria-label={`Payment note for ${loan.lender}`}
-          placeholder="Note (optional)"
-          {...register('note', {
-            setValueAs: (v: string) => (v === '' ? undefined : v),
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('loans.paymentAction')}</legend>
+
+        <p className="text-sm text-muted-foreground">
+          {t('loans.paymentOutstanding', {
+            amount: loan.outstandingPrincipal,
+            currency: loan.currency,
           })}
-        />
-        {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isSubmitting}>
-          Save
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-      {/* Where OVERPAYMENT and SPLIT_MISMATCH land: right under the figures the
-          user typed, with the outstanding principal still on the row above. */}
-      {error && <p className="text-sm text-negative">{error}</p>}
+        </p>
+
+        <FormField
+          id={fieldId('principal')}
+          label={t('loans.paymentPrincipal')}
+          error={errors.principalAmount?.message}
+        >
+          {/* Zero is valid: a final principal-only sweep, with the interest
+              already settled separately, is a real instalment. The currency
+              suffix matches the debt payment form's amount field (fix round
+              1, finding 8: the three amount fields in these two dialogs — the
+              debt's, Gốc and Lãi — either all show the code or none do). */}
+          {(aria) => (
+            <div className="relative">
+              <Input
+                {...aria}
+                type="number"
+                step="0.01"
+                className="pr-14"
+                {...register('principalAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                {loan.currency}
+              </span>
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('interest')}
+          label={t('loans.paymentInterest')}
+          error={errors.interestAmount?.message}
+        >
+          {/* Zero is valid on both parts: an interest-only instalment is what
+              every grace period and the early months of many loans look like
+              (ruling R6-6), and a final sweep of the principal carries no
+              interest. */}
+          {(aria) => (
+            <div className="relative">
+              <Input
+                {...aria}
+                type="number"
+                step="0.01"
+                className="pr-14"
+                {...register('interestAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                {loan.currency}
+              </span>
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('total')}
+          label={t('loans.paymentTotal')}
+          helper={t('loans.paymentTotalNote')}
+          error={errors.totalAmount?.message}
+        >
+          {/* Read-only and unregistered: the total is derived, not entered. See
+              `paymentResolver` above for what is SUBMITTED and `displayTotal`
+              for what is SHOWN — the two differ on purpose while a part is
+              blank, and this field must never read "—" for a valid number,
+              including zero. `FormField`'s own `aria-describedby` already
+              points at the helper note above (`loans.paymentTotalNote`) — this
+              is the binding the spec asks for between the two input fields
+              and the note explaining Tổng is computed. `bg-muted
+              text-muted-foreground` (fix round 1, finding 8) is the visual
+              cue that this field cannot be typed into, on top of the
+              `readOnly`/`aria-readonly` that already say so to assistive
+              tech. */}
+          {(aria) => (
+            <Input
+              {...aria}
+              readOnly
+              aria-readonly="true"
+              value={`${formatMoney(total, loan.currency, locale)} ${loan.currency}`}
+              className="bg-muted tabular-nums text-muted-foreground"
+            />
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('date')}
+          label={t('loans.paymentDate')}
+          error={errors.paymentDate?.message}
+        >
+          {/* Defaulted to the user's today, and editable: an instalment is
+              often recorded a day or two after it was paid, and which day it
+              was is what the history is for. */}
+          {(aria) => <Input {...aria} type="date" {...register('paymentDate')} />}
+        </FormField>
+
+        <FormField id={fieldId('note')} label={t('loans.paymentNote')} error={errors.note?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('note', {
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        {/* Where OVERPAYMENT and SPLIT_MISMATCH land: right under the fields
+            the user typed, with the outstanding principal still visible on the
+            row behind the dialog. */}
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit">
+            {submit.pending ? t('loans.paymentPending') : t('common.save')}
+          </Button>
+        </div>
+      </fieldset>
     </form>
   )
 }
@@ -423,12 +588,15 @@ function LoanPaymentForm({
  */
 function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => void }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const uid = useId()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `loan-edit-${name}-${uid}`
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<UpdateLoanInput>({
     resolver: zodResolver(updateLoanSchema),
     defaultValues: {
@@ -445,73 +613,66 @@ function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => void }) {
 
   async function onSubmit(values: UpdateLoanInput) {
     setError(null)
-    try {
-      const result = await updateLoanAction(loan.id, values)
-      if (!result.ok) {
-        setError(LOAN_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await updateLoanAction(loan.id, values)
+        if (!result.ok) {
+          setError(t(LOAN_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+        onDone()
+      } catch {
+        console.error('LoanEditForm: update failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-      onDone()
-    } catch {
-      console.error('LoanEditForm: update failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="flex w-full max-w-xs flex-col gap-2 border-t border-border pt-2"
-    >
-      <div>
-        <Input
-          aria-label={`Edit lender for ${loan.lender}`}
-          aria-describedby={errors.lender ? `${uid}-lender-error` : undefined}
-          {...register('lender')}
-        />
-        {errors.lender && (
-          <p id={`${uid}-lender-error`} className="text-sm text-negative">
-            {errors.lender.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          type="number"
-          step="0.01"
-          aria-label={`Edit scheduled payment for ${loan.lender}`}
-          aria-describedby={
-            errors.scheduledPaymentAmount ? `${uid}-scheduled-payment-error` : undefined
-          }
-          placeholder={`Instalment (${loan.currency})`}
-          {...register('scheduledPaymentAmount', { valueAsNumber: true })}
-        />
-        {errors.scheduledPaymentAmount && (
-          <p id={`${uid}-scheduled-payment-error`} className="text-sm text-negative">
-            {errors.scheduledPaymentAmount.message}
-          </p>
-        )}
-      </div>
-      <div>
-        <Input
-          aria-label={`Edit notes for ${loan.lender}`}
-          placeholder="Notes (optional)"
-          {...register('notes', {
-            setValueAs: (v: string) => (v === '' ? undefined : v),
-          })}
-        />
-        {errors.notes && <p className="text-sm text-negative">{errors.notes.message}</p>}
-      </div>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isSubmitting}>
-          Save
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onDone}>
-          Cancel
-        </Button>
-      </div>
-      {error && <p className="text-sm text-negative">{error}</p>}
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
+        <legend className="sr-only">{t('loans.editAction')}</legend>
+
+        <FormField id={fieldId('lender')} label={t('loans.lender')} error={errors.lender?.message}>
+          {(aria) => <Input {...aria} {...register('lender')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('scheduled-payment')}
+          label={t('loans.scheduledPayment')}
+          error={errors.scheduledPaymentAmount?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('scheduledPaymentAmount', { valueAsNumber: true })}
+            />
+          )}
+        </FormField>
+
+        <FormField id={fieldId('notes')} label={t('loans.notes')} error={errors.notes?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('notes', {
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit">{submit.pending ? t('common.saving') : t('common.save')}</Button>
+        </div>
+      </fieldset>
     </form>
   )
 }

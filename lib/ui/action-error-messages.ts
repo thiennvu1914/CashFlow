@@ -8,7 +8,7 @@ import type { TransactionActionError } from '@/lib/server/actions/transaction-ac
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
 
 /**
- * The user-facing text for every server-action error code, in one place.
+ * The user-facing message KEY for every server-action error code, in one place.
  *
  * A server action never returns an `Error#message`: it returns a code, and the
  * component renders a fixed string for it. Those strings used to be copied
@@ -17,108 +17,74 @@ import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
  * differently depending on which form the user happened to be looking at.
  *
  * Typing each map as `Record<…ActionError, string>` also makes a new error
- * code a compile error until it has a message, rather than a silent
- * `undefined` rendered as an empty paragraph.
+ * code a compile error until it has a key, rather than a silent `undefined`
+ * rendered as an empty paragraph.
  *
- * Phase 7 replaces these literals with i18n keys (Vietnamese default, English
- * via the locale cookie); this module is the single hook point for that
- * change — nothing else in the UI will need touching.
+ * Phase 7 replaced the literals below with i18n keys (Vietnamese default,
+ * English via the locale cookie): a caller does `t(ACCOUNT_ERROR_KEYS[code])`
+ * against the root translator, and `messages/{vi,en}/errors.json` (Task 2b)
+ * holds the copy each key resolves to.
  */
 
-/** Shown when something failed in a way no action code covers. */
-export const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.'
+export const GENERIC_ERROR_KEY = 'errors.generic'
 
-export const ACCOUNT_ERROR_MESSAGES: Record<FinancialAccountActionError, string> = {
-  NON_ZERO_BALANCE:
-    'This account must have a zero balance before it can be archived. Transfer or adjust the balance first.',
-  ACCOUNT_LOCKED: 'Currency and opening balance cannot be changed once the account has activity.',
-  ARCHIVED_ACCOUNT: 'This account is archived and can no longer be edited.',
-  INVALID_ACCOUNT_TYPE: 'Choose a valid account type.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That account no longer exists.',
+export const ACCOUNT_ERROR_KEYS: Record<FinancialAccountActionError, string> = {
+  NON_ZERO_BALANCE: 'errors.account.NON_ZERO_BALANCE',
+  ACCOUNT_LOCKED: 'errors.account.ACCOUNT_LOCKED',
+  ARCHIVED_ACCOUNT: 'errors.account.ARCHIVED_ACCOUNT',
+  INVALID_ACCOUNT_TYPE: 'errors.account.INVALID_ACCOUNT_TYPE',
+  INVALID_INPUT: 'errors.account.INVALID_INPUT',
+  NOT_FOUND: 'errors.account.NOT_FOUND',
 }
 
-export const TRANSACTION_ERROR_MESSAGES: Record<TransactionActionError, string> = {
-  FX_UNAVAILABLE: 'Exchange rate is temporarily unavailable. Please try again in a moment.',
-  ARCHIVED_ACCOUNT: 'This account is archived.',
-  CURRENCY_MISMATCH:
-    'Move the transaction to an account in the same currency, or delete and re-enter it.',
-  INVALID_CATEGORY: 'Choose a valid category for this type.',
-  CONFLICT: 'This record changed while you were editing it. Reload and try again.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
+export const TRANSACTION_ERROR_KEYS: Record<TransactionActionError, string> = {
+  FX_UNAVAILABLE: 'errors.transaction.FX_UNAVAILABLE',
+  ARCHIVED_ACCOUNT: 'errors.transaction.ARCHIVED_ACCOUNT',
+  CURRENCY_MISMATCH: 'errors.transaction.CURRENCY_MISMATCH',
+  INVALID_CATEGORY: 'errors.transaction.INVALID_CATEGORY',
+  CONFLICT: 'errors.transaction.CONFLICT',
+  INVALID_INPUT: 'errors.transaction.INVALID_INPUT',
+  NOT_FOUND: 'errors.transaction.NOT_FOUND',
 }
 
-export const TRANSFER_ERROR_MESSAGES: Record<TransferActionError, string> = {
-  SAME_ACCOUNT: 'Choose two different accounts.',
-  ARCHIVED_ACCOUNT: 'One of these accounts is archived.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That record no longer exists.',
+export const TRANSFER_ERROR_KEYS: Record<TransferActionError, string> = {
+  SAME_ACCOUNT: 'errors.transfer.SAME_ACCOUNT',
+  ARCHIVED_ACCOUNT: 'errors.transfer.ARCHIVED_ACCOUNT',
+  INVALID_INPUT: 'errors.transfer.INVALID_INPUT',
+  NOT_FOUND: 'errors.transfer.NOT_FOUND',
 }
 
-export const BUDGET_ERROR_MESSAGES: Record<BudgetActionError, string> = {
-  DUPLICATE_BUDGET: 'A budget for this month already exists for that scope or category.',
-  INVALID_CATEGORY: 'Choose an active expense category.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That budget no longer exists.',
+export const BUDGET_ERROR_KEYS: Record<BudgetActionError, string> = {
+  DUPLICATE_BUDGET: 'errors.budget.DUPLICATE_BUDGET',
+  INVALID_CATEGORY: 'errors.budget.INVALID_CATEGORY',
+  INVALID_INPUT: 'errors.budget.INVALID_INPUT',
+  NOT_FOUND: 'errors.budget.NOT_FOUND',
 }
 
-export const SAVINGS_GOAL_ERROR_MESSAGES: Record<SavingsGoalActionError, string> = {
-  // Not "no longer exists": the goal is still on the page, under "Archived
-  // goals", so the message has to name the state the user can actually see.
-  ARCHIVED: 'This goal is archived and can no longer be changed.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That goal no longer exists.',
+export const SAVINGS_GOAL_ERROR_KEYS: Record<SavingsGoalActionError, string> = {
+  ARCHIVED: 'errors.goal.ARCHIVED',
+  INVALID_INPUT: 'errors.goal.INVALID_INPUT',
+  NOT_FOUND: 'errors.goal.NOT_FOUND',
 }
 
-export const DEBT_ERROR_MESSAGES: Record<DebtActionError, string> = {
-  // Says what is wrong with the figure the user typed, not what the service
-  // compared it against: the outstanding amount is already on the row above
-  // the form, and `DebtOverpaymentError` carries a `Prisma.Decimal` that
-  // cannot cross into a client component anyway.
-  OVERPAYMENT: 'That payment is more than what is still owed.',
-  // Like an archived goal, a written-off debt is still visible on the page —
-  // under "Written-off debts" — so the message names the state the user can
-  // see rather than claiming the row has gone.
-  NOT_ACTIVE: 'This debt has been written off and can no longer be changed.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That debt no longer exists.',
+export const DEBT_ERROR_KEYS: Record<DebtActionError, string> = {
+  OVERPAYMENT: 'errors.debt.OVERPAYMENT',
+  NOT_ACTIVE: 'errors.debt.NOT_ACTIVE',
+  INVALID_INPUT: 'errors.debt.INVALID_INPUT',
+  NOT_FOUND: 'errors.debt.NOT_FOUND',
 }
 
-export const LOAN_ERROR_MESSAGES: Record<LoanActionError, string> = {
-  // Names the *principal*, because that is the only part of an instalment the
-  // check compares: a loan can be repaid in principal and still owe a final
-  // interest charge, so "that payment is too large" would be wrong advice. The
-  // outstanding figure itself is already on the row above the form, and
-  // `LoanOverpaymentError` carries a `Prisma.Decimal` that cannot cross into a
-  // client component anyway.
-  OVERPAYMENT: 'That principal payment is more than the principal still outstanding.',
-  // Like a written-off debt, a closed loan is still visible on the page — under
-  // "Closed loans" — so the message names the state the user can see rather
-  // than claiming the row has gone.
-  NOT_ACTIVE: 'This loan is closed and can no longer be changed.',
-  // The wording the schema's refine puts under the total field, so the split
-  // invariant reads the same whichever of its three layers refused the
-  // instalment — with the full stop every message in this file ends in, which
-  // an inline field error does not carry.
-  SPLIT_MISMATCH: 'Total must equal principal plus interest.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  NOT_FOUND: 'That loan no longer exists.',
+export const LOAN_ERROR_KEYS: Record<LoanActionError, string> = {
+  OVERPAYMENT: 'errors.loan.OVERPAYMENT',
+  NOT_ACTIVE: 'errors.loan.NOT_ACTIVE',
+  SPLIT_MISMATCH: 'errors.loan.SPLIT_MISMATCH',
+  INVALID_INPUT: 'errors.loan.INVALID_INPUT',
+  NOT_FOUND: 'errors.loan.NOT_FOUND',
 }
 
-export const REMINDER_ERROR_MESSAGES: Record<ReminderActionError, string> = {
-  // Names the rule the category broke — the *type* has to match — because that
-  // is the one the user can act on from the form: the other three cases the
-  // service refuses (not yours, no such id, archived) all read as "pick another
-  // one" too, and spelling them out would tell a crafted request which ids
-  // exist.
-  INVALID_CATEGORY: 'Choose a category that matches the reminder type.',
-  // "Active", because an archived account is still in the user's vocabulary —
-  // it just cannot be named on a new reminder.
-  INVALID_ACCOUNT: 'Choose one of your active accounts.',
-  INVALID_INPUT: 'Check the highlighted fields.',
-  // Covers a foreign or deleted *occurrence* id as well as a reminder one: an
-  // occurrence only exists as an instance of a reminder, so "that reminder" is
-  // what the user can see has gone from the page.
-  NOT_FOUND: 'That reminder no longer exists.',
+export const REMINDER_ERROR_KEYS: Record<ReminderActionError, string> = {
+  INVALID_CATEGORY: 'errors.reminder.INVALID_CATEGORY',
+  INVALID_ACCOUNT: 'errors.reminder.INVALID_ACCOUNT',
+  INVALID_INPUT: 'errors.reminder.INVALID_INPUT',
+  NOT_FOUND: 'errors.reminder.NOT_FOUND',
 }

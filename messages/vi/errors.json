@@ -1,0 +1,58 @@
+{
+  "generic": "Đã xảy ra lỗi. Vui lòng thử lại.",
+  "boundaryTitle": "Không tải được trang này.",
+  "boundaryBody": "Dữ liệu của bạn chưa bị thay đổi. Hãy thử lại sau một lát.",
+  "account": {
+    "NON_ZERO_BALANCE": "Tài khoản phải có số dư bằng 0 trước khi lưu trữ. Hãy chuyển hoặc điều chỉnh số dư trước.",
+    "ACCOUNT_LOCKED": "Không thể đổi tiền tệ và số dư ban đầu sau khi tài khoản đã có phát sinh.",
+    "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ và không thể sửa.",
+    "INVALID_ACCOUNT_TYPE": "Hãy chọn một loại tài khoản hợp lệ.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Tài khoản này không còn tồn tại."
+  },
+  "transaction": {
+    "FX_UNAVAILABLE": "Tỷ giá tạm thời không khả dụng. Vui lòng thử lại sau một lát.",
+    "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ.",
+    "CURRENCY_MISMATCH": "Hãy chuyển giao dịch sang tài khoản cùng loại tiền, hoặc xóa và nhập lại.",
+    "INVALID_CATEGORY": "Hãy chọn danh mục hợp lệ cho loại giao dịch này.",
+    "CONFLICT": "Bản ghi đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Bản ghi này không còn tồn tại."
+  },
+  "transfer": {
+    "SAME_ACCOUNT": "Hãy chọn hai tài khoản khác nhau.",
+    "ARCHIVED_ACCOUNT": "Một trong hai tài khoản đã lưu trữ.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Bản ghi này không còn tồn tại."
+  },
+  "budget": {
+    "DUPLICATE_BUDGET": "Tháng này đã có ngân sách cho phạm vi hoặc danh mục đó.",
+    "INVALID_CATEGORY": "Hãy chọn một danh mục chi đang hoạt động.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Ngân sách này không còn tồn tại."
+  },
+  "goal": {
+    "ARCHIVED": "Mục tiêu này đã lưu trữ và không thể thay đổi.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Mục tiêu này không còn tồn tại."
+  },
+  "debt": {
+    "OVERPAYMENT": "Khoản thanh toán lớn hơn số còn nợ.",
+    "NOT_ACTIVE": "Khoản nợ này đã được xóa nợ và không thể thay đổi.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Khoản nợ này không còn tồn tại."
+  },
+  "loan": {
+    "OVERPAYMENT": "Phần gốc thanh toán lớn hơn dư nợ gốc còn lại.",
+    "NOT_ACTIVE": "Khoản vay này đã đóng và không thể thay đổi.",
+    "SPLIT_MISMATCH": "Tổng phải bằng gốc cộng lãi.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Khoản vay này không còn tồn tại."
+  },
+  "reminder": {
+    "INVALID_CATEGORY": "Hãy chọn danh mục phù hợp với loại nhắc nhở.",
+    "INVALID_ACCOUNT": "Hãy chọn một trong các tài khoản đang hoạt động của bạn.",
+    "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
+    "NOT_FOUND": "Nhắc nhở này không còn tồn tại."
+  }
+}

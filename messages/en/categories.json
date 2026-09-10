@@ -1,0 +1,19 @@
+{
+  "title": "Categories",
+  "description": "Your account types and income/expense categories.",
+  "accountTypes": "Account Types",
+  "expenseCategories": "Expense Categories",
+  "incomeCategories": "Income Categories",
+  "addLabelAccountTypes": "Add account type",
+  "addLabelExpenseCategories": "Add expense category",
+  "addLabelIncomeCategories": "Add income category",
+  "addPlaceholder": "New name",
+  "addAction": "Add",
+  "addPending": "Adding…",
+  "archiveAction": "Archive",
+  "archiveConfirmTitle": "Archive {name}?",
+  "archiveConfirmBody": "An archived item no longer appears when choosing, but existing records keep it.",
+  "archivePending": "Archiving…",
+  "emptyTitle": "No items yet",
+  "emptyBody": "Use the field below to add the first one."
+}

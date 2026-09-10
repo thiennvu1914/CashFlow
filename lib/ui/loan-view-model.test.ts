@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { LoanRow, LoanWithOutstanding } from '@/lib/server/services/loan'
-import {
-  LOAN_FREQUENCY_LABELS,
-  LOAN_STATUS_LABELS,
-  loanSubtotalsByCurrency,
-  toLoanDto,
-} from './loan-view-model'
+import { loanSubtotalsByCurrency, toLoanDto } from './loan-view-model'
 
 /**
  * Pure mapping — no database, no session, no renderer. These cases pin the two
@@ -143,16 +138,14 @@ describe('toLoanDto', () => {
     expect(dto.interestPaid).toBe('0')
     expect(dto.outstandingPrincipal).toBe('240.000.000')
     expect(dto.percentRepaid).toBe(0)
-    expect(dto.percentLabel).toBe('0 %')
+    expect(dto.percentLabel).toBe('0 %')
     expect(dto.nextDueDate).toBe('2026-05-15')
     expect(dto.scheduledPayment).toBe('5.000.000')
-    expect(dto.frequency).toBe('MONTHLY')
-    expect(dto.frequencyLabel).toBe('Monthly')
-    expect(dto.interestRateLabel).toBe('8,5 %')
+    expect(dto.paymentFrequency).toBe('MONTHLY')
+    expect(dto.interestRateLabel).toBe('8,5 %')
     expect(dto.termMonths).toBe(60)
     expect(dto.startDate).toBe('2026-01-15')
     expect(dto.status).toBe('ACTIVE')
-    expect(dto.statusLabel).toBe('Active')
     expect(dto.active).toBe(true)
     expect(dto.overdue).toBe(false)
     // 15 May is a month away from 15 April: outside the seven-day window.
@@ -197,7 +190,7 @@ describe('toLoanDto', () => {
     expect(dto.interestPaid).toBe('1.500.000')
     expect(dto.outstandingPrincipal).toBe('236.500.000')
     expect(dto.percentRepaid).toBeCloseTo(1.4583, 3)
-    expect(dto.percentLabel).toBe('1 %')
+    expect(dto.percentLabel).toBe('1 %')
   })
 
   it('rounds the label half-up on the Decimal, not on a float', () => {
@@ -216,7 +209,7 @@ describe('toLoanDto', () => {
       TODAY,
     )
 
-    expect(dto.percentLabel).toBe('67 %')
+    expect(dto.percentLabel).toBe('67 %')
     // The bar keeps the unrounded width, so label and bar agree on the reading
     // without the bar inheriting the label's rounding.
     expect(dto.percentRepaid).toBeCloseTo(66.6667, 3)
@@ -239,9 +232,9 @@ describe('toLoanDto', () => {
       TODAY,
     )
     expect(settled.percentRepaid).toBe(100)
-    expect(settled.percentLabel).toBe('100 %')
+    expect(settled.percentLabel).toBe('100 %')
     expect(settled.outstandingPrincipal).toBe('0')
-    expect(settled.statusLabel).toBe('Paid off')
+    expect(settled.status).toBe('PAID_OFF')
 
     // The service refuses an overpayment under a row lock, so this is only
     // reachable by writing rows around it — the bar must still not overflow
@@ -262,7 +255,7 @@ describe('toLoanDto', () => {
       TODAY,
     )
     expect(overpaid.percentRepaid).toBe(100)
-    expect(overpaid.percentLabel).toBe('120 %')
+    expect(overpaid.percentLabel).toBe('120 %')
   })
 
   it('reads both carriers in UTC, so a stored date is the day the user picked', () => {
@@ -359,45 +352,62 @@ describe('toLoanDto', () => {
     })
   })
 
-  it('marks a closed loan inactive and labels it as closed', () => {
+  it('marks a closed loan inactive, keeping the raw status enum', () => {
     const dto = toLoanDto(row({ status: 'CLOSED' }, 'CLOSED'), TODAY)
 
     expect(dto.status).toBe('CLOSED')
-    expect(dto.statusLabel).toBe('Closed')
     // What the page keys the row actions off: a closed loan refuses every
     // write, so no button may be offered for it.
     expect(dto.active).toBe(false)
   })
 
-  it('labels an overdue loan as a payment the user has missed', () => {
+  it('keeps an overdue loan active — a missed instalment is not a closed loan', () => {
     const dto = toLoanDto(row({ nextDueDate: carrier('2026-03-15') }, 'OVERDUE'), TODAY)
 
-    // "Payment overdue", not "Overdue": the loan is not late, an instalment is.
-    expect(dto.statusLabel).toBe('Payment overdue')
+    expect(dto.status).toBe('OVERDUE')
     expect(dto.active).toBe(true)
+  })
+
+  it('carries no English frequency/status literal, an enum key, and nothing else', () => {
+    const dto = toLoanDto(row({ paymentFrequency: 'WEEKLY' }, 'OVERDUE'), TODAY)
+
+    // No `frequencyLabel`/`statusLabel` (or any other translated string) on the
+    // DTO at all — the component calls `paymentFrequencyLabelKey`/
+    // `loanStatusLabelKey`. `interestRateLabel` is the sanctioned exception
+    // (see the module comment) and carries no such word either.
+    expect(Object.keys(dto)).not.toContain('frequencyLabel')
+    expect(Object.keys(dto)).not.toContain('statusLabel')
+
+    // `\b` word boundaries so a field NAME (`principalPaid`) cannot
+    // false-positive this check — only a translated ENGLISH LABEL as a JSON
+    // *value* can.
+    const serialized = JSON.stringify(dto)
+    expect(serialized).not.toMatch(
+      /\bWeekly\b|\bMonthly\b|\bYearly\b|\bActive\b|\bOverdue\b|\bPaid off\b|\bClosed\b/,
+    )
   })
 
   it('formats the interest rate as a Vietnamese percentage, up to three decimals', () => {
     // The stored column is `Decimal(6, 3)`, so a rate really can carry three.
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('8.500') }), TODAY).interestRateLabel,
-    ).toBe('8,5 %')
+    ).toBe('8,5 %')
     // 0 % is a real loan — the interest-free one from family.
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('0.000') }), TODAY).interestRateLabel,
-    ).toBe('0 %')
+    ).toBe('0 %')
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('12.345') }), TODAY).interestRateLabel,
-    ).toBe('12,345 %')
+    ).toBe('12,345 %')
     expect(
       toLoanDto(row({ interestRate: new Prisma.Decimal('100.000') }), TODAY).interestRateLabel,
-    ).toBe('100 %')
+    ).toBe('100 %')
   })
 
-  it('labels every payment frequency in the user’s words', () => {
-    expect(toLoanDto(row({ paymentFrequency: 'WEEKLY' }), TODAY).frequencyLabel).toBe('Weekly')
-    expect(toLoanDto(row({ paymentFrequency: 'MONTHLY' }), TODAY).frequencyLabel).toBe('Monthly')
-    expect(toLoanDto(row({ paymentFrequency: 'YEARLY' }), TODAY).frequencyLabel).toBe('Yearly')
+  it('keeps every payment frequency as the raw enum, for the component to label', () => {
+    expect(toLoanDto(row({ paymentFrequency: 'WEEKLY' }), TODAY).paymentFrequency).toBe('WEEKLY')
+    expect(toLoanDto(row({ paymentFrequency: 'MONTHLY' }), TODAY).paymentFrequency).toBe('MONTHLY')
+    expect(toLoanDto(row({ paymentFrequency: 'YEARLY' }), TODAY).paymentFrequency).toBe('YEARLY')
   })
 
   it('maps the instalment history to strings, oldest first, keeping the service order', () => {
@@ -618,21 +628,5 @@ describe('loanSubtotalsByCurrency', () => {
     // the figure the user was reading.
     expect(loanSubtotalsByCurrency([usd, vnd]).map((s) => s.currency)).toEqual(['VND', 'USD'])
     expect(loanSubtotalsByCurrency([vnd, usd]).map((s) => s.currency)).toEqual(['VND', 'USD'])
-  })
-})
-
-describe('label maps', () => {
-  it('has copy for every frequency and every display status', () => {
-    expect(LOAN_FREQUENCY_LABELS).toEqual({
-      WEEKLY: 'Weekly',
-      MONTHLY: 'Monthly',
-      YEARLY: 'Yearly',
-    })
-    expect(LOAN_STATUS_LABELS).toEqual({
-      ACTIVE: 'Active',
-      OVERDUE: 'Payment overdue',
-      PAID_OFF: 'Paid off',
-      CLOSED: 'Closed',
-    })
   })
 })

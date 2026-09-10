@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { Prisma } from '@prisma/client'
-import { formatChartValue, formatCompactAmount, formatMoney, formatRate } from './format-money'
+import {
+  formatChartValue,
+  formatCompactAmount,
+  formatMoney,
+  formatPercent,
+  formatRate,
+  formatReadableRate,
+} from './format-money'
 
 /**
  * Pure formatting — no database, no session. Every expectation is the literal
@@ -53,6 +60,36 @@ describe('formatRate', () => {
   })
 })
 
+describe('formatReadableRate', () => {
+  it('quotes USD→VND as-is: the stored rate is already VND per 1 USD', () => {
+    expect(formatReadableRate('USD', 'VND', new Prisma.Decimal('25000'), 'vi')).toBe(
+      '1 USD = 25.000 VND',
+    )
+  })
+
+  it('quotes VND→USD in the SAME readable direction — the reciprocal of the stored rate', () => {
+    // Stored destination-per-source: 1 VND buys 0.00004 USD. Nobody reads a
+    // rate that way, so the reciprocal (25.000 VND per 1 USD) is what renders
+    // — identical copy to the USD→VND case above, proving the direction
+    // never depends on which account the money actually left from.
+    expect(formatReadableRate('VND', 'USD', new Prisma.Decimal('0.00004'), 'vi')).toBe(
+      '1 USD = 25.000 VND',
+    )
+  })
+
+  it('returns null for a same-currency transfer (no exchange rate at all)', () => {
+    expect(formatReadableRate('VND', 'VND', null, 'vi')).toBeNull()
+  })
+
+  it('formats per locale, same as formatRate', () => {
+    expect(formatReadableRate('USD', 'VND', '25000', 'en')).toBe('1 USD = 25,000 VND')
+  })
+
+  it('accepts a plain-number ratio — TransferForm’s live preview, not a stored Decimal', () => {
+    expect(formatReadableRate('VND', 'USD', 100 / 2_500_000, 'vi')).toBe('1 USD = 25.000 VND')
+  })
+})
+
 /**
  * Recharts hands a tooltip formatter whatever is in the datum, typed as
  * `number | string | Array<number | string>`, so these cases are the shapes
@@ -101,5 +138,69 @@ describe('formatCompactAmount', () => {
     // invisible U+00A0 in a source literal is a trap for the next reader).
     expect(formatCompactAmount(10_000_000)).toBe('10\u00a0Tr')
     expect(formatCompactAmount(-2_500_000)).toBe('-2,5\u00a0Tr')
+  })
+})
+
+describe('locale-aware formatting', () => {
+  it('groups with commas in English and dots in Vietnamese', () => {
+    expect(formatMoney(25_000_000, 'VND', 'en')).toBe('25,000,000')
+    expect(formatMoney(25_000_000, 'VND', 'vi')).toBe('25.000.000')
+    expect(formatMoney(25_000_000, 'VND')).toBe('25.000.000')
+  })
+
+  it('keeps currency precision independent of the reader\u2019s locale', () => {
+    expect(formatMoney(1234.5, 'USD', 'en')).toBe('1,234.50')
+    expect(formatMoney(1234.5, 'USD', 'vi')).toBe('1.234,50')
+  })
+
+  it('formats a rate per locale', () => {
+    expect(formatRate('25969.5', 'en')).toBe('25,969.5')
+    expect(formatRate('25969.5', 'vi')).toBe('25.969,5')
+  })
+
+  it('formats a chart tooltip value per locale and still refuses a non-number', () => {
+    expect(formatChartValue(1_500_000, 'VND', 'en')).toBe('1,500,000 VND')
+    expect(formatChartValue(null, 'VND', 'en')).toBe('\u2014')
+  })
+
+  it('abbreviates an axis label in each locale\u2019s own short scale', () => {
+    expect(formatCompactAmount(25_000_000, 'en')).toBe('25M')
+    // Vietnamese compact notation is ICU-dependent; this is what this Node
+    // emits. If it changes, change the expectation and note the version.
+    expect(formatCompactAmount(25_000_000, 'vi')).toBe('25 Tr')
+  })
+})
+
+describe('formatPercent', () => {
+  /**
+   * A non-breaking space (U+00A0) separates the figure from the sign in
+   * every locale -- deliberately not a plain space, so the pair can never
+   * wrap across a line break onto "86" / "%" on two rows.
+   */
+  const NBSP = '\u00A0'
+
+  it('renders a whole percent the same shape in both locales -- no thousands separator applies below 100', () => {
+    expect(formatPercent(86, 'vi')).toBe(`86${NBSP}%`)
+    expect(formatPercent(86, 'en')).toBe(`86${NBSP}%`)
+  })
+
+  it('keeps the decimal separator locale-aware for a fractional rate', () => {
+    expect(formatPercent(8.5, 'vi', 3)).toBe(`8,5${NBSP}%`)
+    expect(formatPercent(8.5, 'en', 3)).toBe(`8.5${NBSP}%`)
+  })
+
+  it('accepts a Prisma.Decimal and the string it serialises to', () => {
+    expect(formatPercent(new Prisma.Decimal('120'), 'vi')).toBe(`120${NBSP}%`)
+    expect(formatPercent('67', 'en')).toBe(`67${NBSP}%`)
+  })
+
+  it('trims trailing zeros rather than padding -- fractionDigits is a MAXIMUM, matching the old RATE_FORMATTER', () => {
+    expect(formatPercent(new Prisma.Decimal('12.345'), 'vi', 3)).toBe(`12,345${NBSP}%`)
+    expect(formatPercent(new Prisma.Decimal('100.000'), 'vi', 3)).toBe(`100${NBSP}%`)
+    expect(formatPercent(new Prisma.Decimal('0.000'), 'en', 3)).toBe(`0${NBSP}%`)
+  })
+
+  it('defaults to zero fraction digits -- the whole-percent shape every percentLabel uses', () => {
+    expect(formatPercent(30, 'vi')).toBe(`30${NBSP}%`)
   })
 })

@@ -2,9 +2,12 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { setReminderActiveAction } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_MESSAGE, REMINDER_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
 import type { ReminderDto } from '@/lib/ui/reminder-view-model'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -24,26 +27,27 @@ import { Button } from '@/components/ui/button'
  */
 export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  const label = reminder.active ? 'Pause' : 'Resume'
+  /** Same shared in-flight lock as `OccurrenceActions` — spec §9. */
+  const submit = useSubmitState()
+  const label = t(reminder.active ? 'reminders.pauseAction' : 'reminders.resumeAction')
 
   async function toggle() {
     setError(null)
-    setPending(true)
-    try {
-      const result = await setReminderActiveAction(reminder.id, !reminder.active)
-      if (!result.ok) {
-        setError(REMINDER_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await setReminderActiveAction(reminder.id, !reminder.active)
+        if (!result.ok) {
+          setError(t(REMINDER_ERROR_KEYS[result.error]))
+          return
+        }
+        router.refresh()
+      } catch {
+        console.error('ReminderToggle: set active failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      router.refresh()
-    } catch {
-      console.error('ReminderToggle: set active failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    } finally {
-      setPending(false)
-    }
+    })
   }
 
   return (
@@ -54,19 +58,19 @@ export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
           Internet bill" are never the same name. */}
       <Button
         type="button"
-        variant="outline"
+        variant="ghost"
         size="sm"
-        disabled={pending}
+        // Height only: `size="sm"`'s 36 px is a mouse target, and spec §8
+        // wants 44 px under a thumb — so this inline row action is 44 px
+        // below the icon rail and the compact 36 px from `md` up.
+        className="h-11 md:h-9"
+        disabled={submit.locked}
         aria-label={`${label} ${reminder.title}`}
         onClick={toggle}
       >
         {label}
       </Button>
-      {error && (
-        <p role="alert" className="text-sm text-negative">
-          {error}
-        </p>
-      )}
+      {error && <InlineAlert tone="negative">{error}</InlineAlert>}
     </div>
   )
 }

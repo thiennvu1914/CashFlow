@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { NextIntlClientProvider } from 'next-intl'
 import type { Currency } from '@prisma/client'
+import { loadMessages } from '@/lib/i18n/messages'
 
 /**
  * A markup test, exactly like `components/transactions/transaction-form.test.tsx`
@@ -9,10 +11,13 @@ import type { Currency } from '@prisma/client'
  * What it pins down is the server HTML, which is where this form's half of the
  * hydration-race fix lives (`lib/ui/use-hydrated.ts`): the gate that stops the
  * form accepting input it would silently discard, and the one `<select>` whose
- * form default is not its first option.
+ * form default is not its first option — plus, new in Task 5b, that every
+ * field carries a visible `<label>` rather than an `aria-label`-only control.
  *
  * `useRouter` throws outside a mounted app router and the action module pulls
  * in Prisma, so both are mocked — same reasoning as the transactions test.
+ * Rendered inside a real `NextIntlClientProvider` fed the actual `vi` message
+ * tree, so every string asserted below is the actual product copy.
  */
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -30,21 +35,31 @@ const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
 const CASH: Account = { id: 'acc_cash', name: 'Cash', currency: 'VND' }
 const WALLET: Account = { id: 'acc_wallet', name: 'Wallet', currency: 'VND' }
+const USD_SAVINGS: Account = { id: 'acc_usd', name: 'USD Savings', currency: 'USD' }
+
+const messages = await loadMessages('vi')
 
 function render(accounts: Account[]): string {
-  return renderToStaticMarkup(<TransferForm accounts={accounts} timezone={TIMEZONE} />)
+  return renderToStaticMarkup(
+    <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
+      <TransferForm accounts={accounts} timezone={TIMEZONE} locale="vi" />
+    </NextIntlClientProvider>,
+  )
 }
 
-/** The markup of one `<select>`, found by its `aria-label` — `<select>`s cannot
- *  nest, so the first `</select>` after the opening tag closes it. Scoping
- *  matters here more than anywhere: both account selectors render the SAME
- *  option values, and only one of them may carry a pre-selected option. */
-function selectMarkup(html: string, ariaLabel: string): string {
-  const labelIndex = html.indexOf(`aria-label="${ariaLabel}"`)
-  if (labelIndex === -1) throw new Error(`No element labelled "${ariaLabel}" in the markup`)
-  const start = html.lastIndexOf('<select', labelIndex)
+/** The markup of one `<select>`, found by a field name — same convention as
+ *  `TransactionForm`'s test: every field's `id` is `transfer-<name>-<useId()
+ *  suffix>`, unique per mounted instance, so this matches the PREFIX rather
+ *  than an exact id. Scoping matters here more than anywhere: both account
+ *  selectors render the SAME option values, and only one of them may carry a
+ *  pre-selected option. */
+function selectMarkup(html: string, name: string): string {
+  const idMatch = html.match(new RegExp(`id="transfer-${name}-[^"]*"`))
+  if (!idMatch) throw new Error(`No element with a transfer-${name}-* id in the markup`)
+  const idIndex = html.indexOf(idMatch[0])
+  const start = html.lastIndexOf('<select', idIndex)
   const end = html.indexOf('</select>', start)
-  if (start === -1 || end === -1) throw new Error(`No <select> labelled "${ariaLabel}"`)
+  if (start === -1 || end === -1) throw new Error(`No <select id="transfer-${name}-*">`)
   return html.slice(start, end + '</select>'.length)
 }
 
@@ -62,15 +77,15 @@ describe('TransferForm', () => {
 
     expect(html).toContain('<fieldset disabled=""')
     expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('<legend class="sr-only">Transfer details</legend>')
+    expect(html).toContain('<legend class="sr-only">Chuyển tiền</legend>')
     // The flex column lives on the fieldset, so nothing re-flows when the gate
     // lifts (same guarantee as `TransactionForm`'s).
-    expect(html).toContain('class="flex min-w-0 flex-col gap-3"')
+    expect(html).toContain('class="flex min-w-0 flex-col gap-4"')
     expect(html).toMatch(/<form[^>]*>\s*<fieldset/)
   })
 
   it('server-renders the To account default — the SECOND account — as selected', () => {
-    const toSelect = selectMarkup(render([CASH, WALLET]), 'To account')
+    const toSelect = selectMarkup(render([CASH, WALLET]), 'to')
 
     // A transfer defaults to moving money *between* accounts, so `toAccountId`
     // is `accounts[1]` — not the first option. Without `defaultValue` the
@@ -82,7 +97,7 @@ describe('TransferForm', () => {
   })
 
   it('leaves the From account select with no pre-selected option — its default IS the first', () => {
-    const fromSelect = selectMarkup(render([CASH, WALLET]), 'From account')
+    const fromSelect = selectMarkup(render([CASH, WALLET]), 'from')
 
     // `fromAccountId` defaults to `accounts[0]`, which the browser selects on
     // its own, so no `defaultValue` is passed and react-dom emits no marker.
@@ -98,13 +113,68 @@ describe('TransferForm', () => {
     expect(html.split('selected=""').length - 1).toBe(1)
   })
 
-  it('falls back to the only account when there is just one, still with a marker', () => {
-    // `defaultToAccountId` is `accounts[1] ?? accounts[0] ?? ''`, so a
-    // single-account list makes "to" the same account as "from". The form is
-    // unusable in that state either way (the server rejects a self-transfer),
-    // but the markup must not silently disagree with form state.
-    const toSelect = selectMarkup(render([CASH]), 'To account')
+  it('renders a visible <label> for every field, including the account selects and date/note', () => {
+    const html = render([CASH, WALLET])
 
-    expect(toSelect).toMatch(selectedOption(CASH.id))
+    for (const [name, label] of [
+      ['from', 'Từ'],
+      ['to', 'Đến'],
+      ['fromAmount', 'Số tiền'],
+      ['date', 'Ngày và giờ'],
+      ['note', 'Ghi chú'],
+    ] as const) {
+      const labelMatch = html.match(new RegExp(`<label for="transfer-${name}-[^"]*"`))
+      expect(labelMatch, `<label> for transfer-${name}-*`).not.toBeNull()
+      const labelIndex = html.indexOf(labelMatch![0])
+      const labelEnd = html.indexOf('</label>', labelIndex)
+      expect(html.slice(labelIndex, labelEnd)).toContain(label)
+    }
+  })
+
+  it('shows one primary amount field for a same-currency pair, no destination amount entry', () => {
+    const html = render([CASH, WALLET])
+
+    expect(html).not.toMatch(/id="transfer-toAmount-/)
+    // The single field's label is the generic "Amount", not "Amount sent".
+    const labelMatch = html.match(/<label for="transfer-fromAmount-[^"]*"[^>]*>([^<]*)<\/label>/)
+    expect(labelMatch?.[1]).toBe('Số tiền')
+  })
+
+  it('shows both amount fields, labelled by direction, for a cross-currency pair', () => {
+    const html = render([CASH, USD_SAVINGS])
+
+    const fromLabel = html.match(/<label for="transfer-fromAmount-[^"]*"[^>]*>([^<]*)<\/label>/)
+    const toLabel = html.match(/<label for="transfer-toAmount-[^"]*"[^>]*>([^<]*)<\/label>/)
+    expect(fromLabel?.[1]).toBe('Số tiền gửi')
+    expect(toLabel?.[1]).toBe('Số tiền nhận')
+  })
+
+  it('gives "Amount sent" and "Amount received" the identical class set — a matched pair, no chrome asymmetry', () => {
+    // Task 5b fix round 1, finding 4: "Amount received" used to be a plain,
+    // smaller `Input` with no spinner suppression while "Amount sent" was the
+    // dominant size — a visual mismatch between the two legs of one transfer.
+    const html = render([CASH, USD_SAVINGS])
+
+    const inputMatches = [
+      ...html.matchAll(/<input[^>]*id="transfer-(?:fromAmount|toAmount)-[^"]*"[^>]*>/g),
+    ]
+    expect(inputMatches).toHaveLength(2)
+    const classOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]
+    expect(classOf(inputMatches[0][0])).toBe(classOf(inputMatches[1][0]))
+    // And the native spinner is suppressed on both, not asymmetrically on one
+    // (react-dom HTML-escapes the `&` in the Tailwind arbitrary selector).
+    for (const [tag] of inputMatches) {
+      expect(tag).toContain('[&amp;::-webkit-outer-spin-button]:appearance-none')
+    }
+  })
+})
+
+describe('TransferForm with fewer than two accounts', () => {
+  it('renders nothing — the page replaces it with an EmptyState instead', () => {
+    // Defence in depth (spec §6.3): the page is the one that decides whether
+    // to mount this component at all, but a caller that somehow reaches it
+    // with fewer than two accounts must not see two identical selects.
+    expect(render([CASH])).toBe('')
+    expect(render([])).toBe('')
   })
 })

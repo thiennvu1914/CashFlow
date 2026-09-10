@@ -1,22 +1,27 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useTranslations } from 'next-intl'
+import { ChevronDown } from 'lucide-react'
 import { createSavingsGoalSchema, type CreateSavingsGoalInput } from '@/lib/validation/savings-goal'
 import { createSavingsGoalAction } from '@/lib/server/actions/savings-goal-actions'
-import { GENERIC_ERROR_MESSAGE, SAVINGS_GOAL_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import { GENERIC_ERROR_KEY, SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { FormField, SELECT_CLASS } from '@/components/common/form-field'
+import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
  * The create form for a savings goal.
  *
- * Takes no props: a goal belongs to no month, no account and no category, so
- * there is nothing about the page's state it has to merge in at submit (unlike
- * `BudgetForm`, which carries the selected month).
+ * Takes no props but `onCreated`: a goal belongs to no month, no account and
+ * no category, so there is nothing about the page's state it has to merge in
+ * at submit (unlike `BudgetForm`, which carries the selected month).
  *
  * Only `currency` gets a `defaultValue` and `name` a default at all. Every
  * money field is left without one on purpose: react-hook-form overwrites the
@@ -29,16 +34,20 @@ function defaultValues(): Partial<CreateSavingsGoalInput> {
   return { name: '', currency: 'VND' }
 }
 
-export function GoalForm() {
+export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
   const router = useRouter()
+  const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
+  const submit = useSubmitState()
+  const uid = useId().replace(/:/g, '')
+  const fieldId = (name: string) => `goal-${name}-${uid}`
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<CreateSavingsGoalInput>({
     resolver: zodResolver(createSavingsGoalSchema),
     defaultValues: defaultValues(),
@@ -46,18 +55,21 @@ export function GoalForm() {
 
   async function onSubmit(values: CreateSavingsGoalInput) {
     setError(null)
-    try {
-      const result = await createSavingsGoalAction(values)
-      if (!result.ok) {
-        setError(SAVINGS_GOAL_ERROR_MESSAGES[result.error])
-        return
+    await submit.run(async () => {
+      try {
+        const result = await createSavingsGoalAction(values)
+        if (!result.ok) {
+          setError(t(SAVINGS_GOAL_ERROR_KEYS[result.error]))
+          return
+        }
+        reset(defaultValues())
+        router.refresh()
+        onCreated?.()
+      } catch {
+        console.error('GoalForm: create failed')
+        setError(t(GENERIC_ERROR_KEY))
       }
-      reset(defaultValues())
-      router.refresh()
-    } catch {
-      console.error('GoalForm: create failed')
-      setError(GENERIC_ERROR_MESSAGE)
-    }
+    })
   }
 
   return (
@@ -65,92 +77,121 @@ export function GoalForm() {
       {/* The hydration gate — same mechanism, same reasoning, as
           `BudgetForm`'s; `lib/ui/use-hydrated.ts` documents the defect. */}
       <fieldset
-        disabled={!hydrated}
-        aria-busy={hydrated ? undefined : true}
+        disabled={!hydrated || submit.locked}
+        aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-3"
       >
-        <legend className="sr-only">New savings goal</legend>
-        <div>
-          <Input
-            aria-label="Goal name"
-            placeholder="Goal name (e.g. MacBook)"
-            {...register('name')}
-          />
-          {errors.name && <p className="text-sm text-negative">{errors.name.message}</p>}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Target amount"
-            placeholder="Target amount"
-            {...register('targetAmount', { valueAsNumber: true })}
-          />
-          {errors.targetAmount && (
-            <p className="text-sm text-negative">{errors.targetAmount.message}</p>
+        <legend className="sr-only">{t('goals.createTitle')}</legend>
+
+        <FormField
+          id={fieldId('name')}
+          label={t('goals.name')}
+          helper={t('goals.namePlaceholder')}
+          error={errors.name?.message}
+        >
+          {(aria) => <Input {...aria} {...register('name')} />}
+        </FormField>
+
+        <FormField
+          id={fieldId('target')}
+          label={t('goals.target')}
+          error={errors.targetAmount?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('targetAmount', { valueAsNumber: true })}
+            />
           )}
-        </div>
-        <div>
-          <Input
-            type="number"
-            step="0.01"
-            aria-label="Current amount"
-            placeholder="Already saved (optional)"
-            {...register('currentProgress', {
-              // `setValueAs` rather than `valueAsNumber` (the two are mutually
-              // exclusive in react-hook-form, and `valueAsNumber` wins): an
-              // untouched optional field's DOM value is `''`, which
-              // `valueAsNumber` would hand to Zod as `NaN` — "Enter an amount"
-              // under a field the user is entitled to skip.
-              setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
-            })}
-          />
-          {errors.currentProgress && (
-            <p className="text-sm text-negative">{errors.currentProgress.message}</p>
+        </FormField>
+
+        <FormField
+          id={fieldId('current')}
+          label={t('goals.current')}
+          error={errors.currentProgress?.message}
+        >
+          {(aria) => (
+            <Input
+              {...aria}
+              type="number"
+              step="0.01"
+              {...register('currentProgress', {
+                // `setValueAs` rather than `valueAsNumber` (the two are
+                // mutually exclusive in react-hook-form, and `valueAsNumber`
+                // wins): an untouched optional field's DOM value is `''`,
+                // which `valueAsNumber` would hand to Zod as `NaN` — "Enter an
+                // amount" under a field the user is entitled to skip.
+                setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
+              })}
+            />
           )}
-        </div>
-        <div>
-          {/* `defaultValue` (never `value` — that would make this controlled).
-              VND is already the first option, so react-dom would land here
-              anyway; it is passed for symmetry with the other planning forms,
-              whose defaults are not first, and so the server HTML states the
-              form's own default rather than relying on a browser fallback. */}
-          <select
-            {...register('currency')}
-            defaultValue="VND"
-            aria-label="Goal currency"
-            className="rounded-md border p-2"
-          >
-            <option value="VND">VND</option>
-            <option value="USD">USD</option>
-          </select>
-          {errors.currency && <p className="text-sm text-negative">{errors.currency.message}</p>}
-        </div>
-        <div>
-          {/* A calendar date as a string, never `valueAsDate`: the value that
-              travels is `yyyy-MM-dd` and the carrier is built server-side by
-              `calendarDateToUtcCarrier` (ruling R6-7). `valueAsDate` would
-              hand over an instant the browser's zone had already coloured. */}
-          <Input type="date" aria-label="Deadline" {...register('deadline')} />
-          {errors.deadline && <p className="text-sm text-negative">{errors.deadline.message}</p>}
-        </div>
-        <div>
-          <Input
-            aria-label="Goal note"
-            placeholder="Note (optional)"
-            {...register('note', {
-              // `''` means "no note", so it is normalised to `undefined` here
-              // and the service stores `null` — otherwise an untouched field
-              // would write an empty string that reads back as a note.
-              setValueAs: (v: string) => (v === '' ? undefined : v),
-            })}
-          />
-          {errors.note && <p className="text-sm text-negative">{errors.note.message}</p>}
-        </div>
-        <Button type="submit" disabled={isSubmitting}>
-          Add goal
+        </FormField>
+
+        <FormField
+          id={fieldId('currency')}
+          label={t('goals.currency')}
+          error={errors.currency?.message}
+        >
+          {(aria) => (
+            // `defaultValue` (never `value` — that would make this
+            // controlled). VND is already the first option, so react-dom
+            // would land here anyway; it is passed for symmetry with the
+            // other planning forms, whose defaults are not first, so the
+            // server HTML states the form's own default rather than relying
+            // on a browser fallback.
+            <div className="relative">
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue="VND"
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+            </div>
+          )}
+        </FormField>
+
+        <FormField
+          id={fieldId('deadline')}
+          label={t('goals.deadline')}
+          error={errors.deadline?.message}
+        >
+          {(aria) => (
+            // A calendar date as a string, never `valueAsDate`: the value that
+            // travels is `yyyy-MM-dd` and the carrier is built server-side by
+            // `calendarDateToUtcCarrier` (ruling R6-7). `valueAsDate` would
+            // hand over an instant the browser's zone had already coloured.
+            <Input {...aria} type="date" {...register('deadline')} />
+          )}
+        </FormField>
+
+        <FormField id={fieldId('note')} label={t('goals.note')} error={errors.note?.message}>
+          {(aria) => (
+            <Input
+              {...aria}
+              {...register('note', {
+                // `''` means "no note", so it is normalised to `undefined`
+                // here and the service stores `null` — otherwise an untouched
+                // field would write an empty string that reads back as a note.
+                setValueAs: (v: string) => (v === '' ? undefined : v),
+              })}
+            />
+          )}
+        </FormField>
+
+        <Button type="submit" className="self-start">
+          {submit.pending ? t('goals.createPending') : t('goals.createAction')}
         </Button>
-        {error && <p className="text-sm text-negative">{error}</p>}
+
+        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
       </fieldset>
     </form>
   )

@@ -122,3 +122,26 @@ export function compareCalendarDates(a: string, b: string): -1 | 0 | 1 {
   if (a > b) return 1
   return 0
 }
+
+/** Milliseconds in a day — exact between two UTC-midnight carriers, where no
+ *  DST shift can shorten one. Never applied to an instant. */
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+/**
+ * How many calendar days there are from `from` to `to`, both `yyyy-MM-dd`.
+ *
+ * Computed between two UTC-midnight carriers rather than from the instants the
+ * dates came from, and that is the whole point: `(dueAt - now) / 86_400_000`
+ * answers "0" for a bill due at midnight tomorrow when it is 09:00 today, and a
+ * zone with a DST change makes a real three-day gap measure 71 hours. Carrier
+ * arithmetic in UTC has neither problem — and `calendarDateToUtcCarrier` also
+ * refuses a date that does not exist, so "31 April" cannot silently roll over.
+ *
+ * `Math.round` rather than a bare divide: both operands are exact multiples of
+ * a day by construction, so this only guards against a future caller handing in
+ * something that is not.
+ */
+export function calendarDaysBetween(from: string, to: string): number {
+  const span = calendarDateToUtcCarrier(to).getTime() - calendarDateToUtcCarrier(from).getTime()
+  return Math.round(span / MS_PER_DAY)
+}

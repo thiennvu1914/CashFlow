@@ -1,0 +1,56 @@
+{
+  "transactionType": {
+    "INCOME": "Thu nhập",
+    "EXPENSE": "Chi tiêu",
+    "CASH_IN": "Tiền vào (khác)",
+    "CASH_OUT": "Tiền ra (khác)",
+    "ADJUSTMENT_INCREASE": "Điều chỉnh tăng",
+    "ADJUSTMENT_DECREASE": "Điều chỉnh giảm"
+  },
+  "categoryType": { "INCOME": "Thu nhập", "EXPENSE": "Chi tiêu" },
+  "recordStatus": { "ACTIVE": "Đang hoạt động", "ARCHIVED": "Đã lưu trữ" },
+  "budgetScope": { "OVERALL": "Tổng thể", "CATEGORY": "Theo danh mục" },
+  "budgetStatus": {
+    "ok": "Trong hạn mức",
+    "warning_50": "Đã dùng hơn nửa",
+    "warning_80": "Sắp vượt hạn mức",
+    "at_100": "Đã đến hạn mức",
+    "exceeded": "Vượt hạn mức"
+  },
+  "goalStatus": {
+    "ACTIVE": "Đang thực hiện",
+    "ACHIEVED": "Đạt mục tiêu",
+    "ARCHIVED": "Đã lưu trữ"
+  },
+  "debtDirection": { "RECEIVABLE": "Họ nợ bạn", "PAYABLE": "Bạn nợ họ" },
+  "debtStatus": {
+    "OPEN": "Đang mở",
+    "PARTIALLY_PAID": "Trả một phần",
+    "PAID": "Đã thanh toán",
+    "OVERDUE": "Quá hạn",
+    "WRITTEN_OFF": "Đã xóa nợ"
+  },
+  "loanStatus": {
+    "ACTIVE": "Đang trả",
+    "OVERDUE": "Quá hạn kỳ trả",
+    "PAID_OFF": "Đã trả hết",
+    "CLOSED": "Đã đóng"
+  },
+  "paymentFrequency": { "WEEKLY": "Hàng tuần", "MONTHLY": "Hàng tháng", "YEARLY": "Hàng năm" },
+  "reminderType": { "INCOME": "Thu nhập", "EXPENSE": "Hóa đơn" },
+  "recurrence": {
+    "ONE_TIME": "Một lần",
+    "WEEKLY": "Hàng tuần",
+    "WEEKLY_N": "Mỗi {count} tuần",
+    "MONTHLY": "Hàng tháng",
+    "MONTHLY_N": "Mỗi {count} tháng",
+    "YEARLY": "Hàng năm",
+    "YEARLY_N": "Mỗi {count} năm"
+  },
+  "occurrenceStatus": {
+    "PENDING": "Chờ xử lý",
+    "ACKNOWLEDGED": "Đã ghi nhận",
+    "DISMISSED": "Đã bỏ qua"
+  },
+  "currency": { "VND": "VND", "USD": "USD" }
+}
