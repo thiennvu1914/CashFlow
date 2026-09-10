@@ -14,6 +14,36 @@ import type { Locale } from './locale'
  * about the loader changes when it does. `t('validation.Enter an amount')`
  * has to resolve once 2c lands, which means the domain has to be part of the
  * merged tree from this task onward.
+ *
+ * Accepted untranslated strings, as of Phase 7 Task 13's product-wide sweep
+ * (each with its reason):
+ *
+ *  1. `InvalidReportRangeError`'s message (`lib/reports/report-range.ts`,
+ *     thrown from six call sites, e.g. line 191's "from (…) must be on or
+ *     before to (…)") — it describes a hand-typed URL query parameter, not a
+ *     product state, and translating it means changing `lib/reports/`, which
+ *     is frozen this phase. It reaches the DOM only for a user who edited the
+ *     query string by hand.
+ *  2. Excel sheet names and column headers (`lib/server/export/*`, including
+ *     the `*_STATUS_LABELS`/`recurrenceLabel`/`LOAN_*_LABELS` maps
+ *     `lib/ui/*-view-model.ts` export for them to import) — an explicit
+ *     contract (spec §12), deliberately not localised: the workbook a user
+ *     downloads today must open identically tomorrow regardless of which
+ *     locale cookie is set when they click Export.
+ *  3. Currency codes, IANA time-zone ids, and account/category/person/lender
+ *     names — data the user typed or a currency/timezone standard defines,
+ *     not copy this app owns. The Settings language `<select>`'s "Tiếng Việt"
+ *     option is the same idea one level up: a language's own endonym, shown
+ *     in its own script regardless of which locale is active — the
+ *     convention every language switcher uses.
+ *
+ * NOT an exception: the Zod messages in `lib/validation/**`. The schemas keep
+ * their English literals (Phase 2–6 tests assert them, and they are
+ * reproduced server-side, frozen this phase), and the UI translates them at
+ * the render boundary through `messages/{vi,en}/validation.json` — see
+ * `lib/ui/validation-messages.ts` and the extraction test
+ * (`lib/ui/validation-messages.test.ts`) that proves every literal has both
+ * entries.
  */
 export const MESSAGE_DOMAINS = [
   'common',
