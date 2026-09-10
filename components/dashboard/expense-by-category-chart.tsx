@@ -63,7 +63,24 @@ export function ExpenseByCategoryChart({
   return (
     <figure aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        {/* `title={summary}` (Task 18, routed from the Task 16 re-review):
+            recharts renders its root `<svg>` with `role="application"` and
+            `tabIndex=0` when its accessibility layer is on (the default in
+            v3 — `node_modules/recharts/lib/container/RootSurface.js`), and
+            it always emits a `<title>` element inside that svg. With no
+            `title` prop that element was EMPTY, so the one focusable node in
+            the chart had no accessible name of its own — the `<figure>`'s
+            `aria-label` names the figure, not the plot a keyboard user
+            actually lands on. Same translated sentence, so the figure and
+            the plot cannot disagree. `desc` is deliberately left unset: it
+            would repeat that sentence as the plot's description and be read
+            twice. */}
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          title={summary}
+        >
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
           {/* Wrapped rather than passed directly: Recharts calls a
               `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s

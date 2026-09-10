@@ -751,6 +751,27 @@ test.describe.serial('Phase 7 — accessibility', () => {
       })
     }
 
+    // The PLOT has its own accessible name, not only the figure around it
+    // (Task 18, routed from the Task 16 re-review). Recharts always emits a
+    // `<title>` inside the focusable `role="application"` svg; with no `title`
+    // prop that element was empty, so the one node a keyboard user actually
+    // lands on had no name. It must be the same translated summary the figure
+    // carries — one string from the page, so the two can never disagree.
+    const plotNames = await page.evaluate(() =>
+      [...document.querySelectorAll('figure')].map((figure) => ({
+        figure: figure.getAttribute('aria-label'),
+        plot: figure.querySelector('svg[tabindex="0"] > title')?.textContent ?? '',
+      })),
+    )
+    for (const names of plotNames) {
+      expect(names.plot, 'the focusable plot carries a name of its own').not.toBe('')
+      expect(names.plot, "the plot's name is the figure's own summary").toBe(names.figure)
+    }
+    // And the computed accessible name, not just the markup that feeds it.
+    await expect(page.locator('figure svg[tabindex="0"]').first()).toHaveAccessibleName(
+      /^Biểu đồ .{20,}/,
+    )
+
     // (a) reachable by Tab — every chart, not just the first. The rail is 16
     // stops at 1440, so a bounded 70-press sweep covers the whole page.
     await page.evaluate(() => document.body.focus())

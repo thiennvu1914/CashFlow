@@ -64,7 +64,19 @@ export function CashFlowTrendChart({
   return (
     <figure aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        {/* `title={summary}` (Task 18, routed from the Task 16 re-review):
+            recharts renders its root `<svg>` with `role="application"` and
+            `tabIndex=0` when its accessibility layer is on (the default in
+            v3 — `node_modules/recharts/lib/container/RootSurface.js`), and
+            it always emits a `<title>` element inside that svg. With no
+            `title` prop that element was EMPTY, so the one focusable node in
+            the chart had no accessible name of its own — the `<figure>`'s
+            `aria-label` names the figure, not the plot a keyboard user
+            actually lands on. Same translated sentence, so the figure and
+            the plot cannot disagree. `desc` is deliberately left unset: it
+            would repeat that sentence as the plot's description and be read
+            twice. */}
+        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }} title={summary}>
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="label" {...AXIS_PROPS} />
           {/* Wrapped rather than passed directly: Recharts calls a
@@ -82,7 +94,18 @@ export function CashFlowTrendChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Legend iconType="plainline" wrapperStyle={{ fontSize: '0.7rem' }} />
+          {/* `itemSorter={null}` (Task 18, Task 14 finding F11): `Legend`
+              defaults to `itemSorter: 'value'`
+              (`node_modules/recharts/lib/component/Legend.js`), i.e. it sorts
+              its entries alphabetically by their rendered label — which put
+              "Chi tiêu" before "Thu nhập" in Vietnamese and "Expense" before
+              "Income" in English, contradicting the income-then-expense order
+              this chart declares its series in and that every figure, KPI and
+              tooltip in the product reads in. `null` means "do not sort", so
+              the legend follows the `<Line>` order below and needs no `payload`
+              of its own — nothing about the labels or the colours is restated
+              here. */}
+          <Legend iconType="plainline" itemSorter={null} wrapperStyle={{ fontSize: '0.7rem' }} />
           <Line
             {...LINE_PROPS}
             dataKey="income"
