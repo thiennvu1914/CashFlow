@@ -35,7 +35,13 @@ export type ActionResult<E extends string> = { ok: true } | { ok: false; error: 
 export interface ActionFailure {
   /** Already through `t()` — the exact string to render. */
   message: string
-  /** The refused code, when the action answered `{ ok: false }`. */
+  /**
+   * The refused code, when the action answered `{ ok: false }`. No current
+   * caller reads it — every `onError` sink renders `message` alone — but
+   * `runActionSubmit` already has it for free from the action's result, and
+   * dropping it would remove information a future caller might need (e.g. a
+   * retry offered only for a specific code) with no cost to keep.
+   */
   code?: string
   /**
    * Next's opaque, PII-free server-error digest, when the action THREW and
@@ -122,6 +128,16 @@ export function digestOf(e: unknown): string | undefined {
  * hand-written handlers exactly: they put `setError(null)` above
  * `submit.run(…)`, which means a duplicate submit refused by the guard still
  * cleared the previous message.
+ *
+ * That guard-refused submit clears the sink and then settles nothing else:
+ * `run`'s re-entry check (`createSubmitRunner` in `use-submit-state.ts`)
+ * returns before the callback above — the one holding `onSettled`/`onSuccess`/
+ * `onError`'s second call — ever executes, so a refused duplicate is silent
+ * beyond the clear. Unreachable today, not merely rare: every caller disables
+ * its own submit trigger while `submit.locked` (a `<fieldset disabled>`, a
+ * `<Button disabled>`, or — for `ConfirmDialog` — its own buttons on the same
+ * lock), so no second click can reach `run` while the first is still in
+ * flight.
  */
 export async function runActionSubmit<E extends string>(
   run: SubmitState['run'],

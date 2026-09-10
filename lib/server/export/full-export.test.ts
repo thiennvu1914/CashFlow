@@ -115,6 +115,18 @@ const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
  * Loans sheets fetch: captured from the pre-change build and pasted here
  * verbatim, one line per row. If a single cell, number format or row order
  * moves, this is the case that says which one.
+ *
+ * `Transfers r1` and `Budgets r1` are header-only here — this fixture seeds no
+ * transfer and no budget, so those two sheets have nothing to add to a golden
+ * that is already ~40 lines of every other sheet's data rows. Their own cell
+ * contract is covered elsewhere, per row and per format: transfers by 'lists
+ * transfers with both legs, their currencies and the rate used' and the
+ * Summary-count case above, budgets by 'writes each budget in its own
+ * currency, from historical rates and no current one' and the
+ * archived-category and per-month-scan cases below. Adding a row of each here
+ * would duplicate that coverage and double the Summary-sheet figures (account
+ * balance, net worth, monthly income/expense) this golden would then also have
+ * to carry by hand.
  */
 const EXPECTED_WORKBOOK_CELLS: string[] = [
   'Summary r1: Metric | Value | Note',

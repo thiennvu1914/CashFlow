@@ -2,6 +2,7 @@
   "generic": "Đã xảy ra lỗi. Vui lòng thử lại.",
   "boundaryTitle": "Không tải được trang này.",
   "boundaryBody": "Dữ liệu của bạn chưa bị thay đổi. Hãy thử lại sau một lát.",
+  "boundaryReference": "Mã tham chiếu: {code}",
   "notFoundTitle": "Không tìm thấy trang này.",
   "notFoundBody": "Đường dẫn này không tồn tại hoặc đã được chuyển đi nơi khác.",
   "goToDashboard": "Đến Tổng quan",

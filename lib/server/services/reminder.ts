@@ -530,7 +530,12 @@ export async function setReminderActive(
  *    inserting nothing. The one statement is atomic and self-idempotent on its
  *    own, so a transaction would add nothing but a pooled connection held across
  *    a page render; and a partially materialized user was never an inconsistent
- *    state — it is a user whose next read finishes the job.
+ *    state — it is a user whose next read finishes the job. One statement does
+ *    mean one ceiling: Postgres's protocol caps a single statement at 65,535
+ *    bound parameters, and each row here binds three (`userId`, `reminderId`,
+ *    `dueAt`) — about 21,845 rows per call. `OCCURRENCE_LOOKAHEAD_DAYS` and one
+ *    call per active reminder keep any real user's backlog far below that, so
+ *    this is a named limit to watch, not a batch this function chunks for.
  *
  * The query cost is one reminder `findMany` plus exactly one `createMany`,
  * skipped entirely when nothing at all is due — never a query per reminder and
