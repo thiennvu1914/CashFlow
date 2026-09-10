@@ -125,8 +125,22 @@ export default async function AccountsPage() {
 
       {archivedAccounts.length > 0 && (
         <details className="rounded-lg border border-border bg-surface">
-          <summary className="cursor-pointer px-4 py-3 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
-            {t('accounts.archivedSection', { count: archivedAccounts.length })}
+          {/* A heading element as a `<summary>`'s label is explicit content
+              model (a `<summary>` may include one `h1`-`h6` as its label), and
+              it is what gives this disclosure's own section a real heading
+              rather than a clickable paragraph — the same treatment
+              `/debts` and `/loans` already gave their written-off and closed
+              sections, brought here by Task 16's heading-outline sweep (owner
+              item G1): the page had no `h2` at all, so the archived list was
+              a section with no name. `inline` keeps it on the summary's own
+              line, so nothing moves.
+              `max-md:min-h-11` is the 44 px touch target below the icon rail
+              (routed from Task 15, which measured this summary at 42 px and
+              deferred it): +2 px on a phone, nothing at all from `md` up. */}
+          <summary className="cursor-pointer px-4 py-3 max-md:min-h-11">
+            <h2 className="inline text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+              {t('accounts.archivedSection', { count: archivedAccounts.length })}
+            </h2>
           </summary>
           {/* Read-only, like every other archived section in this app: an
               archived account refuses every write, so no actions are offered. */}

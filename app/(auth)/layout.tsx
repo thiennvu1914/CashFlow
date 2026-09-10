@@ -20,13 +20,21 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
   const t = await getTranslations()
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="flex w-full max-w-[25rem] flex-col gap-6 rounded-lg border border-border bg-surface p-6 sm:p-8">
+      {/* A `<main>`, not a `<div>` (Task 16, owner item G1: exactly one `main`
+          per page). The four auth screens had NO main landmark at all — their
+          `h1` and their form sat in plain divs — so a screen-reader user had
+          no landmark to jump to and "skip to the main content" had nothing to
+          skip to. The card IS the whole page here, wordmark included, so the
+          card is the landmark; nothing else moves, and the class list is
+          unchanged. The signed-in shell's `main` is in
+          `components/layout/app-shell.tsx`. */}
+      <main className="flex w-full max-w-[25rem] flex-col gap-6 rounded-lg border border-border bg-surface p-6 sm:p-8">
         <div className="flex flex-col gap-1">
           <p className="text-base font-semibold text-brand">{t('common.appName')}</p>
           <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{t('common.tagline')}</p>
         </div>
         {children}
-      </div>
+      </main>
     </div>
   )
 }

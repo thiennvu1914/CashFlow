@@ -130,7 +130,7 @@ export function TransactionList({
           ancestor with `overflow: hidden/auto/scroll` becomes the "nearest
           scrolling ancestor" `position: sticky` sticks WITHIN per the CSS
           spec, and this div never itself scrolls (the page does) — so with
-          `overflow-hidden` on it, the `<h3>` below stuck to the top of a
+          `overflow-hidden` on it, the `<h2>` below stuck to the top of a
           container that never moves, which reads as "not sticky" the moment
           you actually scroll. Rounding the card's corners without it clipping
           content is instead done on the two elements that could otherwise
@@ -140,7 +140,16 @@ export function TransactionList({
       <div className="rounded-lg border border-border bg-surface">
         {groups.map((group, groupIndex) => (
           <section key={group.day}>
-            <h3
+            {/* `h2`, not `h3` (Task 16, owner item G1). The page's outline is
+                `h1` "Giao dịch" -> these day groups -> `h2` "Thêm giao dịch"
+                (the create panel), with nothing between the `h1` and the day
+                groups: an `h3` there skipped a level, which is a real
+                heading-order defect and not a styling choice — the class list
+                below is unchanged, so this looks exactly as it did. The day
+                groups ARE the ledger's top-level sections; the alternative
+                (an extra sr-only `h2` above them, to hang `h3`s off) adds a
+                heading nobody asked for. */}
+            <h2
               className={cn(
                 'sticky top-0 z-10 border-b border-border bg-surface px-4 py-2 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase',
                 groupIndex === 0 && 'rounded-t-lg',
@@ -151,7 +160,7 @@ export function TransactionList({
                 : group.kind === 'yesterday'
                   ? t('transactions.dayYesterday')
                   : formatDate(group.day, { locale, timeZone: timezone, style: 'weekday' })}
-            </h3>
+            </h2>
             <ul className="divide-y divide-border">
               {group.rows.map((row, rowIndex) => {
                 const positive = isBalanceIncreasing(row.type)

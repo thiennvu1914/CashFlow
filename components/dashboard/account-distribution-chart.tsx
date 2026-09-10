@@ -45,7 +45,15 @@ export function AccountDistributionChart({
   return (
     <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        {/* See `account-balance-history-chart.tsx` for why the recharts
+            accessibility layer is off: inside `role="img"` it is five dead tab
+            stops and a live region that can never announce. */}
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          accessibilityLayer={false}
+        >
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
           {/* Wrapped rather than passed directly: Recharts calls a
               `tickFormatter` as `(value, index)`, and `formatCompactAmount`'s

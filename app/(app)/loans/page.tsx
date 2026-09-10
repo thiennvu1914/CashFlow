@@ -142,7 +142,10 @@ export default async function LoansPage() {
               which is what gives this disclosure's own section a real
               heading rather than a clickable paragraph — spec a11y AC: "h2 on
               each `<details>`". */}
-          <summary className="cursor-pointer px-4 py-3">
+          {/* `max-md:min-h-11` is the 44 px touch target below the icon
+              rail — routed from Task 15, which measured this summary at
+              42 px and deferred it. +2 px on a phone, nothing from `md`. */}
+          <summary className="cursor-pointer px-4 py-3 max-md:min-h-11">
             <h2 className="inline text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
               {t('loans.closedSection', { count: closed.length })}
             </h2>

@@ -53,7 +53,18 @@ export function Sheet({
             (`components/ui/dialog.tsx:31`) so the scrim never reads as
             glassmorphism. */}
         <DialogOverlay className="bg-foreground/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/50" />
+        {/* `aria-modal="true"` (Task 16, owner item G3). Base UI gives the
+            focus trap, focus restoration, Escape and overlay dismissal — all
+            four verified in the browser — but it marks NOTHING outside the
+            popup: the page behind an open dialog carries no `inert` and no
+            `aria-hidden`, so a screen reader's virtual cursor could still
+            read and operate the whole page underneath while the modal was
+            open. `aria-modal` is the attribute that confines it, and APG asks
+            for exactly one of the two. It is set here rather than passed to
+            `DialogRoot` because Base UI's `modal` prop governs pointer and
+            scroll locking, not this. */}
         <DialogPrimitive.Popup
+          aria-modal="true"
           className={cn(
             'fixed z-50 flex flex-col gap-4 border-border bg-surface-2 p-6 shadow-[0_8px_24px_rgba(25,33,30,0.10)] transition-transform duration-150 dark:shadow-[0_8px_24px_rgba(0,0,0,0.40)]',
             // `left-0 right-0` (not `inset-x-0`) for the same reason as
@@ -91,9 +102,17 @@ export function Sheet({
                 </DialogDescription>
               )}
             </div>
+            {/* `max-md:size-11` is the 44 px touch target below the icon
+                rail (routed from Task 15, which measured this button at
+                36 x 36 and deferred it as outside its enumerated set). It is
+                the only VISIBLE way to close a sheet on a phone — Escape
+                needs a keyboard and an overlay tap has no affordance — so it
+                gets the box. Padding on the existing element, no new prop,
+                and 36 x 36 from `md` up, where a pointer is doing the
+                clicking. */}
             <DialogClose
               aria-label={closeLabel}
-              className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground max-md:size-11"
             >
               <X aria-hidden="true" className="size-4" />
             </DialogClose>

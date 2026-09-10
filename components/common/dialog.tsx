@@ -16,11 +16,15 @@ import {
 /**
  * The app's modal (spec §2, §7, §8).
  *
- * Base UI's Dialog already gives the whole accessibility contract — `role`,
- * `aria-modal`, the focus trap, focus restoration to the opener, Escape and
- * overlay dismissal — so this file adds only CashFlow's surface: `--surface-2`,
- * the one soft shadow the design system allows, radius 10, and the
- * below-640 behaviour the spec asks for (a dialog becomes a bottom sheet).
+ * Base UI's Dialog gives most of the accessibility contract — `role`, the
+ * focus trap, focus restoration to the opener, Escape and overlay dismissal,
+ * all four re-verified in the browser by Task 16 — but NOT `aria-modal`, which
+ * this comment used to claim it did: Base UI sets no `aria-modal` and marks
+ * nothing outside the popup `inert`, so the page behind stayed readable to a
+ * screen reader's virtual cursor. This file supplies it (see the popup below)
+ * and adds CashFlow's surface: `--surface-2`, the one soft shadow the design
+ * system allows, radius 10, and the below-640 behaviour the spec asks for (a
+ * dialog becomes a bottom sheet).
  *
  * `aria-labelledby` is wired by rendering the title through
  * `DialogTitle`, and the description through `DialogDescription`, rather
@@ -77,7 +81,18 @@ export function Dialog({
             (verified: the later value replaces the earlier one here), so this
             reliably removes the blur without touching the generated file. */}
         <DialogOverlay className="bg-foreground/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/50" />
+        {/* `aria-modal="true"` (Task 16, owner item G3). Base UI gives the
+            focus trap, focus restoration, Escape and overlay dismissal — all
+            four verified in the browser — but it marks NOTHING outside the
+            popup: the page behind an open dialog carries no `inert` and no
+            `aria-hidden`, so a screen reader's virtual cursor could still
+            read and operate the whole page underneath while the modal was
+            open. `aria-modal` is the attribute that confines it, and APG asks
+            for exactly one of the two. It is set here rather than passed to
+            `DialogRoot` because Base UI's `modal` prop governs pointer and
+            scroll locking, not this. */}
         <DialogPrimitive.Popup
+          aria-modal="true"
           className={cn(
             'fixed z-50 flex flex-col gap-4 border border-border bg-surface-2 p-6 shadow-[0_8px_24px_rgba(25,33,30,0.10)] transition-transform duration-150 dark:shadow-[0_8px_24px_rgba(0,0,0,0.40)]',
             // Below 640 it is a bottom sheet (spec §7); from 640 up, a centred
@@ -109,9 +124,17 @@ export function Dialog({
                 </DialogDescription>
               )}
             </div>
+            {/* `max-md:size-11` is the 44 px touch target below the icon
+                rail (routed from Task 15, which measured this button at
+                36 x 36 and deferred it as outside its enumerated set). It is
+                the only VISIBLE way to close a sheet on a phone — Escape
+                needs a keyboard and an overlay tap has no affordance — so it
+                gets the box. Padding on the existing element, no new prop,
+                and 36 x 36 from `md` up, where a pointer is doing the
+                clicking. */}
             <DialogClose
               aria-label={closeLabel ?? t('close')}
-              className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground max-md:size-11"
             >
               <X aria-hidden="true" className="size-4" />
             </DialogClose>

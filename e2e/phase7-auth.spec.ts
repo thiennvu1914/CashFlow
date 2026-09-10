@@ -227,10 +227,15 @@ test('no horizontal overflow at 375, and the card is full width with padding', a
     expect(scrollWidth, `overflow at ${url}`).toBeLessThanOrEqual(innerWidth)
 
     // Not just "no overflow" — the card itself (`app/(auth)/layout.tsx`'s
-    // `w-full max-w-[25rem]` div) must actually BE full width inside the
+    // `w-full max-w-[25rem]` element) must actually BE full width inside the
     // page wrapper's `p-4` (16px each side), not a narrower "mobile card"
     // floating in unexplained side margins.
-    const card = page.locator('div.rounded-lg.border-border.bg-surface').first()
+    //
+    // `getByRole('main')`, not the old `div.rounded-lg.border-border.bg-surface`:
+    // Task 16 made that card the page's `main` landmark (the four auth screens
+    // had none), so a `div`-tagged selector no longer matches it. The role is
+    // also the more durable handle — it survives the next class change.
+    const card = page.getByRole('main')
     const box = await card.boundingBox()
     expect(box, `card bounding box at ${url}`).not.toBeNull()
     expect(Math.abs(box!.width - (innerWidth - 32)), `card width at ${url}`).toBeLessThanOrEqual(1)

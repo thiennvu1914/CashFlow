@@ -57,7 +57,26 @@ export function AccountBalanceHistoryChart({
   return (
     <div role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        {/* `accessibilityLayer={false}` (Task 16, owner items G3/G4).
+            recharts 3 turns its accessibility layer ON by default, which puts
+            `tabIndex={0}` and `role="application"` on the `<svg>` plus a
+            `role="status" aria-live="assertive"` announcer beside it. Inside
+            the `role="img"` wrapper above — which is this chart's accessible
+            alternative, an `aria-label` sentence the page composes and
+            translates — that layer is worse than useless: `role="img"` makes
+            the subtree a LEAF in the accessibility tree, so the announcer can
+            never announce and the arrow-key data cursor has nothing to read
+            out, while the svg stays in the tab order. Measured on
+            `/dashboard`: five focusable elements and five dead live regions,
+            i.e. five tab stops that announce nothing at all. Turning the layer
+            off leaves the `role="img"` summary as the single, working
+            alternative. Nothing about hover, the tooltip or the legend
+            changes — the layer only ever added keyboard navigation. */}
+        <LineChart
+          data={data}
+          margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+          accessibilityLayer={false}
+        >
           <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="label" {...AXIS_PROPS} />
           {/* Wrapped rather than passed directly: Recharts calls a
