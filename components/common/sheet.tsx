@@ -69,7 +69,15 @@ export function Sheet({
             // already sets `bottom: 0`, matching the mobile value, so nothing
             // needs cancelling.
             'left-0 right-0 bottom-0 max-h-[85vh] w-full max-w-none overflow-y-auto rounded-none rounded-t-lg border-t',
-            'sm:inset-y-0 sm:right-0 sm:left-auto sm:w-[30rem] sm:max-w-full sm:rounded-none sm:border-t-0 sm:border-l',
+            // `sm:max-h-none` is not decoration: the mobile `max-h-[85vh]`
+            // above applies at EVERY width unless a wider breakpoint cancels
+            // it, so the desktop panel stopped 135 px short of the bottom of a
+            // 900 px viewport — `sm:inset-y-0` set `bottom: 0` and
+            // `max-height: 85vh` then clipped the box back to 765 px — leaving
+            // a strip of page showing under a panel that is meant to be full
+            // height. The `sm:` variant is what keeps the phone's bottom-sheet
+            // height untouched.
+            'sm:inset-y-0 sm:right-0 sm:left-auto sm:w-[30rem] sm:max-w-full sm:max-h-none sm:rounded-none sm:border-t-0 sm:border-l',
           )}
         >
           <div className="flex items-start justify-between gap-4">
