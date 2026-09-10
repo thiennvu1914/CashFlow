@@ -34,13 +34,14 @@ import {
  *
  * One user, one seed, `describe.serial`: the eight destructive cases each
  * consume the row they act on, so they can neither run in parallel nor in
- * another order. The seed is one of everything, plus three deliberate extras —
- * an untouched "Scratch" account (archiving requires a zero balance, so the
- * account being archived here has to be one nothing has ever moved through), a
- * second goal (an archived goal offers no progress button, and rightly), and
- * two one-off reminders (one occurrence each, so acknowledge and dismiss each
- * have their own row and neither depends on how a recurring reminder's group
- * collapses).
+ * another order. The seed is one of everything, plus four deliberate extras —
+ * two untouched zero-balance accounts, "Scratch" and "Spare" (archiving
+ * requires a zero balance, so the account being archived has to be one nothing
+ * has ever moved through, and the stray-Enter case at the bottom needs a second
+ * one because the first is archived by then), a second goal (an archived goal
+ * offers no progress button, and rightly), and two one-off reminders (one
+ * occurrence each, so acknowledge and dismiss each have their own row and
+ * neither depends on how a recurring reminder's group collapses).
  */
 const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-confirm-${process.pid}.json`)
 
@@ -79,6 +80,12 @@ test.describe.serial('Phase 7 — confirmations', () => {
     // `archiveFinancialAccountAction` will accept (a non-zero balance is
     // refused as NON_ZERO_BALANCE, which is another test's subject).
     await createAccountViaUi(page, { name: 'Scratch', currency: 'VND', initialBalance: 0 })
+    // A SECOND empty account, for the stray-Enter case at the bottom of this
+    // file (fix round 1, Minor 5): "Scratch" is archived by its own case above
+    // it, and pressing Enter at an account whose balance makes the archive
+    // impossible anyway would leave that test's consequence half unable to
+    // fail.
+    await createAccountViaUi(page, { name: 'Spare', currency: 'VND', initialBalance: 0 })
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
@@ -232,6 +239,48 @@ test.describe.serial('Phase 7 — confirmations', () => {
     },
   ] as const
 
+  /**
+   * A FAILED confirmation, first — declared before the loop below because it
+   * needs the transaction the loop's first case consumes, and because an
+   * aborted POST deletes nothing, so it leaves the row exactly where it was
+   * (no mutation to revert).
+   *
+   * Fix round 1, Important 1: `TransactionList` and `TransferList` used to
+   * leave the dialog OPEN when the delete failed, which put its own scrim over
+   * the `InlineAlert` below the card — the one message that explains the
+   * refusal. Both now close, like the other six sites.
+   */
+  test('a failed delete closes the confirmation, so the message it would have hidden is readable', async ({
+    page,
+  }) => {
+    await page.goto('/transactions')
+    const rowMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
+    await expect(rowMenu).toBeVisible()
+
+    // The server action's POST never lands. No arbitrary wait anywhere: every
+    // assertion below is an auto-retrying one on a real condition.
+    await page.route(
+      (url) => url.pathname === '/transactions',
+      async (route) => {
+        if (route.request().method() !== 'POST') return route.fallback()
+        await route.abort('failed')
+      },
+    )
+
+    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
+
+    await expect(dialog).toBeHidden()
+    const alert = page.locator('p[role="alert"]').first()
+    await expect(alert).toBeVisible()
+    await expect(alert).toHaveText(/Đã xảy ra lỗi|Something went wrong/)
+    // Still there: an aborted POST deleted nothing, which is also why this test
+    // can run before the delete case below.
+    await expect(rowMenu).toBeVisible()
+  })
+
   for (const action of DESTRUCTIVE) {
     test(`${action.name}: asks first, Cancel changes nothing, Confirm does it`, async ({
       page,
@@ -353,7 +402,10 @@ test.describe.serial('Phase 7 — confirmations', () => {
    */
   test('a stray Enter on an open confirmation cannot confirm it', async ({ page }) => {
     await page.goto('/accounts')
-    await rowAction(page, 'Cash', /^(Lưu trữ|Archive)$/)
+    // "Spare", not "Cash": an empty account CAN be archived, so if a stray
+    // Enter ever reached the confirm button this test would fail rather than
+    // being saved by NON_ZERO_BALANCE (fix round 1, Minor 5).
+    await rowAction(page, 'Spare', /^(Lưu trữ|Archive)$/)
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
 
@@ -364,12 +416,13 @@ test.describe.serial('Phase 7 — confirmations', () => {
     ).toBe(false)
 
     await page.keyboard.press('Enter')
-    // Cash is untouched — still listed, still with its own row menu, and no
-    // second account has joined the archived disclosure. (It could not have
-    // been archived anyway: its balance is not zero. The point is that nothing
-    // was even attempted.)
+    // Spare is untouched — still listed, still with its own row menu, and the
+    // archived disclosure still holds only Scratch. Nothing refused this
+    // archive: an empty account is archivable, so the row surviving is the
+    // whole assertion.
     await page.goto('/accounts')
-    await expect(page.getByRole('button', { name: rowMenuName('Cash') })).toBeVisible()
+    await expect(page.getByRole('button', { name: rowMenuName('Spare') })).toBeVisible()
+    await expect(page.getByText(/Tài khoản đã lưu trữ \(1\)|Archived accounts \(1\)/)).toBeVisible()
     await expect(page.getByText(/Tài khoản đã lưu trữ \(2\)|Archived accounts \(2\)/)).toHaveCount(
       0,
     )

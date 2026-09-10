@@ -82,15 +82,27 @@ export function TransactionList({
   /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
   const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
 
-  async function confirmDelete(row: TransactionRow) {
+  /** Drops any stale message for one row — a fresh attempt starts clean. */
+  function clearError(rowId: string) {
     setErrors((prev) => {
+      if (!(rowId in prev)) return prev
       const next = { ...prev }
-      delete next[row.id]
+      delete next[rowId]
       return next
     })
+  }
+
+  async function confirmDelete(row: TransactionRow) {
+    clearError(row.id)
     try {
       const result = await deleteTransactionAction(row.id)
       if (!result.ok) {
+        // The dialog closes on failure too (spec §10, and the same reasoning
+        // `components/accounts/account-list.tsx` spells out): the row's
+        // `InlineAlert` renders BELOW the card, so a dialog left open puts its
+        // own scrim over the very message that explains the refusal — the user
+        // would see a dialog that appears to have done nothing.
+        setPendingDelete(null)
         setErrors((prev) => ({ ...prev, [row.id]: t(TRANSACTION_ERROR_KEYS[result.error]) }))
         return
       }
@@ -98,6 +110,8 @@ export function TransactionList({
       router.refresh()
     } catch {
       console.error('TransactionList: delete failed')
+      // Closed here too, for the reason above.
+      setPendingDelete(null)
       setErrors((prev) => ({ ...prev, [row.id]: t(GENERIC_ERROR_KEY) }))
     }
   }
@@ -213,7 +227,13 @@ export function TransactionList({
                             id: 'delete',
                             label: t('transactions.deleteAction'),
                             tone: 'negative',
-                            onSelect: () => setPendingDelete(row),
+                            onSelect: () => {
+                              // A retry starts clean: a previous attempt's
+                              // message for this row goes before the
+                              // confirmation reopens (same as `AccountList`).
+                              clearError(row.id)
+                              setPendingDelete(row)
+                            },
                           },
                         ]}
                       />

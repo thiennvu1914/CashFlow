@@ -15,8 +15,16 @@ import { Dialog } from './dialog'
  *
  * `onConfirm` may be async: both buttons lock and the confirm button shows
  * `pendingLabel` until it settles, so a slow server action cannot be
- * double-submitted from here. The dialog closes on success and stays open on
- * failure, where the caller's own `InlineAlert` explains why.
+ * double-submitted from here.
+ *
+ * This component never closes itself — `open` is the caller's state — and the
+ * house pattern every one of the eight call sites follows is to close it on
+ * BOTH outcomes (corrected here in Task 17 fix round 1; this comment used to
+ * say "stays open on failure", which was the wrong instruction and the reason
+ * three call sites had to be fixed). A failure is explained by the caller's own
+ * `InlineAlert`, which renders in the page or under the row — behind this
+ * dialog's scrim — so a dialog left open covers the very message that says why
+ * nothing happened, and reads as an action that did nothing at all.
  *
  * Initial focus (spec §7 a11y): `Dialog`'s footer renders Cancel before
  * Confirm, and Base UI's Dialog moves focus to the first tabbable element

@@ -58,15 +58,27 @@ export function TransferList({
   /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
   const [pendingDelete, setPendingDelete] = useState<TransferRow | null>(null)
 
-  async function confirmDelete(row: TransferRow) {
+  /** Drops any stale message for one row — a fresh attempt starts clean. */
+  function clearError(rowId: string) {
     setErrors((prev) => {
+      if (!(rowId in prev)) return prev
       const next = { ...prev }
-      delete next[row.id]
+      delete next[rowId]
       return next
     })
+  }
+
+  async function confirmDelete(row: TransferRow) {
+    clearError(row.id)
     try {
       const result = await deleteTransferAction(row.id)
       if (!result.ok) {
+        // The dialog closes on failure too (spec §10, and the same reasoning
+        // `components/accounts/account-list.tsx` spells out): the row's
+        // `InlineAlert` renders BELOW the card, so a dialog left open puts its
+        // own scrim over the very message that explains the refusal — the user
+        // would see a dialog that appears to have done nothing.
+        setPendingDelete(null)
         setErrors((prev) => ({ ...prev, [row.id]: t(TRANSFER_ERROR_KEYS[result.error]) }))
         return
       }
@@ -74,6 +86,8 @@ export function TransferList({
       router.refresh()
     } catch {
       console.error('TransferList: delete failed')
+      // Closed here too, for the reason above.
+      setPendingDelete(null)
       setErrors((prev) => ({ ...prev, [row.id]: t(GENERIC_ERROR_KEY) }))
     }
   }
@@ -209,7 +223,13 @@ export function TransferList({
                         id: 'delete',
                         label: t('transfers.deleteAction'),
                         tone: 'negative',
-                        onSelect: () => setPendingDelete(row),
+                        onSelect: () => {
+                          // A retry starts clean: a previous attempt's
+                          // message for this row goes before the
+                          // confirmation reopens (same as `AccountList`).
+                          clearError(row.id)
+                          setPendingDelete(row)
+                        },
                       },
                     ]}
                   />
