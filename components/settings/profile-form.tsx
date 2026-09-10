@@ -9,9 +9,9 @@ import { ChevronDown } from 'lucide-react'
 import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
 import { updateProfile } from '@/lib/server/actions/update-profile'
 import { timezoneGroups } from '@/lib/ui/timezones'
-import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
+import { useHydrated } from '@/lib/ui/use-hydrated'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { SettingsCard } from '@/components/settings/settings-card'
@@ -55,7 +55,7 @@ export function ProfileForm({
   const [notice, setNotice] = useState<string | null>(null)
   /** See the fieldsets below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const {
     register,
     handleSubmit,
@@ -75,36 +75,42 @@ export function ProfileForm({
 
   async function onSubmit(values: ProfileInput) {
     setNotice(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateProfile(values)
-        if (!result.ok) {
-          setError('root', { message: t(GENERIC_ERROR_KEY) })
-          return
-        }
-      } catch {
-        console.error('Profile update request failed')
-        setError('root', { message: t(GENERIC_ERROR_KEY) })
-        return
-      }
-      reset(values)
-      setNotice(t('settings.profileSaved'))
+    await submit.run({
+      tag: 'Profile update request failed',
+      action: () => updateProfile(values),
+      // `updateProfile` has one refusal code and it is not actionable copy for
+      // the user — a rejected `profileSchema` here means the form's own
+      // resolver was bypassed — so it reads as the generic failure, exactly as
+      // it did before.
+      errorKeys: { INVALID_INPUT: GENERIC_ERROR_KEY },
+      // The sink is react-hook-form's own root error, so the message renders
+      // through the same `errors.root` alert the validation messages use. No
+      // clear on `null`: `handleSubmit` has already cleared every error,
+      // `root` included, before this callback can run.
+      onError: (failure) => {
+        if (failure) setError('root', { message: failure.message })
+      },
+      onSuccess: () => {
+        reset(values)
+        setNotice(t('settings.profileSaved'))
 
-      // Spec §3: the profile form applies the `dark` class immediately after a
-      // successful save.
-      //
-      // Only after the action resolved `ok`, and only the class — the cookie and
-      // the row were written by `updateProfile`, and the next server render
-      // produces the same class from `resolveTheme()`. So this is not a second
-      // source of truth; it is the same truth applied one navigation earlier.
-      // `classList.toggle` with an explicit second argument rather than a bare
-      // toggle, so a second save cannot invert it.
-      document.documentElement.classList.toggle('dark', values.theme === 'dark')
-      document.documentElement.style.colorScheme = values.theme
+        // Spec §3: the profile form applies the `dark` class immediately after
+        // a successful save.
+        //
+        // Only after the action resolved `ok`, and only the class — the cookie
+        // and the row were written by `updateProfile`, and the next server
+        // render produces the same class from `resolveTheme()`. So this is not
+        // a second source of truth; it is the same truth applied one
+        // navigation earlier. `classList.toggle` with an explicit second
+        // argument rather than a bare toggle, so a second save cannot invert
+        // it.
+        document.documentElement.classList.toggle('dark', values.theme === 'dark')
+        document.documentElement.style.colorScheme = values.theme
 
-      // And the shell — the rail's labels, every figure's grouping — re-renders
-      // from the database on the next server pass.
-      router.refresh()
+        // And the shell — the rail's labels, every figure's grouping —
+        // re-renders from the database on the next server pass.
+        router.refresh()
+      },
     })
   }
 
