@@ -23,6 +23,19 @@ import { cn } from 'cn'
  * instead — the bar becomes a picture, and the caller's own visible name,
  * amount and percent (real text a screen reader already reads) carry 100 % of
  * the meaning.
+ *
+ * `dark:bg-foreground/14` on the track (Task 14 Step 3, finding 1): in dark
+ * `bg-muted` lands almost exactly on the two surfaces this 6 px bar is drawn
+ * on, so the track was invisible — a 0 %-progress debt or loan showed nothing
+ * at all. `--muted` itself cannot be moved to fix it, because every value that
+ * makes the wash visible breaks a text pair `bg-muted` carries elsewhere; the
+ * track is the one `bg-muted` surface with NO text on it (the fill is its only
+ * child, and the wrapper is either `role="progressbar"` or `aria-hidden`), so
+ * it can take a lighter wash for free. 14 % is `--border`'s own alpha, so the
+ * track reads exactly as present as a card hairline, and light is untouched.
+ * Every measured figure behind that — the trough sweep and both directions'
+ * costs — is in the MEASURED WCAG CONTRAST block in `app/globals.css`, note 2,
+ * which is the single source for it.
  */
 const TONE_CLASSES = {
   brand: 'bg-brand',
@@ -62,26 +75,6 @@ export function Progress({
             'aria-valuetext': valueText,
             'aria-label': label,
           })}
-      // `dark:bg-foreground/14` (Task 14 Step 3, finding 1): in dark,
-      // `bg-muted` resolves to #2C2829, which is 1.05:1 against `--surface`
-      // and 1.06:1 against `--surface-2` — the two surfaces this 6 px track is
-      // ever drawn on. Measured in the browser and confirmed in every dark
-      // screenshot: a 0 %-progress debt, a 0 %-progress loan and a 3 % Reports
-      // category bar showed no track at all, so the bar could not be read as
-      // "this far along a whole". A token nudge cannot fix it: swept in the
-      // browser at 2 % steps, `--muted` bottoms out against `--surface` at
-      // ~6 % and against `--surface-2` at ~10 %, so the shipped 8 % sits in the
-      // trough between them, and moving it out in either direction breaks a
-      // text pair that `bg-muted` carries elsewhere — 14-20 % drops
-      // `text-brand` on it to 4.19-3.53:1 and `text-muted-foreground` to
-      // 4.16-3.50:1, while going down to `--background` keeps the text but
-      // leaves the wash at 1.01:1 on the page background, where the reminders
-      // chips live. The track is the one `bg-muted` surface with NO text
-      // on it (the fill is the only child, and the wrapper is either
-      // `role="progressbar"` or `aria-hidden`), so it can take a lighter wash
-      // for free. 14 % is `--border`'s own alpha, so the track reads exactly as
-      // present as a card hairline (1.53:1 on all three surfaces) — above
-      // light's 1.21:1, and calm. Light is untouched.
       className={cn('h-1.5 overflow-hidden rounded-full bg-muted dark:bg-foreground/14', className)}
     >
       <div className={cn('h-full', TONE_CLASSES[tone])} style={{ width: `${width}%` }} />

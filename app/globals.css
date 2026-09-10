@@ -113,8 +113,8 @@
  * serialises as `color(srgb …)`), a translucent token is alpha-composited
  * over the stated backdrop in sRGB, and the ratio is computed from the 8-bit
  * result. A separate standalone oklch -> linear-sRGB pipeline agreed with the
- * browser on every opaque token and DISAGREED on three — `--muted`,
- * `--muted-foreground` and the `color-mix(…, transparent)` trio — because
+ * browser on every opaque token and DISAGREED on five — `--muted`,
+ * `--muted-foreground`, `--border`, `--border-strong` and `--input` — because
  * `color-mix(in oklch, …)` between a near-achromatic colour and a chromatic
  * one resolves to a POWERLESS hue in Chrome (the computed value is literally
  * `oklch(0.28 0.0066 none)`), which lands a shade warmer than an
@@ -150,7 +150,7 @@
  *   border                                  [1.27]   [1.27]    [1.27]    [1.27]
  *   muted                                   [1.12]   [1.21]    [1.12]      —
  *   chart series on surface: brand 6.35, accent 4.60, positive 5.32,
- *                            negative 5.21, warning 4.95
+ *                            negative 5.21, warning 4.95, foreground 16.73
  *
  * ================================ DARK =================================
  * Tokens as painted: background #171C1A  surface #202724  surface-2 #2A2E2C
@@ -180,9 +180,31 @@
  *   border                             [1.50]   [1.53]    [1.53]    [1.53]
  *   muted                              [1.18]   [1.05]    [1.06]      —
  *   chart series on surface: brand 5.13, accent 4.91, positive 4.66,
- *                            negative 5.13, warning 6.49
+ *                            negative 5.13, warning 6.49, foreground 14.07
  *   surface ladder: background -> surface 1.13, surface -> surface-2 1.11,
  *                   input-bg recessed below surface 1.06
+ *
+ * ================= SERIES AGAINST SERIES (both themes) =================
+ *
+ * "Can I tell these two lines apart" is NOT a WCAG question — a ratio is a
+ * luminance ratio, so two hues of equal lightness score 1.05:1 and are still
+ * obviously different. The right measure is OKLab deltaE, with ~0.10 as the
+ * floor for a 1.5 px line. On the cash-flow trend, which plots three series
+ * at once (dark / light):
+ *
+ *   income vs expense                      0.197 / 0.217   pass
+ *   income vs net  (net = --foreground)    0.351 / 0.298   pass
+ *   expense vs net (net = --foreground)    0.305 / 0.350   pass
+ *   distribution vs positive               0.129 / 0.133   pass
+ *   income vs net, when net was --brand   [0.035 / 0.047]  FAILED
+ *
+ * That last row is why `CHART_COLORS.net` holds `--color-foreground` and not
+ * `--color-brand`: brand and positive are both greens 0.035 apart in dark, 4-6x
+ * closer than any other pair on the same plot, and they read as one line — in
+ * the plot, in the legend swatches and in the tooltip's coloured series names.
+ * `CHART_COLORS.balance` keeps `--color-brand` because it is the only series
+ * in its plot, so there is nothing for it to collide with. See
+ * `components/dashboard/chart-theme.ts`, which states the convention.
  *
  * The pairs Task 14 fixed by moving a token — each the smallest step that
  * clears its minimum, chroma and hue untouched, light untouched (the
@@ -403,9 +425,11 @@
   --positive: oklch(0.635 0.105 160.924);
   --negative: oklch(0.683 0.1 23.252);
   --warning: oklch(0.736 0.1 79.908);
-  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. The
-     existing `--surface` was oklch(0.274 …) (#242926); the spec's ladder needs
-     the middle rung a shade darker so surface-2 is visibly distinct from it.
+  /* Spec §3: background #171C1A → surface #202724 → surface-2 #29302D. This
+     is the ONLY `--surface` in `.dark`: the earlier declaration (removed in
+     Task 14) was oklch(0.274 …) (#242926), which the cascade already
+     discarded in favour of this one, and the spec's ladder needs the middle
+     rung a shade darker than it anyway for surface-2 to be visibly distinct.
      Step 5 measurement (2nd controller-fix round): the previous value here,
      oklch(0.253 0.007 164.376), actually converts to #1F2321 — off from the
      spec's #202724 by more than 2 units on the G/B channels (39/36 -> 35/33),
@@ -420,7 +444,7 @@
   /* Step 5 measurement: the brief's literal 22% measures 1.99:1 against
      --surface (under the 3:1 UI minimum). Like light, unused elsewhere yet,
      so raised to 40% to clear 3:1 against both --surface (3.47:1 as the
-     browser paints it, after the --surface fix below) and --surface-2
+     browser paints it, after the --surface fix above) and --surface-2
      (3.36:1) — see the MEASURED WCAG CONTRAST block above. */
   --border-strong: color-mix(in oklch, var(--foreground) 40%, transparent);
   --focus: var(--brand);
