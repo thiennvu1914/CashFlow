@@ -111,6 +111,16 @@ export default async function ReportsPage({
     // `?period=weekly` is the user's mistake and deserves a sentence, while a
     // database fault is not and must still surface as an error.
     if (!(error instanceof InvalidReportRangeError)) throw error
+    // The specific reason is not lost, it just stops being shown to the
+    // reader: it goes to the server log, where a developer chasing a bad link
+    // can still read which of the six checks refused it.
+    //
+    // `warn`, not `error`: a hand-typed query parameter that the resolver
+    // rejected is a handled input, not a fault — and in `next dev` a
+    // `console.error` during a server render is counted by the dev overlay's
+    // issue badge, which would put a red "1 Issue" on screen every time
+    // someone typed a bad range.
+    console.warn(`Reports: invalid range — ${error.message}`)
     return (
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
         <PageHeader
@@ -133,12 +143,19 @@ export default async function ReportsPage({
           to={echoableDate(params.to)}
           errorId={RANGE_ERROR_ID}
         />
-        {/* `error.message` comes from `InvalidReportRangeError` and is English
-            (`lib/reports/report-range.ts`) — a resolver message about a
-            hand-typed URL, not product copy, so it is left untranslated
-            rather than touching `lib/reports/`, which this phase does not. */}
+        {/* One localized sentence, not `error.message` (Task 17 fix round 1,
+            controller item): `InvalidReportRangeError` carries only a
+            developer message — English, written for a stack trace, and thrown
+            from six call sites ("Unknown period \"weekly\" — expected one of
+            day, week, month, quarter, year or custom") — so rendering it put
+            app-internal text on a Vietnamese screen. It exposes no CODE to map
+            per reason, and re-deriving which of the six failed would mean
+            duplicating the resolver's logic here, so this is deliberately ONE
+            sentence naming both things the reader can do; the control above
+            and the echoed dates below are what they act on. `lib/reports/` is
+            untouched. */}
         <InlineAlert id={RANGE_ERROR_ID} tone="negative">
-          {error.message}
+          {t('reports.invalidRange')}
         </InlineAlert>
       </div>
     )

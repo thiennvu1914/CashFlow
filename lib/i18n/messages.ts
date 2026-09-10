@@ -20,10 +20,15 @@ import type { Locale } from './locale'
  *
  *  1. `InvalidReportRangeError`'s message (`lib/reports/report-range.ts`,
  *     thrown from six call sites, e.g. line 191's "from (…) must be on or
- *     before to (…)") — it describes a hand-typed URL query parameter, not a
- *     product state, and translating it means changing `lib/reports/`, which
- *     is frozen this phase. It reaches the DOM only for a user who edited the
- *     query string by hand.
+ *     before to (…)") — **no longer reaches the UI** (corrected by Task 17 fix
+ *     round 1): `/reports` now renders `reports.invalidRange`, one localized
+ *     sentence, and logs the developer message server-side instead. The
+ *     English text still exists in two places, neither of them product copy:
+ *     the thrown message itself (`lib/reports/` is frozen this phase, and it
+ *     is written for a stack trace) and the 400 body of
+ *     `GET /api/reports/export`, which is an API response with its own
+ *     contract test (`app/api/reports/export/route.test.ts`) and is read-only
+ *     for this phase.
  *  2. Excel sheet names and column headers (`lib/server/export/*`, including
  *     the `*_STATUS_LABELS`/`recurrenceLabel`/`LOAN_*_LABELS` maps
  *     `lib/ui/*-view-model.ts` export for them to import) — an explicit

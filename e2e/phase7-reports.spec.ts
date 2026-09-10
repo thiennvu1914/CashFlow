@@ -1,6 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { test, expect } from '@playwright/test'
+import viReports from '@/messages/vi/reports.json'
 import {
   createAccountViaUi,
   createTransactionViaUi,
@@ -112,7 +113,10 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
     await page.getByRole('link', { name: 'Tùy chọn', exact: true }).click()
     // No from/to yet: the resolver's own invalid-range branch, which still
     // renders the segmented control (with "Tùy chọn" selected) and the form.
-    await expect(page.locator('p[role="alert"]')).toBeVisible()
+    // The alert says it in Vietnamese — `reports.invalidRange`, not
+    // `InvalidReportRangeError`'s English developer message, which is what this
+    // rendered until Task 17 fix round 1.
+    await expect(page.locator('p[role="alert"]')).toHaveText(viReports.invalidRange)
     await expect(page.getByRole('link', { name: 'Tùy chọn', exact: true })).toHaveAttribute(
       'aria-current',
       'page',
@@ -124,13 +128,13 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
     await expect(toInput).toBeVisible()
 
     // A malformed range (from after to): the control and echoed dates stay on
-    // screen, the alert shows the resolver's own message, and the URL is NOT
-    // one the page treats as resolved.
+    // screen, the alert shows the localized invalid-range sentence, and the URL
+    // is NOT one the page treats as resolved.
     await fromInput.fill(today)
     await toInput.fill('2020-01-01')
     await page.getByRole('button', { name: 'Áp dụng' }).click()
     const alert = page.locator('p[role="alert"]')
-    await expect(alert).toBeVisible()
+    await expect(alert).toHaveText(viReports.invalidRange)
     await expect(page.getByLabel('Từ ngày', { exact: true })).toHaveValue(today)
     await expect(page.getByLabel('Đến ngày', { exact: true })).toHaveValue('2020-01-01')
     // Both date inputs point aria-describedby at the alert's own id and carry

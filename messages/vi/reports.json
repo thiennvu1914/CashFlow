@@ -2,6 +2,7 @@
   "title": "Báo cáo",
   "rangeText": "{from} – {to} · {currency}",
   "chooseRange": "Chọn khoảng thời gian · {currency}",
+  "invalidRange": "Khoảng thời gian không hợp lệ. Hãy chọn một kỳ, hoặc nhập ngày bắt đầu trước ngày kết thúc.",
   "conversionNote": "Quy đổi theo tỷ giá của từng giao dịch tại thời điểm ghi nhận",
   "period": "Kỳ báo cáo",
   "periodDay": "Ngày",

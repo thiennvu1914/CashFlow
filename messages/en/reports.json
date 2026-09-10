@@ -2,6 +2,7 @@
   "title": "Reports",
   "rangeText": "{from} – {to} · {currency}",
   "chooseRange": "Choose a period · {currency}",
+  "invalidRange": "That date range is not valid. Pick a period, or enter a start date on or before the end date.",
   "conversionNote": "Converted at each transaction's exchange rate at entry",
   "period": "Report period",
   "periodDay": "Day",
