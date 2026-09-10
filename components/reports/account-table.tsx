@@ -1,5 +1,4 @@
 import { cn } from 'cn'
-import type { Currency } from '@/lib/currency/provider'
 import { MoneyText } from '@/components/common/money-text'
 
 /**
@@ -14,9 +13,18 @@ import { MoneyText } from '@/components/common/money-text'
  * formatted strings, and the alternative (a `useMediaQuery`) would make a
  * server-rendered table depend on the client.
  */
+/*
+ * The currency is NOT a prop (Task 18, owner item I11 — it was here, unused,
+ * and the only `no-unused-vars` warning left in the product). Every figure
+ * this table renders arrives as an already formatted string from
+ * `app/(app)/reports/page.tsx`, and the unit itself is stated once for the
+ * whole card by that page's `<ChartContainer caption={displayCurrency}>` —
+ * repeating it per cell is what the report deliberately does not do. So there
+ * was nothing for the prop to affect, and taking it away is the honest fix
+ * rather than spending it on a currency code in ninety cells.
+ */
 export function AccountTable({
   rows,
-  currency,
   labels,
 }: {
   rows: {
@@ -27,7 +35,6 @@ export function AccountTable({
     netIncome: string
     netNegative: boolean
   }[]
-  currency: Currency
   labels: { account: string; income: string; expense: string; netIncome: string }
 }) {
   return (

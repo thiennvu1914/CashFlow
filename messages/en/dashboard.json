@@ -79,7 +79,7 @@
   "emptyBalanceHistoryBody": "Account balance over time appears after your first transaction.",
   "emptyExpenseTitle": "No expenses this month",
   "emptyDistributionTitle": "No accounts yet",
-  "emptyDistributionAction": "Add an account",
+  "emptyDistributionAction": "Add account",
   "distributionFxUnavailable": "FX unavailable — account balances cannot be compared",
   "debtLoanFxUnavailable": "FX unavailable — outstanding amounts cannot be compared"
 }

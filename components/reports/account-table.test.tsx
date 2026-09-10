@@ -31,19 +31,19 @@ const ROWS = [
 
 describe('AccountTable', () => {
   it('renders both a desktop table (hidden md:table) and a mobile stacked list (md:hidden)', () => {
-    const html = renderToStaticMarkup(<AccountTable rows={ROWS} currency="VND" labels={LABELS} />)
+    const html = renderToStaticMarkup(<AccountTable rows={ROWS} labels={LABELS} />)
     expect(html).toContain('<table')
     expect(html.match(/<table[^>]*class="[^"]*\bhidden\b[^"]*\bmd:table\b[^"]*"/)).toBeTruthy()
     expect(html.match(/<ul[^>]*class="[^"]*\bmd:hidden\b[^"]*"/)).toBeTruthy()
   })
 
   it('marks a negative net income with text-negative in BOTH renderings', () => {
-    const html = renderToStaticMarkup(<AccountTable rows={ROWS} currency="VND" labels={LABELS} />)
+    const html = renderToStaticMarkup(<AccountTable rows={ROWS} labels={LABELS} />)
     expect(html.match(/text-negative/g)?.length).toBeGreaterThanOrEqual(2)
   })
 
   it('uses <th scope="col"> four times and <th scope="row"> once per row', () => {
-    const html = renderToStaticMarkup(<AccountTable rows={ROWS} currency="VND" labels={LABELS} />)
+    const html = renderToStaticMarkup(<AccountTable rows={ROWS} labels={LABELS} />)
     expect(html.match(/<th scope="col"/g)).toHaveLength(4)
     expect(html.match(/<th scope="row"/g)).toHaveLength(ROWS.length)
   })

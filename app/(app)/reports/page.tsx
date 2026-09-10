@@ -264,7 +264,6 @@ export default async function ReportsPage({
         ) : (
           <AccountTable
             rows={accountRows}
-            currency={displayCurrency}
             labels={{
               account: t('reports.account'),
               income: t('reports.income'),
