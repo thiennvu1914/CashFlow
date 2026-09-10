@@ -216,6 +216,174 @@ export function eitherLocale(vi: string, en: string): RegExp {
   return new RegExp(`${escape(vi)}|${escape(en)}`)
 }
 
+/* ------------------------------------------------------------------------- *
+ * The four planning-module seed helpers.
+ *
+ * They lived as local functions inside `e2e/phase6.spec.ts` until Task 17,
+ * which needs all four to seed one of everything a destructive action can be
+ * performed on. Moved here unchanged apart from the move itself: `phase6.spec.ts`
+ * imports them back and its own module-level `TODAY` became `SEED_TODAY`
+ * below, which is the same value read the same way.
+ *
+ * Plain `fill`/`selectOption` with no verify-and-retry wrapper: every one of
+ * these forms is inside a `<fieldset disabled>` until hydration finishes
+ * (`useHydrated`, `lib/ui/use-hydrated.ts`), and Playwright's actionability
+ * check treats a control in a disabled fieldset as disabled — so every action
+ * below already waits for the earliest moment the app itself accepts input, and
+ * nothing it accepts is ever thrown away afterwards. Each helper finishes on an
+ * auto-retrying assertion that the sheet closed, which is the create action's
+ * own confirmation that the row landed.
+ * ------------------------------------------------------------------------- */
+
+/** The timezone every registered user starts in (`lib/server/defaults.ts`). */
+const SEED_TIMEZONE = 'Asia/Ho_Chi_Minh'
+
+/**
+ * Today in that zone, read once when this module loads — exactly the semantics
+ * `phase6.spec.ts`'s own `TODAY` const has, and what the loan helper's
+ * "Kỳ tới" assertion compares against.
+ */
+const SEED_TODAY = todayInZone(SEED_TIMEZONE)
+
+/**
+ * Creates one savings goal through the `/goals` page's header action ("Thêm
+ * mục tiêu") and its create `Sheet` (spec §6.5) — creation lives behind that
+ * button, not inline on the page.
+ */
+export async function createGoalViaUi(
+  page: Page,
+  opts: { name: string; target: number; current?: number },
+): Promise<void> {
+  await page.goto('/goals')
+  await page.getByRole('button', { name: /Thêm mục tiêu|Add goal/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm mục tiêu|Add goal/ })
+  const nameInput = sheet.getByLabel(/Tên mục tiêu|Goal name/)
+  await nameInput.fill(opts.name)
+  await sheet.getByLabel(/Số tiền mục tiêu|Target amount/).fill(String(opts.target))
+  if (opts.current !== undefined) {
+    await sheet.getByLabel(/Đã tiết kiệm|Current amount/).fill(String(opts.current))
+  }
+  await sheet.getByRole('button', { name: /Thêm mục tiêu|Add goal/ }).click()
+  // A successful submit resets the form, which clears the name field — and
+  // the sheet closes itself, so wait for that instead: it is the app's own
+  // confirmation that the goal was created.
+  await expect(sheet).toBeHidden()
+}
+
+/**
+ * Creates one debt through the `/debts` page's header action ("Thêm công nợ")
+ * and its create `Sheet` (spec §6.6) — creation lives behind that button, not
+ * inline on the page.
+ */
+export async function createDebtViaUi(
+  page: Page,
+  opts: { direction: 'RECEIVABLE' | 'PAYABLE'; person: string; amount: number },
+): Promise<void> {
+  await page.goto('/debts')
+  await page.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm công nợ|Add debt/ })
+  // Selected explicitly even for RECEIVABLE, which is already the form's
+  // default: the two options are the only place the user states which way the
+  // money goes (`direction` is absent from `updateDebtSchema` and can never be
+  // corrected), so the wording is worth exercising in both directions. By
+  // VALUE, not by the option's label: the row's own wording
+  // (`labels.debtDirection.*`) differs by locale, but the value is stable
+  // across both.
+  await sheet.getByLabel(/^Chiều$|^Direction$/).selectOption(opts.direction)
+  const personInput = sheet.getByLabel(/^Người$|^Person$/)
+  await personInput.fill(opts.person)
+  await sheet.getByLabel(/Số tiền ban đầu|Original amount/).fill(String(opts.amount))
+  await sheet.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // debt was created.
+  await expect(sheet).toBeHidden()
+}
+
+/**
+ * Creates one loan through the `/loans` page's header action ("Thêm khoản
+ * vay") and its create `Sheet` (spec §6.6) — creation lives behind that
+ * button, not inline on the page.
+ */
+export async function createLoanViaUi(
+  page: Page,
+  opts: {
+    lender: string
+    principal: number
+    interestRate: number
+    termMonths: number
+    scheduledPayment: number
+  },
+): Promise<void> {
+  await page.goto('/loans')
+  await page.getByRole('button', { name: /Thêm khoản vay|Add loan/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm khoản vay|Add loan/ })
+  await sheet.getByLabel(/^Bên cho vay$|^Lender$/).fill(opts.lender)
+  await sheet.getByLabel(/^Số tiền vay$|^Principal$/).fill(String(opts.principal))
+  await sheet.getByLabel(/Lãi suất|Interest rate/).fill(String(opts.interestRate))
+  await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(SEED_TODAY)
+  await sheet.getByLabel(/Kỳ hạn|Term \(months\)/).fill(String(opts.termMonths))
+  // MONTHLY is the *second* option, so the form carries an explicit
+  // `defaultValue` for it; selecting it here exercises the same value the
+  // server HTML claims (`loan-form.test.tsx` asserts that claim in the bytes).
+  // By value, which is stable across both locales.
+  await sheet.getByLabel(/Tần suất trả|Payment frequency/).selectOption('MONTHLY')
+  await sheet.getByLabel(/Số tiền mỗi kỳ|Scheduled payment/).fill(String(opts.scheduledPayment))
+  // Left at its pre-filled default rather than typed: the loan's whole schedule
+  // anchor comes from this field, and "today" is what the page seeded it with.
+  await expect(sheet.getByLabel(/^Kỳ tới$|^Next due date$/)).toHaveValue(SEED_TODAY)
+  await sheet.getByRole('button', { name: /Thêm khoản vay|Add loan/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // loan was created.
+  await expect(sheet).toBeHidden()
+}
+
+/**
+ * Creates one reminder through the `/reminders` page's header action ("Thêm
+ * nhắc nhở") and its create `Sheet` (spec §6.7) — creation lives behind that
+ * button, not inline on the page any more (Task 9 moved it off the page body,
+ * the same treatment `createDebtViaUi`/`createLoanViaUi` already give theirs).
+ *
+ * Every label here is one of the eleven visible `<label for>`s Task 9 added
+ * (`components/reminders/reminder-form.tsx`) — `aria-label`-only lookups no
+ * longer apply. `exact` is not needed on `Type`/`Frequency` any more either:
+ * scoped to `sheet`, there is no longer a same-named `Reminder type` filter nav
+ * for "Type" to collide with (that filter is now `reminders.filter`, read
+ * outside the sheet), and `^…$`-anchored regexes on both selects keep the
+ * lookup unambiguous regardless.
+ */
+export async function createReminderViaUi(
+  page: Page,
+  opts: {
+    title: string
+    type: 'EXPENSE' | 'INCOME'
+    amount: number
+    frequency: 'ONE_TIME' | 'WEEKLY' | 'MONTHLY' | 'YEARLY'
+    dayOfMonth?: number
+    startDate: string
+  },
+): Promise<void> {
+  await page.goto('/reminders')
+  await page.getByRole('button', { name: /Thêm nhắc nhở|Add reminder/ }).click()
+  const sheet = page.getByRole('dialog', { name: /Thêm nhắc nhở|Add reminder/ })
+  await sheet.getByLabel(/^Tiêu đề$|^Title$/).fill(opts.title)
+  // By VALUE, not by the option's own wording (`labels.reminderType.*`, which
+  // differs by locale) — the value is stable across both.
+  await sheet.getByLabel(/^Loại$|^Type$/).selectOption(opts.type)
+  await sheet.getByLabel(/Số tiền dự kiến|Expected amount/).fill(String(opts.amount))
+  // Before `dayOfMonth`, never after: the frequency's `onChange` clears both
+  // recurrence anchors on every change (react-hook-form keeps the value of an
+  // unmounted field), so a day typed first would be wiped by the switch.
+  await sheet.getByLabel(/^Tần suất$|^Frequency$/).selectOption(opts.frequency)
+  if (opts.dayOfMonth !== undefined) {
+    await sheet.getByLabel(/Ngày trong tháng|Day of month/).fill(String(opts.dayOfMonth))
+  }
+  await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(opts.startDate)
+  await sheet.getByRole('button', { name: /Thêm nhắc nhở|Add reminder/ }).click()
+  // The sheet closes itself on success — the app's own confirmation that the
+  // reminder was created.
+  await expect(sheet).toBeHidden()
+}
+
 /**
  * Every signed-in route, in nav order. Shared by the specs that walk the
  * whole app — this task's enum sweep and the all-pages locale assertion in
