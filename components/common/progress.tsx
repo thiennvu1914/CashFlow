@@ -68,12 +68,15 @@ export function Progress({
       // ever drawn on. Measured in the browser and confirmed in every dark
       // screenshot: a 0 %-progress debt, a 0 %-progress loan and a 3 % Reports
       // category bar showed no track at all, so the bar could not be read as
-      // "this far along a whole". A token nudge cannot fix it: `--muted` sits
-      // between `--surface` (min at ~6 %) and `--surface-2` (min at ~10 %), and
-      // moving it out of that dead zone in either direction breaks a text pair
-      // that `bg-muted` carries elsewhere (lighter costs `text-brand`/
-      // `text-muted-foreground` on it, darker costs its visibility against
-      // `--background`). The track is the one `bg-muted` surface with NO text
+      // "this far along a whole". A token nudge cannot fix it: swept in the
+      // browser at 2 % steps, `--muted` bottoms out against `--surface` at
+      // ~6 % and against `--surface-2` at ~10 %, so the shipped 8 % sits in the
+      // trough between them, and moving it out in either direction breaks a
+      // text pair that `bg-muted` carries elsewhere — 14-20 % drops
+      // `text-brand` on it to 4.19-3.53:1 and `text-muted-foreground` to
+      // 4.16-3.50:1, while going down to `--background` keeps the text but
+      // leaves the wash at 1.01:1 on the page background, where the reminders
+      // chips live. The track is the one `bg-muted` surface with NO text
       // on it (the fill is the only child, and the wrapper is either
       // `role="progressbar"` or `aria-hidden`), so it can take a lighter wash
       // for free. 14 % is `--border`'s own alpha, so the track reads exactly as

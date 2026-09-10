@@ -210,17 +210,19 @@
  *    is structural, not a wrong number: `--muted` is derived from
  *    `--background`, and in dark the two surfaces sit ABOVE the background, so
  *    the wash lands between them — its minimum against `--surface` is at ~6 %
- *    and against `--surface-2` at ~10 %, and 8 % sits in that trough. Neither
- *    direction is free: sweeping it lighter (14-20 %) reaches 1.23-1.47:1
- *    against the surfaces but drops `text-brand` on it to 3.7-3.1:1 and
- *    `text-muted-foreground` to 3.8-3.2:1 (the rail's active row, the
- *    SegmentedControl, the reminders chips and StatusBadge's neutral tone all
- *    put text on `bg-muted`); sweeping it darker to `--background` itself
- *    keeps the text but makes the wash vanish on the page background, where
- *    the reminders chips and the mobile-nav hovers live. Making it translucent
- *    (`foreground 6-12 %`, so it lightens whatever it sits on) fails the same
- *    text pairs. Recorded and left alone, with two consequences handled
- *    separately:
+ *    and against `--surface-2` at ~10 %, and 8 % sits in that trough — swept
+ *    in the browser at 2 % steps to confirm it. Neither direction is free:
+ *    sweeping it lighter to 14-20 % buys 1.22-1.45:1 against `--surface` but
+ *    only 1.10-1.31:1 against `--surface-2`, and drops `text-brand` on it to
+ *    4.19-3.53:1 and `text-muted-foreground` to 4.16-3.50:1 (the rail's active
+ *    row, the SegmentedControl, the reminders chips and StatusBadge's neutral
+ *    tone all put text on `bg-muted`); sweeping it darker, all the way to
+ *    `--background` itself, keeps the text (5.84:1 and 5.79:1) and reaches
+ *    1.14/1.26:1 against the two surfaces, but leaves the wash at 1.01:1 on
+ *    the page background, where the reminders chips and the mobile-nav hovers
+ *    live. Making it translucent (`foreground 6-12 %`, so it lightens whatever
+ *    it sits on) fails the same text pairs. Recorded and left alone, with two
+ *    consequences handled separately:
  *      - the 6 px `Progress` track is the one `bg-muted` surface with no text
  *        on it, and it WAS unreadable (a 0 %-progress debt showed nothing at
  *        all), so it takes `dark:bg-foreground/14` — see
