@@ -17,9 +17,9 @@ import {
   recordLoanPaymentAction,
   updateLoanAction,
 } from '@/lib/server/actions/loan-actions'
-import { GENERIC_ERROR_KEY, LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { LoanDto } from '@/lib/ui/loan-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -134,27 +134,20 @@ export function LoanRowMenu({ loan }: { loan: LoanDto }) {
   const [editOpen, setEditOpen] = useState(false)
   const [closing, setClosing] = useState(false)
   const { setError } = useRowError()
-  const closeSubmit = useSubmitState()
+  const closeSubmit = useActionSubmit(t)
 
   if (!loan.active) return null
 
   async function confirmClose() {
-    setError(null)
-    await closeSubmit.run(async () => {
-      try {
-        const result = await closeLoanAction(loan.id)
-        if (!result.ok) {
-          setClosing(false)
-          setError(t(LOAN_ERROR_KEYS[result.error]))
-          return
-        }
-        setClosing(false)
-        router.refresh()
-      } catch {
-        console.error('LoanRowMenu: close failed')
-        setClosing(false)
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await closeSubmit.run({
+      tag: 'LoanRowMenu: close failed',
+      action: () => closeLoanAction(loan.id),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes: the row's message renders behind this
+      // dialog's own scrim (`components/common/confirm-dialog.tsx`).
+      onSettled: () => setClosing(false),
+      onSuccess: () => router.refresh(),
     })
   }
 
@@ -391,7 +384,7 @@ function LoanPaymentForm({
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `loan-payment-${name}-${uid}`
   const {
@@ -417,22 +410,17 @@ function LoanPaymentForm({
   const total = displayTotal(principalAmount, interestAmount)
 
   async function onSubmit(values: RecordLoanPaymentInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        // `values` is the resolver's output, so `values.totalAmount` is the
-        // derived figure the read-only field showed — not a fourth number.
-        const result = await recordLoanPaymentAction(loan.id, values)
-        if (!result.ok) {
-          setError(t(LOAN_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'LoanPaymentForm: record failed',
+      // `values` is the resolver's output, so `values.totalAmount` is the
+      // derived figure the read-only field showed — not a fourth number.
+      action: () => recordLoanPaymentAction(loan.id, values),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('LoanPaymentForm: record failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 
@@ -590,7 +578,7 @@ function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => void }) {
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `loan-edit-${name}-${uid}`
   const {
@@ -612,20 +600,15 @@ function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => void }) {
   })
 
   async function onSubmit(values: UpdateLoanInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateLoanAction(loan.id, values)
-        if (!result.ok) {
-          setError(t(LOAN_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'LoanEditForm: update failed',
+      action: () => updateLoanAction(loan.id, values),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('LoanEditForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

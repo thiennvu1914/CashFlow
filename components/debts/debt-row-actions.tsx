@@ -16,8 +16,8 @@ import {
   updateDebtAction,
   writeOffDebtAction,
 } from '@/lib/server/actions/debt-actions'
-import { DEBT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { DebtDto } from '@/lib/ui/debt-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -116,27 +116,20 @@ export function DebtRowMenu({ debt }: { debt: DebtDto }) {
   const [editOpen, setEditOpen] = useState(false)
   const [writingOff, setWritingOff] = useState(false)
   const { setError } = useRowError()
-  const writeOffSubmit = useSubmitState()
+  const writeOffSubmit = useActionSubmit(t)
 
   if (!debt.active) return null
 
   async function confirmWriteOff() {
-    setError(null)
-    await writeOffSubmit.run(async () => {
-      try {
-        const result = await writeOffDebtAction(debt.id)
-        if (!result.ok) {
-          setWritingOff(false)
-          setError(t(DEBT_ERROR_KEYS[result.error]))
-          return
-        }
-        setWritingOff(false)
-        router.refresh()
-      } catch {
-        console.error('DebtRowMenu: write-off failed')
-        setWritingOff(false)
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await writeOffSubmit.run({
+      tag: 'DebtRowMenu: write-off failed',
+      action: () => writeOffDebtAction(debt.id),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes: the row's message renders behind this
+      // dialog's own scrim (`components/common/confirm-dialog.tsx`).
+      onSettled: () => setWritingOff(false),
+      onSuccess: () => router.refresh(),
     })
   }
 
@@ -210,7 +203,7 @@ function DebtPaymentForm({
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-payment-${name}-${uid}`
   const {
@@ -225,20 +218,15 @@ function DebtPaymentForm({
   })
 
   async function onSubmit(values: RecordDebtPaymentInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await recordDebtPaymentAction(debt.id, values)
-        if (!result.ok) {
-          setError(t(DEBT_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'DebtPaymentForm: record failed',
+      action: () => recordDebtPaymentAction(debt.id, values),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('DebtPaymentForm: record failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 
@@ -322,7 +310,7 @@ function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-edit-${name}-${uid}`
   const {
@@ -344,20 +332,15 @@ function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
   })
 
   async function onSubmit(values: UpdateDebtInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateDebtAction(debt.id, values)
-        if (!result.ok) {
-          setError(t(DEBT_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'DebtEditForm: update failed',
+      action: () => updateDebtAction(debt.id, values),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('DebtEditForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

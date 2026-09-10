@@ -7,10 +7,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { createLoanSchema, type CreateLoanInput } from '@/lib/validation/loan'
 import { createLoanAction } from '@/lib/server/actions/loan-actions'
-import { GENERIC_ERROR_KEY, LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { paymentFrequencyLabelKey } from '@/lib/ui/labels'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -57,7 +57,7 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `loan-${name}-${uid}`
   const {
@@ -71,21 +71,16 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
   })
 
   async function onSubmit(values: CreateLoanInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await createLoanAction(values)
-        if (!result.ok) {
-          setError(t(LOAN_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'LoanForm: create failed',
+      action: () => createLoanAction(values),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues(today))
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('LoanForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

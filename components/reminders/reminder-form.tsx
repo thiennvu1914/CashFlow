@@ -8,11 +8,11 @@ import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import { createReminderSchema, type CreateReminderInput } from '@/lib/validation/reminder'
 import { createReminderAction } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { type Locale, INTL_LOCALE } from '@/lib/i18n/locale'
 import { recurrenceLabelKey, reminderTypeLabelKey } from '@/lib/ui/labels'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -141,7 +141,7 @@ export function ReminderForm({
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `reminder-${name}-${uid}`
   const {
@@ -176,21 +176,16 @@ export function ReminderForm({
   )
 
   async function onSubmit(values: CreateReminderInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await createReminderAction(values)
-        if (!result.ok) {
-          setError(t(REMINDER_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'ReminderForm: create failed',
+      action: () => createReminderAction(values),
+      errorKeys: REMINDER_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues(today))
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('ReminderForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

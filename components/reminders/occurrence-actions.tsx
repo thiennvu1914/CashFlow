@@ -7,10 +7,10 @@ import {
   acknowledgeOccurrenceAction,
   dismissOccurrenceAction,
 } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
 import type { Locale } from '@/lib/i18n/locale'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { OccurrenceDto } from '@/lib/ui/reminder-view-model'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -61,27 +61,23 @@ export function OccurrenceActions({
    *  idempotent and never flips one answer into the other, so a double click
    *  is harmless) but so the row cannot be told two different things at once
    *  and leave the user unsure which one landed. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
 
   async function answer(kind: 'acknowledge' | 'dismiss') {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result =
-          kind === 'acknowledge'
-            ? await acknowledgeOccurrenceAction(occurrence.id)
-            : await dismissOccurrenceAction(occurrence.id)
-        if (!result.ok) {
-          setError(t(REMINDER_ERROR_KEYS[result.error]))
-          return
-        }
-        // The answered occurrence leaves the pending list on the next render, so
-        // the refresh *is* the confirmation.
-        router.refresh()
-      } catch {
-        console.error(`OccurrenceActions: ${kind} failed`)
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await submit.run({
+      // The one interpolated `tag` in the product, and safe: `kind` is a
+      // two-value union declared right above, never user input — so the log
+      // line stays a fixed string from a closed vocabulary.
+      tag: `OccurrenceActions: ${kind} failed`,
+      action: () =>
+        kind === 'acknowledge'
+          ? acknowledgeOccurrenceAction(occurrence.id)
+          : dismissOccurrenceAction(occurrence.id),
+      errorKeys: REMINDER_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // The answered occurrence leaves the pending list on the next render, so
+      // the refresh *is* the confirmation.
+      onSuccess: () => router.refresh(),
     })
   }
 
