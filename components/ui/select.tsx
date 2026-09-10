@@ -1,6 +1,21 @@
 'use client'
 
 import * as React from 'react'
+
+/*
+ * UNCONSUMED (Task 16): nothing in `app/` or `components/` imports this file —
+ * the transaction Account and Category pickers are built on
+ * `@base-ui/react/select` directly (`components/transactions/*-select.tsx`).
+ * It is kept as the generated shadcn baseline, and it still carries
+ * `outline-none`/`outline-hidden` on `SelectTrigger` and `SelectItem` — which
+ * is exactly finding F13: those override the `@layer base`
+ * `:focus-visible { outline: 2px solid var(--focus) }` rule's outline-STYLE, so
+ * a control built from this file would ship with no focus ring at all. A future
+ * consumer must replace them with
+ * `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]`
+ * (replace, not add: in Tailwind v4 `outline-none` sets `--tw-outline-style`,
+ * which `outline-2` then reads). See `components/ui/button.tsx`.
+ */
 import { Select as SelectPrimitive } from '@base-ui/react/select'
 import { cn } from 'cn'
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from 'lucide-react'

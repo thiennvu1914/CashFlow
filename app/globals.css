@@ -433,7 +433,9 @@
        brand     unchanged          5.06 (already met) */
   --positive-on-tint: oklch(0.493 0.091 160.408); /* #27714F */
   --negative-on-tint: oklch(0.52 0.14 25); /* #AB413E */
-  --warning-on-tint: oklch(0.51 0.11 78); /* #875D00 as the browser paints it */
+  --warning-on-tint: oklch(
+    0.51 0.11 78
+  ); /* #875D00 (the offline pipeline rounded it to #885C00 — same value, one 8-bit step apart on two channels) */
   --brand-on-tint: var(--brand); /* #206B58 — already clears 4.5:1 on its own tint */
   /* The background an input SITS on, rather than a translucent wash over
      whatever is behind it. In light this is the surface itself — a white field

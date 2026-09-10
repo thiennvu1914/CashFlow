@@ -1,6 +1,17 @@
 'use client'
 
 import * as React from 'react'
+
+/*
+ * UNCONSUMED (Task 16): nothing imports this file — `RowActionsMenu` and
+ * `ExportMenu` are built on `@base-ui/react/menu` directly, for the reasons
+ * `components/common/row-actions-menu.tsx` documents. It is kept as the
+ * generated shadcn baseline, and every item class in it still carries
+ * `outline-hidden` — finding F13 — so a future consumer would inherit a menu
+ * whose keyboard-highlighted row has no focus ring. Replace it with
+ * `focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus)]`
+ * (inset, because the popup's padding is 4 px), as `row-actions-menu.tsx` does.
+ */
 import { Menu as MenuPrimitive } from '@base-ui/react/menu'
 import { cn } from 'cn'
 import { ChevronRightIcon, CheckIcon } from 'lucide-react'

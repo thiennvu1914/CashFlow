@@ -36,6 +36,18 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
   )
 }
 
+/*
+ * UNCONSUMED (Task 16): `components/common/dialog.tsx` and
+ * `components/common/sheet.tsx` reuse this file's root/portal/overlay/close/
+ * title/description exports but deliberately NOT `DialogContent` — it bakes
+ * `rounded-xl`, `bg-popover` and a centred-only position into one
+ * non-overridable bundle. It also still carries `outline-none` on its popup,
+ * which is finding F13: it overrides the `@layer base`
+ * `:focus-visible { outline: 2px solid var(--focus) }` rule's outline-STYLE. A
+ * future consumer must replace it with spec §2's ring rather than add to it
+ * (in Tailwind v4 `outline-none` sets `--tw-outline-style`, which `outline-2`
+ * then reads). See `components/ui/button.tsx`.
+ */
 function DialogContent({
   className,
   children,
