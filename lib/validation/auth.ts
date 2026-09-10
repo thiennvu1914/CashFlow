@@ -1,9 +1,22 @@
 import { z } from 'zod'
 
+/**
+ * The three `max` messages here and in `profile.ts` are ones a user can reach
+ * (Task 17, owner item H3): no field in the register, reset-password or
+ * change-password form carries a `maxLength`, so a pasted 129-character
+ * passphrase or a 101-character name lands on these rules — and left bare, Zod's
+ * own "Too big: expected string to have <=128 characters" was what the form
+ * showed. The BOUNDS are unchanged (they are also Better Auth's
+ * `minPasswordLength`/`maxPasswordLength`, see `lib/auth/create-auth.ts`);
+ * only the copy is new.
+ */
 export const registerSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(100),
+  name: z.string().min(1, 'Name is required').max(100, 'Keep the name under 100 characters'),
   email: z.email('Enter a valid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(128, 'Keep the password under 128 characters'),
 })
 
 export const loginSchema = z.object({
@@ -20,7 +33,10 @@ export const forgotPasswordSchema = z.object({
 // (see `lib/auth/create-auth.ts`) — the client rules never promise more than
 // the server accepts.
 export const resetPasswordSchema = z.object({
-  password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(128, 'Keep the password under 128 characters'),
 })
 
 export type RegisterInput = z.infer<typeof registerSchema>
