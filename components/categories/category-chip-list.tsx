@@ -111,9 +111,22 @@ export function CategoryChipList({
             <li
               key={item.id}
               className={cn(
-                'inline-flex items-center gap-1 rounded-full py-1 pl-3 text-sm',
+                // One chip height for both variants (Task 18, owner item I5).
+                // A custom chip's `…` trigger is 44 px below `md` and 36 px
+                // from `md` (`RowActionsMenu`, spec §8's touch target), so a
+                // custom chip stood 46/38 px tall while a default chip stood
+                // 28 — and because the `<ul>` is `flex-wrap` (default
+                // `align-items: stretch`), any default chip that happened to
+                // land in the same wrap row was stretched to match while the
+                // rows above it stayed short. Three different heights on one
+                // page. `min-h-11 md:min-h-9` is the same floor every other
+                // interactive row in the product uses, and the default
+                // variant carries a transparent border so both variants
+                // measure the same box. No action is hidden: the `…` is
+                // exactly where it was.
+                'inline-flex min-h-11 items-center gap-1 rounded-full pl-3 text-sm md:min-h-9',
                 item.isDefault
-                  ? 'bg-muted pr-3 text-muted-foreground'
+                  ? 'border border-transparent bg-muted pr-3 text-muted-foreground'
                   : 'border border-border pr-1 text-foreground',
               )}
             >
@@ -142,7 +155,12 @@ export function CategoryChipList({
       )}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <FormField id={`${sectionId}-new`} label={addLabel} className="flex-1">
+        {/* Capped, not stretched (Task 18, owner item I5): `flex-1` alone gave
+            a one-word category name an 800 px input on a 960 px page, three
+            times over, which is what made this page read as three stretched
+            rows rather than three compact sections. The cap is `sm:` only, so
+            a phone keeps the full-width field it needs. */}
+        <FormField id={`${sectionId}-new`} label={addLabel} className="flex-1 sm:max-w-[22rem]">
           {(aria) => (
             <Input
               {...aria}

@@ -194,6 +194,15 @@ export default async function RemindersPage({
       <SegmentedControl
         label={t('reminders.tabs')}
         activeId={view}
+        // `self-start` (Task 18): the page container is a `flex flex-col`, and
+        // its default `align-items: stretch` sized this track to the full
+        // 896 px content width — two small labels at the left end of a
+        // page-wide bordered box. `components/reports/period-filter.tsx`
+        // already documents and fixes exactly this on its own wrapper
+        // (`items-start`), so the primitive's default path is unchanged and
+        // the two segmented controls in the product now hug their own content
+        // the same way.
+        className="self-start"
         segments={[
           { id: 'due', label: t('reminders.tabDue'), href: `/reminders?view=due&type=${filter}` },
           {
@@ -221,8 +230,15 @@ export default async function RemindersPage({
               aria-current={filter === id ? 'page' : undefined}
               className={cn(
                 'rounded-full px-3 py-1.5 text-[0.8125rem]/[1.125rem] whitespace-nowrap',
+                // Task 18, owner item I3: the selected chip used to carry the
+                // SAME `bg-muted font-medium text-brand` as the selected tab
+                // above it, so the secondary filter announced itself in the
+                // primary control's own colour and the two rows read as peers.
+                // Brand colour is now the tab's alone; a selected chip is a
+                // muted fill plus the weight step — still two signals, one
+                // level quieter, and `aria-current` is unchanged.
                 filter === id
-                  ? 'bg-muted font-medium text-brand'
+                  ? 'bg-muted font-medium text-foreground'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >

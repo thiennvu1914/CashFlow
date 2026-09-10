@@ -137,9 +137,26 @@ export function TransactionTypeField({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <p id={legendId} className="text-[0.8125rem]/[1.125rem] font-medium">
+    // From `sm` up this is a two-column grid and the header row below is
+    // `sm:contents`, so the legend, the disclosure and the radiogroup all
+    // become items of THIS grid: legend on row 1, radios on row 2 column 1,
+    // "Khác" on row 2 column 2 — i.e. the disclosure reads as the third
+    // segment of the same control instead of a bare link floating above it
+    // (Task 18, owner item I4). Below `sm` — the mobile sheet, where the four
+    // rarer labels need the full width to stay on one line — nothing changes
+    // at all: the flex column and the legend row are exactly as approved.
+    //
+    // `sm:contents` is on a plain wrapper `div`, never on the
+    // `role="radiogroup"` element: `display: contents` removes a box, and
+    // removing the radiogroup's box is the one thing that could cost it its
+    // role. The DOM order, the roving `tabIndex`, the arrow keys and the
+    // disclosure's position OUTSIDE the radiogroup are all untouched.
+    <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[1fr_auto] sm:gap-2">
+      <div className="flex items-center justify-between gap-2 sm:contents">
+        <p
+          id={legendId}
+          className="text-[0.8125rem]/[1.125rem] font-medium sm:col-span-2 sm:row-start-1"
+        >
           {legend}
         </p>
         {/* Outside `role="radiogroup"` below — see the file doc comment.
@@ -153,7 +170,7 @@ export function TransactionTypeField({
           aria-expanded={showOther}
           disabled={disabled || isOtherChecked}
           onClick={() => setOtherOpenedByUser((open) => !open)}
-          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:col-start-2 sm:row-start-2 sm:justify-center sm:self-start sm:border sm:border-border sm:px-3"
         >
           {otherLabel}
           {/* Flipped, not animated: the design system does not animate, so
@@ -165,7 +182,7 @@ export function TransactionTypeField({
         role="radiogroup"
         aria-labelledby={legendId}
         onKeyDown={handleKeyDown}
-        className="grid grid-cols-2 gap-2"
+        className="grid grid-cols-2 gap-2 sm:col-start-1 sm:row-start-2"
       >
         {visibleTypes.map((type, index) => (
           <TypeButton
