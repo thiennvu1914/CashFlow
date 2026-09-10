@@ -2,7 +2,7 @@ import os from 'os'
 import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import ExcelJS from 'exceljs'
-import { BUDGET_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
+import enErrors from '@/messages/en/errors.json'
 import viErrors from '@/messages/vi/errors.json'
 import {
   createAccountViaUi,
@@ -47,12 +47,14 @@ const OVERALL_VI = 'Tổng thể'
 const OVERALL_EN = 'Overall'
 const OVERALL = eitherLocale(OVERALL_VI, OVERALL_EN)
 
-/** The DUPLICATE_BUDGET server error, in both locales — the InlineAlert now
- *  renders `t(BUDGET_ERROR_KEYS.DUPLICATE_BUDGET)`, never the raw English
- *  literal `BUDGET_ERROR_MESSAGES` alone still carries. */
+/** The DUPLICATE_BUDGET server error, in both locales — the InlineAlert
+ *  renders `t(BUDGET_ERROR_KEYS.DUPLICATE_BUDGET)`, and the temporary English
+ *  `BUDGET_ERROR_MESSAGES` alias this spec used to import for its English
+ *  half is gone (Task 13): `messages/en/errors.json` is the source of that
+ *  text now, read directly. */
 const DUPLICATE_BUDGET_MESSAGE = eitherLocale(
   viErrors.budget.DUPLICATE_BUDGET,
-  BUDGET_ERROR_MESSAGES.DUPLICATE_BUDGET,
+  enErrors.budget.DUPLICATE_BUDGET,
 )
 
 /**

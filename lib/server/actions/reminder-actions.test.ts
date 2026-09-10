@@ -72,7 +72,7 @@ const {
   acknowledgeOccurrenceAction,
   dismissOccurrenceAction,
 } = await import('./reminder-actions')
-const { REMINDER_ERROR_MESSAGES } = await import('@/lib/ui/action-error-messages')
+const { REMINDER_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -457,16 +457,21 @@ describe('dismissOccurrenceAction', () => {
   })
 })
 
-describe('REMINDER_ERROR_MESSAGES', () => {
-  it('has product copy for every code an action can return, and no Zod text', () => {
-    // Typed `Record<ReminderActionError, string>`, so a new code is a compile
-    // error until it has a message; this pins the wording itself, which is what
-    // the form and the row actions render verbatim.
-    expect(REMINDER_ERROR_MESSAGES).toEqual({
-      INVALID_CATEGORY: 'Choose a category that matches the reminder type.',
-      INVALID_ACCOUNT: 'Choose one of your active accounts.',
-      INVALID_INPUT: 'Check the highlighted fields.',
-      NOT_FOUND: 'That reminder no longer exists.',
+describe('REMINDER_ERROR_KEYS', () => {
+  // The temporary English `REMINDER_ERROR_MESSAGES` alias this test used to
+  // pin (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives
+  // only in `messages/{vi,en}/errors.json`, and `lib/i18n/messages.test.ts`
+  // already proves the two locales carry the same key set with no empty
+  // value. What is still this layer's job to prove is narrower: every
+  // `ReminderActionError` a component can receive maps to a key in the
+  // `errors.reminder` namespace, typed as `Record<ReminderActionError,
+  // string>` so a new code is a compile error until it has one.
+  it('has a message key for every code an action can return', () => {
+    expect(REMINDER_ERROR_KEYS).toEqual({
+      INVALID_CATEGORY: 'errors.reminder.INVALID_CATEGORY',
+      INVALID_ACCOUNT: 'errors.reminder.INVALID_ACCOUNT',
+      INVALID_INPUT: 'errors.reminder.INVALID_INPUT',
+      NOT_FOUND: 'errors.reminder.NOT_FOUND',
     })
   })
 })

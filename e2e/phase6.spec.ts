@@ -4,8 +4,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import ExcelJS from 'exceljs'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
-import { DEBT_ERROR_MESSAGES, LOAN_ERROR_MESSAGES } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
+import enErrors from '@/messages/en/errors.json'
 import viErrors from '@/messages/vi/errors.json'
 import {
   createAccountViaUi,
@@ -113,21 +113,16 @@ const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
 /** The day of the month the MONTHLY income reminder is anchored to. */
 const TODAY_DAY_OF_MONTH = Number(TODAY.slice(8, 10))
 
-/** The OVERPAYMENT server error, in both locales — the InlineAlert now renders
- *  `t(DEBT_ERROR_KEYS.OVERPAYMENT)`/`t(LOAN_ERROR_KEYS.OVERPAYMENT)`, never the
- *  raw English literal `DEBT_ERROR_MESSAGES`/`LOAN_ERROR_MESSAGES` alone still
- *  carry. No `NEXT_LOCALE` cookie is ever set in this file, so every page
- *  renders in the app's default locale (vi) — `eitherLocale` is what lets
- *  these assertions hold in either locale without pinning which one is
- *  rendering. */
-const DEBT_OVERPAYMENT_MESSAGE = eitherLocale(
-  viErrors.debt.OVERPAYMENT,
-  DEBT_ERROR_MESSAGES.OVERPAYMENT,
-)
-const LOAN_OVERPAYMENT_MESSAGE = eitherLocale(
-  viErrors.loan.OVERPAYMENT,
-  LOAN_ERROR_MESSAGES.OVERPAYMENT,
-)
+/** The OVERPAYMENT server error, in both locales — the InlineAlert renders
+ *  `t(DEBT_ERROR_KEYS.OVERPAYMENT)`/`t(LOAN_ERROR_KEYS.OVERPAYMENT)`. The
+ *  temporary English `DEBT_ERROR_MESSAGES`/`LOAN_ERROR_MESSAGES` aliases this
+ *  spec used to import for its English half are gone (Task 13):
+ *  `messages/en/errors.json` is the source of that text now, read directly.
+ *  No `NEXT_LOCALE` cookie is ever set in this file, so every page renders in
+ *  the app's default locale (vi) — `eitherLocale` is what lets these
+ *  assertions hold in either locale without pinning which one is rendering. */
+const DEBT_OVERPAYMENT_MESSAGE = eitherLocale(viErrors.debt.OVERPAYMENT, enErrors.debt.OVERPAYMENT)
+const LOAN_OVERPAYMENT_MESSAGE = eitherLocale(viErrors.loan.OVERPAYMENT, enErrors.loan.OVERPAYMENT)
 
 /**
  * A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,

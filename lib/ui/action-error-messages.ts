@@ -6,7 +6,6 @@ import type { ReminderActionError } from '@/lib/server/actions/reminder-actions'
 import type { SavingsGoalActionError } from '@/lib/server/actions/savings-goal-actions'
 import type { TransactionActionError } from '@/lib/server/actions/transaction-actions'
 import type { TransferActionError } from '@/lib/server/actions/transfer-actions'
-import enErrors from '@/messages/en/errors.json'
 
 /**
  * The user-facing message KEY for every server-action error code, in one place.
@@ -90,34 +89,3 @@ export const REMINDER_ERROR_KEYS: Record<ReminderActionError, string> = {
   NOT_FOUND: 'errors.reminder.NOT_FOUND',
 }
 
-/**
- * TEMPORARY (Phase 7, Tasks 2–13). Eleven components and two e2e specs still
- * render/assert this English text literally until their own task switches to
- * `t(KEY)`. The maps are DERIVED from `messages/en/errors.json`, so the literal
- * and the translation can never disagree, and Task 13 deletes this block along
- * with the last literal caller.
- */
-function englishMap<T extends string>(keys: Record<T, string>): Record<T, string> {
-  return Object.fromEntries(
-    Object.entries(keys).map(([code, key]) => [
-      code,
-      (key as string)
-        .replace(/^errors\./, '')
-        .split('.')
-        .reduce<unknown>(
-          (node, part) => (node as Record<string, unknown>)?.[part],
-          enErrors as unknown,
-        ) as string,
-    ]),
-  ) as Record<T, string>
-}
-
-export const GENERIC_ERROR_MESSAGE: string = enErrors.generic
-export const ACCOUNT_ERROR_MESSAGES = englishMap(ACCOUNT_ERROR_KEYS)
-export const TRANSACTION_ERROR_MESSAGES = englishMap(TRANSACTION_ERROR_KEYS)
-export const TRANSFER_ERROR_MESSAGES = englishMap(TRANSFER_ERROR_KEYS)
-export const BUDGET_ERROR_MESSAGES = englishMap(BUDGET_ERROR_KEYS)
-export const SAVINGS_GOAL_ERROR_MESSAGES = englishMap(SAVINGS_GOAL_ERROR_KEYS)
-export const DEBT_ERROR_MESSAGES = englishMap(DEBT_ERROR_KEYS)
-export const LOAN_ERROR_MESSAGES = englishMap(LOAN_ERROR_KEYS)
-export const REMINDER_ERROR_MESSAGES = englishMap(REMINDER_ERROR_KEYS)
