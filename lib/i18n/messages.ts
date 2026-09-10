@@ -43,7 +43,18 @@ import type { Locale } from './locale'
  * the render boundary through `messages/{vi,en}/validation.json` — see
  * `lib/ui/validation-messages.ts` and the extraction test
  * (`lib/ui/validation-messages.test.ts`) that proves every literal has both
- * entries.
+ * entries. This is only true because every field has a literal to extract:
+ * Task 13's own fix round 1 found `financial-account.ts`'s (create and
+ * update) and `account-type.ts`'s/`category.ts`'s `name` fields using a bare
+ * `z.string().min(1)` with NO message, which meant Zod's own untranslatable
+ * internal English ("Too small: expected string to have >=1 characters")
+ * reached the DOM on an empty submit — not a missing dictionary entry (there
+ * was no literal to extract) and not a bypassed `FieldError` (the form did
+ * route through it correctly), so neither the extraction regex nor the
+ * component was at fault. Fixed by giving those three `name` fields the
+ * existing `'Name is required'` literal (already used by `auth.ts`/
+ * `profile.ts`, already in both `validation.json` files) — a message literal
+ * is copy, not a validation rule, so no `min`/`max` limit changed.
  */
 export const MESSAGE_DOMAINS = [
   'common',

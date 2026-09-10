@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { moneyAmountSchema } from '@/lib/validation/money'
 
 export const createFinancialAccountSchema = z.object({
-  name: z.string().min(1).max(100),
+  name: z.string().min(1, 'Name is required').max(100),
   accountTypeId: z.string().min(1),
   initialBalance: moneyAmountSchema,
   currency: z.enum(['VND', 'USD']),
@@ -10,7 +10,7 @@ export const createFinancialAccountSchema = z.object({
 })
 
 export const updateFinancialAccountSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
+  name: z.string().min(1, 'Name is required').max(100).optional(),
   accountTypeId: z.string().min(1).optional(),
   description: z.string().max(500).optional(),
   initialBalance: moneyAmountSchema.optional(),
