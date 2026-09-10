@@ -201,6 +201,36 @@ export default async function DashboardPage() {
    * a card claiming the user has nothing yet is not something this page can
    * stand behind. Those readers get the normal dashboard, whose own widgets
    * explain the gap.
+   *
+   * WHAT THESE FIVE VALUES ACTUALLY MEAN — they are the WIDGETS' windows, not
+   * "does the user own any row of this kind", and that is deliberate (fix
+   * round 1, Minor 4: accepted as designed). The condition asks "would the grid
+   * have had anything to show?", so each term is exactly as wide as the widget
+   * it stands for:
+   *
+   *  · `vm.recentTransactions` — `listTransactions(limit 8)`, unfiltered and
+   *    unwindowed, so empty here really does mean zero transactions ever. This
+   *    is the term the ruling names, and it is exact.
+   *  · `vm.budgets` — the CURRENT LOCAL MONTH's budgets
+   *    (`getBudgetProgressForMonth`). A user whose only budget is for another
+   *    month reads as "no budget" here, which is what the widget itself says
+   *    ("Chưa có ngân sách tháng này").
+   *  · `vm.savingsGoals` — non-archived goals, capped at five. Only archived
+   *    goals reads as none, exactly as the widget shows none.
+   *  · `vm.upcomingReminders` — PENDING occurrences (every overdue one is
+   *    represented, since any overdue row makes this array non-empty). A
+   *    reminder that is paused, or whose next occurrence is past the 30-day
+   *    lookahead, contributes nothing — again matching the widget's own
+   *    caption.
+   *  · the three `position` totals — what is OUTSTANDING now, so a debt repaid
+   *    in full or a closed loan reads as zero, which is what the overview
+   *    shows.
+   *
+   * The consequence, stated plainly so nobody reads this as "no rows": a user
+   * who owns only rows outside every one of those windows — say a single
+   * paused reminder and a budget for next month, and no transaction — sees the
+   * card. That is the right answer for them, because the grid they would
+   * otherwise get has nothing in it either.
    */
   const hasPlanningRows =
     vm.budgets.length > 0 || vm.savingsGoals.length > 0 || vm.upcomingReminders.length > 0

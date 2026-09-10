@@ -220,21 +220,19 @@ async function openDetails(details: Locator): Promise<Locator> {
 }
 
 /* ------------------------------------------------------------------------- *
- * Create-form helpers.
+ * Create-form helpers — the row-menu and figure-line readers below are still
+ * local to this file.
  *
- * Local to this file rather than in `e2e/helpers.ts`: no other spec creates a
- * goal, a debt, a loan or a reminder, and a helper with one caller belongs
- * beside it. Each is used two or more times *within* this file, which is why
- * they are functions at all.
- *
- * Plain `fill`/`selectOption` with no verify-and-retry wrapper: every one of
- * these forms is inside a `<fieldset disabled>` until hydration finishes
- * (`useHydrated`, `lib/ui/use-hydrated.ts`), and Playwright's actionability
- * check treats a control in a disabled fieldset as disabled — so every action
- * below already waits for the earliest moment the app itself accepts input, and
- * nothing it accepts is ever thrown away afterwards. Each helper finishes on an
- * auto-retrying assertion that the form reset itself, which is the create
- * action's own confirmation that the row landed.
+ * `createGoalViaUi`, `createDebtViaUi`, `createLoanViaUi` and
+ * `createReminderViaUi` no longer live here: they were local while this was the
+ * only file creating a goal, a debt, a loan or a reminder, and Task 17 gave
+ * them a second caller (`e2e/phase7-confirm-dialogs.spec.ts` needs one of
+ * everything a destructive action can consume), so they moved to
+ * `e2e/helpers.ts` and are imported back at the top of this file — unchanged
+ * apart from the move, with this file's module-level `TODAY` becoming
+ * `SEED_TODAY` there. Their own doc comments, including the reasoning about the
+ * hydration gate and about each finishing on an auto-retrying assertion that
+ * the sheet closed, travelled with them.
  * ------------------------------------------------------------------------- */
 
 /**

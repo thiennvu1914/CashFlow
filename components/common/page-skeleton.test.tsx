@@ -53,6 +53,13 @@ describe('PageSkeleton', () => {
  * local navigation, and an EXTRA one is just as much a defect — `/categories`,
  * `/goals`, `/settings` and the auth screens were ruled out (each is a short
  * page whose skeleton would flash for less time than it takes to read).
+ *
+ * The walk is RECURSIVE (fix round 1, Minor 6). It used to read only the
+ * direct children of `app/(app)`, so a `loading.tsx` in a nested segment — the
+ * shape a later phase's `transactions/[id]/` or a route group would take —
+ * would have been an extra skeleton this guarantee never saw. Every path is
+ * compared relative to `app/(app)`, which is also what makes the failure
+ * message name the offending segment.
  */
 describe('route-level skeletons', () => {
   const APP_DIR = path.join(process.cwd(), 'app', '(app)')
@@ -68,17 +75,34 @@ describe('route-level skeletons', () => {
     'transfers',
   ]
 
-  it('exists for the ruled routes and for no others', () => {
-    const routes = fs
-      .readdirSync(APP_DIR, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-    const withSkeleton = routes
-      .filter((route) => fs.existsSync(path.join(APP_DIR, route, 'loading.tsx')))
+  /** Every `loading.tsx` under `app/(app)`, at any depth, as a `/`-joined path. */
+  function skeletonSegments(dir = APP_DIR, prefix = ''): string[] {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) => {
+        if (entry.isDirectory()) {
+          const segment = prefix ? `${prefix}/${entry.name}` : entry.name
+          return skeletonSegments(path.join(dir, entry.name), segment)
+        }
+        return entry.name === 'loading.tsx' && prefix ? [prefix] : []
+      })
       .sort()
-    expect(withSkeleton).toEqual(RULED)
+  }
+
+  /** Every directory under `app/(app)`, at any depth — for the "still a route" check. */
+  function segments(dir = APP_DIR, prefix = ''): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      if (!entry.isDirectory()) return []
+      const segment = prefix ? `${prefix}/${entry.name}` : entry.name
+      return [segment, ...segments(path.join(dir, entry.name), segment)]
+    })
+  }
+
+  it('exists for the ruled routes and for no others, at any depth', () => {
+    expect(skeletonSegments()).toEqual(RULED)
     // And the routes that were ruled out really exist — otherwise this test
     // would pass by simply not having those pages any more.
+    const routes = segments()
     for (const route of ['categories', 'goals', 'settings']) {
       expect(routes, `${route} is still a route`).toContain(route)
     }
