@@ -50,6 +50,17 @@
   --color-border-strong: var(--border-strong);
   --color-focus: var(--focus);
   --color-input-bg: var(--input-bg);
+  /* Task 16 (F6, routed from Task 14): the text colour for a TINTED pill only
+     — `StatusBadge`, `InlineAlert`, the FX-rate chip and the checked
+     transaction-type radio, i.e. the four places in the product that put
+     `text-<tone>` on `bg-<tone>/10 dark:bg-<tone>/18`. Never for money, never
+     for a chart series, never for plain `text-<tone>` on a card. See the
+     declarations in `:root`/`.dark` and the ON-TINT table in the MEASURED
+     WCAG CONTRAST block. */
+  --color-positive-on-tint: var(--positive-on-tint);
+  --color-negative-on-tint: var(--negative-on-tint);
+  --color-warning-on-tint: var(--warning-on-tint);
+  --color-brand-on-tint: var(--brand-on-tint);
   /* Phase 7 trims the scale to exactly three radii (spec §2): 6, 10, 999.
      `--radius-lg` is the card radius, `--radius-md` the control radius. */
   --radius-md: 0.375rem;
@@ -103,9 +114,10 @@
 /*
  * MEASURED WCAG CONTRAST — every text and UI pair, both themes.
  *
- * Started by Task 1a Step 5 (light) and completed by Task 14 (dark, owner
- * item E2). Minimums: 4.5:1 for text (WCAG 1.4.3 AA at these sizes), 3:1 for
- * UI boundaries (1.4.11).
+ * Started by Task 1a Step 5 (light), completed by Task 14 (dark, owner item
+ * E2) and extended by Task 16 (the ON-TINT table in note 4, and the focus-ring
+ * note at the end). Minimums: 4.5:1 for text (WCAG 1.4.3 AA at these sizes),
+ * 3:1 for UI boundaries (1.4.11).
  *
  * HOW THESE WERE MEASURED. Not by eye, and not from the oklch literals alone.
  * Every value below was read out of the RUNNING app: each token is resolved
@@ -269,53 +281,101 @@
  *    `bg-muted`. Measured and recorded so that a future component that DOES
  *    put one of those on a raised surface knows it must nudge the token first.
  *
- * 4. The tinted StatusBadge / InlineAlert pill — `bg-<tone>/10
- *    dark:bg-<tone>/18` with `text-<tone>` on it — does not reach 4.5:1 for
- *    every tone in EITHER theme, and cannot be made to at these token values:
- *      dark (18 %)   on surface / surface-2 / background
- *        positive     3.61  3.28  4.09
- *        negative     3.89  3.52  4.43
- *        brand        3.85  3.54  4.38
- *        warning      4.66  4.21  5.31
- *      light (10 %)  on surface / surface-2 / background
- *        positive     4.67  4.30  4.30
- *        negative     4.54  4.19  4.21
- *        brand        5.50  5.06  5.09
- *        warning      4.35  4.01  4.03
- *    The cause is headroom: a tone that measures 4.6-5.1:1 on the plain
- *    surface has nothing left once a wash of ITSELF moves that surface toward
- *    it, and the movement is in the contrast-losing direction in both themes
- *    (lighter in dark, darker in light). Sweeping the dark alpha 18 % -> 8 %
- *    only recovers ~0.5 and buys it by making the pill fainter still; mixing
- *    the tint toward `--background` instead of over the surface lands in the
- *    same trough as note 2; and clearing 4.5:1 by lightening the tones needs
- *    L ~0.75-0.77 for positive/brand/negative — a pastel palette, which
- *    contradicts both the spec's pinned dark lightnesses and "never neon".
- *    The remaining routes are a dedicated tinted-surface token per tone in
- *    both themes, or dropping the tint for a bordered pill in dark. Both are
- *    design decisions across every screen in both themes, so Task 14 recorded
- *    this rather than guessing. Mitigation already in place: every badge's
- *    wording differs per state (StatusBadge's own doc), so colour is never the
- *    only signal, and `role="alert"` carries the negative InlineAlert to a
- *    screen reader regardless.
- *    The pill's own FILL is 1.13-1.16:1 (light) / 1.28-1.39:1 (dark) against
- *    its surface. It is a decorative wash behind text that carries the
- *    meaning, not a control boundary, so 1.4.11's 3:1 does not apply to it —
- *    but it does mean the pill reads as tinted text more than as a chip.
+ * 4. FIXED by Task 16 (finding F6, routed from Task 14) — the tinted pill's
+ *    TEXT now has its own token per tone. The pill is `bg-<tone>/10
+ *    dark:bg-<tone>/18` with the tone's text on it, in four places: the two
+ *    primitives (`StatusBadge`, `InlineAlert`), the dashboard's cached-FX chip
+ *    and the checked transaction-type radio. `text-<tone>` on a wash of the
+ *    SAME tone did not reach 4.5:1 for three of the four tones in light or for
+ *    three of the four in dark, because a tone at 4.6-5.1:1 on the plain
+ *    surface has nothing left once a wash of itself moves that surface toward
+ *    it — and the movement loses contrast in BOTH themes (darker in light,
+ *    lighter in dark). Task 14 measured the shortfall and rejected every route
+ *    that touched the tones themselves: alpha 18 % -> 8 % recovers ~0.5 and
+ *    only makes the pill fainter; mixing the tint toward `--background` lands
+ *    in note 2's trough; and clearing 4.5:1 by lightening the TONES needs
+ *    L ~0.75-0.77, a pastel palette that would repaint every money figure and
+ *    chart series.
  *
- * ================= NOT A CONTRAST PROBLEM, BUT FOUND HERE =================
+ *    The fix is the remaining route: a dedicated TEXT token per tone,
+ *    `--<tone>-on-tint`, same hue and chroma, L stepped only far enough in the
+ *    contrast-gaining direction, reached ONLY through `text-<tone>-on-tint` and
+ *    therefore invisible to money, charts and plain `text-<tone>`. The wash
+ *    alpha, the tones and the `border-<tone>/30` alert edge are all unchanged.
+ *
+ *    ON-TINT, as the browser paints it. `tone` = the old `text-<tone>`,
+ *    `on-tint` = the token now in use; both against the pill's own fill.
+ *
+ *      LIGHT (wash 10 %)      fill      tone    on-tint   fill vs surface
+ *        positive  surface   #EAF2EE    4.67     5.18         1.14
+ *                  surface-2 #E1E9E5   [4.30]    4.77         1.13
+ *                  background#E1E9E4   [4.30]    4.77         1.14
+ *        negative  surface   #F8EDED    4.54     5.15         1.15
+ *                  surface-2 #EFE4E4   [4.19]    4.75         1.14
+ *                  background#EFE5E3   [4.21]    4.78         1.14
+ *        warning   surface   #F4F0E7   [4.35]    5.13         1.14
+ *                  surface-2 #EBE7DE   [4.01]    4.73         1.13
+ *                  background#EBE8DD   [4.03]    4.76         1.13
+ *        brand     surface   #E9F0EE    5.50     5.50         1.16
+ *                  surface-2 #E0E7E5    5.06     5.06         1.15
+ *                  background#E0E8E4    5.09     5.09         1.15
+ *
+ *      DARK (wash 18 %)       fill      tone    on-tint   fill vs surface
+ *        positive  surface   #273C33   [3.61]    5.27         1.29
+ *                  surface-2 #2F4239   [3.28]    4.79         1.28
+ *                  background#20332B   [4.09]    5.98         1.29
+ *        negative  surface   #403734   [3.89]    5.25         1.32
+ *                  surface-2 #483D3A   [3.52]    4.75         1.31
+ *                  background#382E2C   [4.43]    5.97         1.31
+ *        warning   surface   #3F3D2E    4.66     5.27         1.39
+ *                  surface-2 #474335   [4.21]    4.77         1.39
+ *                  background#373426    5.31     6.01         1.38
+ *        brand     surface   #283E37   [3.85]    5.16         1.33
+ *                  surface-2 #30433D   [3.54]    4.74         1.31
+ *                  background#20352F   [4.38]    5.88         1.32
+ *
+ *    Every `on-tint` figure clears 4.5:1, worst case 4.73 (light warning on
+ *    surface-2) and 4.74 (dark brand on surface-2). The tokens as painted:
+ *      light  positive #27714F  negative #AB413E  warning #875D00  brand #206B58
+ *      dark   positive #68BE94  negative #EB9994  warning #D6AE68  brand #65BEA6
+ *    Light `--brand-on-tint` is `var(--brand)` unchanged: it already measured
+ *    5.06-5.50:1, and a token that does not need to move should not move.
+ *
+ *    The pill's own FILL is 1.13-1.16:1 (light) / 1.28-1.39:1 (dark) against
+ *    its surface, unchanged. It is a decorative wash behind text that carries
+ *    the meaning, not a control boundary, so 1.4.11's 3:1 does not apply to it
+ *    — but it does mean the pill reads as tinted text more than as a chip.
+ *    Colour was never the only signal either: every badge's wording differs
+ *    per state (StatusBadge's own doc), and `role="alert"`/`role="status"`
+ *    carry an InlineAlert to a screen reader regardless.
+ *
+ * ============ THE FOCUS RING: WHERE IT LIVES, AND WHAT ATE IT ============
  *
  * `:focus-visible` below sets `outline: 2px solid var(--focus)` for every
  * control, and the ring's colour is comfortably above 3:1 on every surface
- * (see the tables). It does NOT render on anything built from
- * `buttonVariants`, in either theme: that base class carries Tailwind's
- * `outline-none`, which lives in a later cascade layer than `@layer base` and
- * overrides `outline-style` only — so a focused Button computes
- * `outline-width: 2px`, `outline-color: <brand>`, `outline-style: none`.
- * Verified in the browser (`document.activeElement.matches(':focus-visible')`
- * is true while `getComputedStyle(el).outlineStyle` is `none`). Task 16 owns
- * "focus visible everywhere"; Task 14 measured the colour and handed the
- * missing style over rather than editing a shared primitive out of turn.
+ * (see the tables). Task 14 found it rendering on NOTHING built from
+ * `buttonVariants` (finding F13) and Task 16 found the same on `Input`, on
+ * `SELECT_CLASS` and on all five menu/select popup item classes. One cause
+ * every time: Tailwind's `outline-none` in the component's base class, which
+ * lives in a later cascade layer than `@layer base` and overrides
+ * `outline-style` only — so a focused control computed `outline-width: 2px`,
+ * `outline-color: <brand>`, `outline-style: none` and drew nothing.
+ *
+ * Task 16 removed `outline-none` from all seven and had each state spec §2's
+ * ring itself. Removing it was not optional: in Tailwind v4 `outline-none`
+ * sets `--tw-outline-style: none`, which `outline-2` then READS, so adding
+ * `focus-visible:outline-2` beside `outline-none` changes nothing at all.
+ *
+ * Two things to know before measuring a ring in the browser again:
+ *   - `outline-width`, `-offset` and `-color` are all animatable, and these
+ *     base classes carry `transition-all` (150 ms). Read immediately after
+ *     `.focus()` you get t=0 — `medium` (3 px), offset 0, `currentColor` —
+ *     which reads exactly like "no ring". Wait out the transition.
+ *   - a mouse-only session correctly draws nothing (`:focus-visible` false),
+ *     so drive the check from the keyboard.
+ * Verified after the fix on 16 controls × both themes: `solid 2px` in
+ * `--focus` (#206B58 light, #4BA58D dark) on `--surface` and inside a sheet
+ * on `--surface-2`.
  */
 
 :root {
@@ -346,6 +406,35 @@
      above). */
   --border-strong: color-mix(in oklch, var(--foreground) 50%, transparent);
   --focus: var(--brand);
+  /* ON-TINT text tokens (Task 16, F6 routed from Task 14). A tinted pill puts
+     `text-<tone>` on a 10 % wash of that SAME tone over the surface, which
+     moves the surface toward the text and costs contrast in both themes
+     (darker in light, lighter in dark) — measured at 4.01-4.67:1 in light,
+     3.28-4.66:1 in dark, i.e. under the 4.5:1 text minimum for three of the
+     four tones in light and for three in dark. The remedy is a dedicated text
+     token per tone rather than moving the tone itself (which would repaint
+     money figures and chart series, and needs L ~0.75-0.77 in dark — a pastel
+     palette the spec forbids): SAME hue and chroma, L stepped only far enough
+     in the contrast-GAINING direction to clear 4.5:1 with a little headroom on
+     all three tinted fills (surface, surface-2, background). Light steps
+     DARKER, dark steps LIGHTER. The wash alpha and the tones themselves are
+     untouched, exactly as the routing directs.
+
+     Light --brand-on-tint needs no step at all: brand-on-its-own-tint already
+     measures 5.06-5.50:1, so it is `var(--brand)` — declared anyway so all
+     four tones exist in both themes and a consumer cannot pick a token that
+     resolves to nothing.
+
+     The steps, and what each buys (browser figures; the ON-TINT table in the
+     MEASURED WCAG CONTRAST block above has every pair):
+       positive  L 0.518 -> 0.493   4.30 -> 4.77 at the worst fill
+       negative  L 0.55  -> 0.52    4.19 -> 4.75
+       warning   L 0.55  -> 0.51    4.01 -> 4.73
+       brand     unchanged          5.06 (already met) */
+  --positive-on-tint: oklch(0.493 0.091 160.408); /* #27714F */
+  --negative-on-tint: oklch(0.52 0.14 25); /* #AB413E */
+  --warning-on-tint: oklch(0.51 0.11 78); /* #875D00 as the browser paints it */
+  --brand-on-tint: var(--brand); /* #206B58 — already clears 4.5:1 on its own tint */
   /* The background an input SITS on, rather than a translucent wash over
      whatever is behind it. In light this is the surface itself — a white field
      on a white card reads correctly because the 1 px `--input` border is what
@@ -448,6 +537,25 @@
      (3.36:1) — see the MEASURED WCAG CONTRAST block above. */
   --border-strong: color-mix(in oklch, var(--foreground) 40%, transparent);
   --focus: var(--brand);
+  /* ON-TINT text tokens — see the `:root` block for the full reasoning. Dark
+     steps LIGHTER, because in dark an 18 % wash of a tone lifts the surface
+     toward that tone. Every one of the four needed a step here (light needed
+     three), and the steps are larger because the dark tints start further
+     under the minimum:
+       positive  L 0.635 -> 0.735   3.28 -> 4.79 at the worst fill
+       negative  L 0.683 -> 0.763   3.52 -> 4.75
+       warning   L 0.736 -> 0.771   4.21 -> 4.77
+       brand     L 0.66  -> 0.74    3.54 -> 4.74
+     These sit at L 0.735-0.771, which is exactly the lightness Task 14
+     rejected for the BASE tones ("a pastel palette, contradicting the spec's
+     pinned dark lightnesses and 'never neon'"). That objection was about
+     repainting every money figure and chart series; here the value is reached
+     only through `text-<tone>-on-tint`, which nothing but a tinted pill uses,
+     so the pinned tones and the chart palette are untouched. */
+  --positive-on-tint: oklch(0.735 0.105 160.924); /* #68BE94 */
+  --negative-on-tint: oklch(0.763 0.1 23.252); /* #EB9994 */
+  --warning-on-tint: oklch(0.771 0.1 79.908); /* #D6AE68 */
+  --brand-on-tint: oklch(0.74 0.094 173.622); /* #65BEA6 */
   /* Spec §3: "inputs on #1C221F" — one step below `--surface` (#202724), so a
      field reads as recessed into its card. Fixed rather than translucent, so
      the same input looks the same on a card and inside a dialog.

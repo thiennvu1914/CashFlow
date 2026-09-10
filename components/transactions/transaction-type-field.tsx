@@ -225,7 +225,13 @@ function TypeButton({
         // `min-h-11` is the 44 px touch target.
         'min-h-11 rounded-md border px-3 text-sm',
         checked
-          ? 'border-brand bg-brand/10 font-medium text-brand dark:bg-brand/18'
+          // `text-brand-on-tint`, not `text-brand` (Task 16, F6): a checked
+          // radio is the tinted-pill pattern — `text-<tone>` on a wash of the
+          // same tone — and `text-brand` on `bg-brand/18` measured 3.54:1
+          // against `--surface-2` in dark, i.e. a FORM CONTROL's own label
+          // under the 4.5:1 minimum. Same hue and chroma, L stepped only far
+          // enough to clear it; see `app/globals.css`'s ON-TINT table.
+          ? 'border-brand bg-brand/10 font-medium text-brand-on-tint dark:bg-brand/18'
           : 'border-border text-foreground hover:bg-muted',
       )}
     >

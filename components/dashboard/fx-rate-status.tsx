@@ -45,8 +45,12 @@ export async function FxRateStatus({ status }: { status: FxStatus }) {
         </span>
         {' · '}
         <span className="tabular-nums">{t('dashboard.fxUpdated', { time: status.updatedAt })}</span>
+        {/* The same tinted pill as `StatusBadge`'s warning tone, so it takes
+            the same `--warning-on-tint` text token (Task 16, F6): a wash of a
+            tone over the surface leaves the tone itself under 4.5:1 on it in
+            both themes. */}
         {status.kind === 'fallback' && (
-          <span className="ml-2 rounded-md bg-warning/10 px-1.5 py-0.5 text-warning dark:bg-warning/18">
+          <span className="ml-2 rounded-md bg-warning/10 px-1.5 py-0.5 text-warning-on-tint dark:bg-warning/18">
             {t('dashboard.fxCached')}
           </span>
         )}
