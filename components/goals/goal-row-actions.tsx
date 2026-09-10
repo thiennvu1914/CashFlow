@@ -68,7 +68,16 @@ export function GoalProgressButton({ goal }: { goal: SavingsGoalDto }) {
 
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={() => setProgressOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        // Height only: `size="sm"`'s 36 px is a mouse target, and spec §8
+        // wants 44 px under a thumb — so this inline row action is 44 px
+        // below the icon rail and the compact 36 px from `md` up.
+        className="h-11 md:h-9"
+        onClick={() => setProgressOpen(true)}
+      >
         {t('goals.progressAction')}
       </Button>
 

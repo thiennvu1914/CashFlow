@@ -39,6 +39,12 @@ export function LogoutButton({ compact }: { compact?: boolean }) {
       title={t('nav.logout')}
       className={cn(
         'w-full text-muted-foreground',
+        // 44 px below `md`, 36 px from `md` up (spec §8): this button renders
+        // in two places and only one of them is ever below `md` — the More
+        // sheet (`compact` false), where it is a full-width row a thumb has
+        // to hit. The rail (`compact`) only exists from `md` up, so it keeps
+        // the compact 36 px height either way.
+        'h-11 md:h-9',
         compact ? 'justify-center xl:justify-start' : 'justify-start',
       )}
     >
