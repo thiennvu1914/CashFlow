@@ -44,4 +44,18 @@ describe('CategoryChipList', () => {
     const html = renderToStaticMarkup(<CategoryChipList {...PROPS} items={[]} />)
     expect(html).toContain('categories.emptyTitle')
   })
+
+  it('says it through the EmptyState primitive — icon, title, one sentence, no action', () => {
+    // Task 17, owner item H2: this used to be a bare muted `<p>`, the one
+    // empty list in the product that did not go through the shared component.
+    // No `<a>`/`<button>` inside the empty state: the section's own add field
+    // is the next step, two rows below.
+    const html = renderToStaticMarkup(<CategoryChipList {...PROPS} items={[]} />)
+    const emptyState = html.slice(0, html.indexOf('categories.emptyBody'))
+    expect(emptyState).toContain('lucide-tags')
+    expect(emptyState).toContain('aria-hidden="true"')
+    expect(html).toContain('categories.emptyBody')
+    // The add row's own button is the only button on the section.
+    expect(html.match(/<button/g) ?? []).toHaveLength(1)
+  })
 })

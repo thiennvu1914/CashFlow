@@ -14,5 +14,6 @@
   "archiveConfirmTitle": "Archive {name}?",
   "archiveConfirmBody": "An archived item no longer appears when choosing, but existing records keep it.",
   "archivePending": "Archiving…",
-  "emptyTitle": "No items yet"
+  "emptyTitle": "No items yet",
+  "emptyBody": "Use the field below to add the first one."
 }

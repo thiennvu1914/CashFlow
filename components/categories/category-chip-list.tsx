@@ -2,10 +2,12 @@
 
 import { useId, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Tags } from 'lucide-react'
 import { cn } from 'cn'
 import { GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
 import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
+import { EmptyState } from '@/components/common/empty-state'
 import { FormField } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
@@ -76,6 +78,12 @@ export function CategoryChipList({
       setPendingArchive(null)
     } catch {
       console.error('CategoryChipList: archive failed')
+      // The dialog closes on failure too (spec §10, and the same reasoning
+      // `components/accounts/account-list.tsx` spells out): left open, its
+      // scrim covers the very `InlineAlert` below that explains why the
+      // archive was refused, so the user would see a dialog that appears to
+      // have done nothing.
+      setPendingArchive(null)
       setError(t(GENERIC_ERROR_KEY))
     }
   }
@@ -85,9 +93,18 @@ export function CategoryChipList({
       <SectionHeader title={title} />
 
       {items.length === 0 ? (
-        <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">
-          {t('categories.emptyTitle')}
-        </p>
+        // The `EmptyState` primitive, not the plain muted `<p>` this used to be
+        // (Task 17, owner item H2): every other empty list in the product says
+        // what is missing through the same component, and a lone grey sentence
+        // here was the one place that did not. No action prop — `Tags` is the
+        // Categories icon from the nav, the section's own add field is the next
+        // step and it is two rows below, and a button that scrolled to it would
+        // be a second primary for one input.
+        <EmptyState
+          icon={Tags}
+          title={t('categories.emptyTitle')}
+          description={t('categories.emptyBody')}
+        />
       ) : (
         <ul className="flex flex-wrap gap-2">
           {items.map((item) => (
@@ -109,7 +126,12 @@ export function CategoryChipList({
                       id: 'archive',
                       label: archiveLabel,
                       tone: 'negative',
-                      onSelect: () => setPendingArchive(item),
+                      // Clears a previous attempt's message first, so a
+                      // retry starts clean (same as `AccountList`).
+                      onSelect: () => {
+                        setError(null)
+                        setPendingArchive(item)
+                      },
                     },
                   ]}
                 />

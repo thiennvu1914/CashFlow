@@ -14,5 +14,6 @@
   "archiveConfirmTitle": "Lưu trữ {name}?",
   "archiveConfirmBody": "Mục đã lưu trữ không còn xuất hiện khi chọn, nhưng các bản ghi cũ vẫn giữ nguyên.",
   "archivePending": "Đang lưu trữ…",
-  "emptyTitle": "Chưa có mục nào"
+  "emptyTitle": "Chưa có mục nào",
+  "emptyBody": "Dùng ô bên dưới để thêm mục đầu tiên."
 }
