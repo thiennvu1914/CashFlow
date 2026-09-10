@@ -285,7 +285,24 @@ export default async function DashboardPage() {
           the desktop reading order: on a phone the ledger and the planning
           widgets come before the charts, because a phone is where the user
           checks something rather than studies it. */
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
+        /* `md:grid-flow-row-dense` (Task 18, routed from Task 15's owner item
+          F4 "tablet intentional"): in the TWO-column band, 768–1279, the
+          `order-*` sequence hands the grid a full-width widget straight after
+          a half-width one — `order-3` (budget progress, 1 col) is followed by
+          `order-4` (reminders, 2 cols), which cannot share its row — and
+          `order-11` (balance distribution, 1 col) is the last item, with
+          nothing after it to pair with. Both left a half-cell hole. Six
+          half-width widgets and four full-width ones tile that band exactly,
+          so dense backfilling closes both holes without changing a single
+          widget's span: expense-by-category rises beside the budget widget
+          and the distribution beside income-vs-expense. Dense changes
+          PLACEMENT only, never DOM order, so the tab order and the
+          screen-reader order stay the ones the markup already fixes.
+          `xl:grid-flow-row` restores normal flow for the 12-column desktop
+          composition, which has no holes to fill and must stay
+          byte-identical; the phone stack is single-column and sees neither
+          class. */
+        <div className="grid grid-cols-1 gap-6 md:grid-flow-row-dense md:grid-cols-2 xl:grid-flow-row xl:grid-cols-12">
           {/* Row 3: trend 8/12 h300 + expense breakdown 4/12 h300 */}
           <ChartContainer
             title={t('dashboard.cashFlowTrend')}
