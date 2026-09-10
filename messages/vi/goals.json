@@ -1,6 +1,6 @@
 {
   "title": "Mục tiêu tiết kiệm",
-  "description": "Mục tiêu tự nhập — không có gì ở đây làm dịch chuyển tiền",
+  "description": "Mục tiêu tự nhập — cập nhật tiến độ ở đây không làm dịch chuyển tiền giữa các tài khoản của bạn",
   "figureLine": "{progress} / {target} {currency} · {percent}",
   "deadlineMeta": "Còn {count, plural, other {# ngày}} ({date})",
   "deadlineToday": "Đến hạn hôm nay",

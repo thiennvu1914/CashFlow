@@ -17,7 +17,7 @@
   "expense": "Chi tiêu",
   "netIncome": "Thu nhập ròng",
   "byCategory": "Theo danh mục",
-  "byCategoryCaption": "Chỉ chi tiêu — một dòng thu nhập không có chỗ trong bảng phân tích chi",
+  "byCategoryCaption": "Chỉ tính chi tiêu — không gồm thu nhập",
   "byAccount": "Theo tài khoản",
   "account": "Tài khoản",
   "export": "Xuất Excel",

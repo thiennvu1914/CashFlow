@@ -40,7 +40,7 @@
   "intervalUnitMonths": "tháng",
   "intervalUnitYears": "năm",
   "dayOfMonth": "Ngày trong tháng",
-  "dayOfMonthHelper": "Bỏ trống để dùng ngày của ngày bắt đầu.",
+  "dayOfMonthHelper": "Bỏ trống để lấy theo ngày bắt đầu.",
   "month": "Tháng",
   "monthPlaceholder": "Tháng của ngày bắt đầu",
   "startDate": "Ngày bắt đầu",

@@ -33,7 +33,7 @@
   "paymentPrincipal": "Gốc",
   "paymentInterest": "Lãi",
   "paymentTotal": "Tổng",
-  "paymentTotalNote": "Tổng được tính từ Gốc và Lãi.",
+  "paymentTotalNote": "Tổng bằng Gốc cộng Lãi.",
   "paymentDate": "Ngày trả",
   "paymentNote": "Ghi chú (tùy chọn)",
   "paymentPending": "Đang lưu…",

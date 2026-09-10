@@ -1,5 +1,5 @@
 {
-  "A one-time reminder happens once — leave this at 1": "Nhắc nhở một lần chỉ xảy ra một lần — hãy để giá trị này là 1",
+  "A one-time reminder happens once — leave this at 1": "Nhắc nhở một lần thì không lặp lại — hãy để giá trị này là 1",
   "Amount is too large": "Số tiền quá lớn",
   "Amount must be greater than zero": "Số tiền phải lớn hơn 0",
   "At least every 1": "Tối thiểu là mỗi 1",
@@ -51,7 +51,7 @@
   "Pick a month from 1 to 12": "Hãy chọn tháng từ 1 đến 12",
   "Progress cannot be negative": "Tiến độ không được là số âm",
   "Rate cannot be negative": "Lãi suất không được là số âm",
-  "Rate cannot exceed 100 %": "Lãi suất không được vượt quá 100%",
+  "Rate cannot exceed 100 %": "Lãi suất không được vượt quá 100 %",
   "Target must be greater than zero": "Mục tiêu phải lớn hơn 0",
   "The interest cannot be negative": "Phần lãi không được là số âm",
   "The principal cannot be negative": "Phần gốc không được là số âm",
