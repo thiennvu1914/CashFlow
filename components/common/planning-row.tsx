@@ -26,12 +26,14 @@ import { cn } from 'cn'
  * `items-start` alone, though, mis-centred the common case (fix round 2's
  * regression): a single-line title is ~20 px tall, but the actions cell can
  * be 44 px (the `…` trigger's mobile touch target, `size-11`) or 36 px (its
- * desktop size, `sm:size-9`) — top-aligning two boxes of different heights
+ * desktop size, `md:size-9`) — top-aligning two boxes of different heights
  * puts their CONTENTS at different vertical centres, which reads as the `…`
  * trigger sitting low against the title. The fix is not `items-center` on the
  * header (that is what caused fix round 1's regression in the other
  * direction) — it is giving the TITLE cell the SAME min-height as the actions
- * cell can reach (`min-h-11` mobile, `sm:min-h-9` desktop, matching
+ * cell can reach (`min-h-11` below 768, `md:min-h-9` from the icon rail
+ * up — the SAME breakpoint the trigger moved to when the owner ruled 44 px for
+ * the whole sub-768 band, matching
  * `RowActionsMenu`'s own trigger sizes exactly) and keeping `items-center`
  * *inside* that cell. Two boxes of equal height, both top-aligned in an
  * `items-start` row, have coincident centres — restoring pixel-identical
@@ -85,7 +87,7 @@ export function PlanningRow({
         <div
           className={cn(
             'flex min-w-0 flex-wrap items-center gap-2',
-            hasActionsCell && 'min-h-11 sm:min-h-9',
+            hasActionsCell && 'min-h-11 md:min-h-9',
           )}
         >
           <span className="truncate text-sm/[1.25rem] font-medium">{title}</span>

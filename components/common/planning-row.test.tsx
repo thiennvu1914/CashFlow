@@ -71,7 +71,7 @@ describe('PlanningRow', () => {
       <PlanningRow title="Sửa nhà" figureLine="0" actions={<button type="button">…</button>} />,
     )
     expect(withActions).toContain('min-h-11')
-    expect(withActions).toContain('sm:min-h-9')
+    expect(withActions).toContain('md:min-h-9')
 
     // No actions and no inlineAction — an archived/read-only row keeps its
     // pre-fix-round-1 compactness rather than being inflated to match a
