@@ -512,23 +512,29 @@ export async function setReminderActive(
  *    first: that would be a read-then-write with a window in the middle that two
  *    simultaneous page loads would both pass through, and the second insert would
  *    then fail with P2002 (or, worse, succeed against a nonexistent constraint).
- *    `INSERT … ON CONFLICT DO NOTHING` has no window. Dates go in ascending order
- *    on every call, so concurrent callers take their row locks in the same order
- *    and cannot deadlock.
+ *    `INSERT … ON CONFLICT DO NOTHING` has no window. The rows are sorted by
+ *    `(reminderId, dueAt)` before they go in, so concurrent callers take their
+ *    row locks in the same order and cannot deadlock — an ordering the old
+ *    per-reminder insert got for free from the loop and one batch has to arrange
+ *    for itself.
  * 2. **It only ever inserts.** Nothing in this function updates or deletes an
  *    occurrence, which is what makes an ACKNOWLEDGED or DISMISSED row permanent:
  *    a later read recomputes the same `dueAt`, the conflict is skipped, and the
  *    user's answer stands. An `upsert` here — the obvious-looking alternative —
  *    would silently reset every actioned row to PENDING.
- * 3. **No transaction wraps the loop.** Each `createMany` is atomic and
- *    self-idempotent on its own, so a transaction would add nothing but a pooled
- *    connection held across every round trip of a page render. A partially
- *    materialized user is not an inconsistent state — it is a user whose next
- *    read finishes the job.
+ * 3. **One insert for the whole user, and no transaction around it** (Phase 8,
+ *    finding B-3). Every reminder's rows are collected in memory and written by
+ *    a single `createMany`, so the write cost of a dashboard render is a
+ *    property of the render rather than of how many reminders the user keeps —
+ *    it used to be one round trip per active reminder, almost all of them
+ *    inserting nothing. The one statement is atomic and self-idempotent on its
+ *    own, so a transaction would add nothing but a pooled connection held across
+ *    a page render; and a partially materialized user was never an inconsistent
+ *    state — it is a user whose next read finishes the job.
  *
- * The query cost is one reminder `findMany` plus at most one `createMany` per
- * reminder that has dates (the call is skipped entirely when it has none), never
- * a query per date.
+ * The query cost is one reminder `findMany` plus exactly one `createMany`,
+ * skipped entirely when nothing at all is due — never a query per reminder and
+ * never a query per date.
  */
 export async function materializeDueOccurrences(
   userId: string,
@@ -539,7 +545,11 @@ export async function materializeDueOccurrences(
 ): Promise<number> {
   const reminders = await prisma.recurringReminder.findMany({ where: { userId, active: true } })
 
-  let created = 0
+  // Every reminder's rows, collected before anything is written. Typed with a
+  // `Date` `dueAt` rather than as `Prisma.ReminderOccurrenceCreateManyInput`
+  // (whose `dueAt` is `Date | string`) so the sort below can compare instants
+  // without re-parsing them.
+  const rows: { userId: string; reminderId: string; dueAt: Date }[] = []
   for (const reminder of reminders) {
     // The reminder's own zone, per reminder: two reminders of the same user can
     // legitimately be anchored to different zones (one created before a move,
@@ -566,27 +576,36 @@ export async function materializeDueOccurrences(
         ? startLocal
         : maxCarrier(startLocal, oneIntervalBefore(rule, nowLocal))
 
-    const dueDates = computeDueDates(rule, from, to)
-    // Skipped rather than called with an empty array: a reminder whose start
-    // date is beyond the lookahead has nothing due, and an empty `createMany` is
-    // a round trip that inserts nothing.
-    if (dueDates.length === 0) continue
-
-    const result = await prisma.reminderOccurrence.createMany({
-      data: dueDates.map((dueDate) => ({
+    for (const dueDate of computeDueDates(rule, from, to)) {
+      rows.push({
         userId,
         reminderId: reminder.id,
         // Each local calendar day back to the instant it starts in the
         // REMINDER's zone — the only place the conversion happens, and the one
         // that makes a repeat read land on the very same instants.
         dueAt: localCarrierToInstant(dueDate, zone),
-      })),
-      skipDuplicates: true,
-    })
-    created += result.count
+      })
+    }
   }
 
-  return created
+  // Skipped rather than called with an empty array: a user whose reminders all
+  // start beyond the lookahead has nothing due, and an empty `createMany` is a
+  // round trip that inserts nothing.
+  if (rows.length === 0) return 0
+
+  // `(reminderId, dueAt)` ascending — property 1 above. Compared with `<`
+  // rather than `localeCompare`, which is locale-aware and would make the lock
+  // order depend on the host's collation.
+  rows.sort((a, b) =>
+    a.reminderId === b.reminderId
+      ? a.dueAt.getTime() - b.dueAt.getTime()
+      : a.reminderId < b.reminderId
+        ? -1
+        : 1,
+  )
+
+  const result = await prisma.reminderOccurrence.createMany({ data: rows, skipDuplicates: true })
+  return result.count
 }
 
 /**
