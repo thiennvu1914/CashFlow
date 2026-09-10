@@ -187,12 +187,26 @@ test.describe.serial('Phase 7 — theme and locale', () => {
         // translation this app owns, so it is the one string this check
         // excludes rather than a real leak.
         .replace('Tiếng Việt', '')
+      // NOTE: the diacritic class above is a NET, not a proof — it lists the
+      // precomposed Vietnamese vowel-with-diacritic codepoints this suite
+      // happens to need, not every combining-mark sequence Vietnamese text can
+      // use (a decomposed "ữ"/"ử"/"ẻ" built from a base vowel plus a
+      // combining mark would not match). It catches every string this app
+      // actually emits (NFC-normalised, like every literal in `messages/`),
+      // but is not a guarantee against every conceivable Vietnamese string.
       expect(text, url).not.toMatch(/[ăâđêôơưĂÂĐÊÔƠƯ]|ạ|ả|ấ|ầ|ệ|ế|ị|ọ|ố|ồ|ộ|ớ|ợ|ủ|ứ|ự|ỳ|ỹ/)
       // Wherever a four-plus-digit figure appears, it must be comma-grouped
       // (en), never period-grouped (vi) — this account's own figures never
       // grow that large, so the assertion is a no-op where there is nothing
       // to group; it still catches the moment any page starts rendering one.
-      const viGrouped = text.match(/\d{1,3}(?:\.\d{3})+/)
+      //
+      // Anchored with a negative lookahead for a percent sign (plain space OR
+      // U+00A0 non-breaking space before it, `\s` matches both): the Loans
+      // page's `interestRateLabel` can render up to three fraction digits
+      // (`formatPercent`, Task 13 D2), and "12.345 %" in English is a decimal
+      // point followed by exactly three digits — the same SHAPE a vi
+      // thousands separator has, but not a leaked vi grouping at all.
+      const viGrouped = text.match(/\d{1,3}(?:\.\d{3})+(?!\s?%)/)
       expect(viGrouped, `${url}: found a vi-grouped figure under an en page`).toBeNull()
     }
 
