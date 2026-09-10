@@ -33,16 +33,16 @@ console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
   migrates on the first run. There is no default — the suite refuses to start,
   before it spawns a dev server, when the variable is missing, when it resolves
   to the same database as `DATABASE_URL`, or when the database name does not
-  carry `e2e`/`test`. It starts the dev server itself with `DATABASE_URL` set to
-  that e2e database and `EMAIL_OUTBOX_FILE` pointed at
+  carry `e2e`/`test`. It always starts the dev server itself, with
+  `DATABASE_URL` set to that e2e database and `EMAIL_OUTBOX_FILE` pointed at
   `e2e/.outbox/emails.jsonl`, and reads the reset link back out of that file.
 
-  `reuseExistingServer` is on outside CI, so a dev server you started by hand
-  will be reused — and none of the variables above reach it. If you started it
-  without `EMAIL_OUTBOX_FILE`, the reset test times out waiting for an email
-  that went to the console instead; and because it is on your `DATABASE_URL`,
-  the run writes its throwaway users into the development database after all.
-  Either stop that server first, or start it with both variables set.
+  A server it did not start is never reused (`reuseExistingServer: false`),
+  because a dev server you started by hand is on your own `DATABASE_URL` and has
+  none of those variables — reusing it would write the suite's throwaway users
+  into the development database and strand the reset test waiting for an email
+  that went to the console. So **stop your dev server before running the
+  suite**: with port 3000 already busy, Playwright fails immediately and says so.
 
 Run `npm run format:check`, `npm run lint`, `npm run test` and `npm run build`
 before every commit.

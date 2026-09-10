@@ -1,5 +1,5 @@
 import path from 'path'
-import { config as loadEnv } from 'dotenv'
+import { loadEnvConfig } from '@next/env'
 import { E2E_DATABASE_URL_VARIABLE, assertE2eDatabaseUrl } from '../lib/testing/e2e-database-url'
 import { prepareDatabase } from '../lib/testing/prepare-database'
 
@@ -16,11 +16,12 @@ import { prepareDatabase } from '../lib/testing/prepare-database'
  * the config or the run is already over.
  */
 export default async function globalSetup(): Promise<void> {
-  // `next dev` loads `.env` itself, but this process does not: without it both
-  // `E2E_DATABASE_URL` and `DATABASE_URL` would look unset to the guard unless
-  // they happened to be exported in the shell. Never overrides an
-  // already-exported value.
-  loadEnv()
+  // The same loader, the same `dev` flag and therefore the same file
+  // precedence as `playwright.config.ts` — the two halves of one guard must
+  // never disagree about what the environment says. Redundant when this hook
+  // runs in the process that already loaded the config, and load-bearing when
+  // it does not; either way it never overrides an already-set value.
+  loadEnvConfig(process.cwd(), true)
 
   const e2eDatabaseUrl = assertE2eDatabaseUrl(process.env)
 
