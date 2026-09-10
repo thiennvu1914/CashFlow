@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   archiveSavingsGoal,
   createSavingsGoal,
@@ -41,11 +40,7 @@ export type SavingsGoalActionResult = { ok: true } | { ok: false; error: Savings
 
 function mapError(e: unknown): SavingsGoalActionResult {
   if (e instanceof SavingsGoalArchivedError) return { ok: false, error: 'ARCHIVED' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 /** Both pages a goal appears on. Called only after a write actually happened,

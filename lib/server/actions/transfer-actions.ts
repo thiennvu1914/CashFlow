@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   createTransfer,
   deleteTransfer,
@@ -34,11 +33,7 @@ export type TransferActionResult = { ok: true } | { ok: false; error: TransferAc
 function mapError(e: unknown): TransferActionResult {
   if (e instanceof ArchivedAccountError) return { ok: false, error: 'ARCHIVED_ACCOUNT' }
   if (e instanceof SameAccountTransferError) return { ok: false, error: 'SAME_ACCOUNT' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 export async function createTransferAction(

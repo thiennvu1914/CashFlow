@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import * as transactionService from '@/lib/server/services/transaction'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
@@ -55,11 +54,7 @@ function mapError(e: unknown): TransactionActionResult {
   if (e instanceof transactionService.ConcurrentModificationError) {
     return { ok: false, error: 'CONFLICT' }
   }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 /**

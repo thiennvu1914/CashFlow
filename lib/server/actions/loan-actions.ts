@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   closeLoan,
   createLoan,
@@ -64,11 +63,7 @@ function mapError(e: unknown): LoanActionResult {
   // it is mapped rather than left to rethrow because a future caller that does
   // reach it must be answered with a sentence about the split.
   if (e instanceof LoanSplitMismatchError) return { ok: false, error: 'SPLIT_MISMATCH' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 /** Both pages a loan appears on. Called only after a write actually happened,

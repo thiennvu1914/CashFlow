@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   createBudget,
   updateBudget,
@@ -34,11 +33,7 @@ export type BudgetActionResult = { ok: true } | { ok: false; error: BudgetAction
 function mapError(e: unknown): BudgetActionResult {
   if (e instanceof DuplicateBudgetError) return { ok: false, error: 'DUPLICATE_BUDGET' }
   if (e instanceof InvalidBudgetCategoryError) return { ok: false, error: 'INVALID_CATEGORY' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 export async function createBudgetAction(input: CreateBudgetInput): Promise<BudgetActionResult> {
