@@ -13,6 +13,13 @@ import type { Currency } from '@/lib/currency/provider'
  * `tone="accent"` (`--color-accent` via `Progress`) is deliberate — a
  * spending breakdown is a neutral fact, not a good/bad judgement, which is
  * the same choice `chart-theme.ts` makes for the account distribution.
+ * Task 14 (owner item E3) made that reasoning the product-wide convention and
+ * wrote it down in `components/dashboard/chart-theme.ts`: this row is the
+ * `distribution` slot (`--color-accent`), and the dashboard's
+ * `ExpenseByCategoryChart` — the same breakdown of the same numbers — was
+ * moved onto the same slot so the two cannot disagree. `expense`
+ * (`--color-negative`) stays reserved for a series that stands opposite an
+ * income series.
  *
  * `decorative` (fix round 1, promoted minor): the bar's width is a share of
  * the LARGEST row, but `row.percentLabel` beside it is a share of the TOTAL —

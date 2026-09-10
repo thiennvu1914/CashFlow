@@ -27,6 +27,18 @@ import {
  *
  * `summary` and `seriesLabel` arrive already translated from the page (fix
  * round 1, finding 2) — see `CashFlowTrendChart`'s doc comment for why.
+ *
+ * `CHART_COLORS.distribution`, not `.expense` (Task 14 Step 3, finding 3):
+ * this is one quantity — the month's spending — split into its parts, which is
+ * the `distribution` slot in the convention `chart-theme.ts` documents, not the
+ * `expense` slot (that one is for the series that stands opposite an income
+ * series, as on the cash-flow trend and the income-vs-expense bars). It had
+ * been `.expense`, which put the very same breakdown of the very same numbers
+ * in salmon here and in muted blue on the Reports page
+ * (`components/reports/category-bars.tsx`, `tone="accent"`), and its own doc
+ * comment already argued for the neutral reading. The sign is stated by the
+ * card's title and by every figure beside the bars; the hue does not need to
+ * repeat it.
  */
 export function ExpenseByCategoryChart({
   data,
@@ -66,7 +78,7 @@ export function ExpenseByCategoryChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.expense} />
+          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
         </BarChart>
       </ResponsiveContainer>
     </div>
