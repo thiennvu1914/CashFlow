@@ -92,9 +92,16 @@ export function Label({
  * `<ChevronDown className="pointer-events-none absolute right-3 …" />` sibling
  * inside a `relative` wrapper — an inline data-URI background image was tried
  * first and its escaping is brittle in Tailwind v4's arbitrary-value parser.
+ *
+ * Task 16: `outline-none` was here too, and cost every native `<select>` in
+ * the product its focus ring (Settings' four selects, and the type/currency/
+ * category selects in every create sheet) — the same defect as `buttonVariants`
+ * (F13) and `Input`. Replaced, not joined, by spec §2's ring: in Tailwind v4
+ * `outline-none` sets `--tw-outline-style: none`, which `outline-2` reads, so
+ * the two together still draw nothing.
  */
 export const SELECT_CLASS =
-  'h-11 w-full min-w-0 appearance-none rounded-md border border-input bg-[var(--input-bg)] px-3 py-2 pr-9 text-base transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-50 md:h-10 md:text-sm'
+  'h-11 w-full min-w-0 appearance-none rounded-md border border-input bg-[var(--input-bg)] px-3 py-2 pr-9 text-base transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-50 md:h-10 md:text-sm'
 
 /**
  * A field's error — and the render boundary where a Zod message becomes

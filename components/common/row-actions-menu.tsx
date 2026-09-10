@@ -70,12 +70,22 @@ export function RowActionsMenu({ label, actions }: { label: string; actions: Row
         <Menu.Positioner className="isolate z-50" side="bottom" align="end" sideOffset={4}>
           <Menu.Popup className="z-50 min-w-40 rounded-lg border border-border bg-surface-2 p-1 shadow-[0_8px_24px_rgba(25,33,30,0.10)] dark:shadow-[0_8px_24px_rgba(0,0,0,0.40)]">
             {actions.map((action) => (
+              // Task 16 (G3): `outline-none` used to sit in this class list,
+              // so the keyboard-highlighted item's ONLY indicator was
+              // `data-highlighted:bg-muted` — which measures 1.05:1 against
+              // `--surface-2` in dark (`app/globals.css`, contrast note 2),
+              // i.e. a keyboard user could not see where they were. Spec §2's
+              // ring replaces it, drawn INSIDE the item
+              // (`-outline-offset-2`) because the popup's own padding is 4 px
+              // and a 2 px ring at +2 px offset would sit on its edge. The
+              // wash stays: it is what a mouse hover shows, and Base UI
+              // highlights on hover without moving `:focus-visible`.
               <Menu.Item
                 key={action.id}
                 disabled={action.disabled}
                 onClick={action.onSelect}
                 className={cn(
-                  'flex cursor-default items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-disabled:opacity-50',
+                  'flex cursor-default items-center rounded-md px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus)] data-highlighted:bg-muted data-disabled:opacity-50',
                   action.tone === 'negative' ? 'text-negative' : 'text-foreground',
                 )}
               >

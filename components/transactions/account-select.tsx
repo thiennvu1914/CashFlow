@@ -84,7 +84,7 @@ export function AccountSelect({
               <Select.Item
                 key={account.id}
                 value={account.id}
-                className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-selected:font-medium data-selected:text-brand"
+                className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus)] data-highlighted:bg-muted data-selected:font-medium data-selected:text-brand"
               >
                 <Select.ItemText>{optionLabel(account)}</Select.ItemText>
               </Select.Item>

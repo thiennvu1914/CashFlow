@@ -15,7 +15,22 @@ const buttonVariants = cva(
   // no border-colour utility at all (only `border`, which is width/style),
   // and every variant below states its own — `border-transparent` where a
   // border is not meant to show, `border-border` on `outline`.
-  "group/button inline-flex shrink-0 items-center justify-center rounded-md border bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  // The focus ring (spec §2), and why it is spelled out here rather than left
+  // to the global `:focus-visible` rule in `app/globals.css`. The base class
+  // used to carry Tailwind's `outline-none`, which lives in a later cascade
+  // layer than `@layer base` and overrides `outline-style` only — so a focused
+  // Button computed `outline-width: 2px`, `outline-color: <brand>`,
+  // `outline-style: none` and drew NOTHING, in either theme, on every button
+  // and every `buttonVariants()` link in the product (Task 14 finding F13,
+  // measured in the browser; Task 16 re-measured it on six controls before
+  // fixing). `outline-none` is gone AND the three spec §2 utilities are stated,
+  // because the two facts are independent: dropping `outline-none` is what lets
+  // an outline paint at all, and naming the ring here is what keeps a Button
+  // ringed even if the global rule is ever narrowed. Note the order matters in
+  // Tailwind v4: `outline-none` sets `--tw-outline-style: none`, which
+  // `outline-2` then reads — so ADDING `focus-visible:outline-2` beside
+  // `outline-none` would have changed nothing at all.
+  "group/button inline-flex shrink-0 items-center justify-center rounded-md border bg-clip-padding text-sm font-medium whitespace-nowrap transition-all select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)] active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

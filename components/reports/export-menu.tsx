@@ -49,14 +49,14 @@ export function ExportMenu({
             {filteredHref !== null && (
               <Menu.Item
                 render={<a href={filteredHref} />}
-                className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
+                className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus)] data-highlighted:bg-muted"
               >
                 {filteredLabel}
               </Menu.Item>
             )}
             <Menu.Item
               render={<a href={fullHref} />}
-              className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted"
+              className="flex cursor-default items-center rounded-md px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--focus)] data-highlighted:bg-muted"
             >
               {fullLabel}
             </Menu.Item>
