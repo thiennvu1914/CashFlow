@@ -41,6 +41,20 @@ export const E2E_DATABASE_URL_VARIABLE = 'E2E_DATABASE_URL'
  */
 const TEST_DATABASE_NAME_MARKER = /(?:^|_)(?:e2e|test)(?:_|$)/i
 
+/**
+ * Whether a database NAME is one the test policy would accept as disposable.
+ *
+ * Exported so the rule has one reader in each direction. The Playwright guard
+ * below uses it to require the marker; `lib/server/demo/guards.ts` uses it in
+ * reverse, to REFUSE — the demo seed/clear scripts target the application
+ * database, and a run against `cashflow_test` or `cashflow_e2e` would wipe a
+ * suite's fixtures out from under it. Two copies of this regex would be two
+ * copies that could drift in opposite directions.
+ */
+export function isTestDatabaseName(databaseName: string): boolean {
+  return TEST_DATABASE_NAME_MARKER.test(databaseName)
+}
+
 export type E2eDatabaseRefusalReason = 'missing' | 'same-as-app' | 'unsafe'
 
 export type E2eDatabaseDecision =
@@ -110,7 +124,7 @@ export function decideE2eDatabaseUrl(
     }
   }
 
-  if (!TEST_DATABASE_NAME_MARKER.test(databaseName)) {
+  if (!isTestDatabaseName(databaseName)) {
     return {
       ok: false,
       reason: 'unsafe',
