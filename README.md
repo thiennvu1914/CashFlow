@@ -50,10 +50,13 @@ before every commit.
 ## Deployment requirements
 
 Required environment variables. `lib/server/env.ts` validates the whole
-contract once at server start: in production a missing or placeholder value
-throws one aggregated error naming the offending variables (never their
-values), and outside production the same findings are `console.warn`ed and the
-app boots. `.env.example` is the grouped, annotated copy of this list.
+contract before the first request that touches the database, auth or email: in
+production a missing or placeholder value throws one aggregated error naming
+the offending variables (never their values), and outside production the same
+findings are `console.warn`ed and the app boots. Advisory findings — a
+test-only variable, a stray `EMAIL_OUTBOX_FILE`, a non-UTC `TZ` — are logged by
+name in production too, and never fail a boot. `.env.example` is the grouped,
+annotated copy of this list.
 
 - `BETTER_AUTH_URL` — the public origin. Without it Better Auth derives its base
   URL from the request, so a forged `Host` header can end up inside an emailed
@@ -70,9 +73,11 @@ app boots. `.env.example` is the grouped, annotated copy of this list.
   forgeable.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` — there is
   no email fallback in production. `getEmailSender()` throws rather than falling
-  back to the console or the file outbox. `EMAIL_FROM` is required in
-  production, and `SMTP_PORT` must be a positive integer whenever `SMTP_HOST`
-  is set; `SMTP_USER`/`SMTP_PASSWORD` may be empty for an anonymous relay.
+  back to the console or the file outbox, so `SMTP_HOST`, `SMTP_PORT` and
+  `EMAIL_FROM` are required at startup, not at the first send. `SMTP_PORT` must
+  be an integer between 1 and 65535 whenever `SMTP_HOST` is set. Authentication
+  is optional — leave `SMTP_USER`/`SMTP_PASSWORD` empty for an anonymous relay,
+  or set both; `SMTP_USER` without `SMTP_PASSWORD` is refused.
 - `DATABASE_URL` — also needed at build time. `next build` imports every route
   module to collect page data, and the Prisma client is constructed at module
   scope, so the build needs a reachable database. (The production-only part of the
@@ -94,6 +99,11 @@ Operational notes:
   declares an optional peer on `vitest ^2||^3||^4` while this repo runs Vitest 5.
   It is a blanket setting, so review peer warnings by hand when upgrading
   dependencies.
+- Environment values are trimmed before they are validated and used, so a
+  secret pasted with surrounding whitespace signs with its trimmed form.
+  Better Auth's `AUTH_SECRET` fallback is no longer enough in production
+  either: `BETTER_AUTH_SECRET` itself must be set, or the process refuses to
+  start.
 - Set `TZ=UTC` in CI and production (it is in `.env.example`); period math is
   computed in the user's IANA zone from UTC timestamps, so a server on a local
   zone shifts every period boundary. User-facing dates keep coming from
