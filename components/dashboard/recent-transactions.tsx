@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
 import { cn } from 'cn'
-import { Receipt } from 'lucide-react'
+import { ArrowRight, Receipt } from 'lucide-react'
 import { EmptyState } from '@/components/common/empty-state'
 import { FinancialListRow } from '@/components/common/financial-list-row'
 import { MoneyText } from '@/components/common/money-text'
@@ -83,9 +83,10 @@ export async function RecentTransactions({
       </ul>
       <Link
         href="/transactions"
-        className="self-start text-[0.8125rem]/[1.125rem] text-brand underline-offset-4 hover:underline"
+        className="group inline-flex items-center gap-1.5 self-start text-[0.8125rem]/[1.125rem] font-medium text-brand underline-offset-4 hover:underline"
       >
-        {t('dashboard.viewAllTransactions')}
+        <span>{t('dashboard.viewAllTransactions')}</span>
+        <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
       </Link>
     </div>
   )

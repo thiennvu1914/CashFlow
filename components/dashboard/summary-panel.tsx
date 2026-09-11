@@ -1,4 +1,5 @@
 import { cn } from 'cn'
+import { ArrowDownLeft, ArrowUpRight, ShieldCheck, TrendingUp, Wallet } from 'lucide-react'
 import type { Currency } from '@/lib/currency/provider'
 import type { KpiDto } from '@/lib/ui/dashboard-view-model'
 import { MoneyText, type MoneySize } from '@/components/common/money-text'
@@ -225,15 +226,48 @@ function Cell({
   note?: string
   className?: string
 }) {
+  const isNetWorth = size === 'hero'
+  const isTotalBalance = kpi.labelKey.includes('totalBalance')
+  const isIncome = kpi.labelKey.includes('monthlyIncome')
+  const isExpense = kpi.labelKey.includes('monthlyExpense')
+  const isNetIncome = kpi.labelKey.includes('netIncome')
+
   return (
-    // `xl:justify-center` (fix round 1, finding 4): at xl the three monthly
-    // cells span both of the left column's rows (`xl:row-span-2`), and a
-    // top-aligned flex column left an empty band beneath the shorter content
-    // — noticeable in the Step 12 screenshot's above-the-fold view. Centring
-    // the column's content vertically only matters where a cell is taller
-    // than its content (i.e. those three), and is a no-op everywhere else.
-    <div className={cn('flex flex-col gap-1 bg-surface p-4 xl:justify-center', className)}>
-      <dt className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{labels[kpi.labelKey]}</dt>
+    <div
+      className={cn(
+        'group flex flex-col gap-1.5 bg-surface p-4 transition-colors duration-150 hover:bg-muted/30 xl:justify-center',
+        isNetWorth && 'bg-gradient-to-br from-surface via-surface to-brand/5 dark:to-brand/10',
+        className,
+      )}
+    >
+      <dt className="flex items-center gap-2 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+        {isNetWorth && (
+          <span className="flex size-6 items-center justify-center rounded-md bg-brand/15 text-brand ring-1 ring-brand/30">
+            <ShieldCheck className="size-3.5" />
+          </span>
+        )}
+        {isTotalBalance && (
+          <span className="flex size-5.5 items-center justify-center rounded-md bg-accent/15 text-accent">
+            <Wallet className="size-3" />
+          </span>
+        )}
+        {isIncome && (
+          <span className="flex size-5.5 items-center justify-center rounded-md bg-positive/15 text-positive">
+            <ArrowDownLeft className="size-3" />
+          </span>
+        )}
+        {isExpense && (
+          <span className="flex size-5.5 items-center justify-center rounded-md bg-negative/15 text-negative">
+            <ArrowUpRight className="size-3" />
+          </span>
+        )}
+        {isNetIncome && (
+          <span className="flex size-5.5 items-center justify-center rounded-md bg-brand/15 text-brand">
+            <TrendingUp className="size-3" />
+          </span>
+        )}
+        <span>{labels[kpi.labelKey]}</span>
+      </dt>
       <dd className="flex flex-col gap-1">
         <Figure
           kpi={kpi}

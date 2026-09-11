@@ -44,7 +44,12 @@ export function FinancialListRow({
   wrapMeta?: boolean
 }) {
   return (
-    <li className={cn('flex items-center gap-3 px-4 py-3', className)}>
+    <li
+      className={cn(
+        'flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30',
+        className,
+      )}
+    >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div
           className={cn('text-sm/[1.25rem] font-medium', wrapTitle ? 'break-words' : 'truncate')}

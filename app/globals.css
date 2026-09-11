@@ -60,6 +60,8 @@
      `--radius-lg` is the card radius, `--radius-md` the control radius. */
   --radius-md: 0.375rem;
   --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
   --radius-full: 999px;
   --radius-DEFAULT: var(--radius-md);
 }
@@ -632,4 +634,35 @@
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* Sleek custom scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 16%, transparent);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--foreground) 30%, transparent);
+  }
 }
+
+/* Modern Fintech card & depth utilities */
+.card-hover-effect {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+.card-hover-effect:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, var(--brand) 30%, var(--border));
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.05), 0 8px 10px -6px rgb(0 0 0 / 0.03);
+}
+.dark .card-hover-effect:hover {
+  border-color: color-mix(in oklch, var(--brand) 45%, var(--border));
+  box-shadow: 0 12px 30px -5px rgb(0 0 0 / 0.45), 0 8px 10px -6px rgb(0 0 0 / 0.3);
+}
+

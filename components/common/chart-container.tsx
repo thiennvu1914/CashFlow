@@ -27,7 +27,10 @@ export function ChartContainer({
 }) {
   return (
     <section
-      className={cn('flex flex-col rounded-lg border border-border bg-surface p-4', className)}
+      className={cn(
+        'card-hover-effect flex flex-col rounded-lg border border-border bg-surface p-4 shadow-xs',
+        className,
+      )}
     >
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
