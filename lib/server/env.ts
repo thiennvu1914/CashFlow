@@ -24,8 +24,13 @@ import { parseTrustedProxies } from '@/lib/auth/trusted-proxies'
  * - test — silent. The suites stub environments on purpose and must not be
  *   drowned in warnings.
  *
- * Advisory findings (`warnings`) are logged in every non-test environment,
- * production included, and never fail a boot.
+ * Advisory findings (`warnings`) never fail a boot. Most of them (a stray
+ * test-only variable, `EMAIL_OUTBOX_FILE` set in production, a non-UTC `TZ`)
+ * are computed only under a real production runtime; the one exception, an
+ * unrecognised `NODE_ENV`, is computed regardless of environment. Whatever
+ * ends up in `warnings` is printed in every non-test environment — `loadServerEnv`
+ * does not filter by environment again at the printing site, only test stays
+ * silent.
  *
  * The check runs before the first request that touches the database, auth or
  * email: `lib/prisma.ts`, `lib/auth/auth.ts` and `lib/email/get-sender.ts` all
