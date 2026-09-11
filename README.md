@@ -47,6 +47,25 @@ console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
 Run `npm run format:check`, `npm run lint`, `npm run test` and `npm run build`
 before every commit.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`, one run per ref (a new push cancels the one in flight). The `checks`
+job installs from the lockfile on the Node version in `.nvmrc`, then runs lint,
+`format:check`, `tsc --noEmit`, `prisma validate`, Vitest, Playwright
+(Chromium only, workers 1, retries 0, traces uploaded as an artifact when it
+fails) and the production build against a throwaway `postgres:16` service — the
+same three-database split as local development, with `cashflow_ci`,
+`cashflow_ci_test` and `cashflow_ci_e2e` on one disposable server, so no CI
+step can reach a real database. `npm audit` runs there too, informationally,
+and never fails the build. The `production-smoke` job builds the runner and
+migrator images from the `Dockerfile`, migrates a scratch database with the
+migrator, starts the container with a production-shaped environment and a
+secret generated in the job, and asserts `/api/health` returns 200 and that a
+real page ships its security headers. Nothing is deployed and no repository
+secret is used. GitHub Actions cannot be executed locally, so the first real
+run of the pipeline happens when this file is pushed.
+
 ## Docker quick start
 
 The image is vendor-neutral: Node, PostgreSQL, nothing platform-specific. It is
