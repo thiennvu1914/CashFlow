@@ -21,14 +21,25 @@ import { Button } from '@/components/ui/button'
  * re-fetches the segment from the server. Everything here fails on the server,
  * so refetching is the only thing that can recover.
  *
- * Nothing about `error` is rendered or logged. Its `message` is English written
- * for developers, and on this application's pages it can carry account names,
- * balances or provider details — none of which belongs on a user's screen or in
- * a log line. (Next already withholds it in production, replacing it with a
- * `digest`; this component does not rely on that.) The fixed string below is
- * all that is recorded, and the server-side log carries the real error.
+ * Nothing about `error` is RENDERED OR LOGGED except its `digest`. `message` is
+ * English written for developers, and on this application's pages it can carry
+ * account names, balances or provider details — none of which belongs on a
+ * user's screen or in a log line. (Next already withholds `message` in
+ * production, replacing it with the digest; this component does not rely on
+ * that.) `digest` is the one exception, the same reasoning `app/global-error.tsx`
+ * documents: it is by construction opaque and PII-free, and it is the only
+ * token tying this browser to the server stack trace — so it is shown as a
+ * short reference code the user can quote back to support, never logged here
+ * (the fixed string below is all that is recorded; the server-side log carries
+ * the real error).
  */
-export default function AppError({ retry }: { error: unknown; retry: () => void }) {
+export default function AppError({
+  error,
+  retry,
+}: {
+  error: Error & { digest?: string }
+  retry: () => void
+}) {
   const t = useTranslations()
 
   // In an effect, not the render body: rendering must stay free of side
@@ -48,6 +59,11 @@ export default function AppError({ retry }: { error: unknown; retry: () => void 
       <Button type="button" onClick={() => retry()}>
         {t('common.retry')}
       </Button>
+      {error.digest && (
+        <p className="text-xs text-muted-foreground">
+          {t('errors.boundaryReference', { code: error.digest })}
+        </p>
+      )}
     </div>
   )
 }

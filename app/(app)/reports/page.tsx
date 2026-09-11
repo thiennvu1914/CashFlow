@@ -8,10 +8,12 @@ import type { Locale } from '@/lib/i18n/locale'
 import {
   InvalidReportRangeError,
   describeRange,
+  offendingReportRangeParam,
   rangeToQueryString,
   resolveReportRange,
   type ReportRange,
 } from '@/lib/reports/report-range'
+import { log } from '@/lib/server/log'
 import { getActivitySummary } from '@/lib/server/services/activity'
 import { formatDate } from '@/lib/ui/format-date'
 import { formatMoney, formatPercent } from '@/lib/ui/format-money'
@@ -112,15 +114,22 @@ export default async function ReportsPage({
     // database fault is not and must still surface as an error.
     if (!(error instanceof InvalidReportRangeError)) throw error
     // The specific reason is not lost, it just stops being shown to the
-    // reader: it goes to the server log, where a developer chasing a bad link
-    // can still read which of the six checks refused it.
+    // reader and stops carrying the raw query text: a stable reason code plus
+    // the offending field name go to the server log, where a developer
+    // chasing a bad link can still tell which of the six checks refused it —
+    // without the log ever repeating a hand-typed date or period string back
+    // (Task 11 fix round, promoted minor: `error.message` embeds the raw
+    // value for several of those checks).
     //
     // `warn`, not `error`: a hand-typed query parameter that the resolver
     // rejected is a handled input, not a fault — and in `next dev` a
     // `console.error` during a server render is counted by the dev overlay's
     // issue badge, which would put a red "1 Issue" on screen every time
     // someone typed a bad range.
-    console.warn(`Reports: invalid range — ${error.message}`)
+    log.warn('reports.invalid_range', {
+      reason: 'invalid_range',
+      param: offendingReportRangeParam(error.message),
+    })
     return (
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
         <PageHeader

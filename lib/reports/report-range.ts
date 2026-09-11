@@ -215,6 +215,20 @@ export function resolveReportRange(
  *   whichever month it was created in), so the behaviour is deliberate: a named
  *   period means the period, not a snapshot of it.
  */
+/**
+ * The `period`/`from`/`to` field an `InvalidReportRangeError`'s message names
+ * — never the message itself. Every one of `resolveReportRange`'s six checks
+ * embeds the field name as a literal word, but several of them also echo the
+ * raw, possibly hand-typed value right next to it (a bad date, an unknown
+ * period string). Logging `error.message` verbatim would put that
+ * user-supplied query text in the server log; this keeps only the field name,
+ * which is enough for a developer chasing a bad link to know which control to
+ * look at.
+ */
+export function offendingReportRangeParam(message: string): string | undefined {
+  return message.match(/\b(period|from|to)\b/)?.[1]
+}
+
 export function rangeToQueryString(range: ReportRange): string {
   const query = new URLSearchParams()
   query.set('period', range.kind)

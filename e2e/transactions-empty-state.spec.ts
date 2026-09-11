@@ -1,11 +1,9 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createTransactionViaUi,
   eitherLocale,
-  registerNewUser,
 } from './helpers'
 
 /**
@@ -25,10 +23,7 @@ import {
  * reach on its own (archiving is a server round-trip), which is why it is here.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-tx-empty-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('tx-empty')
 
 const NOTICE = eitherLocale(
   'Bạn cần ít nhất một tài khoản để ghi giao dịch.',
@@ -43,23 +38,14 @@ const NOTICE = eitherLocale(
 const RAW_VALIDATION_TEXT = /expected string|>=1 characters|Too small|Invalid input/i
 
 test.describe.serial('Transactions — no active financial account', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    // `storageState: undefined` overrides the file-level `test.use` above,
-    // which at this point names a file this step is about to create — see the
-    // identical reasoning in `phase4.spec.ts`'s `beforeAll`.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
     // No account is created here, deliberately: the first test is the
     // brand-new user's very first visit to `/transactions`.
-    await registerNewUser(page, { emailPrefix: 'e2e-tx-empty' })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser)
   })
 
   test('zero accounts: a notice replaces the form and links to /accounts', async ({ page }) => {

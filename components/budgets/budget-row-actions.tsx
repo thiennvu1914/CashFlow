@@ -8,8 +8,8 @@ import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import { updateBudgetSchema, type UpdateBudgetInput } from '@/lib/validation/budget'
 import { deleteBudgetAction, updateBudgetAction } from '@/lib/server/actions/budget-actions'
-import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { BUDGET_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { BudgetProgressDto } from '@/lib/ui/budget-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -41,27 +41,20 @@ export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const { setError } = useRowError()
-  const deleteSubmit = useSubmitState()
+  const deleteSubmit = useActionSubmit(t)
 
   const name = budget.categoryName ?? t('labels.budgetScope.OVERALL')
 
   async function confirmDelete() {
-    setError(null)
-    await deleteSubmit.run(async () => {
-      try {
-        const result = await deleteBudgetAction(budget.id)
-        if (!result.ok) {
-          setConfirming(false)
-          setError(t(BUDGET_ERROR_KEYS[result.error]))
-          return
-        }
-        setConfirming(false)
-        router.refresh()
-      } catch {
-        console.error('BudgetRowActions: delete failed')
-        setConfirming(false)
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await deleteSubmit.run({
+      tag: 'BudgetRowActions: delete failed',
+      action: () => deleteBudgetAction(budget.id),
+      errorKeys: BUDGET_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes: the row's message renders behind this
+      // dialog's own scrim (`components/common/confirm-dialog.tsx`).
+      onSettled: () => setConfirming(false),
+      onSuccess: () => router.refresh(),
     })
   }
 
@@ -113,7 +106,7 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `budget-edit-${name}-${uid}`
   const {
@@ -129,20 +122,15 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
   })
 
   async function onSubmit(values: UpdateBudgetInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateBudgetAction(budget.id, values)
-        if (!result.ok) {
-          setError(t(BUDGET_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'BudgetEditForm: update failed',
+      action: () => updateBudgetAction(budget.id, values),
+      errorKeys: BUDGET_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('BudgetEditForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

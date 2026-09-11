@@ -803,6 +803,51 @@ describe('current position service', () => {
       expect(position.loanOutstanding.toString()).toBe('0')
       expect(position.netWorth.toString()).toBe('1000000')
     })
+
+    /**
+     * The payload half of finding B-7, pinned where it regressed.
+     *
+     * Net Worth's three agreement terms come from the debt and loan services'
+     * `groupBy` sums; the payment rows those services used to include were
+     * carried across the wire on every dashboard render and then discarded
+     * (this module's own doc comment said so). The figures below are the same
+     * ones every case above asserts — a part-paid receivable, a part-paid
+     * payable and a part-repaid loan — and they must be identical whether or not
+     * the history travels with them.
+     */
+    it('reads the agreement sums without fetching a single payment row', async () => {
+      const s = await vndAccountsOnly()
+      await seedDebt(s.userId, {
+        direction: 'RECEIVABLE',
+        originalAmount: '2000000',
+        paid: '500000',
+      })
+      await seedDebt(s.userId, {
+        direction: 'PAYABLE',
+        originalAmount: '800000',
+        paid: '300000',
+      })
+      await seedLoan(s.userId, { principal: '1000000', principalPaid: '300000' })
+      const debtFindMany = vi.spyOn(prisma.debt, 'findMany')
+      const loanFindMany = vi.spyOn(prisma.loan, 'findMany')
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      // 1,000,000 + 1,500,000 − 500,000 − 700,000.
+      expect(position.receivables.toString()).toBe('1500000')
+      expect(position.payables.toString()).toBe('500000')
+      expect(position.loanOutstanding.toString()).toBe('700000')
+      expect(position.netWorth.toString()).toBe('1300000')
+      // One read each, and neither of them joins the history: the payload is a
+      // property of the position, not of how many instalments the user has
+      // recorded.
+      expect(debtFindMany).toHaveBeenCalledTimes(1)
+      expect(loanFindMany).toHaveBeenCalledTimes(1)
+      expect(debtFindMany.mock.calls[0][0]?.include).toBeUndefined()
+      expect(loanFindMany.mock.calls[0][0]?.include).toBeUndefined()
+    })
   })
 
   describe('getNetWorth', () => {

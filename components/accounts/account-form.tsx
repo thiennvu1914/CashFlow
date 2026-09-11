@@ -11,9 +11,9 @@ import {
   type CreateFinancialAccountInput,
 } from '@/lib/validation/financial-account'
 import { createFinancialAccountAction } from '@/lib/server/actions/financial-account-actions'
-import { ACCOUNT_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { ACCOUNT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ export function AccountForm({
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
   /** Spec §9: the same fieldset is locked while a mutation is in flight. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   /**
    * A per-instance prefix, same reasoning as `TransactionForm`'s `uid`: a
    * hard-coded id would make `<label for>` bind to whichever instance's
@@ -64,21 +64,16 @@ export function AccountForm({
   })
 
   async function onSubmit(values: CreateFinancialAccountInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await createFinancialAccountAction(values)
-        if (!result.ok) {
-          setError(t(ACCOUNT_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'AccountForm: create failed',
+      action: () => createFinancialAccountAction(values),
+      errorKeys: ACCOUNT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset()
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('AccountForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

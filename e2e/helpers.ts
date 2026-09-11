@@ -1,4 +1,6 @@
-import type { Page } from '@playwright/test'
+import os from 'os'
+import path from 'path'
+import type { Browser, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 
 /**
@@ -32,6 +34,86 @@ export async function registerNewUser(
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 })
 
   return { email, password }
+}
+
+/**
+ * One spec file's signed-in browser state: a throwaway user registered through
+ * the real UI once, saved as Playwright `storageState` and reused by every test
+ * in the file via `test.use`.
+ *
+ * Every spec that needs a session had its own copy of this — a `path.join`
+ * against `os.tmpdir()`, a `beforeAll` opening a logged-out context, the
+ * `registerNewUser` call, the save and the close, plus the comment explaining
+ * `storageState: undefined` (twenty-one copies across twenty files, pre-flight
+ * A-7). The copies had already drifted into three wordings of that comment,
+ * none of them closed the context in a `finally`, and each carried its own two
+ * spellings of the same label.
+ *
+ * `label` is that one spelling now: it names the temp file
+ * (`cashflow-<label>-<pid>.json`, per-process so two runs on one machine never
+ * share a file) and the registered user's email prefix (`e2e-<label>`). It must
+ * be distinct per session — two sessions sharing a label would silently share
+ * one state file, so a duplicate throws when the second spec file loads.
+ */
+export interface AuthenticatedSession {
+  /** The `storageState` path — pass to `test.use({ storageState })`. */
+  readonly path: string
+  /**
+   * Registers the user, runs `seed` on the signed-in page, then saves the
+   * state. Call once, from `test.beforeAll`; returns the credentials for the
+   * few specs that sign in again through the UI.
+   */
+  bootstrap(
+    browser: Browser,
+    seed?: (page: Page) => Promise<void>,
+  ): Promise<{ email: string; password: string }>
+}
+
+/**
+ * Every label handed out so far. Playwright loads all spec files into one
+ * process to collect the tests, so a label reused by a second file is caught
+ * here at load time — before either file's `beforeAll` overwrites the other's
+ * saved session and turns it into a cross-file failure nobody would read as a
+ * naming collision.
+ */
+const takenLabels = new Set<string>()
+
+export function authenticatedSession(label: string): AuthenticatedSession {
+  if (takenLabels.has(label)) {
+    throw new Error(
+      `authenticatedSession('${label}') is already used by another spec file. Two sessions with ` +
+        'the same label share one storage-state file and one email prefix; give each spec file its own.',
+    )
+  }
+  takenLabels.add(label)
+
+  const statePath = path.join(os.tmpdir(), `cashflow-${label}-${process.pid}.json`)
+
+  return {
+    path: statePath,
+
+    async bootstrap(browser, seed) {
+      // `browser.newContext()` (the fixture-provided `browser`, not raw
+      // Playwright) inherits the file-level `test.use({ storageState: ... })`
+      // by default — which, at this point, names a file this very step is about
+      // to create. `storageState: undefined` overrides that back to a clean,
+      // logged-out context.
+      const context = await browser.newContext({ storageState: undefined })
+      try {
+        const page = await context.newPage()
+        const account = await registerNewUser(page, { emailPrefix: `e2e-${label}` })
+        // Before the save, so the state a spec's tests start from is the one
+        // the seed left behind — cookies included.
+        await seed?.(page)
+        await context.storageState({ path: statePath })
+        return account
+      } finally {
+        // In a `finally`, unlike the copies this replaces: a seed that throws
+        // used to leave its browser context open for the rest of the run.
+        await context.close()
+      }
+    },
+  }
 }
 
 /**

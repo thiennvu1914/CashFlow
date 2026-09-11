@@ -166,7 +166,7 @@ describe('isSameDatabase', () => {
 
 describe('adminConnectionCandidates', () => {
   it('always tries the maintenance database on the TEST server first', () => {
-    const [first] = adminConnectionCandidates(TEST, DEV)
+    const [first] = adminConnectionCandidates(TEST, DEV, 'TEST_DATABASE_URL')
     const url = new URL(first)
     expect(url.hostname).toBe('localhost')
     expect(url.port).toBe('5439')
@@ -176,29 +176,45 @@ describe('adminConnectionCandidates', () => {
   })
 
   it('offers the dev database as a second attempt on the same server', () => {
-    expect(adminConnectionCandidates(TEST, DEV)).toHaveLength(2)
-    expect(adminConnectionCandidates(TEST, DEV)[1]).toBe(DEV)
+    expect(adminConnectionCandidates(TEST, DEV, 'TEST_DATABASE_URL')).toHaveLength(2)
+    expect(adminConnectionCandidates(TEST, DEV, 'TEST_DATABASE_URL')[1]).toBe(DEV)
   })
 
   it('recognises a dev database on the same loopback server written a different way', () => {
     expect(
-      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@127.0.0.1:5439/cashflow'),
+      adminConnectionCandidates(
+        TEST,
+        'postgresql://cashflow:pw@127.0.0.1:5439/cashflow',
+        'TEST_DATABASE_URL',
+      ),
     ).toHaveLength(2)
     expect(
-      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@[::1]:5439/cashflow'),
+      adminConnectionCandidates(
+        TEST,
+        'postgresql://cashflow:pw@[::1]:5439/cashflow',
+        'TEST_DATABASE_URL',
+      ),
     ).toHaveLength(2)
   })
 
   it('never reaches for a dev database on another server', () => {
     expect(
-      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@db.example.com:5439/cashflow'),
+      adminConnectionCandidates(
+        TEST,
+        'postgresql://cashflow:pw@db.example.com:5439/cashflow',
+        'TEST_DATABASE_URL',
+      ),
     ).toHaveLength(1)
     expect(
-      adminConnectionCandidates(TEST, 'postgresql://cashflow:pw@localhost:5432/cashflow'),
+      adminConnectionCandidates(
+        TEST,
+        'postgresql://cashflow:pw@localhost:5432/cashflow',
+        'TEST_DATABASE_URL',
+      ),
     ).toHaveLength(1)
   })
 
   it('works with no dev URL at all', () => {
-    expect(adminConnectionCandidates(TEST, undefined)).toHaveLength(1)
+    expect(adminConnectionCandidates(TEST, undefined, 'TEST_DATABASE_URL')).toHaveLength(1)
   })
 })

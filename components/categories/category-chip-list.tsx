@@ -4,8 +4,7 @@ import { useId, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Tags } from 'lucide-react'
 import { cn } from 'cn'
-import { GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { EmptyState } from '@/components/common/empty-state'
 import { FormField } from '@/components/common/form-field'
@@ -52,40 +51,44 @@ export function CategoryChipList({
   // field with no default in the first place — there is nothing here for the
   // gate to protect against. Do not "fix" this by adding one.
   const [name, setName] = useState('')
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
+  /**
+   * Archiving gets its OWN lock rather than sharing `submit`'s: the add row's
+   * `disabled` and its "Adding…" label both read `submit.locked`/`.pending`,
+   * so one shared lock would put the add button into its pending state while
+   * an unrelated chip was being archived.
+   */
+  const archiveSubmit = useActionSubmit(t)
   const [error, setError] = useState<string | null>(null)
   /** The item awaiting archive confirmation, or `null`. One dialog per section. */
   const [pendingArchive, setPendingArchive] = useState<Item | null>(null)
 
   async function handleAdd() {
     if (!name.trim()) return
-    setError(null)
-    await submit.run(async () => {
-      try {
-        await onCreate(name.trim())
-        setName('')
-      } catch {
-        console.error('CategoryChipList: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await submit.run({
+      tag: 'CategoryChipList: create failed',
+      // No `errorKeys`: the page's inline server actions (`app/(app)/categories/
+      // page.tsx`) return `Promise<void>`, so a REFUSED create is invisible
+      // here and only a throw reaches this component. Unchanged from before —
+      // widening that contract would be a product change, not a refactor.
+      action: () => onCreate(name.trim()),
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => setName(''),
     })
   }
 
   async function confirmArchive(item: Item) {
-    setError(null)
-    try {
-      await onArchive(item.id)
-      setPendingArchive(null)
-    } catch {
-      console.error('CategoryChipList: archive failed')
-      // The dialog closes on failure too (spec §10, and the same reasoning
+    await archiveSubmit.run({
+      tag: 'CategoryChipList: archive failed',
+      action: () => onArchive(item.id),
+      onError: (failure) => setError(failure?.message ?? null),
+      // The dialog closes on BOTH outcomes (spec §10, and the same reasoning
       // `components/accounts/account-list.tsx` spells out): left open, its
       // scrim covers the very `InlineAlert` below that explains why the
       // archive was refused, so the user would see a dialog that appears to
       // have done nothing.
-      setPendingArchive(null)
-      setError(t(GENERIC_ERROR_KEY))
-    }
+      onSettled: () => setPendingArchive(null),
+    })
   }
 
   return (

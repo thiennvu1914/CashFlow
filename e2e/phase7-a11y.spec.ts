@@ -1,8 +1,6 @@
-import os from 'os'
-import path from 'path'
 import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Page } from '@playwright/test'
-import { PAGES, registerNewUser, createAccountViaUi, createTransactionViaUi } from './helpers'
+import { authenticatedSession, createAccountViaUi, createTransactionViaUi, PAGES } from './helpers'
 
 /**
  * The accessibility guarantees spec §8 makes, as tests (Task 16).
@@ -41,7 +39,7 @@ import { PAGES, registerNewUser, createAccountViaUi, createTransactionViaUi } fr
  * `transition-all` — the wait is `expect.poll`, a retrying assertion with a
  * real condition, not a slept-through interval.
  */
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-a11y-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-a11y')
 
 /** WCAG conformance only. See the file doc for why `best-practice` is out. */
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
@@ -248,41 +246,40 @@ async function savePreference(page: Page, name: 'theme' | 'locale', value: strin
 }
 
 test.describe.serial('Phase 7 — accessibility', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(180_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-a11y' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-    // One transaction, and it is load-bearing rather than decoration: Task 17
-    // replaced the dashboard's ten widgets with a three-step onboarding card
-    // for a user who has nothing (`app/(app)/dashboard/page.tsx`'s
-    // `showOnboarding`), so without a row there is no chart on the page to
-    // scan, to Tab into or to arrow through.
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Cash',
-      categoryName: 'Food & Dining',
-      amount: 120_000,
-    })
-    // A second, zero-balance account, archived: that is what renders the
-    // page-level `<details>`/`<summary>` disclosure whose 44 px touch box was
-    // routed here from Task 15. The same `<summary>` class serves all four
-    // (`/accounts`, `/goals`, `/debts`, `/loans`), so one real instance is
-    // enough to measure — and without it the assertion would be vacuous.
-    // Zero balance because `/accounts` refuses to archive anything else
-    // (spec §6.4).
-    await createAccountViaUi(page, { name: 'Vi cu', currency: 'VND', initialBalance: 0 })
-    await page.getByRole('button', { name: /Tác vụ cho Vi cu|Actions for Vi cu/ }).click()
-    await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
-    const archiveConfirm = page.getByRole('dialog', { name: /Lưu trữ Vi cu\?|Archive Vi cu\?/ })
-    await archiveConfirm.getByRole('button', { name: /^Lưu trữ$|^Archive$/ }).click()
-    await expect(page.getByText(/Tài khoản đã lưu trữ \(1\)|Archived accounts \(1\)/)).toBeVisible()
 
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+      // One transaction, and it is load-bearing rather than decoration: Task 17
+      // replaced the dashboard's ten widgets with a three-step onboarding card
+      // for a user who has nothing (`app/(app)/dashboard/page.tsx`'s
+      // `showOnboarding`), so without a row there is no chart on the page to
+      // scan, to Tab into or to arrow through.
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 120_000,
+      })
+      // A second, zero-balance account, archived: that is what renders the
+      // page-level `<details>`/`<summary>` disclosure whose 44 px touch box was
+      // routed here from Task 15. The same `<summary>` class serves all four
+      // (`/accounts`, `/goals`, `/debts`, `/loans`), so one real instance is
+      // enough to measure — and without it the assertion would be vacuous.
+      // Zero balance because `/accounts` refuses to archive anything else
+      // (spec §6.4).
+      await createAccountViaUi(page, { name: 'Vi cu', currency: 'VND', initialBalance: 0 })
+      await page.getByRole('button', { name: /Tác vụ cho Vi cu|Actions for Vi cu/ }).click()
+      await page.getByRole('menuitem', { name: /^Lưu trữ$|^Archive$/ }).click()
+      const archiveConfirm = page.getByRole('dialog', { name: /Lưu trữ Vi cu\?|Archive Vi cu\?/ })
+      await archiveConfirm.getByRole('button', { name: /^Lưu trữ$|^Archive$/ }).click()
+      await expect(
+        page.getByText(/Tài khoản đã lưu trữ \(1\)|Archived accounts \(1\)/),
+      ).toBeVisible()
+    })
   })
 
   for (const url of PAGES) {
@@ -626,7 +623,7 @@ test.describe.serial('Phase 7 — accessibility', () => {
     browser,
   }) => {
     const context = await browser.newContext({
-      storageState: STORAGE_STATE_PATH,
+      storageState: SESSION.path,
       reducedMotion: 'reduce',
     })
     const page = await context.newPage()

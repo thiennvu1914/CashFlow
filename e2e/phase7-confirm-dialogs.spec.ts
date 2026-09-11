@@ -1,7 +1,6 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Page } from '@playwright/test'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createBudgetViaUi,
   createDebtViaUi,
@@ -9,7 +8,6 @@ import {
   createLoanViaUi,
   createReminderViaUi,
   createTransactionViaUi,
-  registerNewUser,
   todayInZone,
 } from './helpers'
 
@@ -43,7 +41,7 @@ import {
  * occurrence each, so acknowledge and dismiss each have their own row and
  * neither depends on how a recurring reminder's group collapses).
  */
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-confirm-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-confirm')
 
 /** The zone every registered user starts in — for the reminders' start date. */
 const TODAY = todayInZone('Asia/Ho_Chi_Minh')
@@ -63,99 +61,94 @@ async function rowAction(page: Page, row: string, itemName: RegExp): Promise<voi
 }
 
 test.describe.serial('Phase 7 — confirmations', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
   // `next dev` compiles each route and every server action behind it on first
   // request, exactly as `phase6.spec.ts` documents for its own seed.
   test.describe.configure({ timeout: 180_000 })
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-confirm' })
+    await SESSION.bootstrap(browser, async (page) => {
+      // One of everything the eight destructive actions need.
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+      await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 5_000_000 })
+      // Never used by anything below, so its balance stays 0 — the one account
+      // `archiveFinancialAccountAction` will accept (a non-zero balance is
+      // refused as NON_ZERO_BALANCE, which is another test's subject).
+      await createAccountViaUi(page, { name: 'Scratch', currency: 'VND', initialBalance: 0 })
+      // A SECOND empty account, for the stray-Enter case at the bottom of this
+      // file (fix round 1, Minor 5): "Scratch" is archived by its own case above
+      // it, and pressing Enter at an account whose balance makes the archive
+      // impossible anyway would leave that test's consequence half unable to
+      // fail.
+      await createAccountViaUi(page, { name: 'Spare', currency: 'VND', initialBalance: 0 })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 100_000,
+      })
 
-    // One of everything the eight destructive actions need.
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-    await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 5_000_000 })
-    // Never used by anything below, so its balance stays 0 — the one account
-    // `archiveFinancialAccountAction` will accept (a non-zero balance is
-    // refused as NON_ZERO_BALANCE, which is another test's subject).
-    await createAccountViaUi(page, { name: 'Scratch', currency: 'VND', initialBalance: 0 })
-    // A SECOND empty account, for the stray-Enter case at the bottom of this
-    // file (fix round 1, Minor 5): "Scratch" is archived by its own case above
-    // it, and pressing Enter at an account whose balance makes the archive
-    // impossible anyway would leave that test's consequence half unable to
-    // fail.
-    await createAccountViaUi(page, { name: 'Spare', currency: 'VND', initialBalance: 0 })
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Cash',
-      categoryName: 'Food & Dining',
-      amount: 100_000,
-    })
+      // A transfer, through its own form (there is no helper for one).
+      await page.goto('/transfers')
+      // The options read "<name> (<currency>)", so the label is the whole
+      // string — and both are selected explicitly because the form's own
+      // defaults are "the first account" and "the first one after it", which is
+      // whatever order the service returns.
+      await page.getByLabel(/^Từ$|^From$/).selectOption({ label: 'Cash (VND)' })
+      await page.getByLabel(/^Đến$|^To$/).selectOption({ label: 'Bank (VND)' })
+      await page.getByLabel(/^Số tiền$|^Amount$/).fill('50000')
+      await page.getByRole('button', { name: /^Chuyển tiền$|^Transfer$/ }).click()
+      await expect(page.getByRole('button', { name: rowMenuName('Cash → Bank') })).toBeVisible()
 
-    // A transfer, through its own form (there is no helper for one).
-    await page.goto('/transfers')
-    // The options read "<name> (<currency>)", so the label is the whole
-    // string — and both are selected explicitly because the form's own
-    // defaults are "the first account" and "the first one after it", which is
-    // whatever order the service returns.
-    await page.getByLabel(/^Từ$|^From$/).selectOption({ label: 'Cash (VND)' })
-    await page.getByLabel(/^Đến$|^To$/).selectOption({ label: 'Bank (VND)' })
-    await page.getByLabel(/^Số tiền$|^Amount$/).fill('50000')
-    await page.getByRole('button', { name: /^Chuyển tiền$|^Transfer$/ }).click()
-    await expect(page.getByRole('button', { name: rowMenuName('Cash → Bank') })).toBeVisible()
+      // A custom expense category, so `/categories` has an archivable chip (a
+      // default one cannot be archived and offers no menu at all). The page has
+      // exactly three sections, each with one Add button, in the order account
+      // types / expense / income — asserted, so a fourth section would fail here
+      // loudly rather than silently type into the wrong one.
+      await page.goto('/categories')
+      const addButtons = page.getByRole('button', { name: /^Thêm$|^Add$/ })
+      await expect(addButtons).toHaveCount(3)
+      await page.getByLabel(/Thêm danh mục chi|Add expense category/).fill('Ca phe')
+      await addButtons.nth(1).click()
+      await expect(page.getByRole('button', { name: rowMenuName('Ca phe') })).toBeVisible()
 
-    // A custom expense category, so `/categories` has an archivable chip (a
-    // default one cannot be archived and offers no menu at all). The page has
-    // exactly three sections, each with one Add button, in the order account
-    // types / expense / income — asserted, so a fourth section would fail here
-    // loudly rather than silently type into the wrong one.
-    await page.goto('/categories')
-    const addButtons = page.getByRole('button', { name: /^Thêm$|^Add$/ })
-    await expect(addButtons).toHaveCount(3)
-    await page.getByLabel(/Thêm danh mục chi|Add expense category/).fill('Ca phe')
-    await addButtons.nth(1).click()
-    await expect(page.getByRole('button', { name: rowMenuName('Ca phe') })).toBeVisible()
-
-    await createBudgetViaUi(page, { scope: 'OVERALL', amount: 10_000_000 })
-    await createGoalViaUi(page, { name: 'Emergency fund', target: 20_000_000 })
-    // The goal "update progress" acts on: the one above is archived below.
-    await createGoalViaUi(page, { name: 'Laptop', target: 30_000_000 })
-    await createDebtViaUi(page, { direction: 'RECEIVABLE', person: 'Minh', amount: 2_000_000 })
-    await createLoanViaUi(page, {
-      lender: 'Vietcombank',
-      principal: 120_000_000,
-      interestRate: 8.5,
-      termMonths: 60,
-      scheduledPayment: 3_800_000,
+      await createBudgetViaUi(page, { scope: 'OVERALL', amount: 10_000_000 })
+      await createGoalViaUi(page, { name: 'Emergency fund', target: 20_000_000 })
+      // The goal "update progress" acts on: the one above is archived below.
+      await createGoalViaUi(page, { name: 'Laptop', target: 30_000_000 })
+      await createDebtViaUi(page, { direction: 'RECEIVABLE', person: 'Minh', amount: 2_000_000 })
+      await createLoanViaUi(page, {
+        lender: 'Vietcombank',
+        principal: 120_000_000,
+        interestRate: 8.5,
+        termMonths: 60,
+        scheduledPayment: 3_800_000,
+      })
+      // MONTHLY, for pause/resume on the schedule tab.
+      await createReminderViaUi(page, {
+        title: 'Internet',
+        type: 'EXPENSE',
+        amount: 300_000,
+        frequency: 'MONTHLY',
+        startDate: TODAY,
+      })
+      // Two ONE_TIME reminders due today: one occurrence each, so acknowledge and
+      // dismiss each have their own row.
+      await createReminderViaUi(page, {
+        title: 'Power bill',
+        type: 'EXPENSE',
+        amount: 400_000,
+        frequency: 'ONE_TIME',
+        startDate: TODAY,
+      })
+      await createReminderViaUi(page, {
+        title: 'Water bill',
+        type: 'EXPENSE',
+        amount: 200_000,
+        frequency: 'ONE_TIME',
+        startDate: TODAY,
+      })
     })
-    // MONTHLY, for pause/resume on the schedule tab.
-    await createReminderViaUi(page, {
-      title: 'Internet',
-      type: 'EXPENSE',
-      amount: 300_000,
-      frequency: 'MONTHLY',
-      startDate: TODAY,
-    })
-    // Two ONE_TIME reminders due today: one occurrence each, so acknowledge and
-    // dismiss each have their own row.
-    await createReminderViaUi(page, {
-      title: 'Power bill',
-      type: 'EXPENSE',
-      amount: 400_000,
-      frequency: 'ONE_TIME',
-      startDate: TODAY,
-    })
-    await createReminderViaUi(page, {
-      title: 'Water bill',
-      type: 'EXPENSE',
-      amount: 200_000,
-      frequency: 'ONE_TIME',
-      startDate: TODAY,
-    })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   /**

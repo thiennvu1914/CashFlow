@@ -1,16 +1,14 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import ExcelJS from 'exceljs'
 import enErrors from '@/messages/en/errors.json'
 import viErrors from '@/messages/vi/errors.json'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createBudgetViaUi,
   createTransactionViaUi,
   digitsOnly,
   eitherLocale,
-  registerNewUser,
 } from './helpers'
 
 /**
@@ -36,10 +34,7 @@ import {
  * hold in either locale without pinning which one is rendering.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase5-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase5')
 
 /** The localised scope label for an OVERALL budget, in both locales — never
  *  the literal word "Overall", which Task 7 replaced everywhere in the UI. */
@@ -95,22 +90,14 @@ async function openRowMenu(page: Page, row: Locator, name: string, enName = name
 }
 
 test.describe.serial('Phase 5 — budgets', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    // `storageState: undefined` overrides the file-level `test.use` above,
-    // which at this point names a file this step is about to create — see the
-    // identical reasoning in `phase4.spec.ts`'s `beforeAll`.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase5' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    })
   })
 
   test('navigation & empty state (desktop 1280x800)', async ({ page }) => {

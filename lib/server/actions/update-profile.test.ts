@@ -31,6 +31,11 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ set: cookieSetMock }),
+  // A plain localhost HTTP request, the development default: no
+  // `x-forwarded-proto`, so `preferenceCookieOptions()` decides on NODE_ENV
+  // (`test` here) and leaves the cookies without `Secure`. The secure branch
+  // itself is covered in `lib/server/preference-cookies.test.ts`.
+  headers: async () => new Headers(),
 }))
 
 const { updateProfile } = await import('./update-profile')
@@ -76,16 +81,13 @@ describe('updateProfile', () => {
   it('mirrors the parsed locale and theme into their cookies', async () => {
     await updateProfile(validInput)
 
-    expect(cookieSetMock).toHaveBeenCalledWith(
-      'NEXT_LOCALE',
-      'en',
-      expect.objectContaining({ path: '/', sameSite: 'lax' }),
-    )
-    expect(cookieSetMock).toHaveBeenCalledWith(
-      'cashflow-theme',
-      'dark',
-      expect.objectContaining({ path: '/', sameSite: 'lax' }),
-    )
+    const oneYearSeconds = 60 * 60 * 24 * 365
+    // `secure: false` is asserted, not merely absent: on a localhost HTTP dev
+    // request the browser would DROP a Secure cookie, silently losing the
+    // theme and language that were just saved.
+    const expectedOptions = { path: '/', sameSite: 'lax', maxAge: oneYearSeconds, secure: false }
+    expect(cookieSetMock).toHaveBeenCalledWith('NEXT_LOCALE', 'en', expectedOptions)
+    expect(cookieSetMock).toHaveBeenCalledWith('cashflow-theme', 'dark', expectedOptions)
   })
 
   it('never lets an injected isDemo or userId reach prisma, and the where.id comes only from requireUser()', async () => {

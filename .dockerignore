@@ -1,0 +1,64 @@
+# The build context is the working tree, not the git index — so an untracked
+# real `.env` IS in it. `COPY . .` would bake BETTER_AUTH_SECRET, the database
+# password and the SMTP password into an image layer where no later `rm`
+# removes them. The `.env*` rule below is the single most important line here.
+
+# Secrets. `.env` is untracked but present in every developer checkout.
+# Docker's ignore matching is root-anchored by default — a bare `.env` matches
+# only a file literally at the build context's root, not one inside a nested
+# directory. `**/` makes each pattern match at any depth, which is what a
+# secret file actually needs.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# History and local tooling state — large, and irrelevant to a build.
+.git
+.gitattributes
+.gitignore
+.github
+.claude
+.superpowers
+
+# Installed and built artefacts: the image installs and builds its own. Copying
+# a host `node_modules` in would also import host-platform binaries.
+node_modules
+.next
+out
+build
+coverage
+*.tsbuildinfo
+**/node_modules
+**/*.tsbuildinfo
+
+# Test harness output and logs.
+e2e/.outbox
+e2e/.results
+playwright-report
+test-results
+*.log
+*.dump
+**/*.log
+
+# Documentation and editor noise. Not needed to build or serve.
+docs
+.vscode
+.idea
+.DS_Store
+**/.DS_Store
+
+# Kept deliberately (documented so a future edit does not "tidy" them away):
+#   prisma/            schema + migrations — `postinstall` generates from it,
+#                      and the migrator stage applies migrations from it
+#   prisma7.config.ts  the Prisma 7 CLI config both of those read
+#   messages/          next-intl vi/en catalogues, imported by the build
+#   public/            static assets copied into the runner
+#   app/ components/ lib/ i18n/ instrumentation.ts
+#   package.json package-lock.json .npmrc
+#   next.config.ts tsconfig.json postcss.config.mjs components.json
+#   e2e/ and *.test.ts files are NOT excluded: `tsconfig.json` and the
+#   next-intl plugin resolve across the tree, and excluding tests has broken
+#   type-aware builds before. They add kilobytes to the context, not the image.

@@ -1,5 +1,3 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import ExcelJS from 'exceljs'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
@@ -8,6 +6,7 @@ import { formatDate } from '@/lib/ui/format-date'
 import enErrors from '@/messages/en/errors.json'
 import viErrors from '@/messages/vi/errors.json'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createDebtViaUi,
   createGoalViaUi,
@@ -15,7 +14,6 @@ import {
   createReminderViaUi,
   digitsOnly,
   eitherLocale,
-  registerNewUser,
   todayInZone,
 } from './helpers'
 
@@ -74,10 +72,7 @@ import {
 
 const TIMEZONE = 'Asia/Ho_Chi_Minh'
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase6-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase6')
 
 /**
  * The user's own calendar day, taken once for the whole file.
@@ -337,26 +332,18 @@ function rowWhere(rows: unknown[][], column: number, value: string): unknown[] {
 }
 
 test.describe.serial('Phase 6 — planning modules', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
   // See the module comment: `next dev` compiles four brand-new routes, and
   // every server action behind them, on first request.
   test.describe.configure({ timeout: 180_000 })
 
   test.beforeAll(async ({ browser }) => {
-    // `storageState: undefined` overrides the file-level `test.use` above,
-    // which at this point names a file this step is about to create — see the
-    // identical reasoning in `phase4.spec.ts`'s `beforeAll`.
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase6' })
-    // The only account, and it never receives a transaction in this file: its
-    // balance stays exactly 5.000.000, which is what makes test 7's Net Worth
-    // an exact figure rather than an approximation.
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser, async (page) => {
+      // The only account, and it never receives a transaction in this file: its
+      // balance stays exactly 5.000.000, which is what makes test 7's Net Worth
+      // an exact figure rather than an approximation.
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    })
   })
 
   test('1. rail navigation to the four planning pages (desktop 1280x800)', async ({ page }) => {

@@ -1,18 +1,19 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { displayTotal, paymentResolver, totalFromParts } from './loan-payment-math'
 
 /**
  * Unit cases for the two pure functions the payment form derives its Total
- * with. Its own file rather than an addition to `loan-form.test.tsx`, for two
- * reasons: that file is a *markup* test for a different component and mocks a
- * different action (`createLoanAction`), so folding a second module's
- * pure-function cases into it would make its name a lie and its mock set a
- * superset of what it needs; and Group 3 keeps one test file per component
- * under test.
+ * with, and the resolver that wraps them. Its own file rather than an addition
+ * to `loan-form.test.tsx`, for two reasons: that file is a *markup* test for a
+ * different component and mocks a different action (`createLoanAction`), so
+ * folding a second module's pure-function cases into it would make its name a
+ * lie and its mock set a superset of what it needs; and Group 3 keeps one test
+ * file per component under test.
  *
- * `.ts`, not `.tsx`: nothing here renders. Only the module under test is a
- * component file, and importing it needs the same two mocks the markup tests
- * need — `useRouter` throws outside a mounted app router, and the action module
- * pulls in Prisma.
+ * `loan-payment-math.ts` has no React, navigation or action import (Phase 8
+ * pre-flight A-9 split it out of `loan-row-actions.tsx` for exactly this
+ * reason), so this file needs no mocks at all — unlike its former home, which
+ * dragged in `useRouter` and the action module just to let the import resolve.
  *
  * What is pinned here is the one piece of novel arithmetic in this group — the
  * total is added in exact cents, so an instalment whose naive float sum would
@@ -22,17 +23,6 @@ import { describe, expect, it, vi } from 'vitest'
  * asserted without a DOM renderer this repo has no dependency for; it is
  * verified against the installed 7.87 source and documented on `DERIVED_FIELD`.
  */
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
-}))
-
-vi.mock('@/lib/server/actions/loan-actions', () => ({
-  closeLoanAction: vi.fn(),
-  recordLoanPaymentAction: vi.fn(),
-  updateLoanAction: vi.fn(),
-}))
-
-const { displayTotal, paymentResolver, totalFromParts } = await import('./loan-row-actions')
 
 /** The fields the user actually types, with the two amounts left to each case. */
 const BASE = {

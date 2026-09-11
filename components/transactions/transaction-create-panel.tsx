@@ -174,15 +174,19 @@ export function TransactionCreateTrigger() {
   const t = useTranslations()
   const ctx = useContext(TransactionCreateContext)
   if (!ctx) return null
+  // Destructured here, in the same narrowed scope as the guard above, rather
+  // than read off `ctx` inside `handleClick` below: TS does not carry a
+  // `const`'s narrowing into a nested function declaration, so `ctx.openSheet`
+  // itself would still type as possibly-`null`-qualified there. `openSheet`
+  // pulled out here is just a plain `() => void`, with nothing left to assert.
+  const { openSheet } = ctx
 
   function handleClick() {
     const isMdUp = window.matchMedia('(min-width: 768px)').matches
     if (isMdUp) {
       focusInlinePanel()
     } else {
-      // Narrowed by the `if (!ctx) return null` above, in this same render —
-      // TS does not carry that narrowing into a nested function declaration.
-      ctx!.openSheet()
+      openSheet()
     }
   }
 

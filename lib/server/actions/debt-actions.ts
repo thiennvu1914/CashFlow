@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   createDebt,
   recordDebtPayment,
@@ -58,11 +57,7 @@ export type DebtActionResult = { ok: true } | { ok: false; error: DebtActionErro
 function mapError(e: unknown): DebtActionResult {
   if (e instanceof DebtOverpaymentError) return { ok: false, error: 'OVERPAYMENT' }
   if (e instanceof DebtNotActiveError) return { ok: false, error: 'NOT_ACTIVE' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 /** Both pages a debt appears on. Called only after a write actually happened,

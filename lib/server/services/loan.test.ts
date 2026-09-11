@@ -20,6 +20,7 @@ import {
   LoanNotActiveError,
   LoanOverpaymentError,
   LoanSplitMismatchError,
+  type LoanTotals,
   type LoanWithOutstanding,
 } from './loan'
 
@@ -1048,6 +1049,99 @@ describe('loan service', () => {
     it('returns nothing for a user with no loans', async () => {
       expect(await getLoansWithOutstanding(fx.userId, TODAY)).toEqual([])
       expect(await listLoans(fx.userId)).toEqual([])
+    })
+
+    /**
+     * `includePayments: false` — the totals-only read (Phase 8, Task 4,
+     * pre-flight finding B-7), the mirror of `debt.ts`.
+     *
+     * Net Worth's liability term and the export's Loans sheet need
+     * `principalPaid`, `interestPaid`, `outstandingPrincipal` and
+     * `displayStatus`; every instalment row they used to fetch was discarded.
+     * The interest split is the part that would be easiest to get wrong, so both
+     * sums are compared, on a fixture covering no instalments, a fractional
+     * part-payment, a fully repaid loan and a closed one.
+     */
+    it('derives identical figures with and without the instalment history', async () => {
+      const none = await createLoan(fx.userId, { ...BASE_LOAN, lender: 'None' })
+      const partly = await createLoan(fx.userId, { ...BASE_LOAN, lender: 'Partly' })
+      const full = await createLoan(fx.userId, { ...BASE_LOAN, lender: 'Full' })
+      const gone = await createLoan(fx.userId, { ...BASE_LOAN, lender: 'Gone' })
+      await recordLoanPayment(fx.userId, partly.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      await recordLoanPayment(fx.userId, partly.id, {
+        totalAmount: 250_000.5,
+        principalAmount: 200_000.25,
+        interestAmount: 50_000.25,
+        paymentDate: '2026-03-01',
+      })
+      await recordLoanPayment(fx.userId, full.id, {
+        totalAmount: 1_050_000,
+        principalAmount: 1_000_000,
+        interestAmount: 50_000,
+        paymentDate: '2026-02-01',
+      })
+      await recordLoanPayment(fx.userId, gone.id, {
+        totalAmount: 110_000,
+        principalAmount: 100_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      await closeLoan(fx.userId, gone.id)
+
+      const withHistory = await getLoansWithOutstanding(fx.userId, TODAY)
+      const totalsOnly = await getLoansWithOutstanding(fx.userId, TODAY, { includePayments: false })
+
+      const figures = (entries: LoanWithOutstanding[] | LoanTotals[]) =>
+        entries.map((entry) => [
+          entry.loan.lender,
+          entry.loan.principal.toString(),
+          entry.principalPaid.toString(),
+          entry.interestPaid.toString(),
+          entry.outstandingPrincipal.toString(),
+          entry.displayStatus,
+        ])
+
+      expect(figures(totalsOnly)).toEqual(figures(withHistory))
+      expect(figures(totalsOnly)).toEqual([
+        ['None', '1000000', '0', '0', '1000000', 'OVERDUE'],
+        ['Partly', '1000000', '280000.25', '60000.25', '719999.75', 'ACTIVE'],
+        ['Full', '1000000', '1000000', '50000', '0', 'PAID_OFF'],
+        ['Gone', '1000000', '100000', '10000', '900000', 'CLOSED'],
+      ])
+      expect(totalsOnly.map((entry) => entry.loan.id)).toEqual([
+        none.id,
+        partly.id,
+        full.id,
+        gone.id,
+      ])
+      expect(withHistory[1].loan.payments).toHaveLength(2)
+      expect(totalsOnly.every((entry) => !('payments' in entry.loan))).toBe(true)
+    })
+
+    it('fetches no instalment rows for a totals-only read, and still one aggregate', async () => {
+      for (const lender of ['A', 'B', 'C']) {
+        const loan = await createLoan(fx.userId, { ...BASE_LOAN, lender })
+        await recordLoanPayment(fx.userId, loan.id, {
+          totalAmount: 3_000,
+          principalAmount: 1_000,
+          interestAmount: 2_000,
+          paymentDate: '2026-02-01',
+        })
+      }
+      const findMany = vi.spyOn(prisma.loan, 'findMany')
+      const groupBy = vi.spyOn(prisma.loanPayment, 'groupBy')
+
+      const entries = await getLoansWithOutstanding(fx.userId, TODAY, { includePayments: false })
+
+      expect(findMany).toHaveBeenCalledTimes(1)
+      expect(findMany.mock.calls[0][0]?.include).toBeUndefined()
+      expect(groupBy).toHaveBeenCalledTimes(1)
+      expect(entries.every((entry) => entry.principalPaid.toString() === '1000')).toBe(true)
     })
   })
 

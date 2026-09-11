@@ -1,0 +1,321 @@
+# CashFlow CI — one workflow, two jobs.
+#
+#   checks            every gate AGENTS.md asks for before a commit, in order:
+#                     lint, format, types, schema, Vitest, Playwright, build.
+#   production-smoke  the Docker image actually boots, migrates, serves
+#                     /api/health and ships its security headers.
+#
+# Vendor-neutral by design: GitHub-hosted Ubuntu, the official `postgres:16`
+# image and the repo's own Dockerfile. Nothing here knows about Railway,
+# Render or Fly.
+#
+# Databases (the single most important thing in this file). Three databases on
+# ONE throwaway server, all disposable, none of them ever a developer's or a
+# deployment's:
+#
+#   DATABASE_URL       cashflow_ci        the "app" database; migrated by the
+#                                         explicit `prisma migrate deploy` step
+#                                         below, because `next build` and
+#                                         `prisma validate` want the variable
+#                                         SET (they never connect) and nothing
+#                                         else creates it.
+#   TEST_DATABASE_URL  cashflow_ci_test   created and migrated by Vitest's own
+#                                         global setup.
+#   E2E_DATABASE_URL   cashflow_ci_e2e    created and migrated by Playwright's
+#                                         global setup.
+#
+# The last two are created by the suites themselves (`lib/testing/prepare-
+# database.ts` connects to the `postgres` maintenance database and issues
+# CREATE DATABASE; the service container's user is a superuser, so no grants
+# are needed) — do NOT pre-create them here. Both guards refuse to run when
+# their URL resolves to the same database as `DATABASE_URL`, and the e2e guard
+# additionally demands `e2e`/`test` as a word in the name: `cashflow_ci_test`
+# and `cashflow_ci_e2e` satisfy both, and neither may ever be renamed to
+# something that does not.
+#
+# `CASHFLOW_E2E_DISABLE_RATE_LIMIT` is deliberately NOT set here.
+# `playwright.config.ts` sets it on the dev server it spawns and nowhere else;
+# exporting it at job level would hand it to `npm run build` and to any future
+# step, which is exactly how a test-only bypass leaks into a real environment.
+#
+# The first real run of this file happens when it is pushed — GitHub Actions
+# cannot be executed locally, so everything below was validated statically.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref; a new push supersedes the one in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: nothing in this workflow writes to the repository or publishes a
+# package, and the default token is otherwise writable on push events.
+permissions:
+  contents: read
+
+env:
+  # AGENTS.md: all period math starts from UTC. A runner whose clock is not UTC
+  # would move `getPeriodBounds` boundaries and fail date-sensitive suites.
+  TZ: UTC
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  checks:
+    name: Lint, types, unit and browser tests
+    runs-on: ubuntu-latest
+    # Cold Turbopack compile + 12 sequential Playwright spec files + a
+    # production build. 40 minutes is a generous ceiling, not a target.
+    timeout-minutes: 40
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # Throwaway credentials for a container that exists for the length of
+          # one job and is reachable only from it. Not a secret, and
+          # deliberately NOT the development credentials from
+          # `docker-compose.yml`, so nothing in this workflow can be
+          # copy-pasted into a real environment and work.
+          POSTGRES_USER: cashflow_ci
+          POSTGRES_PASSWORD: cashflow_ci_password
+          POSTGRES_DB: cashflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cashflow_ci -d cashflow_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://cashflow_ci:cashflow_ci_password@localhost:5432/cashflow_ci?schema=public
+      TEST_DATABASE_URL: postgresql://cashflow_ci:cashflow_ci_password@localhost:5432/cashflow_ci_test?schema=public
+      E2E_DATABASE_URL: postgresql://cashflow_ci:cashflow_ci_password@localhost:5432/cashflow_ci_e2e?schema=public
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          # `.nvmrc` is the single source of the Node major (24); `engines` in
+          # package.json is the range. Never hard-code a version here.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `postinstall` is `prisma generate`, so this leaves a usable client
+      # behind and no separate generate step is needed.
+      - name: Install dependencies
+        run: npm ci
+
+      # Creates the schema in `cashflow_ci`. The two test databases are created
+      # by their own suites — see the header.
+      - name: Migrate the CI application database
+        run: npx prisma migrate deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Validate the Prisma schema
+        run: npx prisma validate
+
+      - name: Unit and integration tests (Vitest)
+        run: npm run test
+
+      # The cache key is the version actually installed by `npm ci`, read from
+      # the resolved package rather than parsed out of the lockfile: a browser
+      # build downloaded for 1.63.0 must never be reused by another version.
+      - name: Resolve the installed Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright.outputs.version }}
+
+      # Only a `chromium` project exists (playwright.config.ts), so one browser
+      # is installed, not three. On a cache hit the browser binary is already
+      # there and only the apt-level system libraries — which live outside the
+      # cached directory — still have to be installed.
+      - name: Install the Chromium browser and its system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install the Chromium system dependencies (cached browser)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # `workers: 1` and `retries: 0` come from playwright.config.ts and are not
+      # overridden here: a retry would hide exactly the flakiness this suite is
+      # meant to surface. The config spawns its own `next dev` against
+      # E2E_DATABASE_URL (`reuseExistingServer: false`).
+      - name: Browser tests (Playwright)
+        run: npx playwright test
+        env:
+          CI: '1'
+
+      # `trace: 'retain-on-failure'` writes into `e2e/.results` (the configured
+      # outputDir). The reporter is `list`, so `playwright-report/` normally
+      # does not exist — hence `if-no-files-found: ignore`.
+      - name: Upload Playwright traces and report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            e2e/.results
+            playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Needs DATABASE_URL to be SET, not reachable: `lib/prisma.ts` constructs
+      # the client at module scope while Next collects page data.
+      - name: Production build
+        run: npm run build
+
+      # Informational only, and never a gate: the current high findings are
+      # unreachable dev-only transitive advisories whose only "fix" is a
+      # downgrade (preflight E10). `|| true` keeps a new advisory from failing
+      # an unrelated pull request; `!cancelled()` keeps the report visible when
+      # an earlier step failed, without spending time on a superseded run.
+      - name: Dependency audit (informational)
+        if: ${{ !cancelled() }}
+        run: npm audit --omit=dev --audit-level=high || true
+
+  production-smoke:
+    name: Production image smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Independent of `checks` on purpose: it shares no step with it, and a
+    # broken image is worth learning about in the same run as a broken lint.
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      # Two targets out of the one Dockerfile. The runner carries no Prisma CLI
+      # and therefore cannot migrate; the migrator carries no build output and
+      # never serves a request.
+      - name: Build the runner and migrator images
+        run: |
+          docker build --target runner -t cashflow:ci .
+          docker build --target migrator -t cashflow:ci-migrate .
+
+      # A plain `docker run` rather than a service container: the containers
+      # under test have to reach it by name on a user-defined network.
+      - name: Start PostgreSQL
+        run: |
+          docker network create cashflow-ci-net
+          docker run -d --name cashflow-ci-db --network cashflow-ci-net \
+            -e POSTGRES_USER=cashflow_ci \
+            -e POSTGRES_PASSWORD=cashflow_ci_password \
+            -e POSTGRES_DB=cashflow_ci_smoke \
+            postgres:16-alpine
+          for _ in $(seq 1 60); do
+            if docker exec cashflow-ci-db pg_isready -U cashflow_ci -d cashflow_ci_smoke >/dev/null 2>&1; then
+              echo "PostgreSQL is accepting connections."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready within 120s." >&2
+          docker logs cashflow-ci-db >&2
+          exit 1
+
+      # The production env contract from `lib/server/env.ts`, in full. The
+      # secret is generated here and never printed: it goes straight into a
+      # file under RUNNER_TEMP, which is outside the workspace and is uploaded
+      # by no artifact step. No repository secret is used or needed — nothing
+      # in this job talks to a real service.
+      - name: Compose the production environment
+        run: |
+          umask 077
+          {
+            echo "NODE_ENV=production"
+            echo "TZ=UTC"
+            echo "DATABASE_URL=postgresql://cashflow_ci:cashflow_ci_password@cashflow-ci-db:5432/cashflow_ci_smoke?schema=public"
+            echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)"
+            echo "BETTER_AUTH_URL=http://localhost:3000"
+            echo "TRUSTED_PROXY_CIDRS=127.0.0.1/32"
+            echo "EMAIL_FROM=CashFlow CI <no-reply@example.invalid>"
+            echo "SMTP_HOST=smtp.example.invalid"
+            echo "SMTP_PORT=587"
+          } > "$RUNNER_TEMP/smoke.env"
+
+      # The documented release step: run the migrator once, then roll the
+      # runner. `npm run db:deploy` is its CMD.
+      - name: Apply migrations with the migrator image
+        run: |
+          docker run --rm --network cashflow-ci-net \
+            --env-file "$RUNNER_TEMP/smoke.env" cashflow:ci-migrate
+
+      - name: Start the production container
+        run: |
+          docker run -d --name cashflow-ci-app --network cashflow-ci-net \
+            -p 3000:3000 --env-file "$RUNNER_TEMP/smoke.env" cashflow:ci
+
+      # Bounded: 60 attempts, 2s apart, then fail and print the logs. Never an
+      # unbounded wait, never a fixed sleep standing in for readiness.
+      - name: Wait for /api/health to answer 200
+        run: |
+          for _ in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/health || true)
+            if [ "$status" = "200" ]; then
+              echo "Health probe returned 200."
+              curl -s http://localhost:3000/api/health
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "/api/health did not return 200 within 120s (last status: ${status:-none})." >&2
+          exit 1
+
+      # The headers are baked into `routes-manifest.json` by the BUILDER's
+      # NODE_ENV, so their presence on a served response is the only proof that
+      # the image was built in production mode. `curl -D -` prints the response
+      # headers; the greps are case-insensitive because header names are.
+      - name: Assert the security headers and a 200 on /login
+        run: |
+          headers=$(curl -s -o /dev/null -D - -w 'http_status=%{http_code}\n' http://localhost:3000/login)
+          echo "$headers"
+          echo "$headers" | grep -qi '^strict-transport-security: *max-age=31536000; includeSubDomains' \
+            || { echo "Missing or wrong Strict-Transport-Security on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-frame-options: *DENY' \
+            || { echo "Missing or wrong X-Frame-Options on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-content-type-options: *nosniff' \
+            || { echo "Missing or wrong X-Content-Type-Options on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^referrer-policy: *strict-origin-when-cross-origin' \
+            || { echo "Missing or wrong Referrer-Policy on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-powered-by:' \
+            && { echo "X-Powered-By must not be present on /login." >&2; exit 1; }
+          echo "$headers" | grep -q '^http_status=200$' \
+            || { echo "/login did not return 200." >&2; exit 1; }
+
+      - name: Print container logs on failure
+        if: failure()
+        run: |
+          echo '--- application ---'
+          docker logs cashflow-ci-app || true
+          echo '--- postgres ---'
+          docker logs cashflow-ci-db || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f cashflow-ci-app cashflow-ci-db >/dev/null 2>&1 || true
+          docker network rm cashflow-ci-net >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/smoke.env"

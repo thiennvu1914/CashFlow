@@ -8,9 +8,9 @@ import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import { budgetFormSchema, type BudgetFormInput } from '@/lib/validation/budget'
 import { createBudgetAction } from '@/lib/server/actions/budget-actions'
-import { BUDGET_ERROR_KEYS, GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
+import { BUDGET_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -75,7 +75,7 @@ export function BudgetForm({
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `budget-${name}-${uid}`
   const {
@@ -97,25 +97,20 @@ export function BudgetForm({
   }, [scope, setValue])
 
   async function onSubmit(values: BudgetFormInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        // `year`/`month` are read here, from the props this render was given —
-        // the month the user is looking at — never from form state.
-        const result = await createBudgetAction({ ...values, year, month })
-        if (!result.ok) {
-          setError(t(BUDGET_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'BudgetForm: create failed',
+      // `year`/`month` are read here, from the props this render was given —
+      // the month the user is looking at — never from form state.
+      action: () => createBudgetAction({ ...values, year, month }),
+      errorKeys: BUDGET_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         // A reset back to the same month's defaults rather than a bare `reset()`,
         // so a second budget for the same month does not require re-navigating.
         reset(defaultValues(overallExists))
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('BudgetForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

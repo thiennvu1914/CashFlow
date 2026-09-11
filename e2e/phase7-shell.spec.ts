@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { registerNewUser } from './helpers'
+import { authenticatedSession } from './helpers'
 
 /**
  * The app shell (spec §5): the rail's three widths, and the mobile More sheet's
@@ -23,18 +21,15 @@ import { registerNewUser } from './helpers'
  * auto-retrying matcher or a focus check on an element the previous action
  * already awaited.
  */
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-shell-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-shell')
 
 test.describe.serial('Phase 7 — app shell', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-shell' })
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+
+    await SESSION.bootstrap(browser)
   })
 
   test('the rail is 240 px at 1280, 64 px at 1024 and 768, and absent at 375', async ({ page }) => {
@@ -167,5 +162,54 @@ test.describe.serial('Phase 7 — app shell', () => {
     await sheet.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ }).click()
     await expect(page).toHaveURL(/\/transfers/)
     await expect(sheet).toBeHidden()
+  })
+
+  test('every response carries the production security headers and no x-powered-by', async ({
+    page,
+  }) => {
+    // Playwright spawns `next dev` (`playwright.config.ts`'s `webServer`),
+    // which serves `next.config.ts`'s `headers()` too — so this asserts the
+    // real config, not a mock. HSTS is production-only (`lib/server/security-
+    // headers.ts`) and TLS never terminates at `next dev`, so it is
+    // deliberately not asserted here.
+    const response = await page.goto('/dashboard')
+    const headers = response!.headers()
+
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin')
+    expect(headers['x-frame-options']).toBe('DENY')
+    expect(headers['content-security-policy']).toBe("frame-ancestors 'none'")
+    expect(headers['permissions-policy']).toBe(
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()',
+    )
+    expect(headers['x-powered-by']).toBeUndefined()
+  })
+})
+
+test.describe('Phase 7 — app shell / /api/health', () => {
+  // Deliberately no session cookie (fix round, promoted minor): the outer
+  // describe's `storageState` is a signed-in session, and running the health
+  // check under it would prove nothing about whether the endpoint itself
+  // requires auth. An explicit empty `storageState` here is what actually
+  // demonstrates `/api/health` answers an unauthenticated request.
+  test.use({ storageState: { cookies: [], origins: [] } })
+
+  test('GET /api/health answers ok, uncached, and carries the same headers', async ({ page }) => {
+    // The platform probe (`app/api/health/route.ts`): unauthenticated, one key,
+    // never cached — and covered by `next.config.ts`'s `/(.*)` header rule like
+    // every other response, which is the thing a header matcher regression
+    // would break silently.
+    const response = await page.request.get('/api/health')
+
+    expect(response.status()).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok' })
+
+    const headers = response.headers()
+    expect(headers['cache-control']).toBe('no-store')
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin')
+    expect(headers['x-frame-options']).toBe('DENY')
+    expect(headers['content-security-policy']).toBe("frame-ancestors 'none'")
+    expect(headers['x-powered-by']).toBeUndefined()
   })
 })

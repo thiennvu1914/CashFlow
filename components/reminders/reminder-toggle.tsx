@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { setReminderActiveAction } from '@/lib/server/actions/reminder-actions'
-import { GENERIC_ERROR_KEY, REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { ReminderDto } from '@/lib/ui/reminder-view-model'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -30,23 +30,16 @@ export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** Same shared in-flight lock as `OccurrenceActions` — spec §9. */
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const label = t(reminder.active ? 'reminders.pauseAction' : 'reminders.resumeAction')
 
   async function toggle() {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await setReminderActiveAction(reminder.id, !reminder.active)
-        if (!result.ok) {
-          setError(t(REMINDER_ERROR_KEYS[result.error]))
-          return
-        }
-        router.refresh()
-      } catch {
-        console.error('ReminderToggle: set active failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await submit.run({
+      tag: 'ReminderToggle: set active failed',
+      action: () => setReminderActiveAction(reminder.id, !reminder.active),
+      errorKeys: REMINDER_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => router.refresh(),
     })
   }
 

@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import * as accountService from '@/lib/server/services/financial-account'
 import { AccountNotFoundError } from '@/lib/server/services/balance'
 import { ArchivedAccountError } from '@/lib/server/services/transaction'
@@ -44,12 +43,11 @@ function mapError(e: unknown): FinancialAccountActionResult {
   if (e instanceof accountService.InvalidAccountTypeError) {
     return { ok: false, error: 'INVALID_ACCOUNT_TYPE' }
   }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
+  // Hoisted above the shared tail (which is where the `ZodError` branch used
+  // to sit): `AccountNotFoundError` and `ZodError` are disjoint classes, so
+  // the order of the two `instanceof` checks cannot change any outcome.
   if (e instanceof AccountNotFoundError) return { ok: false, error: 'NOT_FOUND' }
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 export async function createFinancialAccountAction(

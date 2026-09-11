@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { Prisma } from '@prisma/client'
-import { ZodError } from 'zod'
 import { requireUser } from '@/lib/auth/require-user'
+import { mapCommonActionError } from './map-action-error'
 import {
   acknowledgeOccurrence,
   createReminder,
@@ -60,14 +59,7 @@ function mapError(e: unknown): ReminderActionResult {
   // which ids exist.
   if (e instanceof InvalidReminderCategoryError) return { ok: false, error: 'INVALID_CATEGORY' }
   if (e instanceof InvalidReminderAccountError) return { ok: false, error: 'INVALID_ACCOUNT' }
-  if (e instanceof ZodError) return { ok: false, error: 'INVALID_INPUT' }
-  // What a foreign (or deleted) occurrence or reminder id resolves to: every
-  // service read goes through the composite `userId_id` key, so another user's
-  // id is a P2025 rather than a usable reference.
-  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-    return { ok: false, error: 'NOT_FOUND' }
-  }
-  throw e
+  return mapCommonActionError(e)
 }
 
 /** Both pages a reminder appears on. Called only after a write actually

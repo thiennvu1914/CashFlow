@@ -94,20 +94,37 @@ export interface DashboardInput {
    */
   goals: SavingsGoalRow[]
   /**
-   * Every PENDING occurrence, soonest first, from `listUpcomingOccurrences` —
-   * which puts the overdue ones at the top by construction because their
-   * `dueAt` is in the past. Deliberately unbounded and *not* limited to the
-   * lookahead window: an unanswered bill from three months ago is still a bill,
-   * so it is in this list.
+   * The occurrences the widget may render, soonest first, from
+   * `listDashboardOccurrences` — at most `DASHBOARD_OCCURRENCE_LIMITS.overdue`
+   * overdue rows followed by at most `.upcoming` upcoming ones, which is the
+   * head of each half of the complete PENDING list (Phase 8, finding B-6). The
+   * page used to hand over *every* PENDING occurrence, so a user a year behind
+   * on one weekly reminder shipped ~57 joined rows through the RSC payload to
+   * render five.
    *
-   * Which is why the widget partitions it rather than taking the head (ruling
-   * R6-23): a user with five old unanswered bills would otherwise get a widget
-   * captioned "the next 30 days" containing nothing from the next 30 days.
+   * The widget still partitions what it gets rather than taking the head
+   * (ruling R6-23): a user with five old unanswered bills would otherwise get a
+   * widget captioned "the next 30 days" containing nothing from the next 30
+   * days. That is also why the bound is one `take` per half rather than a single
+   * `take` over `dueAt asc`, which would return nothing but overdue rows.
    *
    * Expected amounts are in each reminder's own currency and are never
    * converted, so this widget too is untouched by an FX outage.
    */
   occurrences: OccurrenceRow[]
+  /**
+   * How many PENDING occurrences the user is late for **in total**, from
+   * `countOverdueOccurrences` — not the number of overdue rows in
+   * `occurrences`, which is capped at two.
+   *
+   * A number rather than something this builder derives, because a bounded list
+   * cannot be counted (finding B-6). The service's predicate is the same one
+   * `toOccurrenceDto` applies — `dueAt` before the first instant of the user's
+   * today, in their zone — so the tally and the rows can never disagree about
+   * what "late" means; `reminder.test.ts` asserts that against this very
+   * function in two viewer zones.
+   */
+  overdueOccurrenceCount: number
 }
 
 export interface KpiDto {
@@ -301,15 +318,35 @@ const WIDGET_ROW_LIMIT = 5
  * How many of the reminders widget's five rows an overdue occurrence may take
  * (ruling R6-23).
  *
- * `listUpcomingOccurrences` is unbounded and ordered `dueAt asc`, so the head of
- * it is the *oldest unanswered* bill, not the next one due. Five slots filled
- * from that head is a widget captioned "the next 30 days" showing nothing from
- * the next 30 days — the state a user with a few forgotten bills lives in
- * permanently. Two says "you are behind, and here is the oldest of it" and
- * still leaves three slots for what the widget exists to show; the count beside
- * the list carries the rest, and the Reminders page has the complete group.
+ * The occurrence list is ordered `dueAt asc`, so the head of it is the *oldest
+ * unanswered* bill, not the next one due. Five slots filled from that head is a
+ * widget captioned "the next 30 days" showing nothing from the next 30 days —
+ * the state a user with a few forgotten bills lives in permanently. Two says
+ * "you are behind, and here is the oldest of it" and still leaves three slots
+ * for what the widget exists to show; the count beside the list carries the
+ * rest, and the Reminders page has the complete group.
  */
 const WIDGET_OVERDUE_ROW_LIMIT = 2
+
+/**
+ * The two caps the dashboard's occurrence read must honour, derived from the
+ * widget's own row limits (Phase 8, finding B-6).
+ *
+ * Exported so `app/(app)/dashboard/page.tsx` can hand them to
+ * `listDashboardOccurrences` instead of restating them: the query fetches at
+ * most this many rows of each half and this module slices with the same two
+ * numbers, so the bound and the widget can never drift apart. Raising either
+ * limit above widens the query with it.
+ *
+ * `upcoming` is `WIDGET_ROW_LIMIT` rather than
+ * `WIDGET_ROW_LIMIT − WIDGET_OVERDUE_ROW_LIMIT`: a user with nothing overdue
+ * sees five upcoming rows, so five is what the upcoming half must be able to
+ * supply.
+ */
+export const DASHBOARD_OCCURRENCE_LIMITS = {
+  overdue: WIDGET_OVERDUE_ROW_LIMIT,
+  upcoming: WIDGET_ROW_LIMIT,
+} as const
 
 export function buildDashboardViewModel(
   input: DashboardInput,
@@ -340,6 +377,7 @@ export function buildDashboardViewModel(
     budgets,
     goals,
     occurrences,
+    overdueOccurrenceCount,
   } = input
 
   /** A current-position KPI: a figure, or a gap with the reason for it. */
@@ -376,12 +414,12 @@ export function buildDashboardViewModel(
     },
   ]
 
-  // Mapped in full before anything is dropped, unlike the goals above — the
-  // count needs every pending occurrence classified, and `overdue` is decided
-  // by `toOccurrenceDto` (a calendar-day comparison in the user's zone, ruling
-  // R6-7). Re-deriving it here to save formatting the rows the widget will not
-  // show would be a second definition of "late", which is the one thing this
-  // page must not have; the Reminders page maps the same list in full.
+  // Mapped in full, unlike the goals above: `overdue` is decided by
+  // `toOccurrenceDto` (a calendar-day comparison in the user's zone, ruling
+  // R6-7), and re-deriving it here would be a second definition of "late",
+  // which is the one thing this page must not have. The list is now bounded at
+  // seven rows by the read itself (finding B-6), so mapping all of it is
+  // cheaper than the partition it feeds.
   const allOccurrences = occurrences.map((row) => toOccurrenceDto(row, timezone, today, locale))
   const overdueOccurrences = allOccurrences.filter((occurrence) => occurrence.overdue)
   // Both halves keep the service's `dueAt asc` order — oldest overdue first,
@@ -511,8 +549,10 @@ export function buildDashboardViewModel(
     ].slice(0, WIDGET_ROW_LIMIT),
     // The full tally, not the number shown: the widget's one muted line is the
     // only place the user learns that the two rows above it are the tip of
-    // seven.
-    overdueReminderCount: overdueOccurrences.length,
+    // seven. It arrives as a `count` from the service rather than being read
+    // off `overdueOccurrences` above, which the bounded read caps at two
+    // (finding B-6) — `input.overdueOccurrenceCount`'s doc has the predicate.
+    overdueReminderCount: overdueOccurrenceCount,
   }
 }
 

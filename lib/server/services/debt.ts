@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client'
-import type { DebtPayment, DebtStoredStatus } from '@prisma/client'
+import type { Debt, DebtPayment, DebtStoredStatus } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   calendarDateToUtcCarrier,
@@ -198,12 +198,27 @@ export type DebtDisplayStatus = 'OPEN' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' |
  */
 export type DebtRow = Prisma.DebtGetPayload<{ include: { payments: true } }>
 
-export interface DebtWithOutstanding {
-  debt: DebtRow
+/**
+ * The same derived figures over a debt read *without* its history — what
+ * `getDebtsWithOutstanding(..., { includePayments: false })` returns.
+ *
+ * Deliberately the same four fields in the same order, differing only in the
+ * `debt` row's shape: `paid` and `outstanding` come from the `groupBy` sum on
+ * both paths, so there is exactly one definition of what a debt has outstanding
+ * (`debt.test.ts` asserts the two paths agree figure by figure). A caller that
+ * renders the history asks for it; one that renders a total does not, and is
+ * then held to that by the type rather than by a comment.
+ */
+export interface DebtTotals {
+  debt: Debt
   /** Σ of this debt's payments, from the authoritative `groupBy` sum. */
   paid: Prisma.Decimal
   outstanding: Prisma.Decimal
   displayStatus: DebtDisplayStatus
+}
+
+export interface DebtWithOutstanding extends DebtTotals {
+  debt: DebtRow
 }
 
 /**
@@ -234,7 +249,7 @@ const STATUS_RANK: Record<DebtStoredStatus, number> = { ACTIVE: 0, WRITTEN_OFF: 
  * be written in `schema.prisma`. The rank above says the intent outright.
  * (Same reasoning, and the same total ordering, as `savings-goal.ts`.)
  */
-function compareForDisplay(a: DebtRow, b: DebtRow): number {
+function compareForDisplay(a: Debt, b: Debt): number {
   return (
     STATUS_RANK[a.status] - STATUS_RANK[b.status] ||
     a.createdAt.getTime() - b.createdAt.getTime() ||
@@ -342,18 +357,40 @@ export async function listDebts(userId: string): Promise<DebtRow[]> {
  * `activeOnly` is what the dashboard and Net Worth will pass: a written-off
  * debt is not an asset or a liability any more, but it is still part of the
  * user's history and stays visible on the page itself.
+ *
+ * `includePayments: false` drops the history from the payload and nothing else
+ * (Phase 8, finding B-7). The figures are unchanged — they were always the
+ * `groupBy`'s, never the included rows' — so this is one read path and one
+ * definition of what a debt has outstanding, with the O(payments) payload made
+ * optional for the callers that never render a payment: Net Worth
+ * (`position.ts`, which the dashboard and the Accounts page's header total both
+ * read through) and the export's Debts and Summary sheets. The default is
+ * `true`, so the Debts page, which does render every repayment, is untouched.
  */
 export async function getDebtsWithOutstanding(
   userId: string,
   today: string,
-  options: { activeOnly?: boolean } = {},
-): Promise<DebtWithOutstanding[]> {
+  options?: { activeOnly?: boolean; includePayments?: true },
+): Promise<DebtWithOutstanding[]>
+export async function getDebtsWithOutstanding(
+  userId: string,
+  today: string,
+  options: { activeOnly?: boolean; includePayments: boolean },
+): Promise<DebtTotals[]>
+export async function getDebtsWithOutstanding(
+  userId: string,
+  today: string,
+  options: { activeOnly?: boolean; includePayments?: boolean } = {},
+): Promise<DebtTotals[]> {
+  const where = options.activeOnly ? { userId, status: 'ACTIVE' as const } : { userId }
+  const orderBy = [{ createdAt: 'asc' as const }, { id: 'asc' as const }]
   const [debts, sums] = await Promise.all([
-    prisma.debt.findMany({
-      where: options.activeOnly ? { userId, status: 'ACTIVE' } : { userId },
-      include: WITH_PAYMENTS,
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    }),
+    // Two calls rather than one with a conditional `include` key, so each keeps
+    // its own precise Prisma payload type instead of collapsing to a union the
+    // caller would have to narrow.
+    options.includePayments === false
+      ? prisma.debt.findMany({ where, orderBy })
+      : prisma.debt.findMany({ where, include: WITH_PAYMENTS, orderBy }),
     prisma.debtPayment.groupBy({
       by: ['debtId'],
       where: { userId },
@@ -365,7 +402,11 @@ export async function getDebtsWithOutstanding(
     sums.map((row) => [row.debtId, row._sum.amount ?? new Prisma.Decimal(0)]),
   )
 
-  return debts.sort(compareForDisplay).map((debt) => {
+  // Widened to `Debt` so the two `findMany` shapes share one sort and one
+  // derivation; the overload above is what hands a caller back the precise row
+  // type it asked for.
+  const rows: Debt[] = debts
+  return rows.sort(compareForDisplay).map((debt) => {
     const paid = paidByDebt.get(debt.id) ?? new Prisma.Decimal(0)
     const outstanding = deriveDebtOutstanding(debt.originalAmount, paid)
     return {

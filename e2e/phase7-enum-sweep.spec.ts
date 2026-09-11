@@ -1,7 +1,5 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { PAGES, registerNewUser, createAccountViaUi, createTransactionViaUi } from './helpers'
+import { authenticatedSession, createAccountViaUi, createTransactionViaUi, PAGES } from './helpers'
 
 /**
  * The guarantee spec §4 asks for, as a test rather than a habit (Task 13,
@@ -81,7 +79,7 @@ const RAW_ENUM = new RegExp(
  */
 const ALLOWED: string[] = []
 
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-sweep-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-sweep')
 
 async function sweepPage(
   page: import('@playwright/test').Page,
@@ -111,28 +109,26 @@ async function sweepPage(
 }
 
 test.describe.serial('Phase 7 — no raw enum on screen', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(180_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-sweep' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-    // One transaction of the two common types, so every list/widget that
-    // shows recent transactions has at least one row rather than only its
-    // empty state — the raw-enum bug this spec exists for happened in a
-    // POPULATED row, never in an empty one.
-    for (const type of ['EXPENSE', 'INCOME'] as const) {
-      await createTransactionViaUi(page, {
-        type,
-        accountName: 'Cash',
-        categoryName: type === 'EXPENSE' ? 'Food & Dining' : 'Salary',
-        amount: 100_000,
-      })
-    }
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+      // One transaction of the two common types, so every list/widget that
+      // shows recent transactions has at least one row rather than only its
+      // empty state — the raw-enum bug this spec exists for happened in a
+      // POPULATED row, never in an empty one.
+      for (const type of ['EXPENSE', 'INCOME'] as const) {
+        await createTransactionViaUi(page, {
+          type,
+          accountName: 'Cash',
+          categoryName: type === 'EXPENSE' ? 'Food & Dining' : 'Salary',
+          amount: 100_000,
+        })
+      }
+    })
   })
 
   test.describe.serial('vi', () => {
@@ -190,7 +186,7 @@ test.describe.serial('Phase 7 — no raw enum on screen', () => {
       // `NEXT_LOCALE` cookie: for a SIGNED-IN session the cookie is only a
       // mirror and never wins over the stored preference, so setting the
       // cookie alone would silently do nothing here.
-      const context = await browser.newContext({ storageState: STORAGE_STATE_PATH })
+      const context = await browser.newContext({ storageState: SESSION.path })
       const page = await context.newPage()
       await page.goto('/settings')
       await page

@@ -51,7 +51,7 @@ test('registers a fresh user through the redesigned register form and lands on /
   await expect(page).toHaveURL(/\/dashboard/)
 })
 
-test('a duplicate-email registration shows the translated "email taken" message, never a Better Auth code', async ({
+test('a duplicate-email registration shows the GENERIC translated failure — never "that email exists", never a Better Auth code', async ({
   page,
 }) => {
   const { email } = await registerNewUser(page, { emailPrefix: 'e2e-phase7-auth-dup' })
@@ -62,9 +62,19 @@ test('a duplicate-email registration shows the translated "email taken" message,
   await page.getByLabel(/Mật khẩu/).fill('another-good-password-1')
   await page.getByRole('button', { name: 'Tạo tài khoản' }).click()
 
-  await expect(page.getByText('Đã có tài khoản dùng email đó.')).toBeVisible()
+  await expect(
+    page.getByText(
+      'Không thể tạo tài khoản với thông tin này. Hãy kiểm tra lại địa chỉ email, hoặc đăng nhập / đặt lại mật khẩu.',
+    ),
+  ).toBeVisible()
   // The technical Better Auth code must never reach the DOM.
   await expect(page.getByText(/USER_ALREADY_EXISTS/)).toHaveCount(0)
+  // Nor may any wording that confirms the address is registered: this form is
+  // not an account-enumeration oracle (Phase 8 Task 9, E3). Deliberately NOT
+  // a bare /đã có tài khoản/ — that is the page's own "Already have an
+  // account?" sign-in link, which is always present and says nothing about
+  // the address just typed.
+  await expect(page.getByText(/dùng email đó|already exists|email đã được sử dụng/i)).toHaveCount(0)
 })
 
 test('a rate-limited (429) registration shows the too-many-attempts message, not the generic one (D3)', async ({
@@ -92,7 +102,11 @@ test('a rate-limited (429) registration shows the too-many-attempts message, not
   await expect(
     page.getByText('Bạn đã thử quá nhiều lần. Vui lòng đợi một phút rồi thử lại.'),
   ).toBeVisible()
-  await expect(page.getByText('Đã có tài khoản dùng email đó.')).toHaveCount(0)
+  await expect(
+    page.getByText(
+      'Không thể tạo tài khoản với thông tin này. Hãy kiểm tra lại địa chỉ email, hoặc đăng nhập / đặt lại mật khẩu.',
+    ),
+  ).toHaveCount(0)
   await expect(page.getByText('Đã xảy ra lỗi. Vui lòng thử lại.')).toHaveCount(0)
 
   await page.unroute('**/api/auth/sign-up/email')
@@ -250,4 +264,36 @@ test('the dark theme cookie renders html.dark on /login with no session to ask',
     .addCookies([{ name: 'cashflow-theme', value: 'dark', url: 'http://localhost:3000' }])
   const html = await (await page.request.get('/login')).text()
   expect(html).toMatch(/<html[^>]*class="[^"]*\bdark\b/)
+})
+
+/**
+ * Phase 8 Task 2 (E2) — `app/not-found.tsx`, the root 404 for every unmatched
+ * URL (A-2 in the Phase 8 pre-flight audit: before this, Next's raw unbranded
+ * default was the production fallback). Belongs here, not in a signed-in
+ * spec: an unmatched URL is reachable with NO session, exactly like the four
+ * screens above, and the page renders inside the root layout so `resolveLocale()`
+ * — session, then the `NEXT_LOCALE` cookie — picks the language same as any
+ * other pre-auth page.
+ */
+test('an unmatched URL renders the localized not-found page with exactly one h1', async ({
+  page,
+}) => {
+  await page.goto('/no-such-page')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Không tìm thấy trang này.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+  await expect(page.getByRole('link', { name: 'Đến Tổng quan' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Đến trang đăng nhập' })).toBeVisible()
+
+  await page
+    .context()
+    .addCookies([{ name: 'NEXT_LOCALE', value: 'en', url: 'http://localhost:3000' }])
+  await page.goto('/no-such-page')
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'This page could not be found.' }),
+  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+  await expect(page.getByRole('link', { name: 'Go to Dashboard' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Go to sign in' })).toBeVisible()
 })

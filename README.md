@@ -3,79 +3,132 @@
 Personal cash-flow tracking. Next.js 16 App Router, Prisma 7 on PostgreSQL,
 Better Auth 1.7.2.
 
-## Local development
+## Overview
+
+Tracks accounts, transactions, transfers, budgets, savings goals, debts,
+loans and reminders for one user at a time — no shared workspaces. Vietnamese
+default locale with English available, light/dark theme, and full Excel
+export. Every financial invariant (no stored balance, `Decimal`-only money,
+real FX snapshots) is enforced in the service layer; see
+[`docs/architecture.md`](docs/architecture.md) for the invariants and
+boundaries an owner needs to know before changing the code.
+
+## Stack
+
+Next.js 16 (App Router, React 19), Prisma 7 (WASM client + `@prisma/adapter-pg`),
+PostgreSQL, Better Auth, `next-intl`, Tailwind v4, shadcn (base-nova preset),
+Vitest, Playwright.
+
+## Prerequisites
+
+- Node version from [`.nvmrc`](.nvmrc) (Prisma 7's contract:
+  `^20.19.0 || ^22.12.0 || >=24.0.0`).
+- Docker, for local PostgreSQL (compose maps it to host port **5439** — 5432
+  is taken on the original dev machine).
+
+## Install and run
 
 ```bash
-docker compose up -d          # PostgreSQL on host port 5439 (5432 is taken on the original dev machine)
-cp .env.example .env          # then fill in BETTER_AUTH_SECRET
-npm install
-npx prisma migrate dev        # apply migrations and generate the client
+docker compose up -d          # PostgreSQL on host port 5439
+cp .env.example .env          # fill in the groups below; generate BETTER_AUTH_SECRET
+npm ci                        # postinstall runs `prisma generate` — no separate step needed
+npx prisma migrate dev        # apply migrations (never `db push`)
 npm run dev                   # http://localhost:3000
 ```
 
-With no `SMTP_HOST` set, password-reset emails are printed to the dev-server
-console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
+With no `SMTP_HOST` set, password-reset emails print to the dev-server
+console; set `EMAIL_OUTBOX_FILE` to write them to a file instead.
+
+### Environment setup
+
+`.env.example` is grouped — Application, Database, Authentication, Email,
+FX, Testing, Demo/maintenance — with safe placeholders only. `lib/server/env.ts`
+validates the whole contract before the first request touches the database,
+auth or email; production refuses to boot on a bad value, development just
+warns. Full variable-by-variable reference:
+[`docs/operations.md`](docs/operations.md#environment-contract).
 
 ## Testing
 
-- `npm run test` — Vitest. Requires PostgreSQL to be running
-  (`docker compose up -d`): before the first test file, the global setup creates
-  and migrates a dedicated `cashflow_test` database. `TEST_DATABASE_URL` in
-  `.env` chooses it, and the suite refuses to start when that address resolves
-  to the same database as `DATABASE_URL` — tests must never write to the
-  development database. The auth tests themselves need no network and no
-  database rows: they run the real Better Auth instance against an in-memory
-  adapter, built through `lib/auth/__testing__/auth-harness.ts`.
-- `npm run test:e2e` — Playwright. Needs PostgreSQL running and the schema
-  migrated. It starts the dev server itself with `EMAIL_OUTBOX_FILE` pointed at
-  `e2e/.outbox/emails.jsonl` and reads the reset link back out of that file.
+- `npm run test` — Vitest. Requires PostgreSQL running
+  (`docker compose up -d`): the global setup creates and migrates a
+  dedicated `cashflow_test` database on the first run. `TEST_DATABASE_URL` in
+  `.env` chooses it, and the suite refuses to start if that resolves to the
+  same database as `DATABASE_URL`.
+- `npm run test:e2e` — Playwright. Needs PostgreSQL running and
+  `E2E_DATABASE_URL` set in `.env` — there is no default. The browser tests
+  register real users and write real financial rows through the UI, so they
+  run against their own `cashflow_e2e` database (created/migrated
+  automatically) and the suite refuses to start if that variable is missing,
+  equals `DATABASE_URL`, or the name doesn't carry `e2e`/`test`. **The suite
+  always starts its own dev server** (`reuseExistingServer: false`) —
+  **stop any dev server you started by hand first**, or the run fails
+  immediately with a port-in-use error.
 
-  `reuseExistingServer` is on outside CI, so a dev server you started by hand
-  will be reused — and if you started it without `EMAIL_OUTBOX_FILE`, the reset
-  test times out waiting for an email that went to the console instead. Either
-  stop that server first, or start it with the variable set.
+Run `npm run format:check`, `npm run lint`, `npm run test` and
+`npm run build` before every commit.
 
-Run `npm run format:check`, `npm run lint`, `npm run test` and `npm run build`
-before every commit.
+### Production build
 
-## Deployment requirements
+`next.config.ts` sets `output: 'standalone'`, so `npm run build` traces the
+build into `.next/standalone` rather than the full `.next` tree plain
+`next start` expects. That trace does not include `.next/static` or
+`public` — Next leaves it to whoever serves the bundle to place those next
+to `server.js`. `npm run start` runs `scripts/start-standalone.mjs`, which
+copies `.next/static` and `public` into the standalone bundle and then runs
+`node .next/standalone/server.js` — the same entrypoint the Docker `runner`
+stage's `CMD` uses below (the Dockerfile does the equivalent two copies with
+`COPY` instructions instead).
 
-Required environment variables — the app throws at startup without the first
-three, and cannot send email without the SMTP group:
+## Continuous integration
 
-- `BETTER_AUTH_URL` — the public origin. Without it Better Auth derives its base
-  URL from the request, so a forged `Host` header can end up inside an emailed
-  password-reset link.
-- `BETTER_AUTH_SECRET` — a random 32-byte secret.
-- `TRUSTED_PROXY_CIDRS` — comma-separated CIDRs/IPs of the reverse proxy or CDN
-  that sets `x-forwarded-for`. Rate limiting keys on the client IP, resolved by
-  walking the forwarded chain right to left and skipping these hops. Unset, a
-  chain-appending proxy leaves Better Auth with no usable IP and every caller
-  shares one bucket; a single-value header is trusted at face value and is
-  forgeable.
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` — there is
-  no email fallback in production. `getEmailSender()` throws rather than falling
-  back to the console or the file outbox.
-- `DATABASE_URL` — also needed at build time. `next build` imports every route
-  module to collect page data, and the Prisma client is constructed at module
-  scope, so the build needs a reachable database. (The `BETTER_AUTH_URL` /
-  `TRUSTED_PROXY_CIDRS` guard is skipped during the build, which Next marks with
-  `NEXT_PHASE=phase-production-build`.)
+`.github/workflows/ci.yml` runs on every pull request and push to `main`:
+lint, format, type-check, `prisma validate`, Vitest, Playwright and the
+production build against an isolated throwaway Postgres (three separate
+databases, so no CI step can reach a real one), plus a production-smoke job
+that builds the Docker image, migrates a scratch database and asserts
+`/api/health` and the security headers on a running container. No repository
+secret is used. GitHub Actions cannot run locally, so the first real run
+happens on push. Full job breakdown: [`docs/operations.md`](docs/operations.md#continuous-integration).
 
-Operational notes:
+## Docker quick start
 
-- The rate-limit store is an in-memory Map, per process. Before scaling
-  horizontally, switch to a shared store (`rateLimit.storage` backed by Redis or
-  a custom store) — otherwise each instance counts separately and the effective
-  limit multiplies by the instance count.
-- A failed reset-email delivery is swallowed by Better Auth: it logs
-  `Failed to run background task:` and still answers 200 (deliberate — the
-  endpoint gives the same response for every address so nothing leaks). There is
-  no config switch for this in 1.7.2, so **alert on that log line** or reset
-  emails can fail silently.
+Vendor-neutral, four build stages (`deps` → `builder` → `migrator` →
+`runner`); migrations are a separate release step, never a container
+entrypoint.
+
+```bash
+docker build -t cashflow:latest .                      # runner (default target)
+docker build --target migrator -t cashflow:migrate .    # migration image
+
+docker run --rm --env-file .env.production cashflow:migrate   # runs `npm run db:deploy`
+docker run -d -p 3000:3000 --env-file .env.production \
+  --stop-timeout 30 --name cashflow cashflow:latest
+
+curl -i http://localhost:3000/api/health   # 200 {"status":"ok"}; 503 when the database is gone
+```
+
+Full stage table, image sizes, healthcheck details, and platform examples
+(Railway/Render/Fly.io/plain Docker host) live in
+[`docs/operations.md`](docs/operations.md#docker-deployment).
+
+## Further reading
+
+- [`docs/architecture.md`](docs/architecture.md) — tenant isolation, balance
+  derivation, transaction/transfer/FX semantics, debts/loans/reminders,
+  locale/theme resolution, the server/client boundary.
+- [`docs/operations.md`](docs/operations.md) — the full environment
+  contract, migration procedure, health endpoint, Docker deployment,
+  logging, email, FX networking, backup/restore, CSP future work, CI, demo
+  scripts and deployment notes.
+- `docs/superpowers/specs/2026-09-04-cashflow-mvp-design.md` — the original
+  product specification.
+
+## Operational notes
+
 - `.npmrc` sets `legacy-peer-deps=true` repo-wide, because better-auth 1.7.2
-  declares an optional peer on `vitest ^2||^3||^4` while this repo runs Vitest 5.
-  It is a blanket setting, so review peer warnings by hand when upgrading
-  dependencies.
-- Set `TZ=UTC` in CI and production; period math is computed in the user's IANA
-  zone from UTC timestamps.
+  declares an optional peer on `vitest ^2||^3||^4` while this repo runs
+  Vitest 5. Review peer warnings by hand when upgrading dependencies.
+- Set `TZ=UTC` in CI and production; period math is computed in the user's
+  IANA zone from UTC timestamps, so a server on a local zone shifts every
+  period boundary. User-facing dates keep coming from `User.timezone`.

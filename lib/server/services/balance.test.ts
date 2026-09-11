@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import type { TransactionType } from '@prisma/client'
-import { getAccountBalance, getAccountBalances, AccountNotFoundError } from './balance'
+import {
+  getAccountBalance,
+  getAccountBalances,
+  getAccountBalancesForAccounts,
+  AccountNotFoundError,
+} from './balance'
 
 /**
  * Hits the real database — `vitest.setup.ts` points `DATABASE_URL` at the
@@ -211,6 +216,73 @@ describe('balance service', () => {
       await expect(
         getAccountBalances(intruder.userId, [ownAccount.id, owner.accountId]),
       ).rejects.toThrow(AccountNotFoundError)
+    })
+  })
+
+  /**
+   * The pass-down entry point (Phase 8, Task 4 — pre-flight finding B-4).
+   *
+   * `getAccountBalanceOverTime` resolves the account set once and samples it at
+   * six cutoffs, so it hands the rows in rather than making each sample re-read
+   * them. Two things have to hold for that to be safe: the arithmetic must be
+   * the *same* arithmetic (including the "did not exist yet" rule, which is the
+   * only part that reads a row rather than an aggregate), and ownership must
+   * still be enforced — a caller must not be able to widen what it can read by
+   * handing over someone else's row.
+   */
+  describe('getAccountBalancesForAccounts', () => {
+    it('returns exactly what the querying entry point returns, including the not-yet-created zero', async () => {
+      const owner = await setupUserAccount(100, 'VND', new Date('2026-03-01T00:00:00Z'))
+      const accountType = await prisma.accountType.create({
+        data: { userId: owner.userId, name: 'Bank' },
+      })
+      const later = await prisma.financialAccount.create({
+        data: {
+          userId: owner.userId,
+          name: 'Opened in June',
+          accountTypeId: accountType.id,
+          initialBalance: 50,
+          currency: 'VND',
+          createdAt: new Date('2026-06-01T00:00:00Z'),
+        },
+      })
+      await makeTx(owner.userId, owner.accountId, 'INCOME', 25, new Date('2026-04-01T00:00:00Z'))
+      const asOfDate = new Date('2026-05-01T00:00:00Z')
+      const ids = [owner.accountId, later.id]
+
+      const byId = await getAccountBalances(owner.userId, ids, asOfDate)
+      const rows = await prisma.financialAccount.findMany({
+        where: { userId: owner.userId, id: { in: ids } },
+      })
+      const byRow = await getAccountBalancesForAccounts(owner.userId, rows, asOfDate)
+
+      expect([...byRow.entries()].map(([id, value]) => [id, value.toString()]).sort()).toEqual(
+        [...byId.entries()].map(([id, value]) => [id, value.toString()]).sort(),
+      )
+      expect(byRow.get(owner.accountId)?.toString()).toBe('125')
+      // Created after the cutoff, so zero rather than its opening balance —
+      // the rule that needs the row itself and not an aggregate.
+      expect(byRow.get(later.id)?.toString()).toBe('0')
+    })
+
+    it("refuses another user's row exactly as it refuses an unknown id", async () => {
+      const owner = await setupUserAccount(100)
+      const intruder = await setupUserAccount(0)
+      const foreign = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId: owner.userId, id: owner.accountId } },
+      })
+
+      await expect(getAccountBalancesForAccounts(intruder.userId, [foreign])).rejects.toThrow(
+        AccountNotFoundError,
+      )
+      // And nothing of the intruder's own comes back alongside it: the batch
+      // fails whole, the same as the querying path.
+      const own = await prisma.financialAccount.findUniqueOrThrow({
+        where: { userId_id: { userId: intruder.userId, id: intruder.accountId } },
+      })
+      await expect(getAccountBalancesForAccounts(intruder.userId, [own, foreign])).rejects.toThrow(
+        AccountNotFoundError,
+      )
     })
   })
 

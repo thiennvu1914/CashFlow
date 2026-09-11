@@ -1,12 +1,10 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
+  authenticatedSession,
   createAccountViaUi,
   createBudgetViaUi,
   createTransactionViaUi,
   eitherLocale,
-  registerNewUser,
 } from './helpers'
 
 /**
@@ -23,10 +21,7 @@ import {
  * Vietnamese dashboard widgets carry no English budget/goal status word.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-budgets-goals-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-budgets-goals')
 
 /** Creates one savings goal through the `/goals` page's header action and its
  *  create `Sheet` — the same flow `e2e/phase6.spec.ts`'s local helper uses. */
@@ -62,19 +57,14 @@ function goalRow(page: Page, name: string): Locator {
 }
 
 test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-budgets-goals' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    })
   })
 
   test('vi: budget status badge is Vietnamese, and the progress bar announces the true percentage', async ({

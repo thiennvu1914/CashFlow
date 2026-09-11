@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { makeTestAuth, nextTestIp, post, signUp } from './__testing__/auth-harness'
 
 /**
@@ -146,10 +146,22 @@ describe('createAuth', () => {
 describe('CASHFLOW_E2E_DISABLE_RATE_LIMIT', () => {
   const ENV_KEY = 'CASHFLOW_E2E_DISABLE_RATE_LIMIT'
   const originalValue = process.env[ENV_KEY]
+  const originalNodeEnv = process.env.NODE_ENV
+
+  /**
+   * `NODE_ENV` is a getter-backed string on `process.env` in some runtimes, so
+   * it is written through `Object.defineProperty` rather than plain assignment
+   * — the same technique the env suite uses. Restored after every test.
+   */
+  function setNodeEnv(value: string | undefined) {
+    if (value === undefined) delete (process.env as Record<string, string | undefined>).NODE_ENV
+    else (process.env as Record<string, string | undefined>).NODE_ENV = value
+  }
 
   afterEach(() => {
     if (originalValue === undefined) delete process.env[ENV_KEY]
     else process.env[ENV_KEY] = originalValue
+    setNodeEnv(originalNodeEnv)
   })
 
   it('leaves rate limiting enabled when the flag is unset', () => {
@@ -168,6 +180,47 @@ describe('CASHFLOW_E2E_DISABLE_RATE_LIMIT', () => {
     process.env[ENV_KEY] = '1'
     const { auth } = makeTestAuth()
     expect(auth.options.rateLimit?.enabled).toBe(false)
+  })
+
+  // The bypass is a security control, not a convenience: it must open only
+  // where a test harness actually runs. `isNonProductionEnvironment()`
+  // (`lib/server/env.ts`) allows exactly `development` and `test`, and treats
+  // everything else — production, a typo, and an unset `NODE_ENV`, which is
+  // how a bare `node server.js` starts — as production.
+  it('IGNORES the flag in production: rate limiting stays enabled', () => {
+    process.env[ENV_KEY] = '1'
+    setNodeEnv('production')
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(true)
+  })
+
+  it('IGNORES the flag when NODE_ENV is unset — an unknown environment is treated as production', () => {
+    process.env[ENV_KEY] = '1'
+    setNodeEnv(undefined)
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(true)
+  })
+
+  it('IGNORES the flag under an unrecognised NODE_ENV', () => {
+    process.env[ENV_KEY] = '1'
+    setNodeEnv('staging')
+    const { auth } = makeTestAuth()
+    expect(auth.options.rateLimit?.enabled).toBe(true)
+  })
+
+  it('honours the flag in development — the environment Playwright spawns `next dev` in', () => {
+    process.env[ENV_KEY] = '1'
+    setNodeEnv('development')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { auth } = makeTestAuth()
+      expect(auth.options.rateLimit?.enabled).toBe(false)
+      // Named, never valued — and loud enough that a developer who left the
+      // variable exported can see why sign-in never locks out.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(ENV_KEY))
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('lets a 4th sign-up within 10s succeed when the flag is set, unlike the default', async () => {

@@ -17,8 +17,8 @@ import {
   updateSavingsGoalAction,
   updateSavingsGoalProgressAction,
 } from '@/lib/server/actions/savings-goal-actions'
-import { GENERIC_ERROR_KEY, SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { SavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -103,25 +103,18 @@ export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
   const [editOpen, setEditOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const { setError } = useRowError()
-  const archiveSubmit = useSubmitState()
+  const archiveSubmit = useActionSubmit(t)
 
   async function confirmArchive() {
-    setError(null)
-    await archiveSubmit.run(async () => {
-      try {
-        const result = await archiveSavingsGoalAction(goal.id)
-        if (!result.ok) {
-          setArchiving(false)
-          setError(t(SAVINGS_GOAL_ERROR_KEYS[result.error]))
-          return
-        }
-        setArchiving(false)
-        router.refresh()
-      } catch {
-        console.error('GoalRowMenu: archive failed')
-        setArchiving(false)
-        setError(t(GENERIC_ERROR_KEY))
-      }
+    await archiveSubmit.run({
+      tag: 'GoalRowMenu: archive failed',
+      action: () => archiveSavingsGoalAction(goal.id),
+      errorKeys: SAVINGS_GOAL_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes: the row's message renders behind this
+      // dialog's own scrim (`components/common/confirm-dialog.tsx`).
+      onSettled: () => setArchiving(false),
+      onSuccess: () => router.refresh(),
     })
   }
 
@@ -173,7 +166,7 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const {
     register,
@@ -185,20 +178,15 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
   })
 
   async function onSubmit(values: UpdateSavingsGoalProgressInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateSavingsGoalProgressAction(goal.id, values)
-        if (!result.ok) {
-          setError(t(SAVINGS_GOAL_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'GoalProgressForm: update failed',
+      action: () => updateSavingsGoalProgressAction(goal.id, values),
+      errorKeys: SAVINGS_GOAL_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('GoalProgressForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 
@@ -246,7 +234,7 @@ function GoalEditForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => vo
   const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `goal-edit-${name}-${uid}`
   const {
@@ -267,20 +255,15 @@ function GoalEditForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => vo
   })
 
   async function onSubmit(values: UpdateSavingsGoalInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await updateSavingsGoalAction(goal.id, values)
-        if (!result.ok) {
-          setError(t(SAVINGS_GOAL_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'GoalEditForm: update failed',
+      action: () => updateSavingsGoalAction(goal.id, values),
+      errorKeys: SAVINGS_GOAL_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         router.refresh()
         onDone()
-      } catch {
-        console.error('GoalEditForm: update failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

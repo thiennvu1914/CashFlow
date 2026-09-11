@@ -1,12 +1,10 @@
-import os from 'os'
-import path from 'path'
 import { test, expect, type Page } from '@playwright/test'
 import {
-  PAGES,
-  registerNewUser,
+  authenticatedSession,
   createAccountViaUi,
   createBudgetViaUi,
   createTransactionViaUi,
+  PAGES,
   todayInZone,
 } from './helpers'
 
@@ -43,7 +41,7 @@ const YESTERDAY = todayInZone(TIMEZONE, new Date(Date.now() - 24 * 60 * 60 * 100
 const VND_ACCOUNT = 'Tiền mặt'
 const USD_ACCOUNT = 'Đô la Mỹ'
 
-const STORAGE_STATE_PATH = path.join(os.tmpdir(), `cashflow-phase7-responsive-${process.pid}.json`)
+const SESSION = authenticatedSession('phase7-responsive')
 
 /**
  * Every inline row action in the app (spec §8's 44 px rule at `< 768`), with
@@ -190,60 +188,58 @@ async function createCrossCurrencyTransferViaUi(page: Page): Promise<void> {
 }
 
 test.describe.serial('Phase 7 — responsive', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(240_000)
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-responsive' })
-    await createAccountViaUi(page, {
-      name: VND_ACCOUNT,
-      currency: 'VND',
-      initialBalance: 25_000_000,
+
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, {
+        name: VND_ACCOUNT,
+        currency: 'VND',
+        initialBalance: 25_000_000,
+      })
+      await createAccountViaUi(page, { name: USD_ACCOUNT, currency: 'USD', initialBalance: 2_000 })
+      // A long note beside a wide VND figure — the exact row that used to
+      // overflow, and the reason `FinancialListRow` has a fixed amount column.
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: VND_ACCOUNT,
+        categoryName: 'Food & Dining',
+        amount: 12_500_000,
+        note: 'Bữa trưa với khách hàng tại nhà hàng ở quận 1, đã bao gồm phí dịch vụ và thuế giá trị gia tăng',
+      })
+      // A second row, dated yesterday, so `/transactions` renders TWO day groups:
+      // the sticky `z-10` day header of the second group is what the row-menu
+      // popup opens across, and the stacking test below needs that overlap to
+      // exist before it can mean anything.
+      await createDatedTransactionViaUi(page, {
+        accountName: VND_ACCOUNT,
+        categoryName: 'Salary',
+        amount: 30_000_000,
+        date: YESTERDAY,
+      })
+      await createCrossCurrencyTransferViaUi(page)
+      await createBudgetViaUi(page, { scope: 'OVERALL', amount: 20_000_000 })
+      await createGoalViaUi(page, {
+        name: 'Quỹ dự phòng khẩn cấp',
+        target: 200_000_000,
+        current: 45_000_000,
+      })
+      await createDebtViaUi(page, {
+        direction: 'RECEIVABLE',
+        person: 'Nguyễn Thị Minh Khai (bạn cùng phòng cũ)',
+        amount: 18_500_000,
+      })
+      await createLoanViaUi(page, {
+        lender: 'Ngân hàng Thương mại Cổ phần Ngoại thương',
+        principal: 850_000_000,
+        interestRate: 8.5,
+        termMonths: 240,
+        scheduledPayment: 7_400_000,
+      })
+      await createReminderViaUi(page, { title: 'Tiền điện nước tháng này', amount: 1_850_000 })
     })
-    await createAccountViaUi(page, { name: USD_ACCOUNT, currency: 'USD', initialBalance: 2_000 })
-    // A long note beside a wide VND figure — the exact row that used to
-    // overflow, and the reason `FinancialListRow` has a fixed amount column.
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: VND_ACCOUNT,
-      categoryName: 'Food & Dining',
-      amount: 12_500_000,
-      note: 'Bữa trưa với khách hàng tại nhà hàng ở quận 1, đã bao gồm phí dịch vụ và thuế giá trị gia tăng',
-    })
-    // A second row, dated yesterday, so `/transactions` renders TWO day groups:
-    // the sticky `z-10` day header of the second group is what the row-menu
-    // popup opens across, and the stacking test below needs that overlap to
-    // exist before it can mean anything.
-    await createDatedTransactionViaUi(page, {
-      accountName: VND_ACCOUNT,
-      categoryName: 'Salary',
-      amount: 30_000_000,
-      date: YESTERDAY,
-    })
-    await createCrossCurrencyTransferViaUi(page)
-    await createBudgetViaUi(page, { scope: 'OVERALL', amount: 20_000_000 })
-    await createGoalViaUi(page, {
-      name: 'Quỹ dự phòng khẩn cấp',
-      target: 200_000_000,
-      current: 45_000_000,
-    })
-    await createDebtViaUi(page, {
-      direction: 'RECEIVABLE',
-      person: 'Nguyễn Thị Minh Khai (bạn cùng phòng cũ)',
-      amount: 18_500_000,
-    })
-    await createLoanViaUi(page, {
-      lender: 'Ngân hàng Thương mại Cổ phần Ngoại thương',
-      principal: 850_000_000,
-      interestRate: 8.5,
-      termMonths: 240,
-      scheduledPayment: 7_400_000,
-    })
-    await createReminderViaUi(page, { title: 'Tiền điện nước tháng này', amount: 1_850_000 })
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   for (const width of WIDTHS) {

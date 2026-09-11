@@ -10,6 +10,7 @@ import { syncPreferenceCookies } from '@/lib/server/actions/sync-preference-cook
 import { loginSchema, type LoginInput } from '@/lib/validation/auth'
 import { GENERIC_ERROR_KEY } from '@/lib/ui/action-error-messages'
 import { useSubmitState } from '@/lib/ui/use-submit-state'
+import { digestOf } from '@/lib/ui/use-action-submit'
 import { FormField } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -64,8 +65,14 @@ export function LoginForm() {
       // sign-in — so it must never block the navigation below.
       try {
         await syncPreferenceCookies()
-      } catch {
-        console.error('Preference cookie sync failed')
+      } catch (e) {
+        // The digest, when Next attached one, is the one thing about a thrown
+        // server-action error worth logging (pre-flight A-4) — never its
+        // `message`, which this best-effort sync has no user-facing sink for
+        // anyway.
+        const digest = digestOf(e)
+        if (digest) console.error('Preference cookie sync failed', { digest })
+        else console.error('Preference cookie sync failed')
       }
       router.push('/dashboard')
       router.refresh()

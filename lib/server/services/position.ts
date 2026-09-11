@@ -46,15 +46,15 @@ import { getLoansWithOutstanding } from './loan'
  * touches FX at all and their dashboard renders unchanged through a provider
  * outage.
  *
- * The **payload** is not constant, and this function does not need what it
- * pays for: both of those services read through their own `WITH_PAYMENTS`
- * include (`debt.ts`, `loan.ts`), so every `DebtPayment` and `LoanPayment` row
- * crosses the wire on every dashboard render — O(payments) — while the only
- * figures used here come from the accompanying `groupBy` sums, and the payment
- * arrays are discarded. It is one include shared with the Debts and Loans
- * pages, which do render each payment, and splitting it means a second read
- * path and a second definition of a debt's shape; that trade is Phase 7
- * backlog, not something this comment should claim away.
+ * The **payload** is constant too, and deliberately (Phase 8, finding B-7).
+ * Both agreement reads pass `includePayments: false`: the only figures used
+ * here are `outstanding` and `outstandingPrincipal`, which come from those
+ * services' `groupBy` sums, so every `DebtPayment` and `LoanPayment` row used
+ * to cross the wire on every dashboard render — O(payments) — and be discarded.
+ * The flag drops the join and nothing else; the sums, and so every figure
+ * below, are computed exactly as before (`debt.test.ts` and `loan.test.ts`
+ * assert the two paths agree figure by figure), and the Debts and Loans pages,
+ * which do render each payment, keep the default include.
  *
  * No conversion happens inside a transaction and none of the three reads opens
  * one: the debt and loan services do no FX of their own (each record keeps its
@@ -188,8 +188,13 @@ export async function getCurrentPosition(
     ),
     // Active only, both of them: a written-off debt and a closed loan are
     // history, not a position (they stay visible on their own pages).
-    getDebtsWithOutstanding(userId, today, { activeOnly: true }),
-    getLoansWithOutstanding(userId, today, { activeOnly: true }),
+    //
+    // `includePayments: false` because the only figures read below are
+    // `outstanding` / `outstandingPrincipal`, which come from those services'
+    // `groupBy` sums (Phase 8, finding B-7). Nothing on this page renders an
+    // instalment, so nothing here pays for one.
+    getDebtsWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
+    getLoansWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
   ])
 
   // Nothing left owed contributes nothing, so a debt that has been repaid in

@@ -7,10 +7,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { createDebtSchema, type CreateDebtInput } from '@/lib/validation/debt'
 import { createDebtAction } from '@/lib/server/actions/debt-actions'
-import { GENERIC_ERROR_KEY, DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { debtDirectionLabelKey } from '@/lib/ui/labels'
+import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
-import { useSubmitState } from '@/lib/ui/use-submit-state'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -50,7 +50,7 @@ export function DebtForm({ onCreated }: { onCreated?: () => void } = {}) {
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
   const hydrated = useHydrated()
-  const submit = useSubmitState()
+  const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-${name}-${uid}`
   const {
@@ -64,21 +64,16 @@ export function DebtForm({ onCreated }: { onCreated?: () => void } = {}) {
   })
 
   async function onSubmit(values: CreateDebtInput) {
-    setError(null)
-    await submit.run(async () => {
-      try {
-        const result = await createDebtAction(values)
-        if (!result.ok) {
-          setError(t(DEBT_ERROR_KEYS[result.error]))
-          return
-        }
+    await submit.run({
+      tag: 'DebtForm: create failed',
+      action: () => createDebtAction(values),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSuccess: () => {
         reset(defaultValues())
         router.refresh()
         onCreated?.()
-      } catch {
-        console.error('DebtForm: create failed')
-        setError(t(GENERIC_ERROR_KEY))
-      }
+      },
     })
   }
 

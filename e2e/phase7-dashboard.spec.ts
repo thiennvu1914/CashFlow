@@ -1,7 +1,10 @@
-import os from 'os'
-import path from 'path'
 import { test, expect } from '@playwright/test'
-import { createAccountViaUi, createTransactionViaUi, registerNewUser } from './helpers'
+import {
+  authenticatedSession,
+  createAccountViaUi,
+  createTransactionViaUi,
+  registerNewUser,
+} from './helpers'
 
 /**
  * Phase 7 Task 4: owner requirement R — coverage the Dashboard rebuild adds on
@@ -27,10 +30,7 @@ import { createAccountViaUi, createTransactionViaUi, registerNewUser } from './h
  * cookie the page would ignore.
  */
 
-const STORAGE_STATE_PATH = path.join(
-  os.tmpdir(),
-  `cashflow-phase7-dashboard-storage-state-${process.pid}.json`,
-)
+const SESSION = authenticatedSession('phase7-dashboard')
 
 /** A raw enum value would look like this: two-plus upper-case words joined by
  *  underscores (`CASH_OUT`, `ADJUSTMENT_INCREASE`) — never a translated label,
@@ -39,25 +39,20 @@ const RAW_ENUM_PATTERN = /\b[A-Z]{2,}(?:_[A-Z]+)+\b/
 
 test.describe
   .serial('Phase 7 Task 4 — dashboard summary panel, locales, themes and empty states', () => {
-  test.use({ storageState: STORAGE_STATE_PATH })
+  test.use({ storageState: SESSION.path })
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000)
 
-    const context = await browser.newContext({ storageState: undefined })
-    const page = await context.newPage()
-
-    await registerNewUser(page, { emailPrefix: 'e2e-phase7-dashboard' })
-    await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
-    await createTransactionViaUi(page, {
-      type: 'EXPENSE',
-      accountName: 'Cash',
-      categoryName: 'Food & Dining',
-      amount: 150_000,
+    await SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 150_000,
+      })
     })
-
-    await context.storageState({ path: STORAGE_STATE_PATH })
-    await context.close()
   })
 
   test('renders the five summary labels in Vietnamese by default', async ({ page }) => {

@@ -6,14 +6,21 @@ import type { MockInstance } from 'vitest'
 import { formatInTimeZone } from 'date-fns-tz'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getAccountBalance } from '@/lib/server/services/balance'
+// The view model's own definition of "overdue", imported so the service's
+// `count` predicate is asserted against the very function the widget uses
+// rather than against a copy of it.
+import { toOccurrenceDto } from '@/lib/ui/reminder-view-model'
 import {
   InvalidReminderAccountError,
   InvalidReminderCategoryError,
   OCCURRENCE_LOOKAHEAD_DAYS,
   acknowledgeOccurrence,
+  countOverdueOccurrences,
   createReminder,
   dismissOccurrence,
+  listDashboardOccurrences,
   listOccurrences,
   listReminders,
   listUpcomingOccurrences,
@@ -22,6 +29,7 @@ import {
   setReminderActive,
   toLocalCalendarCarrier,
   type OccurrenceRow,
+  type ReminderRow,
 } from './reminder'
 
 /**
@@ -62,8 +70,10 @@ import {
  *    each mutation, which must fail with P2025 and leave the row byte-identical;
  *    the composite FKs refuse a cross-user occurrence, category and account with
  *    P2003 even when the service is bypassed entirely.
- * 8. **No N+1.** Three active reminders cost one reminder `findMany`, at most one
- *    `createMany` each, and one occurrence `findMany` — asserted with spies.
+ * 8. **No N+1.** Three active reminders cost one reminder `findMany`, one
+ *    batched `createMany` for all of them, and one occurrence `findMany` —
+ *    asserted with spies, and `batched materialization` pins the batch's rows
+ *    against the per-reminder loop's output date by date.
  *
  * `fetch` is a throwing spy for every test and `afterEach` asserts it was never
  * called: a reminder keeps its own currency and nothing here converts one, so any
@@ -1341,8 +1351,212 @@ describe('reminder service', () => {
     })
   })
 
+  /**
+   * The two reads of the same PENDING set (Phase 8, Task 4 — pre-flight
+   * finding B-6).
+   *
+   * `listUpcomingOccurrences` is the **Reminders page's** read and stays
+   * complete: that page groups rather than truncates, and states the true size
+   * of the overdue group above it (`reminders.overdueCount`), so a cap there
+   * would be the app quietly forgetting bills on the user's behalf.
+   *
+   * `listDashboardOccurrences` is the **widget's** read and is bounded: five
+   * rows, at most two of them overdue. Because `dueAt asc` puts the whole
+   * overdue backlog at the head of the list, one `take` over that order cannot
+   * express the widget — a user a year behind on one weekly reminder has ~52
+   * overdue rows, so `take: 7` would return seven overdue rows and *no*
+   * upcoming ones, and the widget would render two rows instead of five while
+   * reporting "7 overdue" instead of 52. The bound is therefore one `take` per
+   * half over the same order, plus a `count` for the tally — three constant
+   * queries in place of one unbounded one.
+   *
+   * These cases build that user honestly (a year of weekly reads, each
+   * materializing its own window) and pin both contracts against each other:
+   * the bounded rows must be exactly the head of each half of the complete
+   * list, and the tally must be the complete overdue count.
+   */
+  describe('the two occurrence reads', () => {
+    /** The widget's caps, as `lib/ui/dashboard-view-model.ts` defines them. The
+     *  page passes the exported constant; a test may state the numbers. */
+    const LIMITS = { overdue: 2, upcoming: 5 }
+
+    /** A user who has ignored one weekly reminder for a year: 52 rows already
+     *  overdue and five still to come, accumulated the way a year of dashboard
+     *  views would have accumulated them. */
+    async function seedAYearOfIgnoredReads() {
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Weekly savings',
+        frequency: 'WEEKLY',
+        dayOfMonth: undefined,
+        startDate: '2025-01-06',
+      })
+      // Each read materializes its own [one week back, 30 days ahead] window,
+      // and the 30-day step keeps them contiguous.
+      for (let day = -360; day <= 0; day += 30) {
+        await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, at(day))
+      }
+    }
+
+    /** The instant the viewer's calendar day begins — the boundary both the
+     *  service's `count` and the view model's `overdue` flag decide on. */
+    const dayStart = (timezone: string, now = NOW) =>
+      localCarrierToInstant(toLocalCalendarCarrier(now, timezone), timezone)
+
+    it('leaves the Reminders page’s read complete, however large the backlog', async () => {
+      await seedAYearOfIgnoredReads()
+
+      const rows = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      // Nothing is dropped: the page's own list is the complete PENDING set.
+      expect(rows).toHaveLength(await occurrenceCount())
+      expect(rows.length).toBeGreaterThan(50)
+      // Ascending, so the backlog is at the head and the upcoming rows behind
+      // it — the order both pages' partitions depend on.
+      expect(utcInstants(rows)).toEqual([...utcInstants(rows)].sort())
+      expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
+      // The oldest unanswered bill is still in the list a year later, which is
+      // the whole reason this read is not clamped to the lookahead window.
+      expect(localDays(rows)[0]).toBe('2025-03-17')
+    })
+
+    it('gives the dashboard the widget’s own rows and the complete tally', async () => {
+      await seedAYearOfIgnoredReads()
+      // The complete list the widget used to be built from, partitioned exactly
+      // as `buildDashboardViewModel` partitions it.
+      const complete = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      const boundary = dayStart(TEST_TIMEZONE)
+      const overdue = complete.filter((row) => row.dueAt < boundary)
+      const upcoming = complete.filter((row) => row.dueAt >= boundary)
+      expect(overdue.length).toBeGreaterThan(50)
+      expect(upcoming.length).toBeGreaterThanOrEqual(LIMITS.upcoming)
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // The head of each half, in one ascending list — the same rows, in the
+      // same order, that the widget selected out of the complete list.
+      expect(read.rows.map((row) => row.id)).toEqual([
+        ...overdue.slice(0, LIMITS.overdue).map((row) => row.id),
+        ...upcoming.slice(0, LIMITS.upcoming).map((row) => row.id),
+      ])
+      expect(utcInstants(read.rows)).toEqual([...utcInstants(read.rows)].sort())
+      expect(read.rows.length).toBeLessThanOrEqual(LIMITS.overdue + LIMITS.upcoming)
+      // And the tally is the whole backlog, not the two rows on show.
+      expect(read.overdueCount).toBe(overdue.length)
+    })
+
+    it('fetches at most cap + max rows, with a take on each half', async () => {
+      await seedAYearOfIgnoredReads()
+      const findMany = vi.spyOn(prisma.reminderOccurrence, 'findMany')
+      const count = vi.spyOn(prisma.reminderOccurrence, 'count')
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // Two bounded reads and one count, whatever the size of the backlog —
+      // the whole of finding B-6.
+      expect(findMany).toHaveBeenCalledTimes(2)
+      expect(findMany.mock.calls.map((call) => call[0]?.take)).toEqual([
+        LIMITS.overdue,
+        LIMITS.upcoming,
+      ])
+      expect(count).toHaveBeenCalledTimes(1)
+      expect(read.rows).toHaveLength(LIMITS.overdue + LIMITS.upcoming)
+    })
+
+    it('materializes first, so a first-ever view counts the rows it just created', async () => {
+      // The one ordering that matters: the tally is a `count`, and counting
+      // before the insert would report zero on the very first dashboard view.
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Late rent',
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+
+      const read = await listDashboardOccurrences(fx.userId, TEST_TIMEZONE, LIMITS, NOW)
+
+      // 1 March is behind 15 March, 1 April ahead of it.
+      expect(localDays(read.rows)).toEqual(['2026-03-01', '2026-04-01'])
+      expect(read.overdueCount).toBe(1)
+    })
+
+    it('counts exactly the rows the widget calls overdue, in either viewer zone', async () => {
+      await seedAYearOfIgnoredReads()
+      const rows = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      for (const timezone of [TEST_TIMEZONE, DST_TIMEZONE]) {
+        // The view model's own definition of late: two calendar days in the
+        // viewer's zone, compared as strings (`lib/ui/reminder-view-model.ts`).
+        const today = todayCalendarDateInZone(timezone, NOW)
+        const fromTheWidget = rows.filter(
+          (row) => toOccurrenceDto(row, timezone, today).overdue,
+        ).length
+
+        expect(await countOverdueOccurrences(fx.userId, timezone, NOW)).toBe(fromTheWidget)
+      }
+    })
+
+    it('treats an occurrence due today as not overdue, at the local-midnight boundary', async () => {
+      // Local midnight of the user's today is 17:00Z the previous day in UTC+7,
+      // which is exactly the instant a UTC-only comparison gets wrong: it reads
+      // as "yesterday" in UTC and would count today's bill as late.
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Due today',
+        frequency: 'ONE_TIME',
+        dayOfMonth: undefined,
+        startDate: '2026-03-15',
+      })
+      await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Due yesterday',
+        frequency: 'ONE_TIME',
+        dayOfMonth: undefined,
+        startDate: '2026-03-14',
+      })
+      await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      // The user has the whole of today to pay today's bill.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(1)
+      expect(utcInstants(await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW))).toEqual([
+        '2026-03-13T17:00:00.000Z',
+        '2026-03-14T17:00:00.000Z',
+      ])
+    })
+
+    it('counts only PENDING rows, and only this user’s', async () => {
+      const other = await createReminderUser()
+      extraUserIds.push(other.userId)
+      await createReminder(other.userId, TEST_TIMEZONE, BASE_REMINDER)
+      await listUpcomingOccurrences(other.userId, TEST_TIMEZONE, NOW)
+      await createReminder(fx.userId, TEST_TIMEZONE, BASE_REMINDER)
+      const mine = await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      // The 1 March row is overdue at `NOW`; the 1 April one is not.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(1)
+
+      await acknowledgeOccurrence(fx.userId, mine[0].id, NOW)
+
+      // An answered bill is no longer something the user is late for.
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(0)
+      // And the other user's identical row was never in the tally.
+      expect(await countOverdueOccurrences(other.userId, TEST_TIMEZONE, NOW)).toBe(1)
+    })
+
+    it('materializes nothing when only the tally is asked for', async () => {
+      await createReminder(fx.userId, TEST_TIMEZONE, BASE_REMINDER)
+      const createMany = vi.spyOn(prisma.reminderOccurrence, 'createMany')
+
+      expect(await countOverdueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(0)
+
+      // A count is a question about the past, and answering it must not write —
+      // the same rule `listOccurrences` follows.
+      expect(createMany).not.toHaveBeenCalled()
+      expect(await occurrenceCount()).toBe(0)
+    })
+  })
+
   describe('query shape', () => {
-    it('costs one reminder read, at most one insert per reminder, and one occurrence read', async () => {
+    it('costs one reminder read, one insert, and one occurrence read', async () => {
       for (const title of ['Rent', 'Electricity', 'Water']) {
         await createReminder(fx.userId, TEST_TIMEZONE, { ...BASE_REMINDER, title })
       }
@@ -1355,7 +1569,9 @@ describe('reminder service', () => {
       expect(rows).toHaveLength(6)
       // One query for the reminders however many there are — never one per row.
       expect(reminderFindMany).toHaveBeenCalledTimes(1)
-      expect(createMany.mock.calls.length).toBeLessThanOrEqual(3)
+      // And one insert for all three of them (finding B-3): the write cost of a
+      // dashboard render does not follow the number of reminders.
+      expect(createMany).toHaveBeenCalledTimes(1)
       // And one query for the occurrences, joining the reminder, its category and
       // its account — so the dashboard widget needs no follow-up read.
       expect(occurrenceFindMany).toHaveBeenCalledTimes(1)
@@ -1373,6 +1589,190 @@ describe('reminder service', () => {
       await listUpcomingOccurrences(fx.userId, TEST_TIMEZONE, NOW)
 
       expect(createMany).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * The batched insert (Phase 8, Task 4 — pre-flight finding B-3).
+   *
+   * Materialization used to issue one `createMany` per active reminder, so a
+   * dashboard render cost a write round trip per reminder the user keeps —
+   * whether or not anything was actually due. Batching it is only safe if the
+   * rows it writes are *the same rows*, and the four properties that could
+   * plausibly change when a per-reminder insert becomes one insert are all
+   * pinned here:
+   *
+   * 1. **Per-reminder zone anchoring.** Four reminders, four frequencies, two
+   *    zones — the monthly and yearly ones anchored in `America/New_York`
+   *    across its 8 March DST transition, the one-off and weekly ones in
+   *    `Asia/Ho_Chi_Minh`. A batch that hoisted `nowLocal`, the window or the
+   *    conversion out of the loop would move an instant, and every instant is
+   *    asserted literally.
+   * 2. **The windows themselves.** ONE_TIME is never clamped (a 2020 one-off
+   *    still appears); everything else is clamped to one interval back — so the
+   *    yearly reminder contributes 2025 and 2026 but not 2024.
+   * 3. **Answered rows survive.** An ACKNOWLEDGED and a DISMISSED occurrence
+   *    are re-derived by the next batch and must be skipped, not reset: the
+   *    batch still only ever inserts.
+   * 4. **The insert count no longer follows the reminder count.** One
+   *    `createMany` for four reminders, and the rows inside it ordered by
+   *    `(reminderId, dueAt)` — the ordering the module's deadlock argument
+   *    depends on, which per-reminder inserts got for free and a batch has to
+   *    arrange for itself.
+   */
+  describe('batched materialization', () => {
+    /**
+     * One reminder of every frequency, deliberately spanning a zone boundary:
+     * the Ho Chi Minh pair fall due at 17:00Z of the previous UTC day, the New
+     * York pair at 05:00Z (EST) or 04:00Z (EDT) of the day itself.
+     */
+    async function createMixedReminders() {
+      const oneTime = await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Passport renewal',
+        frequency: 'ONE_TIME',
+        dayOfMonth: undefined,
+        startDate: '2020-05-17',
+      })
+      const weekly = await createReminder(fx.userId, TEST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Weekly savings',
+        frequency: 'WEEKLY',
+        dayOfMonth: undefined,
+        startDate: '2026-01-05',
+      })
+      const monthly = await createReminder(fx.userId, DST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Rent NY',
+        dayOfMonth: 1,
+        startDate: '2026-01-01',
+      })
+      const yearly = await createReminder(fx.userId, DST_TIMEZONE, {
+        ...BASE_REMINDER,
+        title: 'Insurance NY',
+        frequency: 'YEARLY',
+        dayOfMonth: 20,
+        month: 3,
+        startDate: '2024-03-20',
+      })
+      return { oneTime, weekly, monthly, yearly }
+    }
+
+    /** Every stored occurrence as `title dueAt status`, due date ascending —
+     *  the set-equality shape, with each reminder identified by something a
+     *  reader can check against the fixture above. */
+    async function storedRows(reminders: Record<string, ReminderRow>) {
+      const titleOf = new Map(Object.values(reminders).map((row) => [row.id, row.title]))
+      const rows = await prisma.reminderOccurrence.findMany({
+        where: { userId: fx.userId },
+        orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
+      })
+      return rows.map(
+        (row) => `${titleOf.get(row.reminderId)} ${row.dueAt.toISOString()} ${row.status}`,
+      )
+    }
+
+    /**
+     * The golden set: what the per-reminder loop wrote for this fixture, instant
+     * by instant. Eleven rows — one 2020 one-off, six Mondays, two New York
+     * firsts either side of the DST switch, two March 20ths.
+     */
+    const EXPECTED_ROWS = [
+      'Passport renewal 2020-05-16T17:00:00.000Z PENDING',
+      'Insurance NY 2025-03-20T04:00:00.000Z PENDING',
+      'Rent NY 2026-03-01T05:00:00.000Z PENDING',
+      'Weekly savings 2026-03-08T17:00:00.000Z PENDING',
+      'Weekly savings 2026-03-15T17:00:00.000Z PENDING',
+      'Insurance NY 2026-03-20T04:00:00.000Z PENDING',
+      'Weekly savings 2026-03-22T17:00:00.000Z PENDING',
+      'Weekly savings 2026-03-29T17:00:00.000Z PENDING',
+      'Rent NY 2026-04-01T04:00:00.000Z PENDING',
+      'Weekly savings 2026-04-05T17:00:00.000Z PENDING',
+      'Weekly savings 2026-04-12T17:00:00.000Z PENDING',
+    ]
+
+    it('writes exactly the rows a per-reminder loop wrote, across four frequencies and two zones', async () => {
+      const reminders = await createMixedReminders()
+
+      const created = await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      expect(created).toBe(EXPECTED_ROWS.length)
+      expect(await storedRows(reminders)).toEqual(EXPECTED_ROWS)
+    })
+
+    it('re-deriving the same set skips the answered rows instead of resetting them', async () => {
+      const reminders = await createMixedReminders()
+      await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+      const stored = await prisma.reminderOccurrence.findMany({
+        where: { userId: fx.userId },
+        orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
+      })
+      // The 2020 one-off is acknowledged and the first Monday dismissed — two
+      // of the eleven rows the very next batch recomputes.
+      await acknowledgeOccurrence(fx.userId, stored[0].id, NOW)
+      await dismissOccurrence(fx.userId, stored[3].id, NOW)
+
+      // A second read at the same instant: the same eleven dates, nothing new.
+      expect(await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)).toBe(0)
+
+      expect(await storedRows(reminders)).toEqual(
+        EXPECTED_ROWS.map((row) => {
+          if (row.startsWith('Passport renewal')) return row.replace('PENDING', 'ACKNOWLEDGED')
+          if (row === 'Weekly savings 2026-03-08T17:00:00.000Z PENDING') {
+            return row.replace('PENDING', 'DISMISSED')
+          }
+          return row
+        }),
+      )
+      // And each answer keeps the instant the user gave it at.
+      const answered = await prisma.reminderOccurrence.findMany({
+        where: { userId: fx.userId, status: { not: 'PENDING' } },
+      })
+      expect(answered.map((row) => row.actionedAt?.toISOString())).toEqual([
+        NOW.toISOString(),
+        NOW.toISOString(),
+      ])
+    })
+
+    it('costs one insert for four reminders, with the rows ordered by (reminderId, dueAt)', async () => {
+      await createMixedReminders()
+      const createMany = vi.spyOn(prisma.reminderOccurrence, 'createMany')
+
+      await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      // The insert count is a property of the *call*, not of how many reminders
+      // the user keeps — which is the whole of finding B-3.
+      expect(createMany).toHaveBeenCalledTimes(1)
+      const argument = createMany.mock.calls[0][0] as {
+        data: { reminderId: string; dueAt: Date }[]
+        skipDuplicates?: boolean
+      }
+      expect(argument.data).toHaveLength(11)
+      // Ascending `(reminderId, dueAt)`, so concurrent callers take their row
+      // locks in the same order and cannot deadlock — the property the
+      // per-reminder loop had for free.
+      const keys = argument.data.map((row) => `${row.reminderId} ${row.dueAt.toISOString()}`)
+      expect(keys).toEqual([...keys].sort())
+      // `skipDuplicates` is the whole idempotency mechanism: without it the
+      // second read would fail with P2002.
+      expect(argument.skipDuplicates).toBe(true)
+    })
+
+    it('does not grow its insert count with the number of reminders', async () => {
+      for (let index = 0; index < 12; index += 1) {
+        await createReminder(fx.userId, TEST_TIMEZONE, {
+          ...BASE_REMINDER,
+          title: `Bill ${index}`,
+          dayOfMonth: 1,
+        })
+      }
+      const createMany = vi.spyOn(prisma.reminderOccurrence, 'createMany')
+
+      await materializeDueOccurrences(fx.userId, TEST_TIMEZONE, NOW)
+
+      expect(createMany).toHaveBeenCalledTimes(1)
+      // Twelve reminders × two firsts in the window, in one round trip.
+      expect(await occurrenceCount()).toBe(24)
     })
   })
 

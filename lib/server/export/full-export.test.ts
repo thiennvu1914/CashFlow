@@ -110,6 +110,69 @@ const FULL_EXPORT_SHEETS = [
  */
 const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
 
+/**
+ * The workbook this fixture produced BEFORE Task 4 changed what the Debts and
+ * Loans sheets fetch: captured from the pre-change build and pasted here
+ * verbatim, one line per row. If a single cell, number format or row order
+ * moves, this is the case that says which one.
+ *
+ * `Transfers r1` and `Budgets r1` are header-only here — this fixture seeds no
+ * transfer and no budget, so those two sheets have nothing to add to a golden
+ * that is already ~40 lines of every other sheet's data rows. Their own cell
+ * contract is covered elsewhere, per row and per format: transfers by 'lists
+ * transfers with both legs, their currencies and the rate used' and the
+ * Summary-count case above, budgets by 'writes each budget in its own
+ * currency, from historical rates and no current one' and the
+ * archived-category and per-month-scan cases below. Adding a row of each here
+ * would duplicate that coverage and double the Summary-sheet figures (account
+ * balance, net worth, monthly income/expense) this golden would then also have
+ * to carry by hand.
+ */
+const EXPECTED_WORKBOOK_CELLS: string[] = [
+  'Summary r1: Metric | Value | Note',
+  'Summary r2: Generated at | 2026-03-15T12:00:00.000Z [yyyy-mm-dd hh:mm] | ',
+  'Summary r3: Timezone | Asia/Ho_Chi_Minh | ',
+  'Summary r4: Display currency | VND | ',
+  'Summary r5: FX rate | <volatile> | ',
+  'Summary r6: Total account balance | 0 [#,##0] | ',
+  'Summary r7: Net worth | -420000 [#,##0] | ',
+  'Summary r8: Monthly income | 0 [#,##0] | Current local month, at each row’s own rate',
+  'Summary r9: Monthly expense | 0 [#,##0] | Current local month, at each row’s own rate',
+  'Summary r10: Monthly net income | 0 [#,##0] | Current local month, at each row’s own rate',
+  'Summary r11: Active accounts | 2 | ',
+  'Summary r12: Archived accounts | 0 | ',
+  'Summary r13: Transactions | 1 | ',
+  'Summary r14: Transfers | 0 | ',
+  'Accounts r1: Name | Type | Currency | Status | Initial balance | Current balance | Current balance (VND) | Created',
+  'Accounts r2: Wallet | Cash | VND | ACTIVE | 0 [#,##0] | 0 [#,##0] | 0 [#,##0] | <volatile> [yyyy-mm-dd]',
+  'Accounts r3: Dollar savings | Cash | USD | ACTIVE | 0 [#,##0.00] | 0 [#,##0.00] | 0 [#,##0] | <volatile> [yyyy-mm-dd]',
+  'Transactions r1: Transaction id | Date | Type | Category | Account | Amount | Currency | Amount (VND, historical rate) | VND per USD at entry | FX source | FX effective (UTC day) | FX fetched (local) | Note',
+  'Transactions r2: <volatile> | 2026-03-10T12:00:00.000Z [yyyy-mm-dd hh:mm] | CASH_IN |  | Dollar savings | 100 [#,##0.00] | USD | 2500000 [#,##0] | 25000 [#,##0.000000] | export-seeded | 2026-03-10T00:00:00.000Z [yyyy-mm-dd] | 2026-03-10T12:00:00.000Z [yyyy-mm-dd hh:mm] | ',
+  'Transfers r1: Date | From account | To account | From amount | From currency | To amount | To currency | Rate used | Note',
+  'Budgets r1: Year | Month | Scope | Category | Amount | Currency | Spent | Remaining | Used % | Status | Created',
+  'Savings Goals r1: Name | Target | Progress | Remaining | Progress % | Currency | Deadline | Status | Note | Created',
+  'Savings Goals r2: Emergency fund | 10000000 [#,##0] | 2500000 [#,##0] | 7500000 [#,##0] | 0.25 [0%] | VND | 2026-12-31T00:00:00.000Z [yyyy-mm-dd] | In progress | three months of expenses | <volatile> [yyyy-mm-dd hh:mm]',
+  'Savings Goals r3: New laptop | 1000 [#,##0.00] | 1200 [#,##0.00] | 0 [#,##0.00] | 1.2 [0%] | USD |  [yyyy-mm-dd] | Archived |  | <volatile> [yyyy-mm-dd hh:mm]',
+  'Debts r1: Direction | Person | Original | Paid | Outstanding | Currency | Due date | Status | Description | Notes | Created',
+  'Debts r2: Receivable | An | 1000000 [#,##0] | 500000 [#,##0] | 500000 [#,##0] | VND | 2026-04-30T00:00:00.000Z [yyyy-mm-dd] | Partly paid | lent for the deposit | paying in instalments | <volatile> [yyyy-mm-dd hh:mm]',
+  'Debts r3: Receivable | Chi | 100000 [#,##0] | 100000 [#,##0] | 0 [#,##0] | VND | 2026-03-01T00:00:00.000Z [yyyy-mm-dd] | Paid |  |  | <volatile> [yyyy-mm-dd hh:mm]',
+  'Debts r4: Payable | Binh | 400 [#,##0.00] | 100 [#,##0.00] | 300 [#,##0.00] | USD |  [yyyy-mm-dd] | Written off |  |  | <volatile> [yyyy-mm-dd hh:mm]',
+  'Debt Payments r1: Date | Debt | Direction | Amount | Currency | Note',
+  'Debt Payments r2: 2026-03-04T00:00:00.000Z [yyyy-mm-dd] | Binh | Payable | 100 [#,##0.00] | USD | ',
+  'Debt Payments r3: 2026-03-05T00:00:00.000Z [yyyy-mm-dd] | An | Receivable | 300000 [#,##0] | VND | first instalment',
+  'Debt Payments r4: 2026-03-06T00:00:00.000Z [yyyy-mm-dd] | An | Receivable | 200000 [#,##0] | VND | ',
+  'Debt Payments r5: 2026-03-07T00:00:00.000Z [yyyy-mm-dd] | Chi | Receivable | 100000 [#,##0] | VND | ',
+  'Loans r1: Lender | Principal | Principal paid | Interest paid | Outstanding principal | Currency | Interest rate (%) | Frequency | Scheduled payment | Start date | Next due date | Term (months) | Status | Notes | Created',
+  'Loans r2: Sacombank | 1000000 [#,##0] | 80000 [#,##0] | 10000 [#,##0] | 920000 [#,##0] | VND | 7.125 [0.000] | Monthly | 90000 [#,##0] | 2026-01-01T00:00:00.000Z [yyyy-mm-dd] | 2026-04-01T00:00:00.000Z [yyyy-mm-dd] | 12 | Active | car loan | <volatile> [yyyy-mm-dd hh:mm]',
+  'Loans r3: Family | 200 [#,##0.00] | 40 [#,##0.00] | 10 [#,##0.00] | 160 [#,##0.00] | USD | 0 [0.000] | Monthly | 50 [#,##0.00] | 2026-02-01T00:00:00.000Z [yyyy-mm-dd] | 2026-04-01T00:00:00.000Z [yyyy-mm-dd] | 6 | Closed |  | <volatile> [yyyy-mm-dd hh:mm]',
+  'Loan Payments r1: Date | Loan | Total | Principal | Interest | Currency | Note',
+  'Loan Payments r2: 2026-03-01T00:00:00.000Z [yyyy-mm-dd] | Sacombank | 90000 [#,##0] | 80000 [#,##0] | 10000 [#,##0] | VND | March instalment',
+  'Loan Payments r3: 2026-03-02T00:00:00.000Z [yyyy-mm-dd] | Family | 50 [#,##0.00] | 40 [#,##0.00] | 10 [#,##0.00] | USD | ',
+  'Reminders r1: Title | Type | Expected amount | Currency | Frequency | Start date | Active | Pending | Acknowledged | Dismissed | Category | Account | Note | Created | Timezone',
+  'Reminders r2: Rent | Bill | 5000000 [#,##0] | VND | Monthly | 2026-03-01T00:00:00.000Z [yyyy-mm-dd] | Yes | 1 | 0 | 1 | Food | Wallet | landlord transfers | <volatile> [yyyy-mm-dd hh:mm] | Asia/Ho_Chi_Minh',
+  'Reminders r3: Passport renewal | Bill | 200 [#,##0.00] | USD | One time | 2026-03-10T00:00:00.000Z [yyyy-mm-dd] | No | 0 | 1 | 0 |  |  |  | <volatile> [yyyy-mm-dd hh:mm] | Asia/Ho_Chi_Minh',
+]
+
 describe('full export workbook', () => {
   const createdUserIds: string[] = []
   let fetchSpy: MockInstance
@@ -1204,6 +1267,125 @@ describe('full export workbook', () => {
     // And nothing went looking for a rate of its own.
     expect(fetchSpy).not.toHaveBeenCalled()
     await expectNoEmptyStrings(await workbook.xlsx.writeBuffer())
+  })
+
+  /**
+   * Every cell of the whole workbook, as a literal (Phase 8, Task 4).
+   *
+   * The other cases here each check one sheet's rules. This one is the blunt
+   * instrument they cannot be: the eleven sheets' every row, every cell value
+   * and every number format, written out. It exists because Task 4 changed what
+   * the Debts and Loans sheets *fetch* (their payment history is no longer
+   * joined — finding B-7), and the only honest way to claim the workbook did
+   * not change is to compare the whole of it against what it produced before.
+   *
+   * Three families of cell are masked, because they are clock or id readings
+   * rather than fixture facts: any column headed `Created` (the row's own
+   * `createdAt`), the `Transaction id` column (a cuid), and the Summary sheet's
+   * FX-rate description (`fakeFxProvider` stamps it with `Date.now()`).
+   * Everything else — including every derived total, status, date and currency
+   * format — is asserted literally, with dates written as ISO instants so the
+   * golden does not depend on the host's own zone.
+   */
+  function dumpWorkbook(workbook: ExcelJS.Workbook): string[] {
+    const lines: string[] = []
+    for (const worksheet of workbook.worksheets) {
+      // The header row decides which columns are clock readings, so the mask
+      // follows the sheet's own contract rather than a column index.
+      const headers: string[] = []
+      worksheet.getRow(1).eachCell((cell, column) => {
+        headers[column] = String(cell.value ?? '')
+      })
+      worksheet.eachRow((row, index) => {
+        const cells: string[] = []
+        row.eachCell({ includeEmpty: true }, (cell, column) => {
+          const masked =
+            index > 1 &&
+            (headers[column] === 'Created' ||
+              headers[column] === 'Transaction id' ||
+              (worksheet.name === 'Summary' && column === 2 && row.getCell(1).value === 'FX rate'))
+          const value = masked ? '<volatile>' : cell.value
+          const format = cell.numFmt ? ` [${cell.numFmt}]` : ''
+          // Dates as ISO instants: `String(date)` is the *host's* wall clock, so
+          // a golden built here would read differently under `TZ=UTC` in CI.
+          const text =
+            value === null || value === undefined
+              ? ''
+              : value instanceof Date
+                ? value.toISOString()
+                : String(value)
+          cells.push(`${text}${format}`)
+        })
+        lines.push(`${worksheet.name} r${index}: ${cells.join(' | ')}`)
+      })
+    }
+    return lines
+  }
+
+  it('produces the same workbook, cell for cell, as before the payload changes', async () => {
+    const s = await setup()
+    await seedTransaction(s.userId, {
+      accountId: s.usdAccountId,
+      type: 'CASH_IN',
+      amount: 100,
+      currency: 'USD',
+      date: new Date('2026-03-10T05:00:00Z'),
+    })
+    await seedSavingsGoals(s.userId)
+    await seedDebts(s.userId)
+    await seedLoans(s.userId)
+    await seedReminders(s.userId, s)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+
+    const workbook = await buildFullWorkbook(ctx)
+
+    expect(dumpWorkbook(workbook)).toEqual(EXPECTED_WORKBOOK_CELLS)
+  })
+
+  /**
+   * A payment row crosses the wire once per workbook (Phase 8, Task 4 —
+   * finding B-7).
+   *
+   * The full export used to read every `DebtPayment` twice: once joined onto
+   * the Debts sheet's `getDebtsWithOutstanding` (which renders only `Paid` and
+   * `Outstanding`, so the rows were dropped), and once by the Debt Payments
+   * sheet, which is the sheet that actually lists them. Same for loans, and the
+   * Summary sheet's Net Worth read made it a third join.
+   *
+   * The two payment sheets stay exactly as they are — they are the one legitimate
+   * reader of the history — so the assertion is that the *other* reads no longer
+   * join it: two `Debt` reads and two `Loan` reads per workbook (the Summary
+   * sheet's Net Worth and the record sheet itself), none of them with an
+   * include, and one payment `findMany` each.
+   */
+  it('fetches each payment row once for the whole workbook', async () => {
+    const s = await setup()
+    await seedDebts(s.userId)
+    await seedLoans(s.userId)
+    const ctx = await makeExportContext(s.userId, {
+      now: EXPORT_NOW,
+      providerOverride: fakeFxProvider(),
+    })
+    const debtFindMany = vi.spyOn(prisma.debt, 'findMany')
+    const loanFindMany = vi.spyOn(prisma.loan, 'findMany')
+    const debtPaymentFindMany = vi.spyOn(prisma.debtPayment, 'findMany')
+    const loanPaymentFindMany = vi.spyOn(prisma.loanPayment, 'findMany')
+
+    await buildFullWorkbook(ctx)
+
+    // Summary (Net Worth) and the Debts sheet: two reads of the debt table,
+    // neither of them carrying the history.
+    expect(debtFindMany).toHaveBeenCalledTimes(2)
+    expect(debtFindMany.mock.calls.every((call) => call[0]?.include === undefined)).toBe(true)
+    expect(loanFindMany).toHaveBeenCalledTimes(2)
+    expect(loanFindMany.mock.calls.every((call) => call[0]?.include === undefined)).toBe(true)
+    // And exactly one read each of the payment tables — the sheets that list
+    // them.
+    expect(debtPaymentFindMany).toHaveBeenCalledTimes(1)
+    expect(loanPaymentFindMany).toHaveBeenCalledTimes(1)
   })
 
   /**

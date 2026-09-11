@@ -140,12 +140,18 @@ export function isSameDatabase(a: string, b: string): boolean {
  * The dev URL is offered as a second attempt only when it is on that same host
  * and port, covering a server whose `postgres` maintenance database has been
  * removed but whose dev database is reachable.
+ *
+ * `variableName` names the variable `testDatabaseUrl` came from, the way every
+ * other function here takes it: this is shared by the Vitest
+ * (`TEST_DATABASE_URL`) and Playwright (`E2E_DATABASE_URL`) paths, so a
+ * hard-coded name would send the e2e caller's reader to the wrong variable.
  */
 export function adminConnectionCandidates(
   testDatabaseUrl: string,
   devDatabaseUrl: string | undefined,
+  variableName: string,
 ): string[] {
-  const test = parseConnectionString(testDatabaseUrl, 'TEST_DATABASE_URL')
+  const test = parseConnectionString(testDatabaseUrl, variableName)
 
   const maintenance = new URL(test.toString())
   maintenance.pathname = '/postgres'

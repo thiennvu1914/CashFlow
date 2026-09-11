@@ -25,6 +25,10 @@ export default defineConfig({
       'scripts/**/*.test.tsx',
       'e2e-unit/**/*.test.ts',
       'e2e-unit/**/*.test.tsx',
+      // `instrumentation.ts` must live at the repository root (Next resolves it
+      // there and nowhere else), so its unit test does too — and without this
+      // entry the file would be silently skipped.
+      'instrumentation.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/.git/**', '.next/**', '.claude/**', 'docs/**', 'e2e/**'],
     // Creates and migrates the dedicated `cashflow_test` database once per run,

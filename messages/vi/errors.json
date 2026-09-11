@@ -2,6 +2,11 @@
   "generic": "Đã xảy ra lỗi. Vui lòng thử lại.",
   "boundaryTitle": "Không tải được trang này.",
   "boundaryBody": "Dữ liệu của bạn chưa bị thay đổi. Hãy thử lại sau một lát.",
+  "boundaryReference": "Mã tham chiếu: {code}",
+  "notFoundTitle": "Không tìm thấy trang này.",
+  "notFoundBody": "Đường dẫn này không tồn tại hoặc đã được chuyển đi nơi khác.",
+  "goToDashboard": "Đến Tổng quan",
+  "goToLogin": "Đến trang đăng nhập",
   "account": {
     "NON_ZERO_BALANCE": "Tài khoản phải có số dư bằng 0 trước khi lưu trữ. Hãy chuyển hoặc điều chỉnh số dư trước.",
     "ACCOUNT_LOCKED": "Không thể đổi tiền tệ và số dư ban đầu sau khi tài khoản đã có phát sinh.",
