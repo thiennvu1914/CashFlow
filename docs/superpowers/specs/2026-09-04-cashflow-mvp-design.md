@@ -22,7 +22,7 @@ Single full-stack **Next.js (App Router) + TypeScript** monolith — no separate
 - **Validation**: Zod schemas shared between React Hook Form (client, UX-only) and the server action (server always re-validates independently).
 - **No stored balance column, anywhere.** `FinancialAccount` has no `currentBalance` field. Balance is always computed from `Transaction` + `Transfer`. This makes "planning/tracking modules must never silently touch balances" structurally true rather than policy-enforced.
 - **Naming**: Better Auth's own schema defines a model called `Account` (its OAuth/credential-linking table). To avoid collision, the user-facing financial account model is named **`FinancialAccount`** (table `financial_accounts`) at the Prisma/code level. Everywhere in the UI and product language it is still just "Account."
-- **i18n**: `next-intl`, `messages/vi.json` (default) + `messages/en.json`, preference persisted on the user profile.
+- **i18n**: `next-intl`, `messages/vi/*.json` (default) + `messages/en/*.json` per-domain files (e.g. `common.json`, `auth.json`), preference persisted on the user profile.
 - **Theme**: light/dark via CSS variables + Tailwind `dark:` class, preference persisted on the user profile, mirrored to a cookie so first paint has no flash of the wrong theme.
 - **Package manager**: npm. **Local dev database**: Docker Compose Postgres, `DATABASE_URL` env-configurable.
 
@@ -311,7 +311,7 @@ lib/currency/                  ExchangeRateProvider + implementation, historical
 lib/datetime/                  getPeriodBounds and related timezone utilities
 lib/i18n/
 prisma/schema.prisma, migrations/, seed-demo.ts, clear-demo.ts
-messages/vi.json, en.json
+messages/vi/*.json, messages/en/*.json (per-domain)
 ```
 The service layer is where every financial invariant lives and is the primary unit-test target; feature UI stays thin.
 
