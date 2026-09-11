@@ -87,7 +87,8 @@ export function assertNotProduction(
   throw new DemoGuardError(
     'Refusing to run: NODE_ENV is production. The demo scripts create and delete real ' +
       `financial rows for ${DEMO_EMAIL}. Set ${DEMO_PRODUCTION_OVERRIDE}=true to override ` +
-      '(not recommended).',
+      '(not recommended; the demo password is public in this repository, so change it or ' +
+      'remove the account right after seeding).',
   )
 }
 

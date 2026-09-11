@@ -349,7 +349,11 @@ inside a single transaction; it never touches another user's rows and never
 deletes the demo user row itself (so `demo:seed` can be re-run afterward).
 Both commands print counts, never a connection string or secret; the demo
 password is deliberately printed, since it is public in this repository and
-can only ever belong to an account on a non-production database.
+can only ever belong to an account on a non-production database. If the
+production override above is ever actually used, change the demo account's
+password immediately after seeding, or remove the account by hand — the
+shipped password (`DEMO_PASSWORD` in `lib/server/demo/constants.ts`) is
+public and `clearDemoUser` keeps the user row rather than deleting it.
 
 ## Optional: listing historical dev-database test users
 
