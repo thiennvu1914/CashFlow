@@ -12,8 +12,10 @@ placeholder value throws one aggregated error naming the offending
 *variables* (never their values) and the process refuses to boot; outside
 production the same findings are logged with `console.warn` and the app
 still boots. Advisory findings (a stray test-only variable, a non-UTC `TZ`)
-are logged by name in every non-test environment, production included, and
-never fail a boot. `.env.example` is the grouped, annotated, safe-placeholder
+are checked only in a real production runtime (`NODE_ENV=production` and not
+the `next build` phase) and never fire in development or test; they are
+logged by name, never fail a boot, and never carry a value. `.env.example`
+is the grouped, annotated, safe-placeholder
 copy of this table — never paste a real secret into it or into this file.
 
 | Variable | Required in | Purpose | Example placeholder |
@@ -236,7 +238,16 @@ Every response carries `X-Content-Type-Options: nosniff`,
 deny list (camera, microphone, geolocation, payment, usb, browsing-topics);
 `Strict-Transport-Security` is added only when `NODE_ENV === 'production'`
 (TLS terminates at the platform proxy, never at the Node process itself);
-`X-Powered-By` is removed.
+`X-Powered-By` is removed. **This is decided at build time, not runtime.**
+`next.config.ts`'s `headers()` calls `securityHeadersFor(process.env.NODE_ENV)`
+once, while `next build` collects the routes manifest, and the result is
+baked into `.next/server/routes-manifest.json`; the running server only
+replays it. So HSTS depends on the *builder's* `NODE_ENV` (the Dockerfile's
+builder stage deliberately leaves it unset, and Next's CLI defaults it to
+`production` for `next build`), not the runtime's — starting a
+development-mode build with `NODE_ENV=production` does not add the header.
+To verify a given image actually ships it, run the container and inspect the
+live response: `curl -sI https://<host>/ | grep -i strict-transport-security`.
 
 **No nonce CSP and no `script-src` policy ship today.** This was evaluated
 directly: a static `script-src 'self' 'unsafe-inline'` policy was tried as
