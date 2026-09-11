@@ -610,7 +610,19 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(ellipse 90% 50% at 50% -10%, color-mix(in oklch, var(--brand) 7%, transparent), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 4%, transparent), transparent 50%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+  .dark body {
+    background-image:
+      radial-gradient(ellipse 90% 50% at 50% -10%, color-mix(in oklch, var(--brand) 12%, transparent), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 6%, transparent), transparent 50%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
   }
   html {
     @apply font-sans;
@@ -654,15 +666,20 @@
 
 /* Modern Fintech card & depth utilities */
 .card-hover-effect {
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+  position: relative;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.02);
 }
 .card-hover-effect:hover {
   transform: translateY(-2px);
-  border-color: color-mix(in oklch, var(--brand) 30%, var(--border));
-  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.05), 0 8px 10px -6px rgb(0 0 0 / 0.03);
+  border-color: color-mix(in oklch, var(--brand) 35%, var(--border));
+  box-shadow: 0 12px 28px -6px rgb(0 0 0 / 0.08), 0 4px 10px -4px rgb(0 0 0 / 0.04);
+}
+.dark .card-hover-effect {
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.25), 0 1px 2px -1px rgb(0 0 0 / 0.15);
 }
 .dark .card-hover-effect:hover {
   border-color: color-mix(in oklch, var(--brand) 45%, var(--border));
-  box-shadow: 0 12px 30px -5px rgb(0 0 0 / 0.45), 0 8px 10px -6px rgb(0 0 0 / 0.3);
+  box-shadow: 0 12px 30px -6px rgb(0 0 0 / 0.55), 0 4px 12px -4px rgb(0 0 0 / 0.35);
 }
 

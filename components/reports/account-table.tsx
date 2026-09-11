@@ -58,7 +58,7 @@ export function AccountTable({
         </thead>
         <tbody className="divide-y divide-border">
           {rows.map((row) => (
-            <tr key={row.id} className="transition-colors hover:bg-muted/30">
+            <tr key={row.id} className="transition-colors hover:bg-foreground/4">
               <th scope="row" className="py-2.5 pr-4 text-left font-medium">
                 {row.name}
               </th>
@@ -79,7 +79,7 @@ export function AccountTable({
 
       <ul className="flex flex-col divide-y divide-border md:hidden">
         {rows.map((row) => (
-          <li key={row.id} className="flex flex-col gap-1.5 py-3 transition-colors hover:bg-muted/30">
+          <li key={row.id} className="flex flex-col gap-1.5 py-3 transition-colors hover:bg-foreground/4">
             <p className="text-sm font-semibold">{row.name}</p>
             <dl className="grid grid-cols-3 gap-2">
               <div className="flex flex-col">

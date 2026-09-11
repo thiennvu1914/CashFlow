@@ -115,9 +115,9 @@ export const AXIS_PROPS = {
 /** Thin strokes, no dots, no animation — a calm line, not a moving one. */
 export const LINE_PROPS = {
   type: 'monotone',
-  strokeWidth: 2,
+  strokeWidth: 2.2,
   dot: false,
-  activeDot: { r: 4, strokeWidth: 2, stroke: 'var(--color-surface)' },
+  activeDot: { r: 5, strokeWidth: 2, stroke: 'var(--color-surface)' },
   isAnimationActive: false,
 } as const
 
@@ -129,11 +129,11 @@ export const BAR_PROPS = {
 export const TOOLTIP_CONTENT_STYLE = {
   background: 'var(--color-surface)',
   border: '1px solid var(--color-border)',
-  borderRadius: '10px',
-  fontSize: '0.75rem',
+  borderRadius: '12px',
+  fontSize: '0.8125rem',
   color: 'var(--color-foreground)',
-  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.08)',
-  padding: '8px 12px',
+  boxShadow: '0 12px 30px -4px rgba(0, 0, 0, 0.2), 0 4px 12px -2px rgba(0, 0, 0, 0.1)',
+  padding: '10px 14px',
 } as const
 
 export const TOOLTIP_LABEL_STYLE = { color: 'var(--color-muted-foreground)' } as const

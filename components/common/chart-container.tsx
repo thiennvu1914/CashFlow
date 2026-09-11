@@ -28,22 +28,25 @@ export function ChartContainer({
   return (
     <section
       className={cn(
-        'card-hover-effect flex flex-col rounded-lg border border-border bg-surface p-4 shadow-xs',
+        'card-hover-effect flex flex-col rounded-lg border border-border bg-surface p-5 shadow-xs transition-all duration-200 hover:border-brand/40 hover:shadow-md',
         className,
       )}
     >
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 border-b border-border/40 pb-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="text-[0.8125rem]/[1.125rem] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
-            {title}
-          </h2>
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-brand/70 ring-2 ring-brand/20" />
+            <h2 className="text-[0.8125rem]/[1.125rem] font-semibold tracking-[0.05em] text-foreground/85 uppercase">
+              {title}
+            </h2>
+          </div>
           {caption && <p className="text-xs/[1rem] text-muted-foreground">{caption}</p>}
         </div>
         {right}
       </div>
       {/* `min-w-0` so a recharts ResponsiveContainer inside a grid cell can
           shrink below its content width instead of widening the page. */}
-      <div className="mt-3 min-w-0 flex-1" style={height ? { height } : undefined}>
+      <div className="mt-4 min-w-0 flex-1" style={height ? { height } : undefined}>
         {children}
       </div>
     </section>

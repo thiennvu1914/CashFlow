@@ -46,7 +46,7 @@ export function FinancialListRow({
   return (
     <li
       className={cn(
-        'flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30',
+        'flex items-center gap-3 px-4 py-3 transition-colors hover:bg-foreground/4',
         className,
       )}
     >

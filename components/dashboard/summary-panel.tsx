@@ -70,7 +70,7 @@ export function SummaryPanel({
   // differs, which is why it is a variant and not a second component.
   if (variant === 'flat') {
     return (
-      <dl className="grid grid-cols-1 gap-px rounded-lg border border-border bg-surface md:grid-cols-3">
+      <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-surface shadow-sm md:grid-cols-3">
         {kpis.map((kpi, index) => (
           <Cell
             key={kpi.labelKey}
@@ -105,7 +105,7 @@ export function SummaryPanel({
   const [netWorth, totalBalance, monthlyIncome, monthlyExpense, netIncome] = kpis
 
   return (
-    <dl className="grid grid-cols-2 gap-px rounded-lg border border-border bg-surface md:grid-cols-6 xl:grid-cols-9">
+    <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-surface shadow-sm md:grid-cols-6 xl:grid-cols-9">
       {/* Net Worth: both columns at base, full width at md, the top-left 3/9
           (= 4/12) at xl.
 
@@ -235,38 +235,38 @@ function Cell({
   return (
     <div
       className={cn(
-        'group flex flex-col gap-1.5 bg-surface p-4 transition-colors duration-150 hover:bg-muted/30 xl:justify-center',
-        isNetWorth && 'bg-gradient-to-br from-surface via-surface to-brand/5 dark:to-brand/10',
+        'group flex flex-col gap-2 bg-surface p-5 transition-colors duration-150 hover:bg-muted/25 xl:justify-center',
+        isNetWorth && 'bg-gradient-to-br from-surface via-surface to-brand/10 dark:to-brand/20',
         className,
       )}
     >
-      <dt className="flex items-center gap-2 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
+      <dt className="flex items-center gap-2.5 text-[0.8125rem]/[1.125rem] font-medium text-muted-foreground">
         {isNetWorth && (
-          <span className="flex size-6 items-center justify-center rounded-md bg-brand/15 text-brand ring-1 ring-brand/30">
-            <ShieldCheck className="size-3.5" />
+          <span className="flex size-7 items-center justify-center rounded-lg bg-brand/15 text-brand ring-1 ring-brand/30 shadow-xs">
+            <ShieldCheck className="size-4" />
           </span>
         )}
         {isTotalBalance && (
-          <span className="flex size-5.5 items-center justify-center rounded-md bg-accent/15 text-accent">
-            <Wallet className="size-3" />
+          <span className="flex size-6.5 items-center justify-center rounded-lg bg-accent/15 text-accent ring-1 ring-accent/30 shadow-xs">
+            <Wallet className="size-3.5" />
           </span>
         )}
         {isIncome && (
-          <span className="flex size-5.5 items-center justify-center rounded-md bg-positive/15 text-positive">
-            <ArrowDownLeft className="size-3" />
+          <span className="flex size-6.5 items-center justify-center rounded-lg bg-positive/15 text-positive ring-1 ring-positive/30 shadow-xs">
+            <ArrowDownLeft className="size-3.5" />
           </span>
         )}
         {isExpense && (
-          <span className="flex size-5.5 items-center justify-center rounded-md bg-negative/15 text-negative">
-            <ArrowUpRight className="size-3" />
+          <span className="flex size-6.5 items-center justify-center rounded-lg bg-negative/15 text-negative ring-1 ring-negative/30 shadow-xs">
+            <ArrowUpRight className="size-3.5" />
           </span>
         )}
         {isNetIncome && (
-          <span className="flex size-5.5 items-center justify-center rounded-md bg-brand/15 text-brand">
-            <TrendingUp className="size-3" />
+          <span className="flex size-6.5 items-center justify-center rounded-lg bg-brand/15 text-brand ring-1 ring-brand/30 shadow-xs">
+            <TrendingUp className="size-3.5" />
           </span>
         )}
-        <span>{labels[kpi.labelKey]}</span>
+        <span className="font-semibold text-foreground/80">{labels[kpi.labelKey]}</span>
       </dt>
       <dd className="flex flex-col gap-1">
         <Figure

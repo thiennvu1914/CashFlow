@@ -79,12 +79,16 @@ echo.
 :: 4. Mo trinh duyet va chay ung dung
 echo [4/4] Khoi dong ung dung CashFlow...
 echo Trinh duyet se tu dong mo tai http://localhost:3000 trong giay lat...
-start "" /min cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:3000"
+start "" /min cmd /c "timeout /t 5 /nobreak >nul & start http://localhost:3000"
 
 echo.
 echo ====================================================
-echo CashFlow dang chay tai: http://localhost:3000
-echo Nhan Ctrl + C hoac dong cua so nay de tat ung dung.
+echo   CASHFLOW DANG CHAY TAI: http://localhost:3000
+echo.
+echo   * QUAN TRONG: Vui long GIU NGUYEN cua so nay!
+echo     (Dong cua so nay se tat ung dung CashFlow)
+echo   * Neu trinh duyet chua hien giao dien moi, hay
+echo     nhan to hop phim Ctrl + F5 (hoac Ctrl + Shift + R)
 echo ====================================================
 echo.
 
