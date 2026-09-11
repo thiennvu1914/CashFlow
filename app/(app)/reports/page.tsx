@@ -12,6 +12,7 @@ import {
   resolveReportRange,
   type ReportRange,
 } from '@/lib/reports/report-range'
+import { log } from '@/lib/server/log'
 import { getActivitySummary } from '@/lib/server/services/activity'
 import { formatDate } from '@/lib/ui/format-date'
 import { formatMoney, formatPercent } from '@/lib/ui/format-money'
@@ -120,7 +121,7 @@ export default async function ReportsPage({
     // `console.error` during a server render is counted by the dev overlay's
     // issue badge, which would put a red "1 Issue" on screen every time
     // someone typed a bad range.
-    console.warn(`Reports: invalid range — ${error.message}`)
+    log.warn('reports.invalid_range', { reason: error.message })
     return (
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
         <PageHeader

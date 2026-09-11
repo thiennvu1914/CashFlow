@@ -1,5 +1,6 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth'
 import { isNonProductionEnvironment } from '@/lib/server/env'
+import { log } from '@/lib/server/log'
 import { USER_FIELD_DEFAULTS } from './user-defaults'
 
 /**
@@ -31,7 +32,7 @@ import { USER_FIELD_DEFAULTS } from './user-defaults'
  * for carries both variables together. `NODE_ENV` is the one input a
  * production runtime sets for itself.
  *
- * A `console.warn` on the bypass rather than silence: a developer who left the
+ * A warning on the bypass rather than silence: a developer who left the
  * variable exported in their shell should be able to see why sign-in never
  * locks out. Only the variable NAME is printed, never a value — and only
  * once, because `next dev` re-evaluates this module on every recompile and a
@@ -44,9 +45,9 @@ function isRateLimitDisabledForE2e(): boolean {
   if (!isNonProductionEnvironment()) return false
   if (!bypassWarned && process.env.NODE_ENV !== 'test') {
     bypassWarned = true
-    console.warn(
-      'CASHFLOW_E2E_DISABLE_RATE_LIMIT is set: auth rate limiting is DISABLED for this process.',
-    )
+    log.warn('auth.rate_limit_bypass_enabled', {
+      variable: 'CASHFLOW_E2E_DISABLE_RATE_LIMIT',
+    })
   }
   return true
 }

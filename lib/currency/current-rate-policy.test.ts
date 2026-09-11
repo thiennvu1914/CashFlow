@@ -255,9 +255,13 @@ describe('getUsableCurrentRate', () => {
 
     await getUsableCurrentRate(PAIR, failingProvider)
 
+    // One line through `lib/server/log.ts`: a level, a timestamp and the fixed
+    // event name — and still nothing about the provider, the pair or the rate.
     expect(warnSpy).toHaveBeenCalledTimes(1)
-    // A fixed string — no error payload, rate or URL ever reaches the log.
-    expect(warnSpy).toHaveBeenCalledWith('FX live rate lookup failed; using cached fallback rate')
+    const line = warnSpy.mock.calls[0][0] as string
+    expect(warnSpy.mock.calls[0]).toHaveLength(1)
+    expect(line).toContain('fx.live_rate_fallback')
+    expect(line).toContain('WARN')
   })
 
   it('attaches the underlying failure as the error cause when nothing is usable', async () => {

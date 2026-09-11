@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { log } from '@/lib/server/log'
 import { getLatestRate } from './fx-service'
 import type { CachedRateResult } from './fx-service'
 import type { CurrencyPair, ExchangeRateProvider } from './provider'
@@ -117,9 +118,11 @@ export async function getUsableCurrentRate(
     // throws (a database error) is a real fault and propagates untouched.
     const fallback = await getLastKnownGoodCurrentRate(pair)
     if (!fallback) throw new FxUnavailableError({ cause })
-    // A fixed string: never the provider error payload, a rate, or a URL —
-    // logs must stay free of financial data and provider credentials.
-    console.warn('FX live rate lookup failed; using cached fallback rate')
+    // A fixed event name: never the provider error payload, a rate, or a URL
+    // — logs must stay free of financial data and provider credentials. It goes
+    // through the server logger so a production host gets one JSON line with a
+    // level and a timestamp instead of a bare English sentence.
+    log.warn('fx.live_rate_fallback')
     return { ...fallback, source: `cache-fallback:${fallback.source}`, isFallback: true }
   }
   return { ...fresh, isFallback: false }
