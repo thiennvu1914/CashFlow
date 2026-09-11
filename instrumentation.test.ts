@@ -132,6 +132,23 @@ describe('instrumentation onRequestError', () => {
     expect(record.error).toBe('a thrown string')
   })
 
+  it('never throws into the framework, even when the error object itself is hostile', async () => {
+    // A `digest` getter that throws walks the same code path `digestOf` reads
+    // through (`'digest' in error` then the property access) — the sharpest
+    // stand-in for something reaching into `error` blowing up mid-report. The
+    // whole point of the surrounding try/catch is that this must resolve
+    // without rejecting and without leaving anything logged.
+    const hostileError = {
+      name: 'Error',
+      message: 'boom',
+      get digest(): string {
+        throw new Error('getter exploded')
+      },
+    }
+
+    expect(() => onRequestError(hostileError, fakeRequest(), fakeContext())).not.toThrow()
+  })
+
   it('register writes a single startup line and nothing else', () => {
     register()
 

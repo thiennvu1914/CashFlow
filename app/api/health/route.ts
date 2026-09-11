@@ -1,4 +1,3 @@
-import { prisma } from '@/lib/prisma'
 import { log } from '@/lib/server/log'
 
 /**
@@ -44,7 +43,15 @@ export const PROBE_TIMEOUT_MS = 2_000
 /** The one thing this endpoint measures. Injected so the tests need no database. */
 export type HealthProbe = () => Promise<unknown>
 
-const databaseProbe: HealthProbe = () => prisma.$queryRaw`SELECT 1`
+// Imported lazily, inside the probe itself, so that a failure to even
+// construct the Prisma client (`lib/prisma.ts` builds it at module scope) is
+// caught by `checkHealth`'s `try`/`catch` below and answered with a bounded
+// 503, rather than escaping as an import-time throw that Next turns into its
+// generic unbounded 500.
+const databaseProbe: HealthProbe = async () => {
+  const { prisma } = await import('@/lib/prisma')
+  return prisma.$queryRaw`SELECT 1`
+}
 
 function healthResponse(ok: boolean): Response {
   return Response.json(

@@ -184,6 +184,15 @@ test.describe.serial('Phase 7 — app shell', () => {
     )
     expect(headers['x-powered-by']).toBeUndefined()
   })
+})
+
+test.describe('Phase 7 — app shell / /api/health', () => {
+  // Deliberately no session cookie (fix round, promoted minor): the outer
+  // describe's `storageState` is a signed-in session, and running the health
+  // check under it would prove nothing about whether the endpoint itself
+  // requires auth. An explicit empty `storageState` here is what actually
+  // demonstrates `/api/health` answers an unauthenticated request.
+  test.use({ storageState: { cookies: [], origins: [] } })
 
   test('GET /api/health answers ok, uncached, and carries the same headers', async ({ page }) => {
     // The platform probe (`app/api/health/route.ts`): unauthenticated, one key,

@@ -72,6 +72,21 @@ describe('GET /api/health', () => {
     expect(line).not.toContain('s3cret')
   })
 
+  it('answers 503 when the probe throws synchronously — the same shape as a Prisma client that fails to construct', async () => {
+    // `databaseProbe` now imports `@/lib/prisma` lazily inside itself so that a
+    // failure to even construct the client (it is built at module scope in
+    // `lib/prisma.ts`) is caught here rather than escaping as an import-time
+    // throw that Next would turn into its generic unbounded 500. A probe that
+    // throws before returning a promise at all is the sharpest stand-in for
+    // that failure mode.
+    const response = await checkHealth(() => {
+      throw new Error('P1001: cannot reach postgresql://cashflow:s3cret@db:5432/app')
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ status: 'unavailable' })
+  })
+
   it('bounds the default probe at about two seconds', () => {
     expect(PROBE_TIMEOUT_MS).toBe(2_000)
   })

@@ -48,6 +48,20 @@ import { PeriodFilter } from '@/components/reports/period-filter'
 type ReportsSearchParams = Record<string, string | string[] | undefined>
 
 /**
+ * The `period`/`from`/`to` field an `InvalidReportRangeError`'s message names
+ * — never the message itself. Every one of `resolveReportRange`'s six checks
+ * embeds the field name as a literal word, but several of them also echo the
+ * raw, possibly hand-typed value right next to it (a bad date, an unknown
+ * period string). Logging `error.message` verbatim would put that
+ * user-supplied query text in the server log; this keeps only the field name,
+ * which is enough for a developer chasing a bad link to know which control to
+ * look at.
+ */
+function offendingReportRangeParam(message: string): string | undefined {
+  return message.match(/\b(period|from|to)\b/)?.[1]
+}
+
+/**
  * The invalid-range `InlineAlert`'s id (fix round 1, promoted minor) — both
  * date inputs in `PeriodFilter`'s custom-range form point `aria-describedby`
  * at it, so a screen-reader user tabbing into From/To hears why the range
@@ -113,15 +127,22 @@ export default async function ReportsPage({
     // database fault is not and must still surface as an error.
     if (!(error instanceof InvalidReportRangeError)) throw error
     // The specific reason is not lost, it just stops being shown to the
-    // reader: it goes to the server log, where a developer chasing a bad link
-    // can still read which of the six checks refused it.
+    // reader and stops carrying the raw query text: a stable reason code plus
+    // the offending field name go to the server log, where a developer
+    // chasing a bad link can still tell which of the six checks refused it —
+    // without the log ever repeating a hand-typed date or period string back
+    // (Task 11 fix round, promoted minor: `error.message` embeds the raw
+    // value for several of those checks).
     //
     // `warn`, not `error`: a hand-typed query parameter that the resolver
     // rejected is a handled input, not a fault — and in `next dev` a
     // `console.error` during a server render is counted by the dev overlay's
     // issue badge, which would put a red "1 Issue" on screen every time
     // someone typed a bad range.
-    log.warn('reports.invalid_range', { reason: error.message })
+    log.warn('reports.invalid_range', {
+      reason: 'invalid_range',
+      param: offendingReportRangeParam(error.message),
+    })
     return (
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-6 p-4 md:p-6 lg:p-8">
         <PageHeader

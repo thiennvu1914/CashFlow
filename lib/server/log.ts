@@ -122,6 +122,20 @@ function redactValue(value: unknown, depth: number): unknown {
   if (depth >= MAX_DEPTH) return '[truncated]'
   if (isErrorLike(value)) return serializeError(value)
   if (Array.isArray(value)) return value.map((entry) => redactValue(entry, depth + 1))
+  // Without this, `JSON.stringify` — both the production path and
+  // `formatReadableValue`'s fallback — silently serialises a `Map`/`Set` as
+  // `{}`, dropping every entry. Redacting each element the same way an array's
+  // is redacted keeps that data (and keeps a `Map`'s values from bypassing key
+  // redaction) instead of losing it.
+  if (value instanceof Map) {
+    return Array.from(value.entries()).map(([key, entry]) => [
+      redactValue(key, depth + 1),
+      redactValue(entry, depth + 1),
+    ])
+  }
+  if (value instanceof Set) {
+    return Array.from(value.values()).map((entry) => redactValue(entry, depth + 1))
+  }
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {}
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {

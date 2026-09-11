@@ -47,15 +47,24 @@ function digestOf(error: unknown): string | undefined {
 }
 
 export const onRequestError: Instrumentation.onRequestError = (error, request, context) => {
-  log.error('request.error', {
-    // The same value the user is shown as a reference code.
-    digest: digestOf(error),
-    method: stringOrUndefined((request as { method?: unknown }).method),
-    path: pathnameOf((request as { path?: unknown }).path),
-    routerKind: stringOrUndefined((context as { routerKind?: unknown }).routerKind),
-    routeType: stringOrUndefined((context as { routeType?: unknown }).routeType),
-    error,
-  })
+  // Never let error reporting itself throw into the framework's error path: a
+  // hostile or merely malformed `error`/`request`/`context` (a getter that
+  // throws, for instance) must not turn one failed request into an
+  // unhandled rejection on top of it.
+  try {
+    log.error('request.error', {
+      // The same value the user is shown as a reference code.
+      digest: digestOf(error),
+      method: stringOrUndefined((request as { method?: unknown }).method),
+      path: pathnameOf((request as { path?: unknown }).path),
+      routerKind: stringOrUndefined((context as { routerKind?: unknown }).routerKind),
+      routeType: stringOrUndefined((context as { routeType?: unknown }).routeType),
+      error,
+    })
+  } catch {
+    // Swallowed deliberately — see above. There is nowhere safer to report
+    // this failure than the path we are already inside of.
+  }
 }
 
 /**

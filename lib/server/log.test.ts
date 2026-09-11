@@ -146,6 +146,41 @@ describe('lib/server/log', () => {
       expect(record.url).toBe('[redacted]')
     })
 
+    it('serialises a Map and a Set as arrays instead of JSON.stringify silently dropping their entries to {}', () => {
+      const redacted = redactFields({
+        seen: new Set(['a', 'b']),
+        counts: new Map<string, number>([
+          ['x', 1],
+          ['y', 2],
+        ]),
+      })
+
+      expect(redacted.seen).toEqual(['a', 'b'])
+      expect(redacted.counts).toEqual([
+        ['x', 1],
+        ['y', 2],
+      ])
+      // The failure mode this guards: `JSON.stringify(new Map(...))` is `'{}'`.
+      expect(JSON.stringify(redacted.counts)).not.toBe('{}')
+    })
+
+    it('still masks a Map/Set entry that is itself a URL carrying credentials', () => {
+      // `redactValue` runs on every element of a Map's `[key, value]` pair and
+      // every element of a Set, the same as it does for an array entry, so a
+      // credential-bearing URL nested inside either is still caught — this is
+      // the pre-existing `redactString`/`hasCredentials` guard, unaffected by
+      // the new array-serialisation shape.
+      const redacted = redactFields({
+        seen: new Set(['plain', 'postgresql://cashflow:s3cret@db.internal:5432/app']),
+        byHost: new Map<string, string>([
+          ['db', 'postgresql://cashflow:s3cret@db.internal:5432/app'],
+        ]),
+      })
+
+      expect(redacted.seen).toEqual(['plain', '[redacted]'])
+      expect(redacted.byHost).toEqual([['db', '[redacted]']])
+    })
+
     it('truncates instead of following a cycle', () => {
       const cyclic: Record<string, unknown> = { a: 1 }
       cyclic.self = cyclic
