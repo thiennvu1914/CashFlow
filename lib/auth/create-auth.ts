@@ -33,12 +33,17 @@ import { USER_FIELD_DEFAULTS } from './user-defaults'
  *
  * A `console.warn` on the bypass rather than silence: a developer who left the
  * variable exported in their shell should be able to see why sign-in never
- * locks out. Only the variable NAME is printed, never a value.
+ * locks out. Only the variable NAME is printed, never a value — and only
+ * once, because `next dev` re-evaluates this module on every recompile and a
+ * per-call warning buries the dev server's real output.
  */
+let bypassWarned = false
+
 function isRateLimitDisabledForE2e(): boolean {
   if (process.env.CASHFLOW_E2E_DISABLE_RATE_LIMIT !== '1') return false
   if (!isNonProductionEnvironment()) return false
-  if (process.env.NODE_ENV !== 'test') {
+  if (!bypassWarned && process.env.NODE_ENV !== 'test') {
+    bypassWarned = true
     console.warn(
       'CASHFLOW_E2E_DISABLE_RATE_LIMIT is set: auth rate limiting is DISABLED for this process.',
     )
