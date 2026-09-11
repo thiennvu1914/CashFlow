@@ -6,7 +6,7 @@ import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { DEMO_EMAIL, DEMO_TIMEZONE } from './constants'
 import { clearDemoUser, seedDemoUser } from './demo-user'
 import { DemoGuardError } from './guards'
-import { deleteOwnedRows } from './owned-rows'
+import { deleteOwnedRows, OWNED_ROW_DELETIONS } from './owned-rows'
 
 /**
  * The demo seed and reset against a real database.
@@ -100,7 +100,15 @@ async function countOwnedRows(userId: string): Promise<Record<string, number>> {
  * Builds the neighbour. Rows go in with plain Prisma calls rather than through
  * the services: this user is scenery, and the only thing asserted about it is
  * that its row counts never move — which no service invariant contributes to.
- * Its transaction carries its own FX snapshot for the same reason.
+ * Its transaction carries its own FX snapshot for the same reason, and its
+ * loan and reminder are written with their derived columns (`dueDayOfMonth`,
+ * the reminder's anchors) spelled out rather than computed.
+ *
+ * It holds at least one row in EVERY one of the thirteen models
+ * `deleteOwnedRows` walks, so dropping the `userId` filter from any single
+ * step of that sequence moves one of these counts and fails this suite.
+ * `beforeAll` asserts that coverage rather than trusting this list to stay
+ * complete as models are added.
  */
 async function createOtherUser(): Promise<string> {
   const user = await prisma.user.create({
@@ -161,7 +169,7 @@ async function createOtherUser(): Promise<string> {
       currency: 'VND',
     },
   })
-  await prisma.debt.create({
+  const debt = await prisma.debt.create({
     data: {
       userId,
       direction: 'PAYABLE',
@@ -170,6 +178,93 @@ async function createOtherUser(): Promise<string> {
       currency: 'VND',
     },
   })
+  await prisma.debtPayment.create({
+    data: {
+      userId,
+      debtId: debt.id,
+      amount: new Prisma.Decimal('50000'),
+      date: new Date('2026-01-20T00:00:00.000Z'),
+    },
+  })
+
+  // A second account, so the transfer below has two distinct ends — the
+  // composite `(userId, accountId)` foreign keys on both legs mean a transfer
+  // is also the row that would keep a wrongly-scoped `financialAccount` delete
+  // from succeeding.
+  const secondAccount = await prisma.financialAccount.create({
+    data: {
+      userId,
+      name: 'Neighbour Savings',
+      accountTypeId: accountType.id,
+      initialBalance: new Prisma.Decimal('4000000'),
+      currency: 'VND',
+    },
+  })
+  await prisma.transfer.create({
+    data: {
+      userId,
+      fromAccountId: account.id,
+      toAccountId: secondAccount.id,
+      fromAmount: new Prisma.Decimal('200000'),
+      toAmount: new Prisma.Decimal('200000'),
+      date: new Date('2026-01-18T03:00:00.000Z'),
+    },
+  })
+
+  const loan = await prisma.loan.create({
+    data: {
+      userId,
+      lender: 'Neighbour Bank',
+      principal: new Prisma.Decimal('10000000'),
+      currency: 'VND',
+      interestRate: new Prisma.Decimal('7.5'),
+      startDate: new Date('2025-06-01T00:00:00.000Z'),
+      termMonths: 24,
+      paymentFrequency: 'MONTHLY',
+      scheduledPaymentAmount: new Prisma.Decimal('500000'),
+      nextDueDate: new Date('2026-02-01T00:00:00.000Z'),
+      dueDayOfMonth: 1,
+    },
+  })
+  await prisma.loanPayment.create({
+    data: {
+      userId,
+      loanId: loan.id,
+      totalAmount: new Prisma.Decimal('500000'),
+      principalAmount: new Prisma.Decimal('420000'),
+      interestAmount: new Prisma.Decimal('80000'),
+      paymentDate: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  })
+
+  // The reminder points at both the category and the account above, which is
+  // exactly the shape that makes the delete ORDER matter as well as its scope:
+  // a surviving neighbour reminder is what a wrongly-scoped category or
+  // account delete would collide with.
+  const reminder = await prisma.recurringReminder.create({
+    data: {
+      userId,
+      title: 'Neighbour rent',
+      type: 'EXPENSE',
+      expectedAmount: new Prisma.Decimal('750000'),
+      currency: 'VND',
+      categoryId: category.id,
+      accountId: account.id,
+      frequency: 'MONTHLY',
+      interval: 1,
+      dayOfMonth: 1,
+      startDate: new Date('2025-12-31T17:00:00.000Z'),
+      timezone: DEMO_TIMEZONE,
+    },
+  })
+  await prisma.reminderOccurrence.create({
+    data: {
+      userId,
+      reminderId: reminder.id,
+      dueAt: new Date('2026-01-31T17:00:00.000Z'),
+    },
+  })
+
   return userId
 }
 
@@ -186,6 +281,17 @@ async function removeDemoUserEntirely(): Promise<void> {
 beforeAll(async () => {
   await removeDemoUserEntirely()
   otherUserId = await createOtherUser()
+
+  // The suite's central claim — "dropping the userId filter from any step of
+  // the delete order fails this test" — is only true while the neighbour has
+  // a row in every model that order walks. Asserted here, in the fixture, so a
+  // future model added to `OWNED_ROW_DELETIONS` without a neighbour row fails
+  // loudly rather than quietly narrowing what the tenant-scoping cases cover.
+  const coverage = await countOwnedRows(otherUserId)
+  expect(Object.keys(coverage).sort()).toEqual(OWNED_ROW_DELETIONS.map((step) => step.model).sort())
+  for (const [model, count] of Object.entries(coverage)) {
+    expect(count, `the neighbour user needs at least one ${model} row`).toBeGreaterThan(0)
+  }
 })
 
 afterAll(async () => {

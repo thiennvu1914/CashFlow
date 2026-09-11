@@ -16,6 +16,7 @@
  * operation that removes a `user` row from any database.
  */
 
+import { Prisma } from '@prisma/client'
 import { auth } from '@/lib/auth/auth'
 import { prisma } from '@/lib/prisma'
 import { DEMO_EMAIL, DEMO_NAME, DEMO_PASSWORD, DEMO_TIMEZONE } from './constants'
@@ -78,14 +79,29 @@ export async function clearDemoUser(
   })
   if (!existing) return { found: false, userId: null, deleted: {} }
 
-  const deleted = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { email: DEMO_EMAIL },
-      select: IDENTITY_SELECT,
-    })
-    assertDemoUserRow(user)
-    return deleteOwnedRows(tx, [user.id])
-  })
+  const deleted = await prisma.$transaction(
+    async (tx) => {
+      const user = await tx.user.findUnique({
+        where: { email: DEMO_EMAIL },
+        select: IDENTITY_SELECT,
+      })
+      assertDemoUserRow(user)
+      return deleteOwnedRows(tx, [user.id])
+    },
+    // Serializable, not the default READ COMMITTED. Under READ COMMITTED the
+    // identity read above sees a snapshot taken at that statement, so a
+    // concurrent `UPDATE "user" SET "isDemo" = false` could commit between the
+    // guard passing and the deletes running — and the deletes would proceed
+    // against a row that is no longer the demo user. Serializable makes that
+    // interleaving a serialization failure instead, which surfaces as an error
+    // and deletes nothing: the fail-closed answer.
+    //
+    // The cost is acceptable precisely because of what this transaction is:
+    // a hand-run maintenance operation on one user, never concurrent with
+    // itself and never on a request path, so a retry loop would be
+    // ceremony — a refusal an operator re-runs is the correct behaviour here.
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  )
 
   return { found: true, userId: existing.id, deleted }
 }
