@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { requireUser } from '@/lib/auth/require-user'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isSupportedLocale } from '@/lib/i18n/config'
 import { DEFAULT_THEME, THEME_COOKIE } from '@/lib/theme/config'
+import { preferenceCookieOptions } from '@/lib/server/preference-cookies'
 
 /**
  * Writes the signed-in user's saved locale and theme into their mirror cookies
@@ -26,8 +27,11 @@ export async function syncPreferenceCookies(): Promise<void> {
   const locale = isSupportedLocale(rawLocale) ? rawLocale : DEFAULT_LOCALE
   const theme = rawTheme === 'dark' || rawTheme === 'light' ? rawTheme : DEFAULT_THEME
 
+  // Same attribute set as `updateProfile`'s write, from one definition, so the
+  // login-time mirror and the Settings-time mirror cannot disagree about
+  // `secure`, `sameSite`, `path` or lifetime.
   const store = await cookies()
-  const oneYearSeconds = 60 * 60 * 24 * 365
-  store.set(LOCALE_COOKIE, locale, { path: '/', sameSite: 'lax', maxAge: oneYearSeconds })
-  store.set(THEME_COOKIE, theme, { path: '/', sameSite: 'lax', maxAge: oneYearSeconds })
+  const options = await preferenceCookieOptions()
+  store.set(LOCALE_COOKIE, locale, options)
+  store.set(THEME_COOKIE, theme, options)
 }

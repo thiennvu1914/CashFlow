@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
 import { LOCALE_COOKIE } from '@/lib/i18n/config'
 import { THEME_COOKIE } from '@/lib/theme/config'
+import { preferenceCookieOptions } from '@/lib/server/preference-cookies'
 
 export type UpdateProfileResult = { ok: true } | { ok: false; error: 'INVALID_INPUT' }
 
@@ -45,19 +46,13 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
   // Not `httpOnly`: both are presentation preferences with nothing to protect,
   // and a flag that guards nothing only blocks a future client-side read.
   // `sameSite: 'lax'` and `path: '/'` are what make them arrive on every
-  // navigation, including the very next one.
+  // navigation, including the very next one; `secure` is decided per request
+  // by `preferenceCookieOptions()` (HTTPS or production yes, localhost HTTP
+  // no).
   const cookieStore = await cookies()
-  const oneYearSeconds = 60 * 60 * 24 * 365
-  cookieStore.set(LOCALE_COOKIE, parsed.data.locale, {
-    path: '/',
-    sameSite: 'lax',
-    maxAge: oneYearSeconds,
-  })
-  cookieStore.set(THEME_COOKIE, parsed.data.theme, {
-    path: '/',
-    sameSite: 'lax',
-    maxAge: oneYearSeconds,
-  })
+  const options = await preferenceCookieOptions()
+  cookieStore.set(LOCALE_COOKIE, parsed.data.locale, options)
+  cookieStore.set(THEME_COOKIE, parsed.data.theme, options)
 
   return { ok: true }
 }
