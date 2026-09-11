@@ -30,9 +30,7 @@ export function PageHeader({
       )}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-          {title}
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">{title}</h1>
         {description && (
           <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{description}</p>
         )}

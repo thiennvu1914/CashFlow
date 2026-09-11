@@ -237,9 +237,11 @@ function Cell({
       className={cn(
         'group flex flex-col gap-2 bg-surface p-5 transition-all duration-150 hover:brightness-[0.98] dark:hover:brightness-110 xl:justify-center',
         isNetWorth && 'bg-gradient-to-br from-surface via-surface to-brand/12 dark:to-brand/20',
-        isTotalBalance && 'bg-gradient-to-br from-surface via-surface to-accent/10 dark:to-accent/18',
+        isTotalBalance &&
+          'bg-gradient-to-br from-surface via-surface to-accent/10 dark:to-accent/18',
         isIncome && 'bg-gradient-to-br from-surface via-surface to-positive/10 dark:to-positive/18',
-        isExpense && 'bg-gradient-to-br from-surface via-surface to-negative/10 dark:to-negative/18',
+        isExpense &&
+          'bg-gradient-to-br from-surface via-surface to-negative/10 dark:to-negative/18',
         isNetIncome && 'bg-gradient-to-br from-surface via-surface to-brand/10 dark:to-brand/18',
         className,
       )}

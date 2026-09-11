@@ -79,7 +79,10 @@ export function AccountTable({
 
       <ul className="flex flex-col divide-y divide-border md:hidden">
         {rows.map((row) => (
-          <li key={row.id} className="flex flex-col gap-1.5 py-3 transition-colors hover:bg-foreground/4">
+          <li
+            key={row.id}
+            className="flex flex-col gap-1.5 py-3 transition-colors hover:bg-foreground/4"
+          >
             <p className="text-sm font-semibold">{row.name}</p>
             <dl className="grid grid-cols-3 gap-2">
               <div className="flex flex-col">

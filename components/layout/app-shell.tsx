@@ -80,7 +80,9 @@ export function AppShell({ userName, children }: { userName: string; children: R
           <div className="flex size-5 items-center justify-center rounded-md bg-white/20">
             <Plus aria-hidden="true" className="size-3.5 stroke-[2.5]" />
           </div>
-          <span className="sr-only text-sm font-semibold tracking-tight xl:not-sr-only">{t('nav.addTransaction')}</span>
+          <span className="sr-only text-sm font-semibold tracking-tight xl:not-sr-only">
+            {t('nav.addTransaction')}
+          </span>
         </Link>
 
         <nav aria-label={t('nav.primary')} className="mt-6 min-h-0 flex-1 overflow-y-auto pr-1">
@@ -185,4 +187,3 @@ function RailLink({ item, active }: { item: NavItem; active: boolean }) {
     </Link>
   )
 }
-

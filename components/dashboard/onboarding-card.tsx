@@ -42,7 +42,10 @@ export async function OnboardingCard({
       className="card-hover-effect flex flex-col gap-4 rounded-xl border border-border/80 bg-surface/90 p-4 shadow-sm backdrop-blur-xs md:p-6"
     >
       <div className="flex flex-col gap-1">
-        <h2 id="onboarding-title" className="text-[1.125rem]/[1.625rem] font-semibold tracking-tight">
+        <h2
+          id="onboarding-title"
+          className="text-[1.125rem]/[1.625rem] font-semibold tracking-tight"
+        >
           {t('dashboard.onboardingTitle')}
         </h2>
         <p className="text-sm/[1.25rem] text-muted-foreground">{t('dashboard.onboardingBody')}</p>
@@ -155,7 +158,9 @@ function Step({
         </div>
       </div>
       {done ? (
-        <p className="text-[0.8125rem]/[1.125rem] font-medium text-positive-on-tint sm:shrink-0">{doneLabel}</p>
+        <p className="text-[0.8125rem]/[1.125rem] font-medium text-positive-on-tint sm:shrink-0">
+          {doneLabel}
+        </p>
       ) : (
         <div className="flex flex-wrap gap-2 sm:shrink-0">
           {actions.map((action) => (

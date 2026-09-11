@@ -75,10 +75,16 @@ export function Progress({
             'aria-valuetext': valueText,
             'aria-label': label,
           })}
-      className={cn('h-2 overflow-hidden rounded-full bg-muted/80 dark:bg-foreground/14', className)}
+      className={cn(
+        'h-2 overflow-hidden rounded-full bg-muted/80 dark:bg-foreground/14',
+        className,
+      )}
     >
       <div
-        className={cn('h-full rounded-full transition-all duration-500 shadow-2xs', TONE_CLASSES[tone])}
+        className={cn(
+          'h-full rounded-full transition-all duration-500 shadow-2xs',
+          TONE_CLASSES[tone],
+        )}
         style={{ width: `${width}%` }}
       />
     </div>

@@ -45,7 +45,9 @@ export function MobileTopBar() {
               className="size-5 object-contain"
             />
           </span>
-          <span className="font-bold tracking-tight">Cash<span className="text-brand">Flow</span></span>
+          <span className="font-bold tracking-tight">
+            Cash<span className="text-brand">Flow</span>
+          </span>
         </Link>
         <button
           type="button"
