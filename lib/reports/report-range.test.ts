@@ -3,6 +3,7 @@ import {
   InvalidReportRangeError,
   PERIODS,
   describeRange,
+  offendingReportRangeParam,
   rangeToQueryString,
   resolveReportRange,
   type ReportRangeParams,
@@ -293,5 +294,29 @@ describe('InvalidReportRangeError', () => {
     expect(error).toBeInstanceOf(Error)
     expect(error.name).toBe('InvalidReportRangeError')
     expect(error.message).toBe('nope')
+  })
+})
+
+describe('offendingReportRangeParam', () => {
+  // The whole point: the field name is safe to log, the rest of the message
+  // (a hand-typed date, a bogus period string) is not. These pin that only the
+  // field name ever comes back, never the raw value sitting next to it.
+  it.each([
+    ['The period parameter was given more than once', 'period'],
+    ['The from parameter was given more than once', 'from'],
+    ['The to parameter was given more than once', 'to'],
+    ['from must be a real calendar date in YYYY-MM-DD format (got "2026-13-40")', 'from'],
+    ['to must fall between 1900-01-01 and 2999-12-31 (got 3000-01-01)', 'to'],
+    ['from (2026-04-01) must be on or before to (2026-03-01)', 'from'],
+    [
+      'Unknown period "weekly" — expected one of day, week, month, quarter, year or custom',
+      'period',
+    ],
+  ])('returns only the field name for %j', (message, field) => {
+    expect(offendingReportRangeParam(message)).toBe(field)
+  })
+
+  it('returns undefined for a message naming none of the three fields', () => {
+    expect(offendingReportRangeParam('No usable day follows 9999-12-31')).toBeUndefined()
   })
 })

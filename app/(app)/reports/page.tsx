@@ -8,6 +8,7 @@ import type { Locale } from '@/lib/i18n/locale'
 import {
   InvalidReportRangeError,
   describeRange,
+  offendingReportRangeParam,
   rangeToQueryString,
   resolveReportRange,
   type ReportRange,
@@ -46,20 +47,6 @@ import { PeriodFilter } from '@/components/reports/period-filter'
 
 /** Query parameters as Next delivers them — untrusted, and never cast. */
 type ReportsSearchParams = Record<string, string | string[] | undefined>
-
-/**
- * The `period`/`from`/`to` field an `InvalidReportRangeError`'s message names
- * — never the message itself. Every one of `resolveReportRange`'s six checks
- * embeds the field name as a literal word, but several of them also echo the
- * raw, possibly hand-typed value right next to it (a bad date, an unknown
- * period string). Logging `error.message` verbatim would put that
- * user-supplied query text in the server log; this keeps only the field name,
- * which is enough for a developer chasing a bad link to know which control to
- * look at.
- */
-function offendingReportRangeParam(message: string): string | undefined {
-  return message.match(/\b(period|from|to)\b/)?.[1]
-}
 
 /**
  * The invalid-range `InlineAlert`'s id (fix round 1, promoted minor) — both
