@@ -49,13 +49,19 @@ before every commit.
 
 ## Deployment requirements
 
-Required environment variables — the app throws at startup without the first
-three, and cannot send email without the SMTP group:
+Required environment variables. `lib/server/env.ts` validates the whole
+contract once at server start: in production a missing or placeholder value
+throws one aggregated error naming the offending variables (never their
+values), and outside production the same findings are `console.warn`ed and the
+app boots. `.env.example` is the grouped, annotated copy of this list.
 
 - `BETTER_AUTH_URL` — the public origin. Without it Better Auth derives its base
   URL from the request, so a forged `Host` header can end up inside an emailed
   password-reset link.
-- `BETTER_AUTH_SECRET` — a random 32-byte secret.
+- `BETTER_AUTH_SECRET` — a random 32-byte secret (`openssl rand -base64 32`).
+  Boot is refused in production when it is missing, blank, shorter than 32
+  characters, or still the `.env.example` placeholder, which is exported as one
+  constant from `lib/server/env.ts` so the example and the guard cannot drift.
 - `TRUSTED_PROXY_CIDRS` — comma-separated CIDRs/IPs of the reverse proxy or CDN
   that sets `x-forwarded-for`. Rate limiting keys on the client IP, resolved by
   walking the forwarded chain right to left and skipping these hops. Unset, a
@@ -64,11 +70,13 @@ three, and cannot send email without the SMTP group:
   forgeable.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` — there is
   no email fallback in production. `getEmailSender()` throws rather than falling
-  back to the console or the file outbox.
+  back to the console or the file outbox. `EMAIL_FROM` is required in
+  production, and `SMTP_PORT` must be a positive integer whenever `SMTP_HOST`
+  is set; `SMTP_USER`/`SMTP_PASSWORD` may be empty for an anonymous relay.
 - `DATABASE_URL` — also needed at build time. `next build` imports every route
   module to collect page data, and the Prisma client is constructed at module
-  scope, so the build needs a reachable database. (The `BETTER_AUTH_URL` /
-  `TRUSTED_PROXY_CIDRS` guard is skipped during the build, which Next marks with
+  scope, so the build needs a reachable database. (The production-only part of the
+  contract is skipped during the build, which Next marks with
   `NEXT_PHASE=phase-production-build`.)
 
 Operational notes:
@@ -86,5 +94,10 @@ Operational notes:
   declares an optional peer on `vitest ^2||^3||^4` while this repo runs Vitest 5.
   It is a blanket setting, so review peer warnings by hand when upgrading
   dependencies.
-- Set `TZ=UTC` in CI and production; period math is computed in the user's IANA
-  zone from UTC timestamps.
+- Set `TZ=UTC` in CI and production (it is in `.env.example`); period math is
+  computed in the user's IANA zone from UTC timestamps, so a server on a local
+  zone shifts every period boundary. User-facing dates keep coming from
+  `User.timezone`; a non-UTC `TZ` is reported as a startup warning, not a
+  failure.
+- `ALLOW_DEMO_SEED_IN_PRODUCTION` appears in `.env.example` but no code reads it
+  yet; it is reserved for the demo seed/clear scripts' production guard.
