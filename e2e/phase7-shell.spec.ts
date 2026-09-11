@@ -163,4 +163,25 @@ test.describe.serial('Phase 7 — app shell', () => {
     await expect(page).toHaveURL(/\/transfers/)
     await expect(sheet).toBeHidden()
   })
+
+  test('every response carries the production security headers and no x-powered-by', async ({
+    page,
+  }) => {
+    // Playwright spawns `next dev` (`playwright.config.ts`'s `webServer`),
+    // which serves `next.config.ts`'s `headers()` too — so this asserts the
+    // real config, not a mock. HSTS is production-only (`lib/server/security-
+    // headers.ts`) and TLS never terminates at `next dev`, so it is
+    // deliberately not asserted here.
+    const response = await page.goto('/dashboard')
+    const headers = response!.headers()
+
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin')
+    expect(headers['x-frame-options']).toBe('DENY')
+    expect(headers['content-security-policy']).toBe("frame-ancestors 'none'")
+    expect(headers['permissions-policy']).toBe(
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()',
+    )
+    expect(headers['x-powered-by']).toBeUndefined()
+  })
 })
