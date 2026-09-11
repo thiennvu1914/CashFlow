@@ -113,9 +113,13 @@ USER node
 EXPOSE 3000
 
 # No curl in a slim image. A 503 (database unreachable) counts as unhealthy;
-# three retries keep transient latency from cycling the container.
+# three retries keep transient latency from cycling the container. Reads
+# process.env.PORT itself (falling back to 3000, matching the ENV PORT=3000
+# default above) rather than hardcoding the port, so a deployment that
+# overrides PORT still gets a working probe — no shell expansion needed,
+# `node -e` already sees the container's environment.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Exec form so node is PID 1 and receives SIGTERM directly; Next drains
 # in-flight requests itself. Allow a 30 s stop grace period on the platform.
