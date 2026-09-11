@@ -3,6 +3,24 @@ import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+/**
+ * `getEmailSender()` now runs the server environment contract
+ * (`lib/server/env.ts`) first, which is fatal in production. The two
+ * production cases below are about the transport refusal, not about the env
+ * contract, so they stub an otherwise fully configured production environment:
+ * the only thing missing is SMTP, and the error must still be the transport's
+ * own.
+ */
+function stubValidProductionEnvExceptSmtp(): void {
+  vi.stubEnv('NODE_ENV', 'production')
+  vi.stubEnv('DATABASE_URL', 'postgresql://user:pw@db.internal:5432/cashflow')
+  vi.stubEnv('BETTER_AUTH_SECRET', 'w3Ky8Q1nZs6tVb2LpX0fJr7HgD4aMcEu')
+  vi.stubEnv('BETTER_AUTH_URL', 'https://app.example.com')
+  vi.stubEnv('TRUSTED_PROXY_CIDRS', '10.0.0.0/8')
+  vi.stubEnv('EMAIL_FROM', 'CashFlow <no-reply@example.com>')
+  vi.stubEnv('SMTP_HOST', '')
+}
+
 describe('getEmailSender', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -47,9 +65,8 @@ describe('getEmailSender', () => {
   it('throws in production even when EMAIL_OUTBOX_FILE is set — the file outbox is never a production transport', async () => {
     // A reset link is a bearer token. If a stray EMAIL_OUTBOX_FILE could win in
     // production, those tokens would land on disk and never reach the user.
-    vi.stubEnv('SMTP_HOST', '')
+    stubValidProductionEnvExceptSmtp()
     vi.stubEnv('EMAIL_OUTBOX_FILE', '/tmp/some-outbox.jsonl')
-    vi.stubEnv('NODE_ENV', 'production')
     const { getEmailSender } = await import('./get-sender')
     expect(() => getEmailSender()).toThrowError(
       'Email is not configured: set SMTP_HOST (and related SMTP_* variables) in production',
@@ -57,9 +74,8 @@ describe('getEmailSender', () => {
   })
 
   it('throws a configuration error in production when nothing is configured', async () => {
-    vi.stubEnv('SMTP_HOST', '')
+    stubValidProductionEnvExceptSmtp()
     vi.stubEnv('EMAIL_OUTBOX_FILE', '')
-    vi.stubEnv('NODE_ENV', 'production')
     const { getEmailSender } = await import('./get-sender')
     expect(() => getEmailSender()).toThrowError(
       'Email is not configured: set SMTP_HOST (and related SMTP_* variables) in production',

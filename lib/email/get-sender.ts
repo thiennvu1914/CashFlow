@@ -2,6 +2,7 @@ import type { EmailSender } from './sender'
 import { ConsoleEmailSender } from './console-sender'
 import { SmtpEmailSender } from './smtp-sender'
 import { FileEmailSender } from './file-sender'
+import { loadServerEnv } from '@/lib/server/env'
 
 function isSet(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim() !== ''
@@ -18,6 +19,13 @@ function isSet(value: string | undefined): value is string {
  * disk instead of to the user. The file and console senders are dev/E2E-only.
  */
 export function getEmailSender(): EmailSender {
+  // Runs the one server environment contract (cached per process): in
+  // production a missing EMAIL_FROM or an SMTP_HOST without a usable SMTP_PORT
+  // is fatal here rather than a message that silently fails to arrive. The
+  // transport choice below is unchanged — `lib/server/env.ts` deliberately does
+  // not require SMTP_HOST, so the production refusal keeps its own message.
+  loadServerEnv()
+
   if (isSet(process.env.SMTP_HOST)) {
     const port = Number.parseInt(process.env.SMTP_PORT ?? '', 10)
     if (!Number.isInteger(port) || port <= 0) {
