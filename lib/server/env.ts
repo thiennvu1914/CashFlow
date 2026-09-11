@@ -126,12 +126,15 @@ function trimmedOrUndefined(value: unknown): string | undefined {
 
 /**
  * The declarative shape. Every field is optional here and every message is
- * written by hand (never zod's default, which can quote the received input) —
- * which variables are *required* depends on the environment and is decided in
- * `requirementProblems` below.
+ * written by hand (never zod's default, which can quote the received input).
+ * Which variables are *required* depends on the environment, and is decided in
+ * `validateServerEnv` below.
  */
 const serverEnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).optional(),
+  // Deliberately `z.string()` rather than `z.enum(...)`: zod's own enum
+  // message can quote the received value, and nothing this module emits may
+  // carry a value. An unrecognised NODE_ENV is reported as a warning below.
+  NODE_ENV: z.string().optional(),
   NEXT_PHASE: z.string().optional(),
   DATABASE_URL: z
     .string()
@@ -142,7 +145,7 @@ const serverEnvSchema = z.object({
   BETTER_AUTH_SECRET: z.string().optional(),
   BETTER_AUTH_URL: z
     .string()
-    .refine((value) => URL.canParse(value) && new URL(value).protocol.startsWith('http'), {
+    .refine((value) => URL.canParse(value) && /^https?:$/.test(new URL(value).protocol), {
       message: 'BETTER_AUTH_URL: must be an absolute http(s) origin',
     })
     .optional(),
