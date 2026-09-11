@@ -4,14 +4,22 @@
 # removes them. The `.env*` rule below is the single most important line here.
 
 # Secrets. `.env` is untracked but present in every developer checkout.
+# Docker's ignore matching is root-anchored by default — a bare `.env` matches
+# only a file literally at the build context's root, not one inside a nested
+# directory. `**/` makes each pattern match at any depth, which is what a
+# secret file actually needs.
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 # History and local tooling state — large, and irrelevant to a build.
 .git
 .gitattributes
 .gitignore
+.github
 .claude
 .superpowers
 
@@ -23,6 +31,8 @@ out
 build
 coverage
 *.tsbuildinfo
+**/node_modules
+**/*.tsbuildinfo
 
 # Test harness output and logs.
 e2e/.outbox
@@ -31,12 +41,14 @@ playwright-report
 test-results
 *.log
 *.dump
+**/*.log
 
 # Documentation and editor noise. Not needed to build or serve.
 docs
 .vscode
 .idea
 .DS_Store
+**/.DS_Store
 
 # Kept deliberately (documented so a future edit does not "tidy" them away):
 #   prisma/            schema + migrations — `postinstall` generates from it,

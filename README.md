@@ -47,6 +47,16 @@ console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
 Run `npm run format:check`, `npm run lint`, `npm run test` and `npm run build`
 before every commit.
 
+### Production build
+
+`next.config.ts` sets `output: 'standalone'`, so `npm run build` traces the
+build into `.next/standalone` rather than the full `.next` directory plain
+`next start` expects — running `next start` against a standalone build only
+warns and serves nothing useful. `npm run start` therefore runs
+`node .next/standalone/server.js` directly, the same entrypoint the Docker
+`runner` stage's `CMD` uses (below); it is unaffected by this since it never
+called `npm run start` in the first place.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and on every push to
