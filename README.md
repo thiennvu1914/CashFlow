@@ -72,9 +72,13 @@ Run `npm run format:check`, `npm run lint`, `npm run test` and
 
 `next.config.ts` sets `output: 'standalone'`, so `npm run build` traces the
 build into `.next/standalone` rather than the full `.next` tree plain
-`next start` expects. `npm run start` runs
-`node .next/standalone/server.js` directly — the same entrypoint the Docker
-`runner` stage's `CMD` uses below.
+`next start` expects. That trace does not include `.next/static` or
+`public` — Next leaves it to whoever serves the bundle to place those next
+to `server.js`. `npm run start` runs `scripts/start-standalone.mjs`, which
+copies `.next/static` and `public` into the standalone bundle and then runs
+`node .next/standalone/server.js` — the same entrypoint the Docker `runner`
+stage's `CMD` uses below (the Dockerfile does the equivalent two copies with
+`COPY` instructions instead).
 
 ## Continuous integration
 
