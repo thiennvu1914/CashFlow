@@ -184,4 +184,23 @@ test.describe.serial('Phase 7 — app shell', () => {
     )
     expect(headers['x-powered-by']).toBeUndefined()
   })
+
+  test('GET /api/health answers ok, uncached, and carries the same headers', async ({ page }) => {
+    // The platform probe (`app/api/health/route.ts`): unauthenticated, one key,
+    // never cached — and covered by `next.config.ts`'s `/(.*)` header rule like
+    // every other response, which is the thing a header matcher regression
+    // would break silently.
+    const response = await page.request.get('/api/health')
+
+    expect(response.status()).toBe(200)
+    expect(await response.json()).toEqual({ status: 'ok' })
+
+    const headers = response.headers()
+    expect(headers['cache-control']).toBe('no-store')
+    expect(headers['x-content-type-options']).toBe('nosniff')
+    expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin')
+    expect(headers['x-frame-options']).toBe('DENY')
+    expect(headers['content-security-policy']).toBe("frame-ancestors 'none'")
+    expect(headers['x-powered-by']).toBeUndefined()
+  })
 })
