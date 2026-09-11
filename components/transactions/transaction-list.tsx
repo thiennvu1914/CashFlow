@@ -148,7 +148,7 @@ export function TransactionList({
           poke a square corner past the round border: the FIRST group's own
           `bg-surface` header, and the LAST row (only visible were it to also
           carry its own background, e.g. the error tint below). */}
-      <div className="rounded-lg border border-border bg-surface">
+      <div className="card-hover-effect rounded-lg border border-border bg-surface shadow-xs">
         {groups.map((group, groupIndex) => (
           <section key={group.day}>
             {/* `h2`, not `h3` (Task 16, owner item G1). The page's outline is
@@ -162,7 +162,7 @@ export function TransactionList({
                 heading nobody asked for. */}
             <h2
               className={cn(
-                'sticky top-0 z-10 border-b border-border bg-surface px-4 py-2 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase',
+                'sticky top-0 z-10 border-b border-border bg-surface/95 px-4 py-2 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase backdrop-blur-xs',
                 groupIndex === 0 && 'rounded-t-lg',
               )}
             >

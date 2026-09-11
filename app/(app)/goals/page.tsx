@@ -75,7 +75,7 @@ export default async function GoalsPage() {
           description={t('goals.emptyBody')}
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
           <GoalList
             goals={active}
             locale={locale}

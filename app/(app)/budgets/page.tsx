@@ -125,7 +125,7 @@ export default async function BudgetsPage({
         />
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
             <BudgetProgressList
               budgets={dtos}
               locale={locale}

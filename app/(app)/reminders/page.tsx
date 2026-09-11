@@ -288,7 +288,7 @@ export default async function RemindersPage({
                     </span>
                   }
                 />
-                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
                   <OccurrenceList
                     occurrences={overdue}
                     locale={locale}
@@ -308,7 +308,7 @@ export default async function RemindersPage({
             {upcoming.length > 0 && (
               <section className="flex flex-col gap-2">
                 <SectionHeader title={t('reminders.groupUpcoming')} />
-                <div className="overflow-hidden rounded-lg border border-border bg-surface">
+                <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
                   <OccurrenceList
                     occurrences={upcoming}
                     locale={locale}
@@ -340,7 +340,7 @@ export default async function RemindersPage({
           description={t('reminders.emptyDefinitionsBody')}
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
           <ReminderList
             reminders={reminders}
             locale={locale}

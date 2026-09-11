@@ -83,7 +83,13 @@ export function AccountDistributionChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
+          <Bar
+            {...BAR_PROPS}
+            radius={[0, 4, 4, 0]}
+            dataKey="value"
+            name={seriesLabel}
+            fill={CHART_COLORS.distribution}
+          />
         </BarChart>
       </ResponsiveContainer>
     </figure>

@@ -82,7 +82,13 @@ export function PlanningRow({
   const hasActionsCell = Boolean(inlineAction || actions)
 
   return (
-    <li className={cn('relative flex flex-col gap-2 px-4 py-3', dim && 'opacity-70', className)}>
+    <li
+      className={cn(
+        'relative flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-foreground/4',
+        dim && 'opacity-70',
+        className,
+      )}
+    >
       <div className="flex flex-wrap items-start gap-2">
         <div
           className={cn(

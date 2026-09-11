@@ -40,9 +40,12 @@ export function CategoryBars({
   return (
     <ul className="flex flex-col gap-3">
       {rows.map((row) => (
-        <li key={row.id} className="flex flex-col gap-1">
+        <li
+          key={row.id}
+          className="flex flex-col gap-1.5 rounded-lg p-1.5 -mx-1.5 transition-colors hover:bg-muted/30"
+        >
           <div className="flex items-baseline justify-between gap-3">
-            <span className="min-w-0 truncate text-sm">{row.name}</span>
+            <span className="min-w-0 truncate text-sm font-medium">{row.name}</span>
             <div className="flex items-baseline gap-2">
               {/* The share-of-total percent, as real visible text — not only
                   `Progress`'s (now decorative, fix round 1) `aria-valuetext`,

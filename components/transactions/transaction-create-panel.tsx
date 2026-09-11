@@ -209,9 +209,9 @@ export function TransactionCreatePanelBody() {
   return (
     <div
       id="new"
-      className="hidden scroll-mt-6 flex-col gap-4 rounded-lg border border-border bg-surface p-4 md:flex xl:sticky xl:top-6 xl:col-span-5 xl:h-fit"
+      className="card-hover-effect hidden scroll-mt-6 flex-col gap-4 rounded-xl border border-border/80 bg-surface/90 p-5 shadow-xs md:flex xl:sticky xl:top-6 xl:col-span-5 xl:h-fit"
     >
-      <h2 className="text-[1.125rem]/[1.625rem] font-semibold">{t('transactions.createTitle')}</h2>
+      <h2 className="text-[1.125rem]/[1.625rem] font-semibold tracking-tight">{t('transactions.createTitle')}</h2>
       <TransactionForm
         accounts={ctx.accounts}
         categories={ctx.categories}

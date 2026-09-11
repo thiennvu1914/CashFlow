@@ -43,7 +43,7 @@ export function SegmentedControl({
     <nav
       aria-label={label}
       className={cn(
-        'inline-flex max-w-full flex-wrap overflow-x-auto rounded-md border border-border bg-surface p-0.5 sm:flex-nowrap',
+        'inline-flex max-w-full flex-wrap items-center gap-1 overflow-x-auto rounded-lg border border-border/80 bg-surface/90 p-1 shadow-2xs backdrop-blur-xs sm:flex-nowrap',
         className,
       )}
     >
@@ -55,10 +55,10 @@ export function SegmentedControl({
             href={segment.href}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'rounded-md px-3 py-1.5 text-sm whitespace-nowrap',
+              'rounded-md px-3.5 py-1.5 text-sm whitespace-nowrap transition-all duration-150',
               active
-                ? 'bg-muted font-medium text-brand'
-                : 'text-muted-foreground hover:text-foreground',
+                ? 'bg-brand/12 font-semibold text-brand shadow-xs dark:bg-brand/20'
+                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
             )}
           >
             {segment.label}

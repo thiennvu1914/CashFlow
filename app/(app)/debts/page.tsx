@@ -123,7 +123,7 @@ export default async function DebtsPage() {
                   )
                 }
               />
-              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+              <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
                 <DebtList
                   debts={receivable}
                   locale={locale}
@@ -156,7 +156,7 @@ export default async function DebtsPage() {
                   )
                 }
               />
-              <div className="overflow-hidden rounded-lg border border-border bg-surface">
+              <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
                 <DebtList
                   debts={payable}
                   locale={locale}

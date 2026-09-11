@@ -102,7 +102,7 @@ export function TransferList({
 
   return (
     <>
-      <div className="rounded-lg border border-border bg-surface">
+      <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
         <ul className="divide-y divide-border">
           {transfers.map((row, rowIndex) => {
             const crossCurrency = row.fromAccount.currency !== row.toAccount.currency

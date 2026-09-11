@@ -77,7 +77,10 @@ export function Progress({
           })}
       className={cn('h-1.5 overflow-hidden rounded-full bg-muted dark:bg-foreground/14', className)}
     >
-      <div className={cn('h-full', TONE_CLASSES[tone])} style={{ width: `${width}%` }} />
+      <div
+        className={cn('h-full rounded-full transition-all duration-500', TONE_CLASSES[tone])}
+        style={{ width: `${width}%` }}
+      />
     </div>
   )
 }
