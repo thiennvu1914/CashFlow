@@ -47,6 +47,36 @@ console. Set `EMAIL_OUTBOX_FILE` to write them to a file instead.
 Run `npm run format:check`, `npm run lint`, `npm run test` and `npm run build`
 before every commit.
 
+## Docker quick start
+
+The image is vendor-neutral: Node, PostgreSQL, nothing platform-specific. It is
+built in four stages — `deps` (full `npm ci`), `builder` (`next build` with
+`output: 'standalone'`), `migrator` (the Prisma CLI and the migrations, nothing
+else) and `runner` (the standalone server, non-root, no CLI). Migrations are a
+separate release step, never a container entrypoint: an entrypoint migration
+races every replica, and the runner deliberately carries no Prisma CLI to run
+one.
+
+```bash
+docker build -t cashflow:latest .                     # runner (the default target)
+docker build --target migrator -t cashflow:migrate .  # migration image
+
+docker run --rm --env-file .env.production cashflow:migrate   # runs `npm run db:deploy`
+docker run -d -p 3000:3000 --env-file .env.production \
+  --stop-timeout 30 --name cashflow cashflow:latest
+
+curl -i http://localhost:3000/api/health   # 200 {"status":"ok"}; 503 when the database is gone
+```
+
+The env file supplies every variable in
+[Deployment requirements](#deployment-requirements) plus `TZ=UTC`. No secret is
+baked into any layer: the build sets a dummy, never-connected `DATABASE_URL`
+only because `next build` constructs the Prisma client while collecting page
+data, and `.dockerignore` keeps a local `.env` out of the build context. The
+image ships a `HEALTHCHECK` polling `/api/health` and needs no writable
+directory, so a read-only root filesystem works. Platform examples, backup and
+restore live in `docs/operations.md`.
+
 ## Deployment requirements
 
 Required environment variables. `lib/server/env.ts` validates the whole
@@ -78,10 +108,12 @@ annotated copy of this list.
   be an integer between 1 and 65535 whenever `SMTP_HOST` is set. Authentication
   is optional — leave `SMTP_USER`/`SMTP_PASSWORD` empty for an anonymous relay,
   or set both; `SMTP_USER` without `SMTP_PASSWORD` is refused.
-- `DATABASE_URL` — also needed at build time. `next build` imports every route
-  module to collect page data, and the Prisma client is constructed at module
-  scope, so the build needs a reachable database. (The production-only part of the
-  contract is skipped during the build, which Next marks with
+- `DATABASE_URL` — also needed at build time, but only as a _value_. `next build`
+  imports every route module to collect page data and the Prisma client is
+  constructed at module scope, so the variable must be set and syntactically
+  valid; the build never opens a connection (the Docker build proves it — the
+  builder stage sets a dummy URL pointing at nothing). (The production-only part
+  of the contract is skipped during the build, which Next marks with
   `NEXT_PHASE=phase-production-build`.)
 
 Operational notes:
