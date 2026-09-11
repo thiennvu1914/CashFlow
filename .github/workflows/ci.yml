@@ -292,10 +292,16 @@ jobs:
         run: |
           headers=$(curl -s -o /dev/null -D - -w 'http_status=%{http_code}\n' http://localhost:3000/login)
           echo "$headers"
-          echo "$headers" | grep -qi '^strict-transport-security:' \
-            || { echo "Missing Strict-Transport-Security on /login." >&2; exit 1; }
-          echo "$headers" | grep -qi '^x-frame-options:' \
-            || { echo "Missing X-Frame-Options on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^strict-transport-security: *max-age=31536000; includeSubDomains' \
+            || { echo "Missing or wrong Strict-Transport-Security on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-frame-options: *DENY' \
+            || { echo "Missing or wrong X-Frame-Options on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-content-type-options: *nosniff' \
+            || { echo "Missing or wrong X-Content-Type-Options on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^referrer-policy: *strict-origin-when-cross-origin' \
+            || { echo "Missing or wrong Referrer-Policy on /login." >&2; exit 1; }
+          echo "$headers" | grep -qi '^x-powered-by:' \
+            && { echo "X-Powered-By must not be present on /login." >&2; exit 1; }
           echo "$headers" | grep -q '^http_status=200$' \
             || { echo "/login did not return 200." >&2; exit 1; }
 
