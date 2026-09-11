@@ -14,44 +14,50 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 /**
- * Maps a Better Auth error onto one of three fixed message KEYS. The server's
+ * Maps a Better Auth error onto one of two fixed message KEYS. The server's
  * own `error.message` is never rendered: it is library text we do not
  * control, it can change between versions, and it can carry detail (a
  * database or provider message) that has no business on a public sign-up
  * form.
  *
- * `POST /sign-up/email` answers a duplicate address with
- * `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` — verified in
+ * Every server-side failure that is not a 429 collapses onto the SAME key,
+ * `auth.registerFailed`. That is the point: `POST /sign-up/email` answers a
+ * duplicate address with `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL` (verified in
  * `node_modules/better-auth/dist/api/routes/sign-up.mjs`, which throws
- * `APIError.from('UNPROCESSABLE_ENTITY',
- * BASE_ERROR_CODES.USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL)`. The shorter
+ * `APIError.from('UNPROCESSABLE_ENTITY', ...)`; the shorter
  * `USER_ALREADY_EXISTS` is a sibling code in
- * `node_modules/@better-auth/core/dist/error/codes.mjs` used elsewhere in the
- * library, so both are accepted here rather than betting on one spelling.
+ * `node_modules/@better-auth/core/dist/error/codes.mjs`), and rendering a
+ * distinct "that email is taken" message turns this form into an account
+ * enumeration oracle: anyone can type an address and learn whether the person
+ * banks here. Showing one message for "taken" and a different one for any
+ * other failure would leak exactly the same bit, so the branch is gone rather
+ * than merely reworded. The copy still tells a legitimate visitor what to do
+ * next — check the address, or sign in / reset the password — which is the
+ * useful half of the old message.
  *
- * Telling a visitor their email is already registered is a deliberate
- * trade-off: a sign-up form leaks that fact anyway (it cannot create the
- * account), and a useless generic error here just sends people in circles. The
- * endpoints where enumeration actually matters — sign-in and
- * request-password-reset — stay uniform.
+ * Not addressed here, deliberately: response TIMING still differs between a
+ * duplicate and a fresh address (Better Auth hashes a password for one and
+ * not the other), and a determined attacker can measure it. Equalising it
+ * would mean a fake hash on every duplicate; the owner ruled that out for
+ * this app's threat model. Field validation is untouched — a malformed email
+ * or a short password is the user's own input, not a fact about someone
+ * else's account.
  *
- * `status === 429` (Task 13, D3) is checked before the code: Better Auth's own
- * rate limiter (`lib/auth/create-auth.ts`) answers a burst of sign-ups the
- * same way it answers a burst of sign-ins, and a visitor who tripped it needs
- * to know to wait, not "check the highlighted fields" or a generic failure —
- * mirroring the login form's identical `error.status === 429` branch.
+ * `status === 429` (Task 13, D3) is checked first and keeps its own message:
+ * Better Auth's rate limiter (`lib/auth/create-auth.ts`) answers a burst of
+ * sign-ups the same way it answers a burst of sign-ins, and a visitor who
+ * tripped it needs to know to wait rather than to re-check an address that
+ * was fine. It reveals nothing about any account — it is a fact about this
+ * client's request rate — and mirrors the login form's identical branch.
+ *
+ * Exported for `register-form.test.tsx`, which pins that the duplicate codes
+ * and an unknown failure produce the byte-identical key.
  */
-function registerErrorKey(
+export function registerErrorKey(
   error: { code?: string; status?: number } | undefined,
-): 'auth.tooManyAttempts' | 'auth.emailTaken' | 'errors.generic' {
+): 'auth.tooManyAttempts' | 'auth.registerFailed' {
   if (error?.status === 429) return 'auth.tooManyAttempts'
-  if (
-    error?.code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' ||
-    error?.code === 'USER_ALREADY_EXISTS'
-  ) {
-    return 'auth.emailTaken'
-  }
-  return 'errors.generic'
+  return 'auth.registerFailed'
 }
 
 /**
@@ -86,8 +92,11 @@ export function RegisterForm() {
           return
         }
       } catch {
+        // A thrown request (the network, not an answer from the server) says
+        // nothing about any account, but it renders the same message so the
+        // form never has two visually distinguishable failure states.
         console.error('Registration request failed')
-        setError('root', { message: t('errors.generic') })
+        setError('root', { message: t('auth.registerFailed') })
         return
       }
       router.push('/dashboard')
