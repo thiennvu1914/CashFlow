@@ -18,6 +18,15 @@ logged by name, never fail a boot, and never carry a value. `.env.example`
 is the grouped, annotated, safe-placeholder
 copy of this table — never paste a real secret into it or into this file.
 
+Every value is trimmed before validation and use (`trimmedOrUndefined` in
+`lib/server/env.ts`), so a secret pasted with surrounding whitespace — a
+stray newline or space from a copy-paste into a platform's secret manager —
+signs with its trimmed form, not the padded one.
+
+Better Auth's own `AUTH_SECRET` fallback is not sufficient in production:
+`BETTER_AUTH_SECRET` itself must be set, at least 32 characters, and not the
+placeholder shipped in `.env.example`, or the process refuses to start.
+
 | Variable | Required in | Purpose | Example placeholder |
 | --- | --- | --- | --- |
 | `TZ` | production, CI (optional elsewhere, warned if not `UTC`) | Server/container clock; period math computed from UTC in the user's IANA zone | `UTC` |
@@ -262,6 +271,20 @@ against a production build; if it comes back clean, add the report-only
 header first, watch it in production, then promote to enforcing. A true
 `script-src` CSP without `unsafe-inline` needs a nonce pipeline, which is a
 larger change deliberately deferred past Phase 8.
+
+## Auth rate limiting
+
+Better Auth's rate limiter (`lib/auth/create-auth.ts`) is explicitly enabled
+in every environment and stores its counters in an in-memory `Map` local to
+the process — Better Auth's default store, left unconfigured. That store is
+**per process, not shared**: each replica keeps its own counts, so the
+effective limit multiplies by the number of running instances (five
+replicas each enforcing 5 requests/60s on `/sign-in/email` is 25
+requests/60s in aggregate, not 5). Before running more than one replica,
+either budget for that multiplication or front the deployment with a
+proxy-level rate limit; do not reach for a shared store such as Redis to
+close the gap — that is exactly the enterprise infrastructure this project
+deliberately does not add.
 
 ## Rate-limit e2e switch
 
