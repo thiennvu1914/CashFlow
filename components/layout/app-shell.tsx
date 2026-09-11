@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Plus } from 'lucide-react'
@@ -53,13 +54,19 @@ export function AppShell({ userName, children }: { userName: string; children: R
       <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col border-r border-border bg-surface p-2 md:flex xl:w-60 xl:p-4">
         <Link
           href="/dashboard"
-          className="flex h-9 items-center justify-center rounded-md text-base font-semibold text-brand xl:justify-start xl:px-2"
+          className="flex h-9 items-center justify-center gap-2 rounded-md text-base font-semibold text-brand xl:justify-start xl:px-2"
         >
-          {/* The wordmark's first letter alone on the icon rail: "CashFlow" at
-              64 px would either clip or shrink to unreadable. */}
-          <span className="xl:hidden" aria-hidden="true">
-            C
-          </span>
+          {/* Decorative beside the visible desktop wordmark. On the tablet
+              icon rail the existing screen-reader-only text names the link. */}
+          <Image
+            src="/brand/cashflow-mark.png"
+            alt=""
+            width={1254}
+            height={1254}
+            sizes="32px"
+            loading="eager"
+            className="size-8 shrink-0 dark:brightness-150"
+          />
           <span className="sr-only xl:not-sr-only">{t('common.appName')}</span>
         </Link>
 

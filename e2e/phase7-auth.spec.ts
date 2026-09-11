@@ -18,7 +18,7 @@ test('login renders the wordmark, tagline, an h1, labelled fields and the second
 }) => {
   await page.goto('/login')
 
-  await expect(page.getByText('CashFlow', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'CashFlow' })).toBeVisible()
   await expect(page.getByText('Quản lý tài chính cá nhân')).toBeVisible()
   await expect(page.getByRole('heading', { level: 1, name: 'Đăng nhập CashFlow' })).toBeVisible()
   await expect(page.getByLabel('Email')).toBeVisible()
@@ -34,7 +34,7 @@ test('login renders in English via the NEXT_LOCALE cookie', async ({ page }) => 
     .addCookies([{ name: 'NEXT_LOCALE', value: 'en', url: 'http://localhost:3000' }])
   await page.goto('/login')
 
-  await expect(page.getByText('CashFlow', { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: 'CashFlow' })).toBeVisible()
   await expect(page.getByText('Personal finance management')).toBeVisible()
   await expect(page.getByRole('heading', { level: 1, name: 'Sign in to CashFlow' })).toBeVisible()
   await expect(page.getByLabel('Email')).toBeVisible()

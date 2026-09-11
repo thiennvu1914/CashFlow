@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Plus } from 'lucide-react'
@@ -31,8 +32,20 @@ export function MobileTopBar() {
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-surface md:hidden">
       <div className="flex items-center justify-between px-4 py-3">
-        <Link href="/dashboard" className="text-base font-semibold text-brand">
-          {t('common.appName')}
+        <Link
+          href="/dashboard"
+          className="flex items-center gap-2 text-base font-semibold text-brand"
+        >
+          <Image
+            src="/brand/cashflow-mark.png"
+            alt=""
+            width={1254}
+            height={1254}
+            sizes="32px"
+            loading="eager"
+            className="size-8 shrink-0 dark:brightness-150"
+          />
+          <span>{t('common.appName')}</span>
         </Link>
         <button
           type="button"

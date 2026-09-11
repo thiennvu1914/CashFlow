@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import { getTranslations } from 'next-intl/server'
 
 /**
@@ -38,7 +39,15 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
           `components/layout/app-shell.tsx`. */}
       <main className="flex w-full max-w-[25rem] flex-col gap-6 rounded-lg border border-border bg-surface p-6 sm:p-8">
         <div className="flex flex-col gap-1">
-          <p className="text-base font-semibold text-brand">{t('common.appName')}</p>
+          <Image
+            src="/brand/cashflow-logo.png"
+            alt={t('common.appName')}
+            width={2172}
+            height={724}
+            sizes="(min-width: 640px) 160px, 144px"
+            loading="eager"
+            className="h-auto w-36 dark:brightness-200 sm:w-40"
+          />
           <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{t('common.tagline')}</p>
         </div>
         {children}
