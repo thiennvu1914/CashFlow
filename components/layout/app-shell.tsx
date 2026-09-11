@@ -58,15 +58,17 @@ export function AppShell({ userName, children }: { userName: string; children: R
         >
           {/* Decorative beside the visible desktop wordmark. On the tablet
               icon rail the existing screen-reader-only text names the link. */}
-          <Image
-            src="/brand/cashflow-mark.png"
-            alt=""
-            width={1254}
-            height={1254}
-            sizes="32px"
-            loading="eager"
-            className="size-8 shrink-0 dark:brightness-150"
-          />
+          <span className="relative size-7 shrink-0 overflow-hidden">
+            <Image
+              src="/brand/cashflow-mark.png"
+              alt=""
+              width={1254}
+              height={1254}
+              sizes="48px"
+              loading="eager"
+              className="absolute top-1/2 left-1/2 size-12 max-w-none -translate-x-1/2 -translate-y-1/2 dark:brightness-150"
+            />
+          </span>
           <span className="sr-only xl:not-sr-only">{t('common.appName')}</span>
         </Link>
 

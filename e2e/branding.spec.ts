@@ -28,6 +28,15 @@ test.describe('CashFlow branding', () => {
             await logo.evaluate((image) => (image as HTMLImageElement).naturalWidth),
           ).toBeGreaterThan(0)
 
+          const logoBox = await logo.boundingBox()
+          const cardBox = await page.getByRole('main').boundingBox()
+          expect(logoBox).not.toBeNull()
+          expect(cardBox).not.toBeNull()
+          expect(logoBox!.width).toBe(width === 375 ? 176 : 188)
+          expect(
+            Math.abs(logoBox!.x + logoBox!.width / 2 - (cardBox!.x + cardBox!.width / 2)),
+          ).toBeLessThanOrEqual(1)
+
           const hasOverflow = await page.evaluate(
             () => document.documentElement.scrollWidth > window.innerWidth,
           )
@@ -79,7 +88,8 @@ test.describe('CashFlow branding', () => {
         const mark = brandLink.locator('img[alt=""]')
         await expect(mark).toBeVisible()
         await expect(mark).toHaveAttribute('src', /cashflow-mark\.png/)
-        expect((await mark.boundingBox())?.width).toBe(32)
+        expect((await mark.boundingBox())?.width).toBe(48)
+        expect((await mark.locator('..').boundingBox())?.width).toBe(28)
 
         if (railWidth > 0) {
           expect((await page.locator('aside').first().boundingBox())?.width).toBe(railWidth)
