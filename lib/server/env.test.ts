@@ -3,7 +3,7 @@ import {
   PLACEHOLDER_BETTER_AUTH_SECRET,
   MIN_BETTER_AUTH_SECRET_LENGTH,
   isProduction,
-  isTestLikeEnvironment,
+  isNonProductionEnvironment,
   isNextBuildPhase,
   loadServerEnv,
   resetServerEnvCache,
@@ -12,10 +12,10 @@ import {
 
 /**
  * The contract is exercised through plain `ProcessEnv` objects rather than by
- * importing the modules that call it at load time (`lib/prisma.ts`,
- * `lib/auth/auth.ts`, `lib/email/get-sender.ts`), which would need a database.
- * Those modules call `loadServerEnv()` with the real `process.env`, so what is
- * pinned here is exactly the production boot behaviour.
+ * importing the modules that call it (`lib/prisma.ts`, `lib/auth/auth.ts`,
+ * `lib/email/get-sender.ts`), which would need a database. Those modules call
+ * `loadServerEnv()` with the real `process.env`, so what is pinned here is
+ * exactly the production boot behaviour.
  */
 function env(values: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
   return values as NodeJS.ProcessEnv
@@ -28,6 +28,8 @@ const PRODUCTION_BASE: Partial<NodeJS.ProcessEnv> = {
   BETTER_AUTH_SECRET: VALID_SECRET,
   BETTER_AUTH_URL: 'https://app.example.com',
   TRUSTED_PROXY_CIDRS: '10.0.0.0/8',
+  SMTP_HOST: 'smtp.example.com',
+  SMTP_PORT: '587',
   EMAIL_FROM: 'CashFlow <no-reply@example.com>',
   TZ: 'UTC',
 }
@@ -48,12 +50,13 @@ describe('environment predicates', () => {
     expect(isProduction(env({}))).toBe(false)
   })
 
-  it('is fail-closed about test-like environments', () => {
-    expect(isTestLikeEnvironment(env({ NODE_ENV: 'test' }))).toBe(true)
-    expect(isTestLikeEnvironment(env({ NODE_ENV: 'development' }))).toBe(true)
-    expect(isTestLikeEnvironment(env({ NODE_ENV: 'production' }))).toBe(false)
+  it('is fail-closed about non-production environments, which include development', () => {
+    expect(isNonProductionEnvironment(env({ NODE_ENV: 'development' }))).toBe(true)
+    expect(isNonProductionEnvironment(env({ NODE_ENV: 'test' }))).toBe(true)
+    expect(isNonProductionEnvironment(env({ NODE_ENV: 'production' }))).toBe(false)
     // Unset or unrecognised must not open a test-only bypass.
-    expect(isTestLikeEnvironment(env({}))).toBe(false)
+    expect(isNonProductionEnvironment(env({}))).toBe(false)
+    expect(isNonProductionEnvironment(env({ NODE_ENV: 'staging' as never }))).toBe(false)
   })
 
   it('recognises the `next build` page-data pass', () => {
@@ -65,12 +68,14 @@ describe('environment predicates', () => {
 describe('BETTER_AUTH_SECRET (D1)', () => {
   it('rejects a missing secret in production', () => {
     const problems = problemsFor({ ...PRODUCTION_BASE, BETTER_AUTH_SECRET: undefined })
-    expect(problems.some((line) => line.startsWith('BETTER_AUTH_SECRET'))).toBe(true)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('BETTER_AUTH_SECRET')
   })
 
   it('rejects a blank secret in production', () => {
     const problems = problemsFor({ ...PRODUCTION_BASE, BETTER_AUTH_SECRET: '    ' })
-    expect(problems.some((line) => line.startsWith('BETTER_AUTH_SECRET'))).toBe(true)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('BETTER_AUTH_SECRET')
   })
 
   it('rejects the .env.example placeholder, which is long enough to pass a length check', () => {
@@ -126,6 +131,7 @@ describe('the production contract (D2)', () => {
     ['BETTER_AUTH_URL'],
     ['TRUSTED_PROXY_CIDRS'],
     ['EMAIL_FROM'],
+    ['SMTP_HOST'],
   ] as const)('rejects a production environment missing %s', (name) => {
     const problems = problemsFor({ ...PRODUCTION_BASE, [name]: undefined })
     expect(problems).toHaveLength(1)
@@ -150,20 +156,38 @@ describe('the production contract (D2)', () => {
     )
   })
 
-  it('requires a valid SMTP_PORT once SMTP_HOST selects the SMTP sender', () => {
-    expect(problemsFor({ ...PRODUCTION_BASE, SMTP_HOST: 'smtp.example.com' })[0]).toContain(
-      'SMTP_PORT',
-    )
-    expect(
-      problemsFor({ ...PRODUCTION_BASE, SMTP_HOST: 'smtp.example.com', SMTP_PORT: 'abc' })[0],
-    ).toContain('SMTP_PORT')
-    expect(
-      problemsFor({ ...PRODUCTION_BASE, SMTP_HOST: 'smtp.example.com', SMTP_PORT: '587' }),
-    ).toEqual([])
+  it('requires SMTP_HOST in production because SMTP is the only transport it accepts', () => {
+    const problems = problemsFor({ ...PRODUCTION_BASE, SMTP_HOST: undefined, SMTP_PORT: undefined })
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('SMTP_HOST')
   })
 
-  it('does not require SMTP_HOST itself — getEmailSender() owns that refusal', () => {
-    expect(problemsFor(PRODUCTION_BASE).some((line) => line.startsWith('SMTP_HOST'))).toBe(false)
+  it('requires a strictly numeric SMTP_PORT whenever SMTP_HOST is set', () => {
+    expect(problemsFor({ ...PRODUCTION_BASE, SMTP_PORT: undefined })[0]).toContain('SMTP_PORT')
+    for (const bad of ['abc', '587abc', '0', '70000', '58.7', ' 587 x']) {
+      const problems = problemsFor({ ...PRODUCTION_BASE, SMTP_PORT: bad })
+      expect(problems.some((line) => line.startsWith('SMTP_PORT'))).toBe(true)
+    }
+    expect(problemsFor({ ...PRODUCTION_BASE, SMTP_PORT: '465' })).toEqual([])
+  })
+
+  it('allows an anonymous relay but refuses half-configured SMTP authentication', () => {
+    expect(problemsFor({ ...PRODUCTION_BASE, SMTP_USER: undefined })).toEqual([])
+    const problems = problemsFor({ ...PRODUCTION_BASE, SMTP_USER: 'mailer' })
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('SMTP_PASSWORD')
+    expect(problemsFor({ ...PRODUCTION_BASE, SMTP_USER: 'mailer', SMTP_PASSWORD: 'pw' })).toEqual(
+      [],
+    )
+  })
+
+  it('applies the SMTP completeness rules outside production too, once SMTP_HOST is set', () => {
+    const problems = problemsFor({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://localhost:5439/cashflow',
+      SMTP_HOST: 'smtp.example.com',
+    })
+    expect(problems).toEqual(['SMTP_PORT: required when SMTP_HOST is set'])
   })
 
   it('requires DATABASE_URL in every environment', () => {
@@ -203,7 +227,7 @@ describe('loadServerEnv', () => {
           BETTER_AUTH_SECRET: 'short-secret-value',
           TRUSTED_PROXY_CIDRS: '',
           SMTP_HOST: 'smtp.example.com',
-          SMTP_PASSWORD: 'smtp-password-value',
+          SMTP_USER: 'mailer-account',
         }),
       )
     } catch (caught) {
@@ -218,12 +242,13 @@ describe('loadServerEnv', () => {
       'TRUSTED_PROXY_CIDRS',
       'EMAIL_FROM',
       'SMTP_PORT',
+      'SMTP_PASSWORD',
     ]) {
       expect(message).toContain(name)
     }
     for (const value of [
       'short-secret-value',
-      'smtp-password-value',
+      'mailer-account',
       'hunter2',
       'smtp.example.com',
       'postgresql://user:hunter2@db.internal:5432/cashflow',
@@ -232,10 +257,55 @@ describe('loadServerEnv', () => {
     }
   })
 
+  it('logs production warnings by name — they must be visible, not only collected', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() =>
+      loadServerEnv(
+        env({
+          ...PRODUCTION_BASE,
+          TZ: 'Asia/Ho_Chi_Minh',
+          EMAIL_OUTBOX_FILE: '/srv/outbox.jsonl',
+          CASHFLOW_E2E_DISABLE_RATE_LIMIT: '1',
+        }),
+      ),
+    ).not.toThrow()
+
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n')
+    for (const name of ['EMAIL_OUTBOX_FILE', 'CASHFLOW_E2E_DISABLE_RATE_LIMIT', 'TZ']) {
+      expect(logged).toContain(name)
+    }
+    for (const value of ['/srv/outbox.jsonl', 'Asia/Ho_Chi_Minh', VALID_SECRET, 'db.internal']) {
+      expect(logged).not.toContain(value)
+    }
+  })
+
+  it('still logs the warnings when the same production environment is fatal', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() =>
+      loadServerEnv(
+        env({
+          ...PRODUCTION_BASE,
+          BETTER_AUTH_SECRET: undefined,
+          EMAIL_OUTBOX_FILE: '/srv/outbox.jsonl',
+        }),
+      ),
+    ).toThrowError(/BETTER_AUTH_SECRET/)
+
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n')
+    expect(logged).toContain('EMAIL_OUTBOX_FILE')
+    // The thrown problems are not also logged — they are about to be thrown.
+    expect(logged).not.toContain('BETTER_AUTH_SECRET')
+  })
+
   it('does not throw during `next build`, which serves no requests', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(() =>
       loadServerEnv(env({ NODE_ENV: 'production', NEXT_PHASE: 'phase-production-build' })),
     ).not.toThrow()
+    // Still reported, by name, so a build log shows what a deployment will need.
+    expect(warn.mock.calls.map((call) => String(call[0])).join('\n')).toContain('DATABASE_URL')
   })
 
   it('still throws for a production runtime, which leaves NEXT_PHASE unset', () => {
@@ -258,14 +328,22 @@ describe('loadServerEnv', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('returns the parsed contract and caches the process environment', () => {
-    const parsed = loadServerEnv(env({ ...PRODUCTION_BASE, SMTP_PORT: '587' }))
+  it('returns only the values callers consume, and caches the process environment', () => {
+    const parsed = loadServerEnv(env(PRODUCTION_BASE))
     expect(parsed.isProduction).toBe(true)
-    expect(parsed.smtpPort).toBe(587)
     expect(parsed.trustedProxyCidrs).toEqual(['10.0.0.0/8'])
+    // No SMTP credential, EMAIL_FROM, outbox path or TZ is carried on the
+    // cached object — they are validated, not retained.
+    expect(Object.keys(parsed).sort()).toEqual([
+      'betterAuthSecret',
+      'databaseUrl',
+      'isBuildPhase',
+      'isProduction',
+      'nodeEnv',
+      'trustedProxyCidrs',
+    ])
 
-    // The no-argument form memoises: the second call returns the same object
-    // even though it re-reads nothing.
+    // The no-argument form memoises: the second call returns the same object.
     const first = loadServerEnv()
     expect(loadServerEnv()).toBe(first)
   })

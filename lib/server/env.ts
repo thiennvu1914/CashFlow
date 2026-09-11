@@ -9,23 +9,33 @@ import { parseTrustedProxies } from '@/lib/auth/trusted-proxies'
  * reported by NAME only. No message this module produces — thrown or logged —
  * ever interpolates a value, because the same code path handles
  * `BETTER_AUTH_SECRET`, `SMTP_PASSWORD` and `DATABASE_URL`, and a boot failure
- * is exactly the moment a value would end up in a platform log.
+ * is exactly the moment a value would end up in a platform log. For the same
+ * reason the returned object carries only the values a caller actually
+ * consumes: no cached record of `SMTP_PASSWORD` or `SMTP_USER` exists.
  *
  * Behaviour by environment:
  *
  * - production — one aggregated `Error` listing every offending variable, so a
- *   misconfigured deployment crashes on start instead of serving requests with
- *   a broken security property (a forgeable session cookie, a spoofable
- *   rate-limit key, a host-header-derived reset link, undeliverable email).
+ *   misconfigured deployment crashes instead of serving requests with a broken
+ *   security property (a forgeable session cookie, a spoofable rate-limit key,
+ *   a host-header-derived reset link, undeliverable email).
  * - development — `console.warn` naming the same variables and continue, so a
  *   half-configured local checkout still boots.
  * - test — silent. The suites stub environments on purpose and must not be
  *   drowned in warnings.
  *
- * `next build` runs with `NODE_ENV=production` but is not a boot: it imports
- * every route module to collect page data while serving no requests, and CI
- * builds legitimately have no auth or SMTP configuration. Next marks that pass
- * with `NEXT_PHASE=phase-production-build`
+ * Advisory findings (`warnings`) are logged in every non-test environment,
+ * production included, and never fail a boot.
+ *
+ * The check runs before the first request that touches the database, auth or
+ * email: `lib/prisma.ts`, `lib/auth/auth.ts` and `lib/email/get-sender.ts` all
+ * call `loadServerEnv()`, the first of them at module load, and the result is
+ * cached for the process.
+ *
+ * `next build` runs with `NODE_ENV=production` but serves nothing: it imports
+ * every route module to collect page data, and CI builds legitimately have no
+ * auth or SMTP configuration. Next marks that pass with
+ * `NEXT_PHASE=phase-production-build`
  * (`node_modules/next/dist/build/index.js`), which is the one production case
  * exempted here. `next start` and any serverless runtime leave `NEXT_PHASE`
  * unset, so a real production process is still checked.
@@ -51,7 +61,7 @@ export const PLACEHOLDER_BETTER_AUTH_SECRET =
  * Better Auth's own fallback secret (`DEFAULT_SECRET` in
  * `node_modules/better-auth/dist/context/create-context.mjs`). Better Auth
  * throws on it too, but only lazily on the first request; rejecting it here
- * fails the process at start.
+ * fails the process earlier.
  */
 const BETTER_AUTH_DEFAULT_SECRET = 'better-auth-secret-12345678901234567890'
 
@@ -73,28 +83,28 @@ const TEST_ONLY_VARIABLES = [
   'CASHFLOW_E2E_DISABLE_RATE_LIMIT',
 ] as const
 
+/**
+ * Only the values a caller consumes. `DATABASE_URL` and `BETTER_AUTH_SECRET`
+ * are here because `lib/prisma.ts` and `lib/auth/auth.ts` need them; the SMTP
+ * credentials, `EMAIL_FROM`, `EMAIL_OUTBOX_FILE` and `TZ` are validated but
+ * deliberately NOT carried, so a long-lived cached object never holds them.
+ * `lib/email/smtp-sender.ts` keeps reading those from `process.env` at the
+ * moment it sends.
+ */
 export interface ServerEnv {
   nodeEnv: 'development' | 'test' | 'production'
   isProduction: boolean
   isBuildPhase: boolean
   databaseUrl: string | undefined
   betterAuthSecret: string | undefined
-  betterAuthUrl: string | undefined
   trustedProxyCidrs: string[]
-  smtpHost: string | undefined
-  smtpPort: number | undefined
-  smtpUser: string | undefined
-  smtpPassword: string | undefined
-  emailFrom: string | undefined
-  emailOutboxFile: string | undefined
-  timezone: string | undefined
 }
 
 export interface ServerEnvValidation {
   env: ServerEnv
-  /** Fatal in production, warned about in development. `NAME: reason` lines. */
+  /** Fatal in production, warned about elsewhere. `NAME: reason` lines. */
   problems: string[]
-  /** Advisory everywhere; never fatal. `NAME: reason` lines. */
+  /** Advisory in every non-test environment; never fatal. `NAME: reason` lines. */
   warnings: string[]
 }
 
@@ -104,13 +114,15 @@ export function isProduction(source: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * `true` for the environments the automated suites run in. Fail-closed: an
- * unset or unrecognised `NODE_ENV` is NOT test-like, so a test-only bypass
- * gated on this can never open by accident. Exported for the callers that must
- * refuse a test-only switch outside these environments.
+ * `true` for the two environments this app is allowed to run outside
+ * production: `development` (which includes the dev server Playwright spawns)
+ * and `test`. Fail-closed on purpose — an unset or unrecognised `NODE_ENV` is
+ * NOT one of them, so a test-only bypass gated on this can never open by
+ * accident on a host that forgot to set `NODE_ENV`. Exported for the callers
+ * that must refuse a test-only switch outside these environments.
  */
-export function isTestLikeEnvironment(source: NodeJS.ProcessEnv = process.env): boolean {
-  return source.NODE_ENV === 'test' || source.NODE_ENV === 'development'
+export function isNonProductionEnvironment(source: NodeJS.ProcessEnv = process.env): boolean {
+  return source.NODE_ENV === 'development' || source.NODE_ENV === 'test'
 }
 
 /** `true` while `next build` is collecting page data (no requests are served). */
@@ -122,6 +134,12 @@ function trimmedOrUndefined(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+/** A port is valid only if the whole string round-trips through the parse. */
+function isValidPort(value: string): boolean {
+  const port = Number.parseInt(value, 10)
+  return String(port) === value && port > 0 && port <= 65535
 }
 
 /**
@@ -153,13 +171,7 @@ const serverEnvSchema = z.object({
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z
     .string()
-    .refine(
-      (value) => {
-        const port = Number.parseInt(value, 10)
-        return String(port) === value.trim() && port > 0 && port <= 65535
-      },
-      { message: 'SMTP_PORT: must be an integer between 1 and 65535' },
-    )
+    .refine(isValidPort, { message: 'SMTP_PORT: must be an integer between 1 and 65535' })
     .optional(),
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
@@ -199,25 +211,24 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
       ? nodeEnvRaw
       : 'development'
 
-  const smtpHost = trimmedOrUndefined(source.SMTP_HOST)
-  const smtpPortRaw = trimmedOrUndefined(source.SMTP_PORT)
-  const smtpPortParsed = smtpPortRaw === undefined ? Number.NaN : Number.parseInt(smtpPortRaw, 10)
+  const isBuildPhase = trimmedOrUndefined(source.NEXT_PHASE) === NEXT_BUILD_PHASE
+  const isProductionRuntime = nodeEnvRaw === 'production' && !isBuildPhase
+
+  const smtpHost = normalized.SMTP_HOST
+  const smtpPort = normalized.SMTP_PORT
+  const smtpUser = normalized.SMTP_USER
+  const smtpPassword = normalized.SMTP_PASSWORD
+  const emailFrom = normalized.EMAIL_FROM
+  const emailOutboxFile = normalized.EMAIL_OUTBOX_FILE
+  const timezone = normalized.TZ
 
   const env: ServerEnv = {
     nodeEnv,
     isProduction: nodeEnvRaw === 'production',
-    isBuildPhase: trimmedOrUndefined(source.NEXT_PHASE) === NEXT_BUILD_PHASE,
-    databaseUrl: trimmedOrUndefined(source.DATABASE_URL),
-    betterAuthSecret: trimmedOrUndefined(source.BETTER_AUTH_SECRET),
-    betterAuthUrl: trimmedOrUndefined(source.BETTER_AUTH_URL),
+    isBuildPhase,
+    databaseUrl: normalized.DATABASE_URL,
+    betterAuthSecret: normalized.BETTER_AUTH_SECRET,
     trustedProxyCidrs: parseTrustedProxies(source.TRUSTED_PROXY_CIDRS),
-    smtpHost,
-    smtpPort: Number.isInteger(smtpPortParsed) ? smtpPortParsed : undefined,
-    smtpUser: trimmedOrUndefined(source.SMTP_USER),
-    smtpPassword: trimmedOrUndefined(source.SMTP_PASSWORD),
-    emailFrom: trimmedOrUndefined(source.EMAIL_FROM),
-    emailOutboxFile: trimmedOrUndefined(source.EMAIL_OUTBOX_FILE),
-    timezone: trimmedOrUndefined(source.TZ),
   }
 
   const problems = [...formatProblems]
@@ -229,18 +240,26 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
     problems.push('DATABASE_URL: required but not set')
   }
 
-  // `getEmailSender()` owns "production must use SMTP" and its own message;
-  // this module only pins the variables the SMTP transport needs once that
-  // sender is the one selected.
-  if (env.smtpHost !== undefined && smtpPortRaw === undefined) {
-    problems.push('SMTP_PORT: required when SMTP_HOST is set')
+  // Whenever SMTP is the selected sender — production always, elsewhere as soon
+  // as SMTP_HOST is set — the transport's own inputs must be complete.
+  // `lib/email/smtp-sender.ts` adds SMTP auth only when SMTP_USER is set and
+  // then passes SMTP_PASSWORD with it, so authentication is optional (an
+  // anonymous relay is legal) but half-configured authentication is not: a user
+  // without a password authenticates with `undefined` and every send fails.
+  if (smtpHost !== undefined) {
+    if (smtpPort === undefined) {
+      problems.push('SMTP_PORT: required when SMTP_HOST is set')
+    }
+    if (smtpUser !== undefined && smtpPassword === undefined) {
+      problems.push('SMTP_PASSWORD: required when SMTP_USER is set')
+    }
   }
 
-  if (env.isProduction && !env.isBuildPhase) {
+  if (isProductionRuntime) {
     const secret = secretProblem(env.betterAuthSecret)
     if (secret !== undefined) problems.push(secret)
 
-    if (env.betterAuthUrl === undefined) {
+    if (normalized.BETTER_AUTH_URL === undefined) {
       problems.push(
         'BETTER_AUTH_URL: required in production but not set; it pins the origin used in emailed reset links',
       )
@@ -250,12 +269,23 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
         'TRUSTED_PROXY_CIDRS: required in production but not set; without the reverse-proxy CIDRs rate limiting cannot identify a client',
       )
     }
-    if (env.emailFrom === undefined) {
+    // Production has exactly one legal transport: SMTP. The console sender
+    // prints reset links and the file outbox writes them to disk, and both are
+    // refused by `getEmailSender()` there, so a production process without
+    // SMTP_HOST cannot deliver a password reset at all — that is a boot
+    // failure, not a first-send surprise.
+    if (smtpHost === undefined) {
+      problems.push(
+        'SMTP_HOST: required in production but not set; SMTP is the only transport production accepts (the console and file senders are refused there)',
+      )
+    }
+    if (emailFrom === undefined) {
       problems.push(
         'EMAIL_FROM: required in production but not set; messages sent without a From address are rejected or spam-filed',
       )
     }
-    if (env.emailOutboxFile !== undefined) {
+
+    if (emailOutboxFile !== undefined) {
       warnings.push(
         'EMAIL_OUTBOX_FILE: set in a production process; it is ignored there (the file outbox is never a production transport) and should be removed',
       )
@@ -265,7 +295,7 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
         warnings.push(`${name}: test-only variable set in a production process; remove it`)
       }
     }
-    if (env.timezone !== REQUIRED_SERVER_TIMEZONE) {
+    if (timezone !== REQUIRED_SERVER_TIMEZONE) {
       warnings.push(
         `TZ: the server contract is TZ=${REQUIRED_SERVER_TIMEZONE}; user-facing dates come from User.timezone`,
       )
@@ -282,12 +312,14 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
 let cached: ServerEnv | undefined
 
 /**
- * Validates the process environment once and returns the parsed contract.
+ * Validates the process environment and returns the parsed contract, cached
+ * for the process.
  *
- * Called at module load by the three modules that already read the environment
- * at server start — `lib/prisma.ts`, `lib/auth/auth.ts` and
- * `lib/email/get-sender.ts` — so the check runs exactly once per process and a
- * production misconfiguration is fatal before the first request.
+ * Called by the three modules that read the environment for real —
+ * `lib/prisma.ts`, `lib/auth/auth.ts` and `lib/email/get-sender.ts` — so the
+ * contract is enforced before the first request that touches the database,
+ * auth or email, and a production misconfiguration is fatal rather than a
+ * broken feature discovered later.
  *
  * Pass an explicit `source` to validate an arbitrary environment; that form is
  * never cached.
@@ -296,18 +328,24 @@ export function loadServerEnv(source?: NodeJS.ProcessEnv): ServerEnv {
   if (source === undefined && cached !== undefined) return cached
 
   const { env, problems, warnings } = validateServerEnv(source ?? process.env)
+  const fatal = problems.length > 0 && env.isProduction && !env.isBuildPhase
 
-  if (problems.length > 0 && env.isProduction && !env.isBuildPhase) {
+  // Warnings are advisory everywhere and must be visible in production too —
+  // they are how an operator learns that a test-only variable or a stray
+  // outbox path reached a real deployment. They are emitted before the throw
+  // so a fatal boot still reports them. Problems are logged only when they are
+  // not about to be thrown. Names only, never values.
+  if (env.nodeEnv !== 'test') {
+    for (const line of fatal ? warnings : [...problems, ...warnings]) {
+      console.warn(`[env] ${line}`)
+    }
+  }
+
+  if (fatal) {
     throw new Error(
       'Invalid server environment; refusing to start. Fix these variables ' +
         `(names only, no values are ever printed): ${problems.join(' | ')}`,
     )
-  }
-
-  if (env.nodeEnv === 'development' && (problems.length > 0 || warnings.length > 0)) {
-    for (const line of [...problems, ...warnings]) {
-      console.warn(`[env] ${line}`)
-    }
   }
 
   if (source === undefined) cached = env

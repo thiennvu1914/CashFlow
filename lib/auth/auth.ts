@@ -9,9 +9,10 @@ import { createAuth } from './create-auth'
 // missing, placeholder or too-short BETTER_AUTH_SECRET, a missing
 // BETTER_AUTH_URL or TRUSTED_PROXY_CIDRS — rather than serving requests with a
 // forgeable session cookie, a spoofable rate-limit key or a
-// host-header-derived reset link. `lib/server/env.ts` owns the whole contract
-// (this replaces the former `lib/auth/production-config.ts`); outside
-// production it warns and continues, so dev and test are unaffected.
+// host-header-derived reset link. `lib/server/env.ts` owns the whole
+// contract and runs it before the first request that touches the database,
+// auth or email (this replaces the former `lib/auth/production-config.ts`);
+// outside production it warns and continues, so dev and test are unaffected.
 const serverEnv = loadServerEnv()
 
 /**
