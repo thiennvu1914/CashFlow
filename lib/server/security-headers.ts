@@ -13,7 +13,9 @@
  * `Strict-Transport-Security` is production-only: TLS terminates at the
  * platform's proxy in every deploy target this app runs on (Railway/Render/
  * Fly — see `docs/operations.md`), so the header would be a lie in local dev
- * over plain HTTP, and browsers ignore it there anyway. `includeSubDomains`
+ * over plain HTTP, and browsers ignore it there anyway. "Production-only"
+ * means the environment of the machine that ran `next build` — see
+ * `securityHeadersFor` below. `includeSubDomains`
  * is set; `preload` is deliberately withheld — that is effectively a
  * one-way, browser-vendor-list commitment the owner has not made.
  *
@@ -55,10 +57,18 @@ export const HSTS_HEADER: SecurityHeader = {
 
 /**
  * The full header list for the given `NODE_ENV`, in the order Next should
- * send them. `next.config.ts`'s `headers()` calls this with
- * `process.env.NODE_ENV` at request-serving time (Next re-evaluates
- * `headers()` per build, not per request, but `NODE_ENV` is fixed for the
- * life of a running server, so this is equivalent).
+ * send them.
+ *
+ * **When this is decided.** `next.config.ts`'s `headers()` calls this once, at
+ * BUILD time: Next evaluates the config's `headers()` during `next build` and
+ * writes the resulting list into `.next/server/routes-manifest.json`, which
+ * the running server replays per request. So the `nodeEnv` that matters is the
+ * BUILDER's, not the runtime's — a server started with `NODE_ENV=development`
+ * against a production build still sends HSTS, and a build run with a
+ * non-production `NODE_ENV` omits it no matter how the server is started.
+ * Next's CLI defaults every non-dev command to `NODE_ENV=production`, so a
+ * plain `next build` (and the Dockerfile's builder stage, which deliberately
+ * does not override it) produces the production set.
  */
 export function securityHeadersFor(nodeEnv: string | undefined): SecurityHeader[] {
   return isProductionMode(nodeEnv)
