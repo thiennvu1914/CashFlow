@@ -92,12 +92,16 @@ export function IncomeVsExpenseChart({
           <Legend itemSorter={null} wrapperStyle={{ fontSize: '0.7rem' }} />
           <Bar
             {...BAR_PROPS}
+            maxBarSize={32}
+            radius={[6, 6, 0, 0]}
             dataKey="income"
             name={seriesLabels.income}
             fill={CHART_COLORS.income}
           />
           <Bar
             {...BAR_PROPS}
+            maxBarSize={32}
+            radius={[6, 6, 0, 0]}
             dataKey="expense"
             name={seriesLabels.expense}
             fill={CHART_COLORS.expense}

@@ -51,7 +51,7 @@ export function StatusBadge({
         // Wraps to a second line rather than truncating (spec §4): a Vietnamese
         // status word is longer than its English original and a clipped badge
         // is a badge that says the wrong thing.
-        'inline-flex items-center rounded-md px-1.5 py-0.5 text-xs/[1rem] font-medium',
+        'inline-flex items-center rounded-md px-2 py-0.5 text-xs/[1rem] font-semibold ring-1 ring-inset ring-current/15 shadow-2xs',
         TONE_CLASSES[tone],
         className,
       )}

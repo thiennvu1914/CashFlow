@@ -377,7 +377,7 @@
 
 :root {
   /* CashFlow base tokens */
-  --background: oklch(0.971 0.002 134.839);
+  --background: oklch(0.958 0.005 160);
   --surface: oklch(1 0 0);
   --foreground: oklch(0.232 0.009 168.472);
   --brand: oklch(0.476 0.079 172.703);
@@ -457,7 +457,7 @@
   --muted-foreground: color-mix(in oklch, var(--foreground) 65%, var(--background));
   --accent-foreground: var(--surface);
   --destructive: var(--negative);
-  --border: color-mix(in oklch, var(--foreground) 12%, transparent);
+  --border: color-mix(in oklch, var(--foreground) 16%, transparent);
   /* Step 5 measurement (controller-fix round): the brief's literal 18%
      measures 1.45:1 against --input-bg (= --surface here) — under the 3:1 UI
      minimum for "the field's own edge". Raised to 49%, the smallest step
@@ -612,15 +612,15 @@
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(ellipse 90% 50% at 50% -10%, color-mix(in oklch, var(--brand) 7%, transparent), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 4%, transparent), transparent 50%);
+      radial-gradient(ellipse 90% 40% at 50% -5%, color-mix(in oklch, var(--brand) 14%, transparent), transparent 65%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 7%, transparent), transparent 50%);
     background-attachment: fixed;
     background-repeat: no-repeat;
   }
   .dark body {
     background-image:
-      radial-gradient(ellipse 90% 50% at 50% -10%, color-mix(in oklch, var(--brand) 12%, transparent), transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 6%, transparent), transparent 50%);
+      radial-gradient(ellipse 90% 45% at 50% -10%, color-mix(in oklch, var(--brand) 22%, transparent), transparent 65%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, color-mix(in oklch, var(--accent) 10%, transparent), transparent 50%);
     background-attachment: fixed;
     background-repeat: no-repeat;
   }

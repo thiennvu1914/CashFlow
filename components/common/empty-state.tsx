@@ -35,7 +35,7 @@ export function EmptyState({
         size === 'widget' ? 'min-h-24 py-4' : 'min-h-40 py-8',
       )}
     >
-      <div className="flex size-11 items-center justify-center rounded-xl bg-muted/80 text-muted-foreground ring-4 ring-muted/30">
+      <div className="flex size-12 items-center justify-center rounded-xl bg-brand/10 text-brand ring-4 ring-brand/15 shadow-xs">
         <Icon aria-hidden="true" className="size-5" />
       </div>
       <div className="flex flex-col gap-1">

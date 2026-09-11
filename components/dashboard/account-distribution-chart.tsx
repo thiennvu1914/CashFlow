@@ -85,7 +85,8 @@ export function AccountDistributionChart({
           />
           <Bar
             {...BAR_PROPS}
-            radius={[0, 4, 4, 0]}
+            maxBarSize={28}
+            radius={[0, 6, 6, 0]}
             dataKey="value"
             name={seriesLabel}
             fill={CHART_COLORS.distribution}
