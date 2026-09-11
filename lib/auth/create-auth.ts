@@ -1,5 +1,50 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth'
+import { isNonProductionEnvironment } from '@/lib/server/env'
 import { USER_FIELD_DEFAULTS } from './user-defaults'
+
+/**
+ * The e2e escape hatch for Better Auth's rate limiter, and the two conditions
+ * that must BOTH hold before it opens.
+ *
+ * `CASHFLOW_E2E_DISABLE_RATE_LIMIT === '1'` says what the operator asked for;
+ * `isNonProductionEnvironment()` says whether this process is allowed to grant
+ * it. The second check is the boundary: the variable is set only in the env of
+ * the dev server `playwright.config.ts` spawns, but env blocks get copied
+ * between a PaaS's environments, `.env` files get shipped into images, and a
+ * Dockerfile inherits an `ARG`. If that ever happens, the cost is every rate
+ * limit on sign-in, sign-up, change-password, change-email and
+ * password-reset silently gone in production — so "nobody sets it there" is
+ * not a control.
+ *
+ * `isNonProductionEnvironment()` (`lib/server/env.ts`) is true for exactly
+ * `NODE_ENV=development` and `NODE_ENV=test`. Anything else — production, a
+ * typo, or `NODE_ENV` unset, which is how a bare `node server.js` runs — is
+ * treated as production and keeps the limiter on. Failing closed is the whole
+ * point: an unrecognised environment must not be able to argue its way into
+ * the bypass.
+ *
+ * Deliberately NOT also gated on `E2E_DATABASE_URL` being set. It would cost
+ * one line and the Playwright-spawned server does inherit the variable
+ * (`webServer.env` spreads `process.env`, into which `loadEnvConfig` has
+ * already read `.env`), but it buys nothing: `E2E_DATABASE_URL` is documented
+ * in `.env.example`, so the very copy-the-env-block accident this guard exists
+ * for carries both variables together. `NODE_ENV` is the one input a
+ * production runtime sets for itself.
+ *
+ * A `console.warn` on the bypass rather than silence: a developer who left the
+ * variable exported in their shell should be able to see why sign-in never
+ * locks out. Only the variable NAME is printed, never a value.
+ */
+function isRateLimitDisabledForE2e(): boolean {
+  if (process.env.CASHFLOW_E2E_DISABLE_RATE_LIMIT !== '1') return false
+  if (!isNonProductionEnvironment()) return false
+  if (process.env.NODE_ENV !== 'test') {
+    console.warn(
+      'CASHFLOW_E2E_DISABLE_RATE_LIMIT is set: auth rate limiting is DISABLED for this process.',
+    )
+  }
+  return true
+}
 
 export interface CreateAuthOptions {
   /**
@@ -118,13 +163,14 @@ export function createAuth(options: CreateAuthOptions) {
     // went wrong" and strands the test on `/register`. `playwright.config.ts`
     // sets `CASHFLOW_E2E_DISABLE_RATE_LIMIT=1` only in the env of the dev
     // server IT spawns, so this check disables rate limiting only for that
-    // process — never for `npm run dev` on its own, never in production
-    // (nothing sets the variable there), and never for the unit tests in this
-    // directory (`rate-limit.test.ts` and the others call `createAuth`
-    // directly with no env override, so they keep exercising the real
-    // limiter).
+    // process — never for `npm run dev` on its own, and never for the unit
+    // tests in this directory (`rate-limit.test.ts` and the others call
+    // `createAuth` directly with no env override, so they keep exercising
+    // the real limiter). `isRateLimitDisabledForE2e` above additionally
+    // refuses the bypass outside development and test, so a production
+    // process that somehow inherits the variable keeps its limiter.
     rateLimit: {
-      enabled: process.env.CASHFLOW_E2E_DISABLE_RATE_LIMIT !== '1',
+      enabled: !isRateLimitDisabledForE2e(),
       window: 60,
       max: 10,
       customRules: {
