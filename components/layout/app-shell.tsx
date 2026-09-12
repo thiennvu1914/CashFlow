@@ -50,18 +50,20 @@ export function AppShell({ userName, children }: { userName: string; children: R
           from xl (product owner's ruling: 1024–1279 is the TABLET
           composition, not a squeezed desktop) — one element, two widths, so
           there is no second rail to keep in step. */}
-      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col border-r border-border/70 bg-surface/90 backdrop-blur-md p-2 md:flex xl:w-64 xl:p-4">
+      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col border-r border-border/70 bg-surface/90 backdrop-blur-md p-2 md:flex xl:w-60 xl:p-4">
         <Link
           href="/dashboard"
           className="group flex h-10 items-center justify-center gap-2.5 rounded-xl px-1 text-base font-bold text-foreground transition-all xl:justify-start xl:px-2"
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand/10 p-1 ring-1 ring-brand/20 transition-transform group-hover:scale-105">
+          <span className="relative size-7 shrink-0 overflow-hidden rounded-lg bg-brand/10 ring-1 ring-brand/20 transition-transform group-hover:scale-105">
             <Image
-              src="/cashflow-transparent.png"
+              src="/brand/cashflow-mark.png"
               alt=""
-              width={32}
-              height={32}
-              className="size-6 object-contain"
+              width={1254}
+              height={1254}
+              sizes="48px"
+              loading="eager"
+              className="absolute top-1/2 left-1/2 size-12 max-w-none -translate-x-1/2 -translate-y-1/2 dark:brightness-150"
             />
           </span>
           <span className="sr-only text-base font-bold tracking-tight text-foreground xl:not-sr-only">
@@ -96,7 +98,7 @@ export function AppShell({ userName, children }: { userName: string; children: R
               >
                 <h2
                   id={`nav-group-${group.id}`}
-                  className="sr-only px-2.5 pb-1 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground/80 uppercase xl:not-sr-only"
+                  className="sr-only px-2.5 pb-1 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase xl:not-sr-only"
                 >
                   {t(group.headerKey)}
                 </h2>

@@ -36,13 +36,15 @@ export function MobileTopBar() {
           href="/dashboard"
           className="flex items-center gap-2 text-base font-bold text-foreground"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand/10 p-1 ring-1 ring-brand/20">
+          <span className="relative size-7 shrink-0 overflow-hidden rounded-lg bg-brand/10 ring-1 ring-brand/20">
             <Image
-              src="/cashflow-transparent.png"
+              src="/brand/cashflow-mark.png"
               alt=""
-              width={28}
-              height={28}
-              className="size-5 object-contain"
+              width={1254}
+              height={1254}
+              sizes="48px"
+              loading="eager"
+              className="absolute top-1/2 left-1/2 size-12 max-w-none -translate-x-1/2 -translate-y-1/2 dark:brightness-150"
             />
           </span>
           <span className="font-bold tracking-tight">
