@@ -48,7 +48,9 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
             loading="eager"
             className="h-auto w-44 max-w-full self-center object-contain dark:brightness-200 sm:w-[11.75rem]"
           />
-          <p className="text-[0.8125rem]/[1.125rem] text-muted-foreground">{t('common.tagline')}</p>
+          <p className="text-center text-[0.8125rem]/[1.125rem] text-muted-foreground">
+            {t('common.tagline')}
+          </p>
         </div>
         {children}
       </main>
