@@ -216,10 +216,10 @@ describe('FileEmailSender', () => {
 })
 
 describe('sendResetPasswordEmail', () => {
-  it('sends to the given address with the expected subject and a link containing the reset URL', async () => {
+  it('sends the complete branded reset message to the requested recipient', async () => {
     const { sendResetPasswordEmail } = await import('./send-reset-password-email')
     const fakeSender = { send: vi.fn().mockResolvedValue(undefined) }
-    const resetUrl = 'https://app.example.com/reset-password?token=abc123'
+    const resetUrl = 'https://cashflow.astravn.online/reset-password?token=abc123'
 
     await sendResetPasswordEmail('c@example.com', resetUrl, fakeSender)
 
@@ -228,5 +228,54 @@ describe('sendResetPasswordEmail', () => {
     expect(message.to).toBe('c@example.com')
     expect(message.subject).toBe('Reset your CashFlow password')
     expect(message.html).toContain(resetUrl)
+    expect(message.html).toContain('https://cashflow.astravn.online/brand/cashflow-logo.png')
+    expect(message.html).toContain('cashflow.astravn.online')
+    expect(message.html).toContain('Reset your password')
+    expect(message.html).toMatch(/>\s*Reset password\s*</)
+    expect(message.html).toContain('copy and paste this link into')
+    expect(message.html).toContain('expires soon and can only be used once')
+    expect(message.html).toContain('For your')
+    expect(message.html).toContain('do not forward this email or share this link')
+    expect(message.html).toContain('If you did not request a password reset')
+  })
+
+  it('escapes a hostile reset URL in both links and visible fallback text', async () => {
+    const { sendResetPasswordEmail } = await import('./send-reset-password-email')
+    const fakeSender = { send: vi.fn().mockResolvedValue(undefined) }
+    const resetUrl = `https://cashflow.astravn.online/reset-password?token=a&next="<tag>'`
+    const escapedUrl =
+      'https://cashflow.astravn.online/reset-password?token=a&amp;next=&quot;&lt;tag&gt;&#39;'
+
+    await sendResetPasswordEmail('c@example.com', resetUrl, fakeSender)
+
+    const message = fakeSender.send.mock.calls[0][0]
+    expect(message.html).toContain(`href="${escapedUrl}"`)
+    expect(message.html).toContain(
+      `>\n                      ${escapedUrl}\n                    </a>`,
+    )
+    expect(message.html).not.toContain(`href="${resetUrl}"`)
+  })
+
+  it('is deterministic and never writes the reset URL or token to the console', async () => {
+    const { sendResetPasswordEmail } = await import('./send-reset-password-email')
+    const firstSender = { send: vi.fn().mockResolvedValue(undefined) }
+    const secondSender = { send: vi.fn().mockResolvedValue(undefined) }
+    const consoleSpies = [
+      vi.spyOn(console, 'log').mockImplementation(() => {}),
+      vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      vi.spyOn(console, 'error').mockImplementation(() => {}),
+      vi.spyOn(console, 'debug').mockImplementation(() => {}),
+    ]
+    const resetUrl = 'https://cashflow.astravn.online/reset-password?token=do-not-log-me'
+
+    try {
+      await sendResetPasswordEmail('c@example.com', resetUrl, firstSender)
+      await sendResetPasswordEmail('c@example.com', resetUrl, secondSender)
+
+      expect(firstSender.send.mock.calls[0][0]).toEqual(secondSender.send.mock.calls[0][0])
+      for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled()
+    } finally {
+      for (const spy of consoleSpies) spy.mockRestore()
+    }
   })
 })
