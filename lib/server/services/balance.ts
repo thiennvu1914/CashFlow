@@ -130,8 +130,10 @@ export async function getAccountBalances(
  * read. The three aggregates below are scoped by `userId` regardless, which is
  * what makes tenant isolation a property of the query and not of the argument.
  *
- * Do not reach for this to avoid one lookup: `getAccountBalances` is the entry
- * point, and this one only pays off when the same rows are sampled repeatedly.
+ * Callers that hold only ids should use `getAccountBalances`. This lower-level
+ * entry point is for callers that already hold tenant-scoped rows, either to
+ * sample them repeatedly or to avoid re-reading the same rows on a hot
+ * authenticated-navigation path.
  */
 export async function getAccountBalancesForAccounts(
   userId: string,

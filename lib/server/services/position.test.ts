@@ -848,6 +848,21 @@ describe('current position service', () => {
       expect(debtFindMany.mock.calls[0][0]?.include).toBeUndefined()
       expect(loanFindMany.mock.calls[0][0]?.include).toBeUndefined()
     })
+
+    it('reuses the tenant-scoped active account rows for its balance aggregates', async () => {
+      const s = await vndAccountsOnly()
+      const accountFindMany = vi.spyOn(prisma.financialAccount, 'findMany')
+
+      const position = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: countingProvider().provider,
+      })
+
+      expect(position.totalBalance.toString()).toBe('1000000')
+      expect(accountFindMany).toHaveBeenCalledTimes(1)
+      expect(accountFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: s.userId, status: 'ACTIVE' } }),
+      )
+    })
   })
 
   describe('getNetWorth', () => {

@@ -7,7 +7,7 @@ import {
   accountsWithActivity,
 } from '@/lib/server/services/financial-account'
 import { listAccountTypes } from '@/lib/server/services/account-type'
-import { getCurrentAccountBalances } from '@/lib/server/services/balance'
+import { getAccountBalancesForAccounts } from '@/lib/server/services/balance'
 import { getCurrentPosition } from '@/lib/server/services/position'
 import { resolveLocale } from '@/lib/i18n/config'
 import { formatMoney } from '@/lib/ui/format-money'
@@ -58,20 +58,15 @@ export default async function AccountsPage() {
   ])
   const archivedAccounts = allAccounts.filter((a) => a.status === 'ARCHIVED')
   // One batched call for every account on the page — never one query per
-  // account — via `getCurrentAccountBalances`'s single `groupBy` + `findMany`.
+  // account. The active rows above are already tenant-scoped, so the balance
+  // helper validates those rows in memory and avoids a duplicate ownership
+  // lookup while every aggregate remains scoped by `userId`.
   //
-  // `getCurrentAccountBalances`, not `getAccountBalances`: a "current balance"
-  // means the same thing here as on the dashboard and in the Excel export —
-  // the balance as of now, with future-dated entries excluded until their date
-  // (`lib/server/services/balance.ts`). Those entries are still stored and
-  // still listed on the Transactions and Transfers pages; they simply are not
-  // money held yet.
+  // Passing `now` keeps the same "current balance" definition as the dashboard
+  // and Excel export: future-dated entries are excluded until their date. They
+  // remain stored and visible on the Transactions and Transfers pages.
   const [balances, locked, futureDatedCount] = await Promise.all([
-    getCurrentAccountBalances(
-      user.id,
-      accounts.map((a) => a.id),
-      now,
-    ),
+    getAccountBalancesForAccounts(user.id, accounts, now),
     // Whether an edit form must disable/omit currency & initialBalance
     // (Task 15's lock) — one batched query for every account on the page,
     // never one `accountHasActivity` call per row.

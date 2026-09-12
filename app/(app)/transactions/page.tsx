@@ -5,7 +5,7 @@ import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { resolveLocale } from '@/lib/i18n/config'
 import { getActivitySummary } from '@/lib/server/services/activity'
-import { getCurrentAccountBalances } from '@/lib/server/services/balance'
+import { getAccountBalancesForAccounts } from '@/lib/server/services/balance'
 import { listCategories } from '@/lib/server/services/category'
 import { listActiveFinancialAccounts } from '@/lib/server/services/financial-account'
 import { listTransactions } from '@/lib/server/services/transaction'
@@ -36,11 +36,13 @@ export default async function TransactionsPage() {
   const today = todayCalendarDateInZone(timezone, now)
   const yesterday = todayCalendarDateInZone(timezone, new Date(now.getTime() - MS_PER_DAY))
 
-  const [transactions, accounts, expenseCategories, incomeCategories, monthly] = await Promise.all([
+  const [transactions, accounts, categories, monthly] = await Promise.all([
     listTransactions(user.id),
     listActiveFinancialAccounts(user.id),
-    listCategories(user.id, 'EXPENSE'),
-    listCategories(user.id, 'INCOME'),
+    // Both transaction types use the same picker payload. One tenant-scoped
+    // read preserves the service ordering and avoids two parallel queries for
+    // rows that are concatenated again below.
+    listCategories(user.id),
     // The header's month total. The same call the dashboard makes for the same
     // window — historical, restated at each row's own snapshot, so it consults
     // no current rate and an FX outage cannot reach it.
@@ -77,13 +79,10 @@ export default async function TransactionsPage() {
     )
   }
 
-  // The account picker shows each account's balance (spec §2), so it needs one
-  // batched read — never one query per account.
-  const balances = await getCurrentAccountBalances(
-    user.id,
-    accounts.map((account) => account.id),
-    now,
-  )
+  // The account picker shows each account's balance (spec §2). Reuse the
+  // already tenant-scoped active rows above, retaining the helper's ownership
+  // validation and user-scoped aggregates without a duplicate account lookup.
+  const balances = await getAccountBalancesForAccounts(user.id, accounts, now)
 
   const accountOptions = accounts.map((account) => {
     const balance = balances.get(account.id)
@@ -102,7 +101,7 @@ export default async function TransactionsPage() {
   return (
     <TransactionCreatePanelProvider
       accounts={accountOptions}
-      categories={[...expenseCategories, ...incomeCategories].map((category) => ({
+      categories={categories.map((category) => ({
         id: category.id,
         name: category.name,
         type: category.type,

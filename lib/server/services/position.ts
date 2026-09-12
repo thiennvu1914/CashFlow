@@ -4,7 +4,7 @@ import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
 import { FxUnavailableError, getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
-import { getCurrentAccountBalances } from './balance'
+import { getAccountBalancesForAccounts } from './balance'
 import { getDebtsWithOutstanding } from './debt'
 import { listActiveFinancialAccounts } from './financial-account'
 import { getLoansWithOutstanding } from './loan'
@@ -22,7 +22,8 @@ import { getLoansWithOutstanding } from './loan'
  * Interest paid on a loan is nowhere in the formula: interest is the cost of
  * borrowing, not a repayment of it, so only `outstandingPrincipal` counts.
  *
- * **Current position = balances as of now.** The balances come from
+ * **Current position = balances as of now.** The balances use the same
+ * `getAccountBalancesForAccounts(..., now)` arithmetic and cutoff as
  * `getCurrentAccountBalances` (`balance.ts`), the single definition of a current
  * balance in this app: `now` is the cut-off, so a booked but future-dated
  * entry — next month's rent, a post-dated cheque — is not counted as money
@@ -37,8 +38,8 @@ import { getLoansWithOutstanding } from './loan'
  * other: they are three views of one set of balances converted at one rate.
  *
  * The **query count** is constant, not per-account and not per-record: one
- * `listActiveFinancialAccounts`, one batched `getAccountBalances` for every id
- * at once, one `getDebtsWithOutstanding` and one `getLoansWithOutstanding`
+ * `listActiveFinancialAccounts`, three batched balance aggregates over those
+ * already-owned rows, one `getDebtsWithOutstanding` and one `getLoansWithOutstanding`
  * (each of those is itself one `findMany` plus one `groupBy`, whatever the
  * number of rows), and — only when at least one active account, unsettled debt
  * or unsettled loan is held in a currency other than `displayCurrency` — one
@@ -158,12 +159,13 @@ export async function getCurrentPosition(
   // Active only: an account can only be archived at a zero balance (Phase 2),
   // so an archived one would contribute nothing but a zero slice of noise.
   const accounts = await listActiveFinancialAccounts(userId)
-  // `getCurrentAccountBalances` — the one shared "as of now" definition
-  // (`balance.ts`), the same one the Accounts page and the Excel export use, so
-  // no two surfaces can put different numbers on the same account. A booked
-  // entry dated next week has not happened yet, and counting it here would also
-  // make the KPI strip disagree with the Account Balance Over Time chart's
-  // current point, which is sampled at `now` too.
+  // The same shared "as of now" balance arithmetic (`balance.ts`) the Accounts
+  // page and Excel export use, with the active rows already resolved above.
+  // Reusing them preserves the helper's in-memory ownership check and every
+  // aggregate's `userId` scope while avoiding a second ownership query. A
+  // booked entry dated next week has not happened yet, and counting it here
+  // would also make the KPI strip disagree with the Account Balance Over Time
+  // chart's current point, which is sampled at `now` too.
   const asOf = options.now ?? new Date()
   // The debts and the loans travel with the balances rather than after them:
   // three independent reads, one round trip's worth of latency. Neither
@@ -181,11 +183,7 @@ export async function getCurrentPosition(
   // `todayCalendarDateInZone`.
   const today = formatInTimeZone(asOf, 'UTC', 'yyyy-MM-dd')
   const [balances, debts, loans] = await Promise.all([
-    getCurrentAccountBalances(
-      userId,
-      accounts.map((account) => account.id),
-      asOf,
-    ),
+    getAccountBalancesForAccounts(userId, accounts, asOf),
     // Active only, both of them: a written-off debt and a closed loan are
     // history, not a position (they stay visible on their own pages).
     //

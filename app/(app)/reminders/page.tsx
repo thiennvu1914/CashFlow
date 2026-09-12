@@ -142,15 +142,17 @@ export default async function RemindersPage({
   const filter = resolveTypeFilter(params.type)
   const filterType = FILTER_TYPE[filter]
 
-  const [occurrenceRows, reminderRows, expenseCategories, incomeCategories, accounts] =
-    await Promise.all([
-      // The one materializing read on this page.
-      listUpcomingOccurrences(user.id, timezone, now),
-      listReminders(user.id),
-      listCategories(user.id, 'EXPENSE'),
-      listCategories(user.id, 'INCOME'),
-      listActiveFinancialAccounts(user.id),
-    ])
+  const [occurrenceRows, reminderRows, categories, accounts] = await Promise.all([
+    // The one materializing read on this page.
+    listUpcomingOccurrences(user.id, timezone, now),
+    listReminders(user.id),
+    // Both reminder types need categories. One tenant-scoped read preserves
+    // their relative ordering and is split in memory for the two form fields.
+    listCategories(user.id),
+    listActiveFinancialAccounts(user.id),
+  ])
+  const expenseCategories = categories.filter((category) => category.type === 'EXPENSE')
+  const incomeCategories = categories.filter((category) => category.type === 'INCOME')
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders DTOs. Filtered before mapping, so the filter does
