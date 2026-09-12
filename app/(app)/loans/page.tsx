@@ -121,7 +121,7 @@ export default async function LoansPage() {
               paralleling `debts.json`'s two section headings and the closed
               section's own `h2` below. */}
           <SectionHeader title={t('loans.activeSection')} />
-          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
             <LoanList
               loans={active}
               locale={locale}

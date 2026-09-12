@@ -98,7 +98,14 @@ export function ExpenseByCategoryChart({
             labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={(value) => formatChartValue(value, currency, locale)}
           />
-          <Bar {...BAR_PROPS} dataKey="value" name={seriesLabel} fill={CHART_COLORS.distribution} />
+          <Bar
+            {...BAR_PROPS}
+            maxBarSize={28}
+            radius={[0, 6, 6, 0]}
+            dataKey="value"
+            name={seriesLabel}
+            fill={CHART_COLORS.distribution}
+          />
         </BarChart>
       </ResponsiveContainer>
     </figure>

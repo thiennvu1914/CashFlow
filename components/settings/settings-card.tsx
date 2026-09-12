@@ -21,7 +21,7 @@ export function SettingsCard({
   children: React.ReactNode
 }) {
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-6">
+    <section className="card-hover-effect flex flex-col gap-4 rounded-xl border border-border/80 bg-surface/90 p-6 shadow-xs">
       <SectionHeader title={title} caption={description} />
       {children}
     </section>

@@ -39,10 +39,13 @@ export async function OnboardingCard({
   return (
     <section
       aria-labelledby="onboarding-title"
-      className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4 md:p-6"
+      className="card-hover-effect flex flex-col gap-4 rounded-xl border border-border/80 bg-surface/90 p-4 shadow-sm backdrop-blur-xs md:p-6"
     >
       <div className="flex flex-col gap-1">
-        <h2 id="onboarding-title" className="text-[1.125rem]/[1.625rem] font-semibold">
+        <h2
+          id="onboarding-title"
+          className="text-[1.125rem]/[1.625rem] font-semibold tracking-tight"
+        >
           {t('dashboard.onboardingTitle')}
         </h2>
         <p className="text-sm/[1.25rem] text-muted-foreground">{t('dashboard.onboardingBody')}</p>
@@ -127,22 +130,22 @@ function Step({
   actions: { href: string; label: string; primary?: boolean }[]
 }) {
   return (
-    <li className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-4">
+    <li className="flex flex-col gap-3 rounded-lg px-2 py-3.5 transition-colors first:pt-2 last:pb-2 hover:bg-muted/20 sm:flex-row sm:items-center sm:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-3">
         {/* The marker is decoration: the number is already in the list's own
             semantics, and "Đã xong" below carries the completion in text. */}
         <span
           aria-hidden="true"
           className={cn(
-            'mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs/[1rem] font-medium tabular-nums',
+            'mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-xs/[1rem] font-semibold tabular-nums shadow-2xs',
             done
               ? // The audited tinted pair (Task 16, F6): the tone's own
                 // ON-TINT text token over its 10 % fill, never the raw tone.
-                'bg-positive/10 text-positive-on-tint dark:bg-positive/18'
-              : 'border border-border text-muted-foreground',
+                'bg-positive/15 text-positive-on-tint ring-2 ring-positive/20 dark:bg-positive/25'
+              : 'border border-border/80 bg-muted/40 text-muted-foreground',
           )}
         >
-          {done ? <Check className="size-4" /> : index}
+          {done ? <Check className="size-4 stroke-[2.5]" /> : index}
         </span>
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-sm/[1.25rem] font-medium">
@@ -155,7 +158,9 @@ function Step({
         </div>
       </div>
       {done ? (
-        <p className="text-[0.8125rem]/[1.125rem] text-positive-on-tint sm:shrink-0">{doneLabel}</p>
+        <p className="text-[0.8125rem]/[1.125rem] font-medium text-positive-on-tint sm:shrink-0">
+          {doneLabel}
+        </p>
       ) : (
         <div className="flex flex-wrap gap-2 sm:shrink-0">
           {actions.map((action) => (

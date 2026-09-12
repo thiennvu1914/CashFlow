@@ -58,15 +58,15 @@ export function AccountTable({
         </thead>
         <tbody className="divide-y divide-border">
           {rows.map((row) => (
-            <tr key={row.id}>
-              <th scope="row" className="py-2 pr-4 text-left font-normal">
+            <tr key={row.id} className="transition-colors hover:bg-foreground/4">
+              <th scope="row" className="py-2.5 pr-4 text-left font-medium">
                 {row.name}
               </th>
-              <td className="py-2 pl-4 text-right tabular-nums">{row.income}</td>
-              <td className="py-2 pl-4 text-right tabular-nums">{row.expense}</td>
+              <td className="py-2.5 pl-4 text-right tabular-nums">{row.income}</td>
+              <td className="py-2.5 pl-4 text-right tabular-nums">{row.expense}</td>
               <td
                 className={cn(
-                  'py-2 pl-4 text-right font-medium tabular-nums',
+                  'py-2.5 pl-4 text-right font-medium tabular-nums',
                   row.netNegative && 'text-negative',
                 )}
               >
@@ -79,8 +79,11 @@ export function AccountTable({
 
       <ul className="flex flex-col divide-y divide-border md:hidden">
         {rows.map((row) => (
-          <li key={row.id} className="flex flex-col gap-1 py-3">
-            <p className="text-sm font-medium">{row.name}</p>
+          <li
+            key={row.id}
+            className="flex flex-col gap-1.5 py-3 transition-colors hover:bg-foreground/4"
+          >
+            <p className="text-sm font-semibold">{row.name}</p>
             <dl className="grid grid-cols-3 gap-2">
               <div className="flex flex-col">
                 <dt className="text-xs/[1rem] text-muted-foreground">{labels.income}</dt>

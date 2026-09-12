@@ -35,9 +35,11 @@ export function EmptyState({
         size === 'widget' ? 'min-h-24 py-4' : 'min-h-40 py-8',
       )}
     >
-      <Icon aria-hidden="true" className="size-6 text-muted-foreground" />
+      <div className="flex size-12 items-center justify-center rounded-xl bg-brand/10 text-brand ring-4 ring-brand/15 shadow-xs">
+        <Icon aria-hidden="true" className="size-5" />
+      </div>
       <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium">{title}</p>
+        <p className="text-sm font-semibold tracking-tight">{title}</p>
         {description && (
           <p className="max-w-[36ch] text-[0.8125rem]/[1.125rem] text-muted-foreground">
             {description}

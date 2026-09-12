@@ -7,7 +7,6 @@ import { Plus } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { cn } from 'cn'
 import { LogoutButton } from '@/components/auth/logout-button'
-import { buttonVariants } from '@/components/ui/button'
 import { MobileTabBar, MobileTopBar } from './mobile-nav'
 import { NAV_GROUPS } from './nav-groups'
 import { ADD_TRANSACTION_HREF, isActiveNavItem, type NavItem } from './nav-items'
@@ -51,14 +50,12 @@ export function AppShell({ userName, children }: { userName: string; children: R
           from xl (product owner's ruling: 1024–1279 is the TABLET
           composition, not a squeezed desktop) — one element, two widths, so
           there is no second rail to keep in step. */}
-      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col border-r border-border bg-surface p-2 md:flex xl:w-60 xl:p-4">
+      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col border-r border-border/70 bg-surface/90 backdrop-blur-md p-2 md:flex xl:w-60 xl:p-4">
         <Link
           href="/dashboard"
-          className="flex h-9 items-center justify-center gap-2 rounded-md text-base font-semibold text-brand xl:justify-start xl:px-2"
+          className="group flex h-10 items-center justify-center gap-2.5 rounded-xl px-1 text-base font-bold text-foreground transition-all xl:justify-start xl:px-2"
         >
-          {/* Decorative beside the visible desktop wordmark. On the tablet
-              icon rail the existing screen-reader-only text names the link. */}
-          <span className="relative size-7 shrink-0 overflow-hidden">
+          <span className="relative size-7 shrink-0 overflow-hidden rounded-lg bg-brand/10 ring-1 ring-brand/20 transition-transform group-hover:scale-105">
             <Image
               src="/brand/cashflow-mark.png"
               alt=""
@@ -69,7 +66,9 @@ export function AppShell({ userName, children }: { userName: string; children: R
               className="absolute top-1/2 left-1/2 size-12 max-w-none -translate-x-1/2 -translate-y-1/2 dark:brightness-150"
             />
           </span>
-          <span className="sr-only xl:not-sr-only">{t('common.appName')}</span>
+          <span className="sr-only text-base font-bold tracking-tight text-foreground xl:not-sr-only">
+            Cash<span className="text-brand">Flow</span>
+          </span>
         </Link>
 
         <Link
@@ -77,34 +76,33 @@ export function AppShell({ userName, children }: { userName: string; children: R
           aria-label={t('nav.addTransaction')}
           title={t('nav.addTransaction')}
           className={cn(
-            buttonVariants({ size: 'default' }),
-            'mt-6 w-full justify-center gap-2 xl:justify-start',
+            'mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 px-3 font-medium text-white shadow-sm shadow-emerald-950/20 transition-all duration-200 hover:from-emerald-500 hover:via-teal-500 hover:to-emerald-600 hover:shadow-md hover:shadow-emerald-950/30 active:scale-[0.98] xl:justify-start',
           )}
         >
-          <Plus aria-hidden="true" className="size-4" />
-          <span className="sr-only xl:not-sr-only">{t('nav.addTransaction')}</span>
+          <div className="flex size-5 items-center justify-center rounded-md bg-white/20">
+            <Plus aria-hidden="true" className="size-3.5 stroke-[2.5]" />
+          </div>
+          <span className="sr-only text-sm font-semibold tracking-tight xl:not-sr-only">
+            {t('nav.addTransaction')}
+          </span>
         </Link>
 
-        <nav aria-label={t('nav.primary')} className="mt-6 min-h-0 flex-1 overflow-y-auto">
-          <div className="flex flex-col gap-4">
+        <nav aria-label={t('nav.primary')} className="mt-6 min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="flex flex-col gap-5">
             {NAV_GROUPS.map((group) => (
-              // `role="group"` + `aria-labelledby` is what makes the header
-              // belong to its items for a screen reader; a bare `<p>` above a
-              // `<ul>` is only a visual grouping. On the icon rail the header
-              // is hidden and a divider stands in for it.
               <div
                 key={group.id}
                 role="group"
                 aria-labelledby={`nav-group-${group.id}`}
-                className="flex flex-col gap-0.5 border-t border-border pt-4 first:border-t-0 first:pt-0 xl:border-t-0 xl:pt-0"
+                className="flex flex-col gap-1 border-t border-border/60 pt-3 first:border-t-0 first:pt-0 xl:border-t-0 xl:pt-0"
               >
                 <h2
                   id={`nav-group-${group.id}`}
-                  className="sr-only px-2 pb-1 text-xs/[1rem] font-medium tracking-[0.04em] text-muted-foreground uppercase xl:not-sr-only"
+                  className="sr-only px-2.5 pb-1 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase xl:not-sr-only"
                 >
                   {t(group.headerKey)}
                 </h2>
-                <ul className="flex flex-col gap-0.5">
+                <ul className="flex flex-col gap-1">
                   {group.items.map((item) => (
                     <li key={item.href}>
                       <RailLink item={item} active={isActiveNavItem(pathname, item.href)} />
@@ -116,13 +114,16 @@ export function AppShell({ userName, children }: { userName: string; children: R
           </div>
         </nav>
 
-        {/* Spec §14, decision 4: the user's name above a ghost Log out, at the
-            bottom of the rail — not a solid outline button competing with the
-            one primary action at the top. */}
-        <div className="mt-4 flex flex-col gap-1 border-t border-border pt-4">
-          <p className="hidden truncate px-2 text-[0.8125rem]/[1.125rem] text-muted-foreground xl:block">
-            {userName}
-          </p>
+        <div className="mt-4 flex flex-col gap-2 border-t border-border/70 pt-3">
+          <div className="hidden items-center gap-2.5 rounded-lg px-2 py-1.5 xl:flex">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand/15 text-xs font-bold text-brand ring-1 ring-brand/30">
+              {userName ? userName.trim().charAt(0).toUpperCase() : 'U'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-foreground">{userName}</p>
+              <span className="block truncate text-[11px] text-muted-foreground">Tài khoản</span>
+            </div>
+          </div>
           <LogoutButton compact />
         </div>
       </aside>
@@ -171,17 +172,20 @@ function RailLink({ item, active }: { item: NavItem; active: boolean }) {
       aria-label={label}
       title={label}
       className={cn(
-        'relative flex h-9 items-center justify-center gap-2.5 rounded-md text-sm xl:justify-start xl:px-2',
+        'group relative flex h-9 items-center justify-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-all duration-150 xl:justify-start',
         active
-          ? 'bg-muted font-medium text-brand before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand'
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+          ? 'bg-brand/10 font-semibold text-brand-on-tint shadow-xs dark:bg-brand/15 before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-1 before:rounded-r-full before:bg-brand'
+          : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
       )}
     >
-      <Icon aria-hidden="true" className="size-4" />
-      {/* Hidden on the icon rail, shown from xl. `aria-label` above carries
-          the name at both widths, so a tablet user's screen reader is not left
-          with an unnamed link. */}
-      <span className="sr-only xl:not-sr-only">{label}</span>
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          'size-4 shrink-0 transition-transform duration-150 group-hover:scale-110',
+          active ? 'text-brand stroke-[2.2]' : 'text-muted-foreground group-hover:text-foreground',
+        )}
+      />
+      <span className="sr-only truncate xl:not-sr-only">{label}</span>
     </Link>
   )
 }

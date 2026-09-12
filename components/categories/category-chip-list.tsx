@@ -127,10 +127,10 @@ export function CategoryChipList({
                 // variant carries a transparent border so both variants
                 // measure the same box. No action is hidden: the `…` is
                 // exactly where it was.
-                'inline-flex min-h-11 items-center gap-1 rounded-full pl-3 text-sm md:min-h-9',
+                'inline-flex min-h-11 items-center gap-1 rounded-full pl-3 text-sm transition-all duration-150 md:min-h-9',
                 item.isDefault
                   ? 'border border-transparent bg-muted pr-3 text-muted-foreground'
-                  : 'border border-border pr-1 text-foreground',
+                  : 'border border-border pr-1 text-foreground shadow-2xs hover:border-brand/40 hover:shadow-xs',
               )}
             >
               <span>{item.name}</span>

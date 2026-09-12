@@ -115,24 +115,25 @@ export const AXIS_PROPS = {
 /** Thin strokes, no dots, no animation — a calm line, not a moving one. */
 export const LINE_PROPS = {
   type: 'monotone',
-  strokeWidth: 1.5,
+  strokeWidth: 2.2,
   dot: false,
-  activeDot: { r: 3 },
+  activeDot: { r: 5, strokeWidth: 2, stroke: 'var(--color-surface)' },
   isAnimationActive: false,
 } as const
 
 export const BAR_PROPS = {
   isAnimationActive: false,
-  radius: 2,
+  radius: 4,
 } as const
 
 export const TOOLTIP_CONTENT_STYLE = {
-  background: 'var(--color-surface-2)',
+  background: 'var(--color-surface)',
   border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-lg)',
-  fontSize: '0.75rem',
+  borderRadius: '12px',
+  fontSize: '0.8125rem',
   color: 'var(--color-foreground)',
-  boxShadow: '0 8px 24px rgba(25, 33, 30, 0.10)',
+  boxShadow: '0 12px 30px -4px rgba(0, 0, 0, 0.2), 0 4px 12px -2px rgba(0, 0, 0, 0.1)',
+  padding: '10px 14px',
 } as const
 
 export const TOOLTIP_LABEL_STYLE = { color: 'var(--color-muted-foreground)' } as const

@@ -126,7 +126,7 @@ export function AccountList({
 
   return (
     <>
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
         <ul className="divide-y divide-border">
           {accounts.map((account) => {
             const isNegative = account.balance.startsWith('-')

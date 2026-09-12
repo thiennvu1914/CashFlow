@@ -30,13 +30,13 @@ export function MobileTopBar() {
   const t = useTranslations()
 
   return (
-    <header className="sticky top-0 z-20 border-b border-border bg-surface md:hidden">
-      <div className="flex items-center justify-between px-4 py-3">
+    <header className="sticky top-0 z-20 border-b border-border/70 bg-surface/85 backdrop-blur-md md:hidden">
+      <div className="flex items-center justify-between px-4 py-2.5">
         <Link
           href="/dashboard"
-          className="flex items-center gap-2 text-base font-semibold text-brand"
+          className="flex items-center gap-2 text-base font-bold text-foreground"
         >
-          <span className="relative size-7 shrink-0 overflow-hidden">
+          <span className="relative size-7 shrink-0 overflow-hidden rounded-lg bg-brand/10 ring-1 ring-brand/20">
             <Image
               src="/brand/cashflow-mark.png"
               alt=""
@@ -47,13 +47,15 @@ export function MobileTopBar() {
               className="absolute top-1/2 left-1/2 size-12 max-w-none -translate-x-1/2 -translate-y-1/2 dark:brightness-150"
             />
           </span>
-          <span>{t('common.appName')}</span>
+          <span className="font-bold tracking-tight">
+            Cash<span className="text-brand">Flow</span>
+          </span>
         </Link>
         <button
           type="button"
           aria-label={t('nav.more')}
           onClick={() => setOpen(true)}
-          className="flex h-11 items-center gap-1 rounded-md px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
         >
           {t('nav.more')}
         </button>
@@ -86,7 +88,7 @@ export function MobileTabBar() {
       // be able to tell the two navigations apart, and only one of them carries
       // the full set of destinations.
       aria-label={t('nav.compact')}
-      className="fixed inset-x-0 bottom-0 z-20 min-h-[60px] border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="fixed inset-x-0 bottom-0 z-20 min-h-[60px] border-t border-border/70 bg-surface/90 backdrop-blur-md pb-[env(safe-area-inset-bottom)] md:hidden"
     >
       <ul className="grid grid-cols-5 items-end">
         {MOBILE_TAB_ITEMS.slice(0, 2).map((item) => (
@@ -96,14 +98,9 @@ export function MobileTabBar() {
           <Link
             href={ADD_TRANSACTION_HREF}
             aria-label={t('nav.addTransaction')}
-            // Raised out of the bar and ringed in the bar's own colour rather
-            // than lifted with a drop shadow — the same visual separation
-            // without the glow this design system does not use. The ring is
-            // `border-surface`, matching the bar it overlaps; `border-background`
-            // drew a visible seam across it.
-            className="-mt-5 flex size-13 items-center justify-center rounded-full border-4 border-surface bg-brand text-primary-foreground"
+            className="-mt-5 flex size-12 items-center justify-center rounded-full border-4 border-surface bg-gradient-to-tr from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-950/25 active:scale-95 transition-transform"
           >
-            <Plus aria-hidden="true" className="size-6" />
+            <Plus aria-hidden="true" className="size-6 stroke-[2.5]" />
           </Link>
         </li>
         {MOBILE_TAB_ITEMS.slice(2).map((item) => (

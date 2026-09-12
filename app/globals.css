@@ -60,6 +60,8 @@
      `--radius-lg` is the card radius, `--radius-md` the control radius. */
   --radius-md: 0.375rem;
   --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
+  --radius-2xl: 1.125rem;
   --radius-full: 999px;
   --radius-DEFAULT: var(--radius-md);
 }
@@ -375,7 +377,7 @@
 
 :root {
   /* CashFlow base tokens */
-  --background: oklch(0.971 0.002 134.839);
+  --background: oklch(0.958 0.005 160);
   --surface: oklch(1 0 0);
   --foreground: oklch(0.232 0.009 168.472);
   --brand: oklch(0.476 0.079 172.703);
@@ -455,7 +457,7 @@
   --muted-foreground: color-mix(in oklch, var(--foreground) 65%, var(--background));
   --accent-foreground: var(--surface);
   --destructive: var(--negative);
-  --border: color-mix(in oklch, var(--foreground) 12%, transparent);
+  --border: color-mix(in oklch, var(--foreground) 16%, transparent);
   /* Step 5 measurement (controller-fix round): the brief's literal 18%
      measures 1.45:1 against --input-bg (= --surface here) — under the 3:1 UI
      minimum for "the field's own edge". Raised to 49%, the smallest step
@@ -608,7 +610,35 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(
+        ellipse 90% 40% at 50% -5%,
+        color-mix(in oklch, var(--brand) 14%, transparent),
+        transparent 65%
+      ),
+      radial-gradient(
+        ellipse 60% 40% at 100% 0%,
+        color-mix(in oklch, var(--accent) 7%, transparent),
+        transparent 50%
+      );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+  .dark body {
+    background-image:
+      radial-gradient(
+        ellipse 90% 45% at 50% -10%,
+        color-mix(in oklch, var(--brand) 22%, transparent),
+        transparent 65%
+      ),
+      radial-gradient(
+        ellipse 60% 40% at 100% 0%,
+        color-mix(in oklch, var(--accent) 10%, transparent),
+        transparent 50%
+      );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
   }
   html {
     @apply font-sans;
@@ -632,4 +662,50 @@
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* Sleek custom scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 16%, transparent);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--foreground) 30%, transparent);
+  }
+}
+
+/* Modern Fintech card & depth utilities */
+.card-hover-effect {
+  position: relative;
+  transition:
+    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.22s ease;
+  box-shadow:
+    0 1px 3px 0 rgb(0 0 0 / 0.04),
+    0 1px 2px -1px rgb(0 0 0 / 0.02);
+}
+.card-hover-effect:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, var(--brand) 35%, var(--border));
+  box-shadow:
+    0 12px 28px -6px rgb(0 0 0 / 0.08),
+    0 4px 10px -4px rgb(0 0 0 / 0.04);
+}
+.dark .card-hover-effect {
+  box-shadow:
+    0 1px 3px 0 rgb(0 0 0 / 0.25),
+    0 1px 2px -1px rgb(0 0 0 / 0.15);
+}
+.dark .card-hover-effect:hover {
+  border-color: color-mix(in oklch, var(--brand) 45%, var(--border));
+  box-shadow:
+    0 12px 30px -6px rgb(0 0 0 / 0.55),
+    0 4px 12px -4px rgb(0 0 0 / 0.35);
 }

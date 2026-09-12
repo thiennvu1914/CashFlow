@@ -60,7 +60,10 @@ export function DebtLoanOverview({
           // A wrapper `div` per pair, as in `KpiStrip`: a `dl` may contain only
           // `dt`/`dd` (or `div`s of them), and it is what lets each row be one
           // flex line.
-          <div key={key} className="flex items-baseline justify-between gap-2">
+          <div
+            key={key}
+            className="flex items-baseline justify-between gap-2 rounded-md px-2.5 py-1.5 transition-colors hover:bg-muted/40"
+          >
             <dt className="text-sm text-muted-foreground">{labels[labelKey]}</dt>
             {/* `tabular-nums` so the three figures' digits line up into a
                 column that can be compared at a glance, and `whitespace-nowrap`

@@ -37,7 +37,7 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
           card is the landmark; nothing else moves, and the class list is
           unchanged. The signed-in shell's `main` is in
           `components/layout/app-shell.tsx`. */}
-      <main className="flex w-full max-w-[25rem] flex-col gap-6 rounded-lg border border-border bg-surface p-6 sm:p-8">
+      <main className="card-hover-effect relative flex w-full max-w-[25rem] flex-col gap-6 overflow-hidden rounded-2xl border border-border/70 bg-surface/95 p-6 shadow-xl backdrop-blur-md before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-gradient-to-r before:from-emerald-500 before:via-teal-500 before:to-emerald-600 sm:p-8">
         <div className="flex flex-col gap-1">
           <Image
             src="/brand/cashflow-logo.png"

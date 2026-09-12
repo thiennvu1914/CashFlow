@@ -191,7 +191,10 @@ export function TransferForm({
   if (accounts.length < 2) return null
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)}>
+    <form
+      onSubmit={handleSubmit(onSubmit)}
+      className="card-hover-effect rounded-xl border border-border/80 bg-surface/90 p-5 shadow-xs backdrop-blur-xs"
+    >
       {/* The hydration gate — same mechanism, same reasoning, as
           `TransactionForm`'s; `lib/ui/use-hydrated.ts` documents the defect.
           A live pre-fix probe reverted this form's "Amount sent" 5/5 times and
