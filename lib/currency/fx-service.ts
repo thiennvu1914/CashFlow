@@ -157,3 +157,42 @@ export async function getHistoricalRate(
   await cacheRate(pair, effectiveDate, fetched)
   return { ...fetched, effectiveDate, rateDecimal: new Prisma.Decimal(fetched.rate) }
 }
+
+/** Same historical policy, with one cache read for all distinct requested days. */
+export async function getHistoricalRates(
+  pair: CurrencyPair,
+  dates: Date[],
+  providerOverride?: ExchangeRateProvider,
+): Promise<Map<number, CachedRateResult | null>> {
+  const days = [...new Set(dates.map((date) => startOfUtcDay(date).getTime()))]
+  const result = new Map<number, CachedRateResult | null>()
+  if (days.length === 0) return result
+  const cached = await prisma.exchangeRate.findMany({
+    where: {
+      base: pair.base,
+      quote: pair.quote,
+      effectiveDate: { in: days.map((day) => new Date(day)) },
+    },
+  })
+  for (const row of cached) result.set(row.effectiveDate.getTime(), toRateResult(row))
+  const provider = providerOverride ?? defaultProvider
+  await Promise.all(
+    days
+      .filter((day) => !result.has(day))
+      .map(async (day) => {
+        const effectiveDate = new Date(day)
+        const fetched = await provider.getHistoricalRate(pair, effectiveDate)
+        if (!fetched) {
+          result.set(day, null)
+          return
+        }
+        await cacheRate(pair, effectiveDate, fetched)
+        result.set(day, {
+          ...fetched,
+          effectiveDate,
+          rateDecimal: new Prisma.Decimal(fetched.rate),
+        })
+      }),
+  )
+  return result
+}

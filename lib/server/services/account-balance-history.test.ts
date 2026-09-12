@@ -457,9 +457,8 @@ describe('getAccountBalanceOverTime', () => {
    * opened with a `financialAccount.findMany` whose `where` does not depend on
    * the cutoff, so a six-month chart fetched and re-validated an identical
    * account set six times over — on top of the one this service had already
-   * fetched to decide which accounts exist at all. The per-point work that
-   * genuinely depends on the cutoff (the three aggregate scans) is unchanged,
-   * and asserted here so a "fix" that batched the sums instead would show up.
+   * fetched to decide which accounts exist at all. The ledger now groups all
+   * cutoffs in one command as well, with the same exact values at every point.
    */
   it('resolves the account list once for the whole chart, not once per point', async () => {
     const s = await setup()
@@ -479,7 +478,7 @@ describe('getAccountBalanceOverTime', () => {
     })
     const { provider } = makeForbiddenProvider()
     const accountFindMany = vi.spyOn(prisma.financialAccount, 'findMany')
-    const transactionGroupBy = vi.spyOn(prisma.transaction, 'groupBy')
+    const ledgerQuery = vi.spyOn(prisma, '$queryRaw')
 
     const points = await getAccountBalanceOverTime(s.userId, HCMC, 'VND', 6, provider, NOW)
 
@@ -502,8 +501,6 @@ describe('getAccountBalanceOverTime', () => {
     ])
     // One ownership read for six points — it was seven.
     expect(accountFindMany).toHaveBeenCalledTimes(1)
-    // And still one balance batch per point, because each one's cutoff is a
-    // different instant.
-    expect(transactionGroupBy).toHaveBeenCalledTimes(6)
+    expect(ledgerQuery).toHaveBeenCalledTimes(1)
   })
 })

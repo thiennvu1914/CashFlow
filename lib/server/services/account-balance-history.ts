@@ -1,10 +1,32 @@
 import { Prisma } from '@prisma/client'
 import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
-import { getHistoricalRate } from '@/lib/currency/fx-service'
+import { getHistoricalRates } from '@/lib/currency/fx-service'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
 import { getRecentMonthWindows } from '@/lib/datetime/month-windows'
-import { getAccountBalancesForAccounts } from './balance'
-import { listAllFinancialAccounts } from './financial-account'
+import { prisma } from '@/lib/prisma'
+import { AccountNotFoundError } from './balance'
+import { getBalanceTimeline } from './balance-timeline'
+
+/** Internal request-local inputs shared by the current position and history. */
+export async function loadBalanceHistory(
+  userId: string,
+  timezone: string,
+  monthsBack: number,
+  now: Date,
+) {
+  const windows = getRecentMonthWindows(timezone, monthsBack, now)
+  const cutoffs = windows.map(
+    (window) => new Date(Math.min(window.endUtc.getTime() - 1, now.getTime())),
+  )
+  const accounts = await prisma.financialAccount.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'asc' },
+  })
+  const timeline = await getBalanceTimeline(userId, accounts, cutoffs)
+  return { userId, accounts, cutoffs, timeline }
+}
+
+type BalanceHistoryInput = Awaited<ReturnType<typeof loadBalanceHistory>>
 
 /**
  * Account Balance Over Time — account balances only.
@@ -57,8 +79,7 @@ export interface AccountBalancePoint {
  * months are real history, and dropping them would make the chart's past change
  * whenever a user tidies up. An account that did not exist yet at a given point
  * contributes zero rather than its (not-yet-true) opening balance — that rule
- * lives in `getAccountBalances`, which is also what keeps this function from
- * needing to know about `createdAt` at all.
+ * lives in the shared balance timeline, just as in `getAccountBalances`.
  *
  * A rate is consulted only when it can actually change the answer: the balances
  * come first, and a point whose foreign-currency accounts all sit at zero is
@@ -66,15 +87,12 @@ export interface AccountBalancePoint {
  * turning every earlier point into a gap — before it existed its balance was
  * zero, and zero converts to zero at any rate, so there is nothing to look up.
  *
- * Cost is one account read for the whole chart plus one batched balance read
- * per point (never one per account), and at most one `getHistoricalRate` per
- * point. The accounts are resolved once and passed down
- * (`getAccountBalancesForAccounts`): the ownership row set does not depend on
- * the cutoff, so re-reading it per point was six identical queries and six
- * identical validations of rows this function already held.
+ * Cost is one account read, one SQL aggregate for every point together, and
+ * one historical-rate cache read for all days that actually need conversion.
+ * Provider misses keep the existing per-day fetch/cache policy. The Dashboard
+ * supplies its already loaded timeline, also used by the current position.
  *
- * The points are computed concurrently — each resolves a different UTC day, so
- * two of them can never race to cache the same row.
+ * Missing historical days are fetched concurrently, once per distinct UTC day.
  *
  * Arithmetic is `Prisma.Decimal` end to end and nothing is rounded: rounding is
  * a presentation decision the page or the export makes later.
@@ -86,66 +104,81 @@ export async function getAccountBalanceOverTime(
   monthsBack = 6,
   providerOverride?: ExchangeRateProvider,
   now: Date = new Date(),
+  input?: BalanceHistoryInput,
 ): Promise<AccountBalancePoint[]> {
   const windows = getRecentMonthWindows(timezone, monthsBack, now)
   if (windows.length === 0) return []
 
-  // Read once, for every point (pre-flight finding B-4). The account set is not
-  // a function of the cutoff — which accounts a user has does not depend on
-  // which month is being sampled — so it is resolved here and handed to each
-  // point's balance read, where `getAccountBalances` would otherwise re-fetch
-  // and re-validate the identical rows once per point.
-  const accounts = await listAllFinancialAccounts(userId)
-
-  // Concurrent, and safe to be: the points share no state, and each one caches
-  // (at most) its own distinct UTC day, so no two can collide on the FX cache's
-  // natural key. `Promise.all` preserves input order, so the result stays
-  // oldest → newest.
-  return Promise.all(
-    windows.map(async (window): Promise<AccountBalancePoint> => {
-      const monthEnd = new Date(window.endUtc.getTime() - 1)
-      // The month in progress ends in the future; sample it at `now` instead.
-      const asOf = monthEnd.getTime() > now.getTime() ? now : monthEnd
-
-      // Balances first: whether a rate is *needed* is a fact about this point's
-      // numbers, not about the account list.
-      const balances = await getAccountBalancesForAccounts(userId, accounts, asOf)
-      const balanceOf = (accountId: string) => balances.get(accountId) ?? new Prisma.Decimal(0)
-
-      // Zero converts to zero at every rate, so a foreign account sitting at
-      // zero — including one that did not exist yet at `asOf` — cannot make the
-      // answer depend on FX.
-      const needsRate = accounts.some(
-        (account) => account.currency !== displayCurrency && !balanceOf(account.id).isZero(),
-      )
-      // One lookup for the whole point: the rate is a property of the day, not
-      // of an account.
-      const rate = needsRate
-        ? await getHistoricalRate({ base: 'USD', quote: 'VND' }, asOf, providerOverride)
-        : null
-      if (needsRate && !rate) {
-        // A real answer, not an error: the day's rate is unknown, so this point
-        // is a gap. The neighbouring points keep their own days' rates.
-        return { month: window.month, asOf, balance: null }
-      }
-
-      let total = new Prisma.Decimal(0)
-      for (const account of accounts) {
-        const balance = balanceOf(account.id)
-        if (account.currency === displayCurrency || balance.isZero()) {
-          total = total.add(balance)
-          continue
-        }
-        // Unreachable: `needsRate` is true whenever this branch is, and a null
-        // rate already returned above. The throw exists so a future edit that
-        // decouples the two fails loudly instead of charting native numbers.
-        if (!rate) throw new Error('Missing exchange rate for a conversion that is required')
-        total = total.add(
-          applyVndPerUsdRate(balance, account.currency, displayCurrency, rate.rateDecimal),
-        )
-      }
-
-      return { month: window.month, asOf, balance: total }
-    }),
+  const state = input ?? (await loadBalanceHistory(userId, timezone, monthsBack, now))
+  if (
+    state.userId !== userId ||
+    state.cutoffs.length !== windows.length ||
+    state.timeline.balances.length !== windows.length ||
+    state.cutoffs.some(
+      (cutoff, index) =>
+        cutoff.getTime() !== Math.min(windows[index].endUtc.getTime() - 1, now.getTime()),
+    )
+  ) {
+    throw new Error('Balance history state must belong to this user and these cutoffs')
+  }
+  const { accounts } = state
+  for (const account of accounts) {
+    if (account.userId !== userId) throw new AccountNotFoundError(account.id)
+  }
+  const needsRates = state.timeline.balances.map((balances) =>
+    accounts.some(
+      (account) =>
+        account.currency !== displayCurrency &&
+        !(balances.get(account.id) ?? new Prisma.Decimal(0)).isZero(),
+    ),
   )
+  const rates = await getHistoricalRates(
+    { base: 'USD', quote: 'VND' },
+    state.cutoffs.filter((_, index) => needsRates[index]),
+    providerOverride,
+  )
+
+  // All database/provider reads are complete; preserve oldest → newest order.
+  return windows.map((window, index): AccountBalancePoint => {
+    const monthEnd = new Date(window.endUtc.getTime() - 1)
+    // The month in progress ends in the future; sample it at `now` instead.
+    const asOf = monthEnd.getTime() > now.getTime() ? now : monthEnd
+
+    // Balances first: whether a rate is *needed* is a fact about this point's
+    // numbers, not about the account list.
+    const balances = state.timeline.balances[index]
+    const balanceOf = (accountId: string) => balances.get(accountId) ?? new Prisma.Decimal(0)
+
+    // Zero converts to zero at every rate, so a foreign account sitting at
+    // zero — including one that did not exist yet at `asOf` — cannot make the
+    // answer depend on FX.
+    const needsRate = needsRates[index]
+    // One lookup for the whole point: the rate is a property of the day, not
+    // of an account.
+    const day = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
+    const rate = needsRate ? rates.get(day) : null
+    if (needsRate && !rate) {
+      // A real answer, not an error: the day's rate is unknown, so this point
+      // is a gap. The neighbouring points keep their own days' rates.
+      return { month: window.month, asOf, balance: null }
+    }
+
+    let total = new Prisma.Decimal(0)
+    for (const account of accounts) {
+      const balance = balanceOf(account.id)
+      if (account.currency === displayCurrency || balance.isZero()) {
+        total = total.add(balance)
+        continue
+      }
+      // Unreachable: `needsRate` is true whenever this branch is, and a null
+      // rate already returned above. The throw exists so a future edit that
+      // decouples the two fails loudly instead of charting native numbers.
+      if (!rate) throw new Error('Missing exchange rate for a conversion that is required')
+      total = total.add(
+        applyVndPerUsdRate(balance, account.currency, displayCurrency, rate.rateDecimal),
+      )
+    }
+
+    return { month: window.month, asOf, balance: total }
+  })
 }

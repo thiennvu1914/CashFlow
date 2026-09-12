@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { getLatestRate, getHistoricalRate } from './fx-service'
+import { getLatestRate, getHistoricalRate, getHistoricalRates } from './fx-service'
 import type { ExchangeRateProvider, RateResult } from './provider'
 
 /**
@@ -30,6 +30,69 @@ const forbiddenProvider: ExchangeRateProvider = {
     throw new Error('provider must not be called')
   },
 }
+
+describe('getHistoricalRates', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await cleanupRatesFor(PAIR)
+  })
+
+  it('reads distinct days once, preserving each cached Decimal and its original metadata', async () => {
+    const first = new Date('2026-07-31T00:00:00Z')
+    const second = new Date('2026-08-31T00:00:00Z')
+    const fetchedAt = new Date('2026-09-01T01:02:03Z')
+    await prisma.exchangeRate.createMany({
+      data: [
+        {
+          ...PAIR,
+          effectiveDate: first,
+          fetchedAt,
+          source: 'fixture',
+          rate: '123456789012.123456',
+        },
+        { ...PAIR, effectiveDate: second, fetchedAt, source: 'fixture', rate: '24000.654321' },
+      ],
+    })
+    const read = vi.spyOn(prisma.exchangeRate, 'findMany')
+    const rates = await getHistoricalRates(
+      PAIR,
+      [first, new Date('2026-07-31T23:59:59Z'), second],
+      forbiddenProvider,
+    )
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(rates.size).toBe(2)
+    expect(rates.get(first.getTime())?.rateDecimal.toString()).toBe('123456789012.123456')
+    expect(rates.get(second.getTime())?.rateDecimal.toString()).toBe('24000.654321')
+    expect(rates.get(first.getTime())?.fetchedAt).toEqual(fetchedAt)
+    expect(rates.get(first.getTime())?.effectiveDate).toEqual(first)
+  })
+
+  it('fetches only missing historical days and retains null gaps without consulting current FX', async () => {
+    const first = new Date('2026-07-31T00:00:00Z')
+    const second = new Date('2026-08-31T00:00:00Z')
+    const fetchedAt = new Date('2026-09-01T01:02:03Z')
+    const historical = vi.fn(async (_pair, day: Date): Promise<RateResult | null> =>
+      day.getTime() === first.getTime()
+        ? {
+            rate: 25000,
+            effectiveDate: new Date('2026-07-30T00:00:00Z'),
+            fetchedAt,
+            source: 'fixture',
+          }
+        : null,
+    )
+    const provider = { ...forbiddenProvider, getHistoricalRate: historical }
+    const result = await getHistoricalRates(PAIR, [first, first, second], provider)
+    expect(historical).toHaveBeenCalledTimes(2)
+    expect(result.get(first.getTime())?.effectiveDate).toEqual(first)
+    expect(result.get(second.getTime())).toBeNull()
+    const cached = await getHistoricalRate(PAIR, first, forbiddenProvider)
+    expect(cached).toEqual(result.get(first.getTime()))
+    const query = vi.spyOn(prisma.exchangeRate, 'findMany')
+    expect(await getHistoricalRates(PAIR, [], forbiddenProvider)).toEqual(new Map())
+    expect(query).not.toHaveBeenCalled()
+  })
+})
 
 describe('getLatestRate', () => {
   afterEach(async () => {

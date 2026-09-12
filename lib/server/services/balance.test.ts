@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getBalanceTimeline } from './balance-timeline'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import type { TransactionType } from '@prisma/client'
@@ -76,6 +77,7 @@ describe('balance service', () => {
   }
 
   afterEach(async () => {
+    vi.restoreAllMocks()
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
     try {
@@ -147,6 +149,204 @@ describe('balance service', () => {
       await makeTx(s.userId, s.accountId, 'INCOME', 0.2)
       const balance = await getAccountBalance(s.userId, s.accountId)
       expect(balance.toString()).toBe('0.3')
+    })
+  })
+
+  describe('batched balance timeline', () => {
+    it('matches cumulative numeric sums across buckets with mixed types and full-width money', async () => {
+      const s = await setupUserAccount(0.01, 'VND', new Date('2026-01-01T00:00:00Z'))
+      const dates = [new Date('2026-02-01T00:00:00Z'), new Date('2026-03-01T00:00:00Z')]
+      const types = [
+        'INCOME',
+        'EXPENSE',
+        'CASH_IN',
+        'CASH_OUT',
+        'ADJUSTMENT_INCREASE',
+        'ADJUSTMENT_DECREASE',
+      ] as const
+      await prisma.transaction.createMany({
+        data: dates.flatMap((date) =>
+          types.map((type) => ({
+            userId: s.userId,
+            accountId: s.accountId,
+            type,
+            amount: '9999999999999999.99',
+            currency: 'VND',
+            date,
+            vndPerUsdAtEntry: 25000,
+            fxRateFetchedAt: date,
+            fxRateEffectiveAt: date,
+            fxRateSource: 'fixture',
+          })),
+        ),
+      })
+      await makeTx(s.userId, s.accountId, 'INCOME', 0.02, dates[1])
+      const accounts = await prisma.financialAccount.findMany({ where: { userId: s.userId } })
+      const result = await getBalanceTimeline(s.userId, accounts, dates)
+      for (let index = 0; index < dates.length; index++) {
+        expect(result.balances[index]).toEqual(
+          await getAccountBalancesForAccounts(s.userId, accounts, dates[index]),
+        )
+      }
+      expect(result.balances[1].get(s.accountId)?.toString()).toBe('0.03')
+    })
+
+    it.each([
+      'INCOME',
+      'EXPENSE',
+      'CASH_IN',
+      'CASH_OUT',
+      'ADJUSTMENT_INCREASE',
+      'ADJUSTMENT_DECREASE',
+    ] as const)(
+      'matches the existing balance loader for %s at inclusive boundaries',
+      async (type) => {
+        const at = new Date('2026-05-01T00:00:00Z')
+        const s = await setupUserAccount(0.1, 'VND', new Date('2026-01-01T00:00:00Z'))
+        await makeTx(s.userId, s.accountId, type, 0.2, at)
+        await makeTx(s.userId, s.accountId, type, 99, new Date(at.getTime() + 1))
+        const accounts = await prisma.financialAccount.findMany({ where: { userId: s.userId } })
+        const dates = [new Date('2025-12-31T00:00:00Z'), new Date(at.getTime() - 1), at]
+        const timeline = await getBalanceTimeline(s.userId, accounts, dates)
+        for (let index = 0; index < dates.length; index++) {
+          const reference = await getAccountBalancesForAccounts(s.userId, accounts, dates[index])
+          expect(timeline.balances[index]).toEqual(reference)
+        }
+        expect(timeline.hasFutureEntries).toBe(true)
+        expect(timeline.accountsWithActivity).toEqual(new Set([s.accountId]))
+      },
+    )
+
+    it('matches initial balances, archived history, both transfer directions and native cross-currency legs', async () => {
+      const created = new Date('2026-01-01T00:00:00Z')
+      const s = await setupUserAccount(1000000.12, 'VND', created)
+      const accountType = await prisma.accountType.create({
+        data: { userId: s.userId, name: 'Bank' },
+      })
+      const other = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          accountTypeId: accountType.id,
+          name: 'Other',
+          currency: 'VND',
+          initialBalance: 0,
+          createdAt: created,
+        },
+      })
+      const usd = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          accountTypeId: accountType.id,
+          name: 'USD',
+          currency: 'USD',
+          initialBalance: 0.1,
+          createdAt: created,
+        },
+      })
+      const dates = [
+        new Date('2026-04-01T00:00:00Z'),
+        new Date('2026-05-01T00:00:00Z'),
+        new Date('2026-06-01T00:00:00Z'),
+      ]
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: other.id,
+          fromAmount: 100,
+          toAmount: 100,
+          date: dates[1],
+        },
+      })
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: usd.id,
+          fromAmount: 250000,
+          toAmount: 10,
+          exchangeRateUsed: '0.00004',
+          date: dates[2],
+        },
+      })
+      await makeTx(s.userId, other.id, 'EXPENSE', 100, dates[2])
+      await prisma.financialAccount.update({
+        where: { id: other.id },
+        data: { status: 'ARCHIVED' },
+      })
+      const accounts = await prisma.financialAccount.findMany({ where: { userId: s.userId } })
+      const timeline = await getBalanceTimeline(s.userId, accounts, dates)
+      for (let index = 0; index < dates.length; index++) {
+        expect(timeline.balances[index]).toEqual(
+          await getAccountBalancesForAccounts(s.userId, accounts, dates[index]),
+        )
+      }
+      expect(
+        timeline.balances[1].get(s.accountId)!.add(timeline.balances[1].get(other.id)!),
+      ).toEqual(new Prisma.Decimal('1000000.12'))
+      expect(timeline.balances[2].get(usd.id)?.toString()).toBe('10.1')
+      expect(timeline.hasFutureEntries).toBe(false)
+    })
+
+    it('uses one SQL call for one or many accounts/cutoffs and refuses foreign rows before SQL', async () => {
+      const owner = await setupUserAccount(100, 'VND', new Date('2026-01-01T00:00:00Z'))
+      const intruder = await setupUserAccount(1)
+      await makeTx(intruder.userId, intruder.accountId, 'INCOME', 999)
+      const rows = await prisma.financialAccount.findMany({ where: { userId: owner.userId } })
+      const type = await prisma.accountType.findFirstOrThrow({ where: { userId: owner.userId } })
+      await prisma.financialAccount.createMany({
+        data: Array.from({ length: 99 }, (_, i) => ({
+          userId: owner.userId,
+          accountTypeId: type.id,
+          name: `Account ${i}`,
+          initialBalance: 1,
+          currency: 'VND',
+          createdAt: rows[0].createdAt,
+        })),
+      })
+      const many = await prisma.financialAccount.findMany({ where: { userId: owner.userId } })
+      const query = vi.spyOn(prisma, '$queryRaw')
+      const date = new Date('2026-09-01T00:00:00Z')
+      const single = await getBalanceTimeline(owner.userId, rows, [date])
+      expect(query).toHaveBeenCalledTimes(1)
+      expect(single.balances[0].get(owner.accountId)?.toString()).toBe('100')
+      query.mockClear()
+      const multiple = await getBalanceTimeline(owner.userId, many, [
+        new Date('2026-01-01T00:00:00Z'),
+        date,
+      ])
+      expect(query).toHaveBeenCalledTimes(1)
+      expect(multiple.balances[1].size).toBe(100)
+      query.mockClear()
+      await expect(getBalanceTimeline(intruder.userId, rows, [date])).rejects.toThrow(
+        AccountNotFoundError,
+      )
+      expect(query).not.toHaveBeenCalled()
+      // A valid user with an injected SQL-looking id cannot escape the bound
+      // tenant predicate, even when given otherwise owned-looking input rows.
+      const injected = `x' OR 1=1 --`
+      const isolated = await getBalanceTimeline(
+        injected,
+        [{ ...rows[0], userId: injected, initialBalance: new Prisma.Decimal(0) }],
+        [date],
+      )
+      expect(isolated.balances[0].get(rows[0].id)?.isZero()).toBe(true)
+    })
+
+    it('retains future/zero activity locks and skips SQL for empty inputs', async () => {
+      const s = await setupUserAccount(20, 'VND', new Date('2026-01-01T00:00:00Z'))
+      const now = new Date('2026-09-01T00:00:00Z')
+      await makeTx(s.userId, s.accountId, 'INCOME', 0, new Date(now.getTime() + 1))
+      const accounts = await prisma.financialAccount.findMany({ where: { userId: s.userId } })
+      const timeline = await getBalanceTimeline(s.userId, accounts, [now])
+      expect(timeline.balances[0].get(s.accountId)?.toString()).toBe('20')
+      expect(timeline.accountsWithActivity.has(s.accountId)).toBe(true)
+      expect(timeline.hasFutureEntries).toBe(true)
+      const query = vi.spyOn(prisma, '$queryRaw')
+      expect((await getBalanceTimeline(s.userId, [], [now])).balances).toEqual([new Map()])
+      expect((await getBalanceTimeline(s.userId, accounts, [])).balances).toEqual([])
+      await expect(getBalanceTimeline(s.userId, accounts, [now, now])).rejects.toThrow(/increasing/)
+      expect(query).not.toHaveBeenCalled()
     })
   })
 
