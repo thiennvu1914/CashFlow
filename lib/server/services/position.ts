@@ -4,7 +4,7 @@ import { applyVndPerUsdRate } from '@/lib/currency/apply-rate'
 import { FxUnavailableError, getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import type { Currency, ExchangeRateProvider } from '@/lib/currency/provider'
-import { getAccountBalancesForAccounts } from './balance'
+import { AccountNotFoundError, getAccountBalancesForAccounts, type OwnedAccount } from './balance'
 import { getDebtsWithOutstanding } from './debt'
 import { listActiveFinancialAccounts } from './financial-account'
 import { getLoansWithOutstanding } from './loan'
@@ -149,6 +149,13 @@ export interface CurrentPositionOptions {
    * against a clock that ticks between two awaits.
    */
   now?: Date
+  /** Internal request-local read reuse; never supplied from a client. */
+  accountState?: {
+    userId: string
+    asOf: Date
+    accounts: (OwnedAccount & { name: string; currency: Currency; status: 'ACTIVE' | 'ARCHIVED' })[]
+    balances: Map<string, Prisma.Decimal>
+  }
 }
 
 export async function getCurrentPosition(
@@ -158,7 +165,20 @@ export async function getCurrentPosition(
 ): Promise<CurrentPosition> {
   // Active only: an account can only be archived at a zero balance (Phase 2),
   // so an archived one would contribute nothing but a zero slice of noise.
-  const accounts = await listActiveFinancialAccounts(userId)
+  const asOf = options.now ?? new Date()
+  const state = options.accountState
+  if (state && (state.userId !== userId || state.asOf.getTime() !== asOf.getTime())) {
+    throw new Error('Position account state must belong to this user and cutoff')
+  }
+  if (state) {
+    for (const account of state.accounts) {
+      if (account.userId !== userId) throw new AccountNotFoundError(account.id)
+      if (!state.balances.has(account.id)) throw new Error('Missing position account balance')
+    }
+  }
+  const accounts = state
+    ? state.accounts.filter((account) => account.status === 'ACTIVE')
+    : await listActiveFinancialAccounts(userId)
   // The same shared "as of now" balance arithmetic (`balance.ts`) the Accounts
   // page and Excel export use, with the active rows already resolved above.
   // Reusing them preserves the helper's in-memory ownership check and every
@@ -166,7 +186,6 @@ export async function getCurrentPosition(
   // booked entry dated next week has not happened yet, and counting it here
   // would also make the KPI strip disagree with the Account Balance Over Time
   // chart's current point, which is sampled at `now` too.
-  const asOf = options.now ?? new Date()
   // The debts and the loans travel with the balances rather than after them:
   // three independent reads, one round trip's worth of latency. Neither
   // service does any FX — each record keeps its own currency and the
@@ -183,7 +202,7 @@ export async function getCurrentPosition(
   // `todayCalendarDateInZone`.
   const today = formatInTimeZone(asOf, 'UTC', 'yyyy-MM-dd')
   const [balances, debts, loans] = await Promise.all([
-    getAccountBalancesForAccounts(userId, accounts, asOf),
+    state ? Promise.resolve(state.balances) : getAccountBalancesForAccounts(userId, accounts, asOf),
     // Active only, both of them: a written-off debt and a closed loan are
     // history, not a position (they stay visible on their own pages).
     //

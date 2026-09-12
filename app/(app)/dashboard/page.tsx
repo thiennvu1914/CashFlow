@@ -13,19 +13,11 @@ import {
 } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
-import { getCalendarMonth } from '@/lib/datetime/calendar-month'
-import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { resolveLocale } from '@/lib/i18n/config'
-import { getAccountBalanceOverTime } from '@/lib/server/services/account-balance-history'
-import { getActivitySummary, getCashFlowTrend } from '@/lib/server/services/activity'
-import { getBudgetProgressForMonth } from '@/lib/server/services/budget'
-import { getCurrentPosition } from '@/lib/server/services/position'
-import { listDashboardOccurrences, OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/server/services/reminder'
-import { listSavingsGoals } from '@/lib/server/services/savings-goal'
-import { listTransactions } from '@/lib/server/services/transaction'
+import { getDashboardData } from '@/lib/server/services/dashboard'
+import { OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/server/services/reminder'
 import { DASHBOARD_OCCURRENCE_LIMITS, buildDashboardViewModel } from '@/lib/ui/dashboard-view-model'
 import { formatDate } from '@/lib/ui/format-date'
-import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
 import { AccountBalanceHistoryChart } from '@/components/dashboard/account-balance-history-chart'
@@ -73,84 +65,28 @@ export default async function DashboardPage() {
   // page cannot be computed against two different "nows" either side of
   // midnight.
   const now = new Date()
-  // The month the user is *in*, read in their zone — never from a server-local
-  // `Date` getter, which for a Vietnamese user on a UTC host is the previous
-  // month for seven hours of every day.
-  const currentMonth = getCalendarMonth(timezone, now)
   // The user's own calendar day, from the same `now`: whether a goal's deadline
   // has passed or a reminder is overdue is a comparison of calendar dates in
   // *their* zone, never of instants in the server's (ruling R6-7).
   const today = todayCalendarDateInZone(timezone, now)
 
-  // Per render, the whole page costs:
-  //   · 1 `listActiveFinancialAccounts` + 1 batched `getAccountBalances`
-  //     + 1 debt read + 1 loan read (2 queries each)
-  //     + at most 1 current-FX policy call        (getCurrentPosition)
-  //   · 1 month scan  — KPIs *and* Expense by Category   (getActivitySummary)
-  //   · 1 six-month scan — the trend, and the Income vs Expense bars derived
-  //     from its last two points                        (getCashFlowTrend)
-  //   · 6 batched balance reads + at most 6 historical-rate lookups
-  //                                              (getAccountBalanceOverTime)
-  //   · 1 recent-transactions list                       (listTransactions)
-  //   · 1 budget list + 1 month EXPENSE scan  (getBudgetProgressForMonth)
-  //   · 1 goal list                                    (listSavingsGoals)
-  //   · 1 reminder scan, at most 1 batched insert, then 2 bounded occurrence
-  //     reads + 1 overdue count                (listDashboardOccurrences)
-  // Nothing here is per-account or per-row, and no widget fetches on its own.
-  //
-  // `listDashboardOccurrences` is the one call on this page that WRITES: there
-  // is no cron in this project, so the rows for the next 30 days are
-  // materialized lazily by whoever reads them first (idempotently — a second
-  // read creates nothing, and it is one batched insert however many reminders
-  // the user keeps). It then reads only what the widget can render — at most
-  // two overdue rows and five upcoming ones — plus a `count` for the overdue
-  // tally beside the list, so the payload is constant rather than growing with
-  // the user's backlog of unanswered bills (pre-flight B-6). The Reminders
-  // page keeps the complete list, which is what it renders.
-
-  // Resolved FIRST, on its own, and only then the rest.
-  //
-  // `getCurrentPosition` is the one call that may consult the *current*-rate
-  // policy, which caches today's row on a miss. `getAccountBalanceOverTime`'s
-  // current point then looks that very day up. Awaiting the position before
-  // starting the others means the row is already written when the chart asks,
-  // so on a live-rate day the current point is a figure rather than a gap —
-  // deterministically, instead of depending on which of two concurrent promises
-  // happened to win. It costs one round trip of serialisation; everything below
-  // still runs concurrently.
-  //
-  // One call answers all three current-position figures (Total Account Balance,
-  // Net Worth, the distribution), so they cannot disagree: they are three views
-  // of one set of balances converted at one rate. `{ now }` makes it "as of
-  // now", cut at the same instant as the balance chart's current point.
-  const position = await orNullIfFxUnavailable(
-    getCurrentPosition(user.id, displayCurrency, { now }),
-  )
-
-  const [monthly, cashFlowTrend, balanceOverTime, recentTransactions, budgets, goals, occurrences] =
-    await Promise.all([
-      // ONE scan of the current local month, feeding the three monthly KPIs and
-      // the Expense by Category chart. Two scans of the same window could only
-      // ever produce the same numbers at a higher price — or different ones, if a
-      // row landed between them.
-      getActivitySummary(user.id, displayCurrency, getPeriodBounds(timezone, 'month', now)),
-      getCashFlowTrend(user.id, timezone, displayCurrency, TREND_MONTHS, now),
-      getAccountBalanceOverTime(user.id, timezone, displayCurrency, TREND_MONTHS, undefined, now),
-      listTransactions(user.id, { limit: RECENT_TRANSACTION_COUNT }),
-      // Historical end to end: it sums each contributing row at that row's own FX
-      // snapshot and never consults the current-rate policy, so it is not wrapped
-      // in `orNullIfFxUnavailable` — an FX outage cannot reach it, and there is
-      // nothing for it to degrade to. Two queries whatever the number of budgets,
-      // and none at all in the transaction table when the month has none.
-      getBudgetProgressForMonth(user.id, timezone, currentMonth.year, currentMonth.month),
-      // Both of these keep every amount in its own currency and consult no rate
-      // at all, so — like the budgets above — they are not wrapped in
-      // `orNullIfFxUnavailable`: an FX outage cannot reach them and there is
-      // nothing for them to degrade to. The Debt / Loan overview beside them is
-      // the opposite case and comes from `position`, which already degraded.
-      listSavingsGoals(user.id),
-      listDashboardOccurrences(user.id, timezone, DASHBOARD_OCCURRENCE_LIMITS, now),
-    ])
+  // One request-local account list and ledger batch feed both current position
+  // and every historical point. The loader retains the existing FX ordering
+  // while independent widgets can start immediately after authentication.
+  const {
+    position,
+    monthly,
+    cashFlowTrend,
+    balanceOverTime,
+    recentTransactions,
+    budgets,
+    goals,
+    occurrences,
+  } = await getDashboardData(user.id, timezone, displayCurrency, now, {
+    months: TREND_MONTHS,
+    transactions: RECENT_TRANSACTION_COUNT,
+    occurrences: DASHBOARD_OCCURRENCE_LIMITS,
+  })
 
   // Resolved before `buildDashboardViewModel`: every figure and chart-axis
   // label it produces is locale-sensitive (fix round 1, finding 1), so the

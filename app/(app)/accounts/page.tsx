@@ -1,38 +1,14 @@
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
-import { prisma } from '@/lib/prisma'
-import {
-  listActiveFinancialAccounts,
-  listAllFinancialAccounts,
-  accountsWithActivity,
-} from '@/lib/server/services/financial-account'
-import { listAccountTypes } from '@/lib/server/services/account-type'
-import { getAccountBalancesForAccounts } from '@/lib/server/services/balance'
-import { getCurrentPosition } from '@/lib/server/services/position'
+import { getAccountOverview } from '@/lib/server/services/account-overview'
 import { resolveLocale } from '@/lib/i18n/config'
 import { formatMoney } from '@/lib/ui/format-money'
-import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { AccountCreateButton } from '@/components/accounts/account-create-button'
 import { AccountList } from '@/components/accounts/account-list'
 import { FinancialListRow } from '@/components/common/financial-list-row'
 import { PageHeader } from '@/components/common/page-header'
 import { StatusBadge } from '@/components/common/status-badge'
-
-/**
- * How many of this user's entries are dated after `now` — a transaction or
- * either leg of a transfer. Only ever compared against zero: it decides whether
- * the "balances are as of now" note is shown, so the note appears exactly when
- * it has something to explain and stays absent for the ordinary user who never
- * post-dates anything.
- */
-async function countFutureDatedEntries(userId: string, now: Date): Promise<number> {
-  const [transactions, transfers] = await Promise.all([
-    prisma.transaction.count({ where: { userId, date: { gt: now } } }),
-    prisma.transfer.count({ where: { userId, date: { gt: now } } }),
-  ])
-  return transactions + transfers
-}
 
 export default async function AccountsPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
@@ -45,40 +21,8 @@ export default async function AccountsPage() {
   // a service reading the clock again mid-render, so every balance below is cut
   // at the same instant.
   const now = new Date()
-  const [accounts, accountTypes, allAccounts, position] = await Promise.all([
-    listActiveFinancialAccounts(user.id),
-    listAccountTypes(user.id),
-    listAllFinancialAccounts(user.id),
-    // The base-currency total for the header (spec §6.4), from the same
-    // position read the dashboard uses — so the two pages cannot disagree. It
-    // may consult the CURRENT-rate policy, so it degrades to `null` on an FX
-    // outage exactly as the dashboard's does, and the header then shows "—"
-    // rather than a number nobody can stand behind.
-    orNullIfFxUnavailable(getCurrentPosition(user.id, displayCurrency, { now })),
-  ])
-  const archivedAccounts = allAccounts.filter((a) => a.status === 'ARCHIVED')
-  // One batched call for every account on the page — never one query per
-  // account. The active rows above are already tenant-scoped, so the balance
-  // helper validates those rows in memory and avoids a duplicate ownership
-  // lookup while every aggregate remains scoped by `userId`.
-  //
-  // Passing `now` keeps the same "current balance" definition as the dashboard
-  // and Excel export: future-dated entries are excluded until their date. They
-  // remain stored and visible on the Transactions and Transfers pages.
-  const [balances, locked, futureDatedCount] = await Promise.all([
-    getAccountBalancesForAccounts(user.id, accounts, now),
-    // Whether an edit form must disable/omit currency & initialBalance
-    // (Task 15's lock) — one batched query for every account on the page,
-    // never one `accountHasActivity` call per row.
-    accountsWithActivity(
-      user.id,
-      accounts.map((a) => a.id),
-    ),
-    // Two cheap counts, only to decide whether the "as of now" note below is
-    // worth showing. Not a balance input — nothing on this page is derived
-    // from it.
-    countFutureDatedEntries(user.id, now),
-  ])
+  const { accounts, archivedAccounts, accountTypes, position, balances, locked, hasFutureEntries } =
+    await getAccountOverview(user.id, displayCurrency, now)
   // Serialised to a string/number here: a `Prisma.Decimal` cannot cross the
   // server-to-client-component boundary, so `AccountList` receives plain
   // values and formats/edits them for display only. `.get(account.id)` is
@@ -112,7 +56,7 @@ export default async function AccountsPage() {
                 currency: displayCurrency,
               })
         }
-        meta={futureDatedCount > 0 ? t('accounts.asOfNow') : undefined}
+        meta={hasFutureEntries ? t('accounts.asOfNow') : undefined}
         actions={<AccountCreateButton accountTypes={accountTypes} />}
       />
 
