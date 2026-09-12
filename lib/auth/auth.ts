@@ -7,7 +7,7 @@ import { createAuth } from './create-auth'
 
 // Crash a production boot whose environment cannot support safe auth — a
 // missing, placeholder or too-short BETTER_AUTH_SECRET, a missing
-// BETTER_AUTH_URL or TRUSTED_PROXY_CIDRS — rather than serving requests with a
+// BETTER_AUTH_URL or a safe client-IP source — rather than serving requests with a
 // forgeable session cookie, a spoofable rate-limit key or a
 // host-header-derived reset link. `lib/server/env.ts` owns the whole
 // contract and runs it before the first request that touches the database,
@@ -23,7 +23,10 @@ const serverEnv = loadServerEnv()
 export const auth = createAuth({
   database: prismaAdapter(prisma, { provider: 'postgresql' }),
   sendResetPasswordEmail,
-  trustedProxies: serverEnv.trustedProxyCidrs,
+  // Render supplies a Cloudflare-overwritten `cf-connecting-ip`; every other
+  // runtime keeps the existing TRUSTED_PROXY_CIDRS/X-Forwarded-For strategy.
+  // `authIpAddress` is a union, so these modes cannot be combined here.
+  ...serverEnv.authIpAddress,
   // Passing the validated secret makes the value Better Auth signs with the
   // same one this app refused to start without. Left undefined when unset
   // (dev/test), which keeps Better Auth's own environment fallback.

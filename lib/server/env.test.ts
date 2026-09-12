@@ -121,10 +121,57 @@ describe('BETTER_AUTH_SECRET (D1)', () => {
 
 describe('the production contract (D2)', () => {
   it('accepts a fully configured production environment', () => {
-    const { problems, warnings } = validateServerEnv(env(PRODUCTION_BASE))
+    const { env: parsedEnv, problems, warnings } = validateServerEnv(env(PRODUCTION_BASE))
     expect(problems).toEqual([])
     expect(warnings).toEqual([])
+    expect(parsedEnv.authIpAddress).toEqual({ trustedProxies: ['10.0.0.0/8'] })
   })
+
+  it('accepts Render production without TRUSTED_PROXY_CIDRS and selects only cf-connecting-ip', () => {
+    const { env: parsedEnv, problems } = validateServerEnv(
+      env({ ...PRODUCTION_BASE, RENDER: 'true', TRUSTED_PROXY_CIDRS: undefined }),
+    )
+
+    expect(problems).toEqual([])
+    expect(parsedEnv.authIpAddress).toEqual({ ipAddressHeaders: ['cf-connecting-ip'] })
+    expect('trustedProxies' in parsedEnv.authIpAddress).toBe(false)
+  })
+
+  it('ignores TRUSTED_PROXY_CIDRS on Render instead of combining both trust modes', () => {
+    const { env: parsedEnv, problems } = validateServerEnv(
+      env({ ...PRODUCTION_BASE, RENDER: 'true', TRUSTED_PROXY_CIDRS: '0.0.0.0/0' }),
+    )
+
+    expect(problems).toEqual([])
+    expect(parsedEnv.authIpAddress).toEqual({ ipAddressHeaders: ['cf-connecting-ip'] })
+  })
+
+  it('still rejects missing TRUSTED_PROXY_CIDRS in non-Render production', () => {
+    const problems = problemsFor({
+      ...PRODUCTION_BASE,
+      RENDER: undefined,
+      TRUSTED_PROXY_CIDRS: undefined,
+    })
+
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('TRUSTED_PROXY_CIDRS')
+  })
+
+  it.each(['development', 'test'] as const)(
+    'does not enable Render header mode in %s',
+    (nodeEnv) => {
+      const { env: parsedEnv, problems } = validateServerEnv(
+        env({
+          NODE_ENV: nodeEnv,
+          RENDER: 'true',
+          DATABASE_URL: 'postgresql://localhost:5439/cashflow',
+        }),
+      )
+
+      expect(problems).toEqual([])
+      expect(parsedEnv.authIpAddress).toEqual({ trustedProxies: [] })
+    },
+  )
 
   it.each([
     ['DATABASE_URL'],
@@ -331,16 +378,16 @@ describe('loadServerEnv', () => {
   it('returns only the values callers consume, and caches the process environment', () => {
     const parsed = loadServerEnv(env(PRODUCTION_BASE))
     expect(parsed.isProduction).toBe(true)
-    expect(parsed.trustedProxyCidrs).toEqual(['10.0.0.0/8'])
+    expect(parsed.authIpAddress).toEqual({ trustedProxies: ['10.0.0.0/8'] })
     // No SMTP credential, EMAIL_FROM, outbox path or TZ is carried on the
     // cached object — they are validated, not retained.
     expect(Object.keys(parsed).sort()).toEqual([
+      'authIpAddress',
       'betterAuthSecret',
       'databaseUrl',
       'isBuildPhase',
       'isProduction',
       'nodeEnv',
-      'trustedProxyCidrs',
     ])
 
     // The no-argument form memoises: the second call returns the same object.

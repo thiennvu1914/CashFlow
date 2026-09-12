@@ -102,7 +102,9 @@ export interface ServerEnv {
   isBuildPhase: boolean
   databaseUrl: string | undefined
   betterAuthSecret: string | undefined
-  trustedProxyCidrs: string[]
+  authIpAddress:
+    | { ipAddressHeaders: string[]; trustedProxies?: never }
+    | { ipAddressHeaders?: never; trustedProxies: string[] }
 }
 
 export interface ServerEnvValidation {
@@ -159,6 +161,7 @@ const serverEnvSchema = z.object({
   // carry a value. An unrecognised NODE_ENV is reported as a warning below.
   NODE_ENV: z.string().optional(),
   NEXT_PHASE: z.string().optional(),
+  RENDER: z.string().optional(),
   DATABASE_URL: z
     .string()
     .refine((value) => value.startsWith('postgres://') || value.startsWith('postgresql://'), {
@@ -218,6 +221,8 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
 
   const isBuildPhase = trimmedOrUndefined(source.NEXT_PHASE) === NEXT_BUILD_PHASE
   const isProductionRuntime = nodeEnvRaw === 'production' && !isBuildPhase
+  const isRenderProduction = isProductionRuntime && source.RENDER === 'true'
+  const trustedProxyCidrs = parseTrustedProxies(source.TRUSTED_PROXY_CIDRS)
 
   const smtpHost = normalized.SMTP_HOST
   const smtpPort = normalized.SMTP_PORT
@@ -233,7 +238,12 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
     isBuildPhase,
     databaseUrl: normalized.DATABASE_URL,
     betterAuthSecret: normalized.BETTER_AUTH_SECRET,
-    trustedProxyCidrs: parseTrustedProxies(source.TRUSTED_PROXY_CIDRS),
+    // Render's Cloudflare edge overwrites this single-value header with the
+    // real client IP. Everywhere else keeps the existing right-to-left CIDR
+    // trust model for X-Forwarded-For. The union makes the modes exclusive.
+    authIpAddress: isRenderProduction
+      ? { ipAddressHeaders: ['cf-connecting-ip'] }
+      : { trustedProxies: trustedProxyCidrs },
   }
 
   const problems = [...formatProblems]
@@ -269,7 +279,7 @@ export function validateServerEnv(source: NodeJS.ProcessEnv): ServerEnvValidatio
         'BETTER_AUTH_URL: required in production but not set; it pins the origin used in emailed reset links',
       )
     }
-    if (env.trustedProxyCidrs.length === 0) {
+    if (!isRenderProduction && trustedProxyCidrs.length === 0) {
       problems.push(
         'TRUSTED_PROXY_CIDRS: required in production but not set; without the reverse-proxy CIDRs rate limiting cannot identify a client',
       )

@@ -91,11 +91,19 @@ export interface CreateAuthOptions {
    * chain is walked right to left, trusted hops are skipped, and the first
    * untrusted address wins — so a spoofed left-most entry is ignored.
    *
-   * `lib/auth/auth.ts` fills this from `TRUSTED_PROXY_CIDRS` and requires it in
-   * production. Left undefined (dev/test, or a direct-to-Node deployment),
-   * Better Auth keeps its single-value-header behaviour.
+   * `lib/auth/auth.ts` fills this from `TRUSTED_PROXY_CIDRS` outside Render and
+   * requires it in a non-Render production runtime. Render instead supplies
+   * `ipAddressHeaders` below. Left empty in dev/test, Better Auth keeps its
+   * single-value-header behaviour.
    */
   trustedProxies?: string[]
+  /**
+   * Trusted single-value client-IP headers, passed straight through to Better
+   * Auth. The app singleton uses this only on Render, where Cloudflare
+   * overwrites `cf-connecting-ip`; other environments leave it undefined and
+   * keep the trusted-proxy CIDR mode above.
+   */
+  ipAddressHeaders?: string[]
   /**
    * Called once, after Better Auth has written a new user row, with that row's
    * id. `lib/auth/auth.ts` passes `seedDefaultsForUser`, which creates the
@@ -124,10 +132,7 @@ export function createAuth(options: CreateAuthOptions) {
     secret: options.secret,
     advanced: {
       ipAddress: {
-        // `ipAddressHeaders` is deliberately left out so Better Auth keeps its
-        // default of `["x-forwarded-for"]` (`DEFAULT_IP_HEADERS` in
-        // `node_modules/@better-auth/core/dist/utils/ip.mjs`). Only the
-        // trusted-proxy list is configured here.
+        ipAddressHeaders: options.ipAddressHeaders,
         trustedProxies: options.trustedProxies,
       },
     },

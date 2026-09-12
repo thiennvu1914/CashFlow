@@ -100,6 +100,8 @@ export function makeTestAuth(overrides: Partial<CreateAuthOptions> = {}): TestAu
 export interface RequestOptions {
   /** Value for `x-forwarded-for`. Allocate it with `nextTestIp()`. */
   ip?: string
+  /** Value for Render's Cloudflare-overwritten client-IP header. */
+  cfConnectingIp?: string
   cookie?: string
   /** Defaults to the harness base URL; override alongside `makeTestAuth`. */
   baseURL?: string
@@ -109,6 +111,7 @@ function buildHeaders(baseURL: string, options: RequestOptions, contentType: boo
   const headers: Record<string, string> = { origin: baseURL }
   if (contentType) headers['content-type'] = 'application/json'
   if (options.ip) headers['x-forwarded-for'] = options.ip
+  if (options.cfConnectingIp) headers['cf-connecting-ip'] = options.cfConnectingIp
   if (options.cookie) headers.cookie = options.cookie
   return headers
 }

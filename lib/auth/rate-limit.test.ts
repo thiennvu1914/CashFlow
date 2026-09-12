@@ -169,3 +169,37 @@ describe('rate-limit client-IP resolution through trusted proxies', () => {
     expect(sixth.status).toBe(429)
   })
 })
+
+describe('rate-limit client-IP resolution on Render', () => {
+  it('uses cf-connecting-ip and ignores spoofed x-forwarded-for values', async () => {
+    const { auth } = makeTestAuth({ ipAddressHeaders: ['cf-connecting-ip'] })
+    const email = 'render-client@example.com'
+    const clientIp = '198.51.100.200'
+
+    expect(auth.options.advanced?.ipAddress?.ipAddressHeaders).toEqual(['cf-connecting-ip'])
+    expect(auth.options.advanced?.ipAddress?.trustedProxies).toBeUndefined()
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const response = await signIn(
+        auth,
+        { email, password: WRONG_PASSWORD },
+        { ip: `203.0.113.${attempt}`, cfConnectingIp: clientIp },
+      )
+      expect(response.status).toBe(401)
+    }
+
+    const sixth = await signIn(
+      auth,
+      { email, password: WRONG_PASSWORD },
+      { ip: '203.0.113.99', cfConnectingIp: clientIp },
+    )
+    expect(sixth.status).toBe(429)
+
+    const otherClient = await signIn(
+      auth,
+      { email, password: WRONG_PASSWORD },
+      { ip: '203.0.113.99', cfConnectingIp: '198.51.100.201' },
+    )
+    expect(otherClient.status).toBe(401)
+  })
+})

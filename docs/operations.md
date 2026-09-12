@@ -33,7 +33,7 @@ placeholder shipped in `.env.example`, or the process refuses to start.
 | `DATABASE_URL` | always, including build | Postgres connection string; the Prisma client is constructed at module scope | `postgresql://user:pass@localhost:5439/cashflow` |
 | `BETTER_AUTH_SECRET` | production | Signs session cookies and reset tokens; rejected if missing/blank/short/the shipped placeholder | (generate with `openssl rand -base64 32`) |
 | `BETTER_AUTH_URL` | production | Public origin; without it a forged `Host` header can end up in a reset link | `https://cashflow.example.com` |
-| `TRUSTED_PROXY_CIDRS` | production | CIDRs/IPs of the reverse proxy/CDN in front of the app, for rate-limit IP resolution | `10.0.0.0/8` |
+| `TRUSTED_PROXY_CIDRS` | non-Render production | CIDRs/IPs of the reverse proxy/CDN in front of the app, for rate-limit IP resolution; Render uses its Cloudflare-overwritten `CF-Connecting-IP` header instead | `10.0.0.0/8` |
 | `SMTP_HOST` | production | Outbound mail relay host; there is no production fallback | `smtp.example.com` |
 | `SMTP_PORT` | production (with `SMTP_HOST`) | Integer 1–65535 | `587` |
 | `SMTP_USER` / `SMTP_PASSWORD` | optional (both or neither) | SMTP auth; anonymous relay is legal | (empty for anonymous) |
@@ -131,9 +131,12 @@ Notes:
   cannot migrate even by accident, and an entrypoint migration would race
   every replica on a scale-out deploy.
 - **Runtime env**: the runner needs the full production contract above
-  (`DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`,
-  `TRUSTED_PROXY_CIDRS`, SMTP, `EMAIL_FROM`) plus `TZ=UTC`; it is supplied at
-  `docker run` time via `--env-file`, never baked into a layer. The builder
+  (`DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, SMTP,
+  `EMAIL_FROM`) plus `TZ=UTC`; non-Render deployments also require
+  `TRUSTED_PROXY_CIDRS`. Render's automatic `RENDER=true` marker selects only
+  `CF-Connecting-IP`, which its Cloudflare edge overwrites, so Render must not
+  be configured with a broad trusted-proxy range. Runtime configuration is
+  supplied at `docker run` time via `--env-file`, never baked into a layer. The builder
   sets only a syntactically valid, never-connected dummy `DATABASE_URL`
   (`next build` constructs the Prisma client while collecting page data, but
   the build never opens a connection); every real secret is runtime-only.
