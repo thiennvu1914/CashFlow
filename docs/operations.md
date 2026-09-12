@@ -35,7 +35,7 @@ placeholder shipped in `.env.example`, or the process refuses to start.
 | `BETTER_AUTH_URL` | production | Public origin; without it a forged `Host` header can end up in a reset link | `https://cashflow.example.com` |
 | `TRUSTED_PROXY_CIDRS` | non-Render production | CIDRs/IPs of the reverse proxy/CDN in front of the app, for rate-limit IP resolution; Render uses its Cloudflare-overwritten `CF-Connecting-IP` header instead | `10.0.0.0/8` |
 | `SMTP_HOST` | production | Outbound mail relay host; there is no production fallback | `smtp.example.com` |
-| `SMTP_PORT` | production (with `SMTP_HOST`) | Integer 1–65535 | `587` |
+| `SMTP_PORT` | production (with `SMTP_HOST`) | Integer 1–65535; Resend port 2587 advertises STARTTLS | `2587` |
 | `SMTP_USER` / `SMTP_PASSWORD` | optional (both or neither) | SMTP auth; anonymous relay is legal | (empty for anonymous) |
 | `EMAIL_FROM` | production | From address for reset emails | `CashFlow <no-reply@example.com>` |
 | `EMAIL_OUTBOX_FILE` | dev/e2e only | Writes outgoing mail to a JSON-lines file instead of sending it | `e2e/.outbox/emails.jsonl` |
@@ -60,6 +60,23 @@ needs no API key; staleness window, rounding and the historical-snapshot
 policy are code in `lib/currency/`, not configuration. That endpoint must be
 reachable from the running server at request time — it is not a build-time
 dependency.
+
+## Current hosted topology
+
+- **Application:** Render public web service built from the repository
+  `Dockerfile`. Render supplies `RENDER=true`; that marker selects
+  `CF-Connecting-IP` for Better Auth rate limiting, so
+  `TRUSTED_PROXY_CIDRS` stays unset on Render.
+- **Database:** external Supabase PostgreSQL through `DATABASE_URL`. The root
+  `docker-compose.yml` and its named PostgreSQL volume are local
+  development/test infrastructure, not part of production.
+- **Email:** Resend SMTP with `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=2587`,
+  `SMTP_USER=resend`, the Resend API key in `SMTP_PASSWORD`, and
+  `EMAIL_FROM="CashFlow <no-reply@mail.astravn.online>"`. Port 2587 uses
+  STARTTLS, which Nodemailer negotiates automatically when Resend advertises it.
+
+Keep actual passwords, API keys, and database URLs only in the deployment
+secret store. None belong in `.env.example`, this document, or an image layer.
 
 ## Migration procedure
 
@@ -187,7 +204,8 @@ and error name/message at the time it happened.
   `EMAIL_FROM` must be set, because password reset is the only email this
   app sends and there is no safe fallback for it. `SMTP_USER`/
   `SMTP_PASSWORD` are optional together (anonymous relay is legal) but
-  refused if only one is set.
+  refused if only one is set. Port 465 uses implicit TLS; Resend port 2587
+  starts with `secure: false` and upgrades automatically through STARTTLS.
 - **Dev/e2e**: with no `SMTP_HOST`, password-reset emails print to the
   dev-server console; set `EMAIL_OUTBOX_FILE` to append them as JSON lines
   to a file instead (Playwright uses this so the reset-password test can

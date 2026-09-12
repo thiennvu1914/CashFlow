@@ -157,6 +157,8 @@ docker compose up -d
 ```
 
 The included local compose setup maps PostgreSQL to host port **5439**.
+It is local development/test infrastructure only; the hosted application uses
+Supabase PostgreSQL and does not depend on this container.
 
 ### 2. Configure environment variables
 
@@ -170,7 +172,7 @@ On Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Fill in the required values, especially `DATABASE_URL` and a strong `BETTER_AUTH_SECRET`. The full environment contract is documented in [`docs/operations.md`](docs/operations.md#environment-contract).
+Fill in the required values, especially `DATABASE_URL` and a strong `BETTER_AUTH_SECRET`. For local work, keep `DATABASE_URL` on the Compose database at `localhost:5439`; never copy a production Supabase URL into the local `.env`. The full environment contract is documented in [`docs/operations.md`](docs/operations.md#environment-contract).
 
 ### 3. Install and migrate
 
@@ -226,6 +228,9 @@ Full CI intentionally skips pushes/PRs that change only `README.md` or Markdown 
 ## Production & Docker
 
 CashFlow uses a vendor-neutral multi-stage Docker build with separate migration and runtime responsibilities.
+The current hosted topology is a Render web service built from this Dockerfile,
+an external Supabase PostgreSQL database, and Resend SMTP on port 2587 with
+STARTTLS. The root `docker-compose.yml` remains only a local PostgreSQL service.
 
 ```text
 deps → builder → runner
