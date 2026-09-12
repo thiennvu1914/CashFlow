@@ -174,7 +174,7 @@ function RailLink({ item, active }: { item: NavItem; active: boolean }) {
       className={cn(
         'group relative flex h-9 items-center justify-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-all duration-150 xl:justify-start',
         active
-          ? 'bg-brand/10 font-semibold text-brand shadow-xs dark:bg-brand/15 before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-1 before:rounded-r-full before:bg-brand'
+          ? 'bg-brand/10 font-semibold text-brand-on-tint shadow-xs dark:bg-brand/15 before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-1 before:rounded-r-full before:bg-brand'
           : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
       )}
     >

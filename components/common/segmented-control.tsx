@@ -57,7 +57,7 @@ export function SegmentedControl({
             className={cn(
               'rounded-md px-3.5 py-1.5 text-sm whitespace-nowrap transition-all duration-150',
               active
-                ? 'bg-brand/12 font-semibold text-brand shadow-xs dark:bg-brand/20'
+                ? 'bg-brand/12 font-semibold text-brand-on-tint shadow-xs dark:bg-brand/20'
                 : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
             )}
           >
