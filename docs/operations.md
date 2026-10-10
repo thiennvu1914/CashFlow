@@ -438,3 +438,7 @@ this shape — mentioned only as illustrations, not dependencies:
   on the device that signs out, but after a password reset or a session
   revocation, another device holding a fresh cache keeps working until its
   cache expires.
+  The same applies to the profile fields read from the session (theme,
+  locale, base currency, timezone): a change can take up to five minutes to
+  apply on other devices or browsers, while the device that saved it updates
+  immediately (`refreshSessionCache`).
