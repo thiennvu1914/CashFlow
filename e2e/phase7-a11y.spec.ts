@@ -461,42 +461,36 @@ test.describe.serial('Phase 7 — accessibility', () => {
     await opener.click()
     const sheet = page.getByRole('dialog')
     await expect(sheet).toBeVisible()
-    // Base UI supplies the trap but marks nothing outside the popup, so
-    // `aria-modal` is what stops a virtual cursor walking the page behind it.
+    // Base UI supplies the trap; `aria-modal` is what stops a virtual cursor
+    // walking the page behind it.
     await expect(sheet).toHaveAttribute('aria-modal', 'true')
     await expect(sheet).toHaveAttribute('aria-labelledby', /.+/)
 
-    // Twenty tabs, and not one of them may hand focus to a control on the page
-    // behind the sheet — which is the whole guarantee. Two landings other than
-    // "inside" are legitimate, and are named rather than waved through: Base
-    // UI's 1x1 focus-guard spans, which sit OUTSIDE the popup element on
-    // purpose and are how the wrap-around is implemented, and the one frame
-    // where `document.activeElement` is `body` while a guard blurs and Base UI
-    // moves focus back in (observed in both forms across runs, which is why
-    // both are allowed). Neither is an operable element, so neither is an
-    // escape. The `inside` COUNT is asserted afterwards, so a "trap" that
-    // simply parked focus on `body` for ever could not pass this.
+    // Twenty tabs, and every one of them must land on a control inside the
+    // sheet. Base UI's modal focus guard (a 1x1 span outside the popup, how the
+    // wrap-around is implemented) sends focus back inside on the NEXT animation
+    // frame (enqueueFocus -> requestAnimationFrame), so two Tabs pressed within
+    // one frame can leave the document and re-enter at the skip link. A person
+    // cannot Tab that fast, so wait two frames after each press and read where
+    // focus actually settles, not a mid-hand-off instant. With that wait there
+    // is no legitimate landing other than "inside": a trap that parked focus on
+    // `body`, or let it reach the page behind, fails here.
     const landings: string[] = []
     for (let index = 0; index < 20; index += 1) {
       await page.keyboard.press('Tab')
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      )
       const where = await page.evaluate(() => {
         const active = document.activeElement
         const dialog = document.querySelector('[role="dialog"]')
         if (active === null || dialog === null) return 'nothing-focused'
         if (dialog.contains(active)) return 'inside'
-        if (active === document.body || active === document.documentElement) return 'handover'
-        const rect = active.getBoundingClientRect()
-        return active.tagName === 'SPAN' && rect.width <= 1 && rect.height <= 1
-          ? 'focus-guard'
-          : `escaped: ${active.tagName.toLowerCase()}.${active.className}`
+        return `outside: ${active.tagName.toLowerCase()}.${active.className}`
       })
       landings.push(where)
-      expect(where, `after ${index + 1} tabs`).toMatch(/^(inside|focus-guard|handover)$/)
+      expect(where, `after ${index + 1} tabs: ${JSON.stringify(landings)}`).toBe('inside')
     }
-    expect(
-      landings.filter((where) => where === 'inside').length,
-      `most tabs land on a control inside the sheet: ${JSON.stringify(landings)}`,
-    ).toBeGreaterThanOrEqual(12)
 
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
