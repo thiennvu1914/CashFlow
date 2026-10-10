@@ -13,6 +13,18 @@ describe('PRISMA_POOL_OPTIONS', () => {
       idleTimeoutMillis: 300_000,
       connectionTimeoutMillis: 5_000,
       keepAlive: true,
+      keepAliveInitialDelayMillis: 30_000,
     })
+  })
+
+  // pg hands `keepAliveInitialDelayMillis` straight to `socket.setKeepAlive`,
+  // where 0 (its default) means the OS default — two hours on Linux. The first
+  // probe has to go out well inside the 300 s idle window, or `keepAlive` keeps
+  // nothing alive.
+  it('sends the first keepalive probe well inside the idle window', () => {
+    expect(PRISMA_POOL_OPTIONS.keepAliveInitialDelayMillis).toBeGreaterThan(0)
+    expect(PRISMA_POOL_OPTIONS.keepAliveInitialDelayMillis).toBeLessThan(
+      PRISMA_POOL_OPTIONS.idleTimeoutMillis / 2,
+    )
   })
 })
