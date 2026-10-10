@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -70,7 +69,6 @@ export function BudgetForm({
   /** The create sheet closes itself on success. */
   onCreated?: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -108,7 +106,6 @@ export function BudgetForm({
         // A reset back to the same month's defaults rather than a bare `reset()`,
         // so a second budget for the same month does not require re-navigating.
         reset(defaultValues(overallExists))
-        router.refresh()
         onCreated?.()
       },
     })

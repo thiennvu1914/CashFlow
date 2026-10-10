@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
   acknowledgeOccurrenceAction,
@@ -53,7 +52,6 @@ export function OccurrenceActions({
   locale: Locale
   timeZone: string
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** Spec §9: one in-flight lock shared by every row action (Acknowledge,
@@ -75,9 +73,9 @@ export function OccurrenceActions({
           : dismissOccurrenceAction(occurrence.id),
       errorKeys: REMINDER_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
-      // The answered occurrence leaves the pending list on the next render, so
-      // the refresh *is* the confirmation.
-      onSuccess: () => router.refresh(),
+      // The answered occurrence leaves the pending list when the action's own
+      // response re-renders the route (it `revalidatePath`s), so that re-render
+      // *is* the confirmation — no client-side refresh is needed.
     })
   }
 

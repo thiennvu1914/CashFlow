@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -52,7 +51,6 @@ function defaultValues(today: string): Partial<CreateLoanInput> {
 }
 
 export function LoanForm({ today, onCreated }: { today: string; onCreated?: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -78,7 +76,6 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
         reset(defaultValues(today))
-        router.refresh()
         onCreated?.()
       },
     })

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
 import { closeLoanAction } from '@/lib/server/actions/loan-actions'
@@ -120,7 +119,6 @@ export function LoanPaymentButton({
 }
 
 export function LoanRowMenu({ loan }: { loan: LoanDto }) {
-  const router = useRouter()
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [closing, setClosing] = useState(false)
@@ -138,7 +136,6 @@ export function LoanRowMenu({ loan }: { loan: LoanDto }) {
       // Closes on BOTH outcomes: the row's message renders behind this
       // dialog's own scrim (`components/common/confirm-dialog.tsx`).
       onSettled: () => setClosing(false),
-      onSuccess: () => router.refresh(),
     })
   }
 

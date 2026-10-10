@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
@@ -50,7 +49,6 @@ export function ProfileForm({
     preferencesDescription: string
   }
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [notice, setNotice] = useState<string | null>(null)
   /** See the fieldsets below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -107,9 +105,11 @@ export function ProfileForm({
         document.documentElement.classList.toggle('dark', values.theme === 'dark')
         document.documentElement.style.colorScheme = values.theme
 
-        // And the shell — the rail's labels, every figure's grouping —
-        // re-renders from the database on the next server pass.
-        router.refresh()
+        // No client-side refresh here: `updateProfile` sets the locale and theme
+        // cookies, and a cookie write inside a Server Action makes Next re-render
+        // the current route in the action's own response — so the shell (the
+        // rail's labels, every figure's grouping) already re-renders from the
+        // database. A second client refresh would render the page twice.
       },
     })
   }

@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -98,7 +97,6 @@ export function GoalProgressButton({ goal }: { goal: SavingsGoalDto }) {
 }
 
 export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
-  const router = useRouter()
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
@@ -114,7 +112,6 @@ export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
       // Closes on BOTH outcomes: the row's message renders behind this
       // dialog's own scrim (`components/common/confirm-dialog.tsx`).
       onSettled: () => setArchiving(false),
-      onSuccess: () => router.refresh(),
     })
   }
 
@@ -163,7 +160,6 @@ export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
  *  moves a goal's progress. Its own copy makes clear that saving it moves no
  *  account money: it only records what the user says they now have. */
 function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -184,7 +180,6 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
       errorKeys: SAVINGS_GOAL_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })
@@ -231,7 +226,6 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
  * already all strings: a `Prisma.Decimal` cannot cross into this component.
  */
 function GoalEditForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -261,7 +255,6 @@ function GoalEditForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => vo
       errorKeys: SAVINGS_GOAL_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Wallet } from 'lucide-react'
 import type { Currency } from '@prisma/client'
@@ -58,7 +57,6 @@ export function AccountList({
   accountTypes: AccountType[]
   locale: Locale
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [editing, setEditing] = useState<AccountRow | null>(null)
   /** The row awaiting archive confirmation, or `null`. One dialog for the whole list. */
@@ -109,7 +107,6 @@ export function AccountList({
       // hides the very `InlineAlert` below that explains why the archive was
       // refused — the user would see a dialog that appears to have done nothing.
       onSettled: () => setPendingArchive(null),
-      onSuccess: () => router.refresh(),
     })
   }
 

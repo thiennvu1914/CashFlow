@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -90,7 +89,6 @@ export function TransferForm({
   timezone: string
   locale: Locale
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -173,7 +171,6 @@ export function TransferForm({
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
         reset(defaultValues(accounts, timezone))
-        router.refresh()
       },
     })
   }

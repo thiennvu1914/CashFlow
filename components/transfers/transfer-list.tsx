@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { ArrowLeftRight, ArrowRight } from 'lucide-react'
 import type { Currency } from '@/lib/currency/provider'
@@ -53,7 +52,6 @@ export function TransferList({
   timezone: string
   locale: Locale
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [errors, setErrors] = useState<Record<string, string>>({})
   /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
@@ -85,7 +83,6 @@ export function TransferList({
       // own scrim over the very message that explains the refusal — the user
       // would see a dialog that appears to have done nothing.
       onSettled: () => setPendingDelete(null),
-      onSuccess: () => router.refresh(),
     })
   }
 

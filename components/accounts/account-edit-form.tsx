@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -60,7 +59,6 @@ export function AccountEditForm({
   }
   onDone?: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -96,7 +94,6 @@ export function AccountEditForm({
       errorKeys: ACCOUNT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone?.()
       },
     })

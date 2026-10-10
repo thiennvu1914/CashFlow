@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -111,7 +110,6 @@ export function DebtPaymentButton({ debt, today }: { debt: DebtDto; today: strin
 }
 
 export function DebtRowMenu({ debt }: { debt: DebtDto }) {
-  const router = useRouter()
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [writingOff, setWritingOff] = useState(false)
@@ -129,7 +127,6 @@ export function DebtRowMenu({ debt }: { debt: DebtDto }) {
       // Closes on BOTH outcomes: the row's message renders behind this
       // dialog's own scrim (`components/common/confirm-dialog.tsx`).
       onSettled: () => setWritingOff(false),
-      onSuccess: () => router.refresh(),
     })
   }
 
@@ -200,7 +197,6 @@ function DebtPaymentForm({
   today: string
   onDone: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -224,7 +220,6 @@ function DebtPaymentForm({
       errorKeys: DEBT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })
@@ -307,7 +302,6 @@ function DebtPaymentForm({
  * into this component.
  */
 function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -338,7 +332,6 @@ function DebtEditForm({ debt, onDone }: { debt: DebtDto; onDone: () => void }) {
       errorKeys: DEBT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })

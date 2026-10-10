@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Controller, useForm, useWatch, type FieldErrors, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -174,7 +173,6 @@ export function TransactionForm({
   /** The sheet closes itself on success; the sticky panel passes nothing. */
   onCreated?: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /**
@@ -284,7 +282,6 @@ export function TransactionForm({
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
         reset(defaultValues(accounts, timezone))
-        router.refresh()
         onCreated?.()
       },
     })

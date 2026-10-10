@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
@@ -60,7 +59,6 @@ export function LoanPaymentForm({
   locale: Locale
   onDone: () => void
 }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -97,7 +95,6 @@ export function LoanPaymentForm({
       errorKeys: LOAN_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })

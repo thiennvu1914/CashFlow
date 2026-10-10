@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { setReminderActiveAction } from '@/lib/server/actions/reminder-actions'
 import { REMINDER_ERROR_KEYS } from '@/lib/ui/action-error-messages'
@@ -26,7 +25,6 @@ import { Button } from '@/components/ui/button'
  * dialog here: nothing is destroyed and the action is its own undo.
  */
 export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** Same shared in-flight lock as `OccurrenceActions` — spec §9. */
@@ -39,7 +37,6 @@ export function ReminderToggle({ reminder }: { reminder: ReminderDto }) {
       action: () => setReminderActiveAction(reminder.id, !reminder.active),
       errorKeys: REMINDER_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
-      onSuccess: () => router.refresh(),
     })
   }
 

@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -36,7 +35,6 @@ import { Input } from '@/components/ui/input'
  * two.
  */
 export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
-  const router = useRouter()
   const t = useTranslations()
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -54,7 +52,6 @@ export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
       // Closes on BOTH outcomes: the row's message renders behind this
       // dialog's own scrim (`components/common/confirm-dialog.tsx`).
       onSettled: () => setConfirming(false),
-      onSuccess: () => router.refresh(),
     })
   }
 
@@ -103,7 +100,6 @@ export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
 }
 
 function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -128,7 +124,6 @@ function BudgetEditForm({ budget, onDone }: { budget: BudgetProgressDto; onDone:
       errorKeys: BUDGET_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })

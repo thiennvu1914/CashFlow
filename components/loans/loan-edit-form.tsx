@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
@@ -39,7 +38,6 @@ import { Input } from '@/components/ui/input'
  * `useHydrated` here — a click cannot happen before hydration.
  */
 export function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => void }) {
-  const router = useRouter()
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   const submit = useActionSubmit(t)
@@ -70,7 +68,6 @@ export function LoanEditForm({ loan, onDone }: { loan: LoanDto; onDone: () => vo
       errorKeys: LOAN_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        router.refresh()
         onDone()
       },
     })
