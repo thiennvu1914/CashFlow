@@ -428,3 +428,13 @@ this shape — mentioned only as illustrations, not dependencies:
   treats an unset `NODE_ENV` as *production* for its own build/serve
   behaviour (headers, minification, etc.). Never rely on leaving it unset —
   always set it explicitly for the environment you mean.
+- **A hand-corrected exchange rate needs a restart.** The server memoises
+  today's USD/VND `ExchangeRate` row in process memory until UTC midnight
+  (`lib/currency/fx-service.ts`), so editing that row in the database
+  changes nothing until the service is restarted (or the UTC day ends).
+- **Session revocation lags up to 5 minutes on other devices**
+  (owner-approved). Sessions are cached in a signed cookie for five minutes
+  (`session.cookieCache` in `lib/auth/create-auth.ts`). Sign-out clears it
+  on the device that signs out, but after a password reset or a session
+  revocation, another device holding a fresh cache keeps working until its
+  cache expires.
