@@ -17,7 +17,8 @@ export function PageHeader({
   className,
 }: {
   title: string
-  description?: string
+  /** A node, not just a string, so a page can stream a slow figure behind its own Suspense. */
+  description?: React.ReactNode
   meta?: React.ReactNode
   actions?: React.ReactNode
   className?: string

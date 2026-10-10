@@ -1,24 +1,26 @@
+import { Suspense } from 'react'
 import { Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
-import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { resolveLocale } from '@/lib/i18n/config'
-import { getActivitySummary } from '@/lib/server/services/activity'
 import { getAccountBalancesForUser } from '@/lib/server/services/balance-timeline'
 import { listCategories } from '@/lib/server/services/category'
 import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
-import { listTransactions } from '@/lib/server/services/transaction'
-import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { toAccountOptions } from '@/components/transactions/account-options'
 import {
   TransactionCreatePanelBody,
   TransactionCreatePanelProvider,
   TransactionCreateTrigger,
 } from '@/components/transactions/transaction-create-panel'
-import { TransactionList } from '@/components/transactions/transaction-list'
+import {
+  TransactionLedgerSection,
+  TransactionLedgerSkeleton,
+  TransactionsMonthTotal,
+} from '@/components/transactions/transaction-ledger-section'
 
 /** One day, in milliseconds — for computing "yesterday" from "now". */
 const MS_PER_DAY = 24 * 60 * 60 * 1000
@@ -36,27 +38,41 @@ export default async function TransactionsPage() {
   const today = todayCalendarDateInZone(timezone, now)
   const yesterday = todayCalendarDateInZone(timezone, new Date(now.getTime() - MS_PER_DAY))
 
-  const [transactions, accounts, categories, monthly, balances] = await Promise.all([
-    listTransactions(user.id),
+  const [accounts, categories, balances] = await Promise.all([
     listActiveAccountPickerRows(user.id),
     // Both transaction types use the same picker payload. One tenant-scoped
     // read preserves the service ordering and avoids two parallel queries for
     // rows that are concatenated again below.
     listCategories(user.id),
-    // The header's month total. The same call the dashboard makes for the same
-    // window — historical, restated at each row's own snapshot, so it consults
-    // no current rate and an FX outage cannot reach it.
-    getActivitySummary(user.id, displayCurrency, getPeriodBounds(timezone, 'month', now)),
     // The account picker shows each account's balance (spec §2). Read beside
     // the page's other queries instead of after the account list; joined by id
     // below.
     getAccountBalancesForUser(user.id, now),
   ])
 
-  const monthTotalDescription = t('transactions.monthTotal', {
-    amount: formatMoney(monthly.expense, displayCurrency, locale),
-    currency: displayCurrency,
-  })
+  // The month total needs a summary query and the ledger a 200-row one; neither
+  // gates the create form, so each streams behind its own boundary. The header
+  // title and the form render as soon as the three reads above return.
+  const monthTotalDescription = (
+    // A `span`, not `Skeleton`: this sits inside `PageHeader`'s `<p>`, where a
+    // `div` is invalid nesting and fails hydration.
+    <Suspense
+      fallback={
+        <span
+          aria-hidden="true"
+          className="inline-block h-4 w-48 animate-pulse rounded-md bg-muted align-middle"
+        />
+      }
+    >
+      <TransactionsMonthTotal
+        userId={user.id}
+        displayCurrency={displayCurrency}
+        timezone={timezone}
+        locale={locale}
+        now={now}
+      />
+    </Suspense>
+  )
 
   /**
    * Zero active accounts (spec §14 fix round 1, finding 6): the page itself
@@ -83,23 +99,9 @@ export default async function TransactionsPage() {
     )
   }
 
-  const accountOptions = accounts.map((account) => {
-    const balance = balances.get(account.id)
-    if (!balance) throw new Error(`Missing balance for account ${account.id}`)
-    return {
-      id: account.id,
-      name: account.name,
-      currency: account.currency,
-      // A `Prisma.Decimal` cannot cross the server-to-client-component
-      // boundary, so the balance crosses as a fixed-2-decimal string and is
-      // formatted for display only — no arithmetic happens on the client.
-      balance: balance.toFixed(2),
-    }
-  })
-
   return (
     <TransactionCreatePanelProvider
-      accounts={accountOptions}
+      accounts={toAccountOptions(accounts, balances)}
       categories={categories.map((category) => ({
         id: category.id,
         name: category.name,
@@ -122,26 +124,15 @@ export default async function TransactionsPage() {
             (below `md`) needs no grid cell at all. */}
         <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
           <div className="xl:col-span-7">
-            <TransactionList
-              transactions={transactions.map((tx) => ({
-                id: tx.id,
-                type: tx.type,
-                // A `Prisma.Decimal` cannot cross the server-to-client-component
-                // boundary, so the amount crosses as a fixed-2-decimal string and
-                // is formatted for display only — no arithmetic on the client.
-                amount: tx.amount.toFixed(2),
-                currency: tx.currency,
-                date: tx.date,
-                note: tx.note,
-                fxRateSource: tx.fxRateSource,
-                account: { name: tx.account.name },
-                category: tx.category ? { name: tx.category.name } : null,
-              }))}
-              timezone={timezone}
-              locale={locale}
-              today={today}
-              yesterday={yesterday}
-            />
+            <Suspense fallback={<TransactionLedgerSkeleton />}>
+              <TransactionLedgerSection
+                userId={user.id}
+                timezone={timezone}
+                locale={locale}
+                today={today}
+                yesterday={yesterday}
+              />
+            </Suspense>
           </div>
           <TransactionCreatePanelBody />
         </div>
