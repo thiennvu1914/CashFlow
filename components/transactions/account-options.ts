@@ -13,10 +13,12 @@ export interface AccountOption {
  * Joins the picker rows to their derived balances.
  *
  * The rows and the balances are read in parallel, not in one transaction, so an
- * account created between the two reads has a picker row but no balance yet. A
- * balance is never stored — it is derived from Transaction + Transfer — and a
- * brand-new account has no movements, so its balance is exactly zero. That is
- * the truthful value, not a fabricated one, and it beats crashing the page.
+ * account created between the two reads has a picker row but no balance yet.
+ * Such an account was created after `now`, the cutoff the page reads balances
+ * at, and `getBalanceTimeline` (`lib/server/services/balance-timeline.ts`)
+ * reports every account created after its cutoff as exactly zero — whatever
+ * its `initialBalance`. So zero is the value the balance read itself would have
+ * given, not a fabricated one, and it beats crashing the page.
  */
 export function toAccountOptions(
   accounts: ReadonlyArray<{ id: string; name: string; currency: Currency }>,
