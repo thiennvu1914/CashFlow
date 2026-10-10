@@ -4,6 +4,21 @@ import { loadServerEnv } from '@/lib/server/env'
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
+/**
+ * pg-pool settings for one long-lived Node process talking to Supabase's
+ * session-mode pooler in another region. The defaults (10 connections, closed
+ * after 10 s idle, no connect timeout) made every click after a short pause
+ * re-handshake TCP+TLS+auth across the Singapore→Sydney link.
+ * `max` stays well under the Supavisor session pool; `connectionTimeoutMillis`
+ * turns an unreachable database into a fast error instead of a hung request.
+ */
+export const PRISMA_POOL_OPTIONS = {
+  max: 6,
+  idleTimeoutMillis: 300_000,
+  connectionTimeoutMillis: 5_000,
+  keepAlive: true,
+} as const
+
 function createPrismaClient() {
   // Validates the whole server environment once per process (fatal in
   // production, a warning in development), before the first request that
@@ -17,7 +32,9 @@ function createPrismaClient() {
   // constructed without one. The datasource URL lives only in
   // `prisma7.config.ts`, which is CLI-only and never reaches the runtime
   // client, so it has to be supplied here.
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
+  return new PrismaClient({
+    adapter: new PrismaPg({ connectionString, ...PRISMA_POOL_OPTIONS }),
+  })
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient()
