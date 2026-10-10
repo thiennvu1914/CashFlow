@@ -110,15 +110,19 @@ describe('formatDate formatter cache', () => {
     const spy = vi.spyOn(Intl, 'DateTimeFormat')
     try {
       const a = formatDate('2026-09-09', {
-        locale: 'vi',
+        locale: 'en',
         timeZone: 'America/Denver',
-        style: 'date',
+        style: 'monthYearShort',
       })
-      const b = formatDate('2026-09-09', { locale: 'vi', timeZone: 'Asia/Tokyo', style: 'date' })
-      expect(a).toBe('09/09/2026')
-      expect(b).toBe('09/09/2026')
+      const b = formatDate('2026-09-09', {
+        locale: 'en',
+        timeZone: 'Asia/Tokyo',
+        style: 'monthYearShort',
+      })
+      expect(a).toBe('Sep 2026')
+      expect(b).toBe('Sep 2026')
       // Both carriers resolve to timeZone 'UTC', so they share one formatter.
-      expect(spy.mock.calls.length).toBeLessThanOrEqual(1)
+      expect(spy).toHaveBeenCalledTimes(1)
     } finally {
       spy.mockRestore()
     }

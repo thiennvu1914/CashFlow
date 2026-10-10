@@ -274,6 +274,46 @@ test.describe.serial('Phase 7 — confirmations', () => {
     await expect(rowMenu).toBeVisible()
   })
 
+  /**
+   * The delete is OPTIMISTIC: the moment Confirm is pressed the dialog closes
+   * and the row is gone, without waiting for the server. The POST is held open
+   * here so the in-flight state is observable, then aborted so the failure
+   * path restores the row alongside the message (nothing is deleted, which is
+   * also why this can sit before the delete case below).
+   */
+  test('a confirmed delete closes the dialog and hides the row at once, and a failure brings it back', async ({
+    page,
+  }) => {
+    await page.goto('/transactions')
+    const rowMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
+    await expect(rowMenu).toBeVisible()
+
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    await page.route(
+      (url) => url.pathname === '/transactions',
+      async (route) => {
+        if (route.request().method() !== 'POST') return route.fallback()
+        await held
+        await route.abort('failed')
+      },
+    )
+
+    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
+
+    // The server has not answered yet.
+    await expect(dialog).toBeHidden()
+    await expect(rowMenu).toHaveCount(0)
+
+    release()
+    await expect(rowMenu).toBeVisible()
+    await expect(page.locator('p[role="alert"]').first()).toHaveText(
+      /Đã xảy ra lỗi|Something went wrong/,
+    )
+  })
+
   for (const action of DESTRUCTIVE) {
     test(`${action.name}: asks first, Cancel changes nothing, Confirm does it`, async ({
       page,

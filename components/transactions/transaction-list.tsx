@@ -31,6 +31,7 @@ import { InlineAlert } from '@/components/common/inline-alert'
 import { MoneyText } from '@/components/common/money-text'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
 import { groupByDay } from './transaction-day-group'
+import { withoutAccepted, withoutRow } from './transaction-delete-visibility'
 
 /**
  * The ledger (spec §6.2).
@@ -104,7 +105,7 @@ export function TransactionList({
    */
   const [acceptedDeletes, setAcceptedDeletes] = useState<ReadonlySet<string>>(new Set())
   const settled = useMemo(
-    () => transactions.filter((row) => !acceptedDeletes.has(row.id)),
+    () => withoutAccepted(transactions, acceptedDeletes),
     [transactions, acceptedDeletes],
   )
   /**
@@ -112,9 +113,7 @@ export function TransactionList({
    * confirms, and restored by React itself if the action fails or throws (the
    * optimistic value reverts when the transition ends).
    */
-  const [visible, hideRow] = useOptimistic(settled, (rows, hiddenId: string) =>
-    rows.filter((row) => row.id !== hiddenId),
-  )
+  const [visible, hideRow] = useOptimistic(settled, withoutRow<TransactionRow>)
   const dialogRef = useRef<DeleteDialogHandle>(null)
   const submit = useActionSubmit(t)
 
@@ -142,25 +141,27 @@ export function TransactionList({
     [clearError],
   )
 
-  /** Resolves once the whole transition has ended, which is when the dialog closes. */
-  function confirmDelete(row: TransactionRow): Promise<void> {
-    return new Promise<void>((resolve) => {
-      startTransition(async () => {
-        hideRow(row.id)
-        try {
-          await submit.run({
-            tag: 'TransactionList: delete failed',
-            action: () => deleteTransactionAction(row.id),
-            errorKeys: TRANSACTION_ERROR_KEYS,
-            onError: (failure) =>
-              failure === null
-                ? clearError(row.id)
-                : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
-            onSuccess: () => setAcceptedDeletes((prev) => new Set(prev).add(row.id)),
-          })
-        } finally {
-          resolve()
-        }
+  /**
+   * Fire-and-forget: the dialog has already closed, so nothing awaits this.
+   * `hideRow` runs INSIDE the `run` callback (synchronously, so still within
+   * the transition) rather than before it: `submit.run` refuses a second delete
+   * while one is in flight, and a row hidden before that refusal would snap
+   * back with no message. The refused row simply stays visible.
+   */
+  function confirmDelete(row: TransactionRow) {
+    startTransition(async () => {
+      await submit.run({
+        tag: 'TransactionList: delete failed',
+        action: () => {
+          hideRow(row.id)
+          return deleteTransactionAction(row.id)
+        },
+        errorKeys: TRANSACTION_ERROR_KEYS,
+        onError: (failure) =>
+          failure === null
+            ? clearError(row.id)
+            : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
+        onSuccess: () => setAcceptedDeletes((prev) => new Set(prev).add(row.id)),
       })
     })
   }
@@ -344,32 +345,30 @@ interface DeleteDialogHandle {
  * The one confirmation for the whole list, with its own `pendingDelete` state:
  * opening and closing it re-renders only this component, never the rows.
  *
- * It closes on BOTH outcomes (spec §10, and the same reasoning
- * `components/accounts/account-list.tsx` spells out): the row's `InlineAlert`
- * renders BELOW the card, so a dialog left open puts its own scrim over the very
- * message that explains the refusal — the user would see a dialog that appears
- * to have done nothing.
+ * It closes the moment the user confirms, not when the server answers: the
+ * delete is optimistic, so the row is already gone and a modal left up with a
+ * spinner would make the user wait out the round trip for nothing. A failure
+ * is still explained — the row's `InlineAlert` renders BELOW the card, where
+ * no scrim covers it (the older reason to close on both outcomes), and the
+ * hidden row comes back with it.
  */
 function DeleteTransactionDialog({
   handleRef,
   onConfirm,
 }: {
   handleRef: Ref<DeleteDialogHandle>
-  /** Resolves when the delete has settled, success or failure. */
-  onConfirm: (row: TransactionRow) => Promise<void>
+  onConfirm: (row: TransactionRow) => void
 }) {
   const t = useTranslations()
   /** The row awaiting confirmation, or `null`. */
   const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
   useImperativeHandle(handleRef, () => ({ open: setPendingDelete }), [])
 
-  async function confirm() {
+  function confirm() {
     if (!pendingDelete) return
-    try {
-      await onConfirm(pendingDelete)
-    } finally {
-      setPendingDelete(null)
-    }
+    const row = pendingDelete
+    setPendingDelete(null)
+    onConfirm(row)
   }
 
   return (
