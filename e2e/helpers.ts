@@ -1,3 +1,4 @@
+import { writeFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import type { Browser, Page } from '@playwright/test'
@@ -78,6 +79,8 @@ export interface AuthenticatedSession {
  */
 const takenLabels = new Set<string>()
 
+const SESSION_CACHE_COOKIE = /^(__Secure-)?better-auth\.session_data(\.\w+)?$/
+
 export function authenticatedSession(label: string): AuthenticatedSession {
   if (takenLabels.has(label)) {
     throw new Error(
@@ -105,7 +108,16 @@ export function authenticatedSession(label: string): AuthenticatedSession {
         // Before the save, so the state a spec's tests start from is the one
         // the seed left behind — cookies included.
         await seed?.(page)
-        await context.storageState({ path: statePath })
+        const state = await context.storageState()
+        // Drop Better Auth's signed session cache (`session_data`, plus its
+        // chunked and `__Secure-` forms). It is a 5-minute snapshot of the
+        // session AND the user row (theme, locale, ...), so replaying it in
+        // every later context would hand those tests the profile as it was at
+        // bootstrap, ignoring anything an earlier test saved in another
+        // context. Without it the first request resolves the user from the
+        // database and the app re-issues a fresh cache for that context.
+        state.cookies = state.cookies.filter((cookie) => !SESSION_CACHE_COOKIE.test(cookie.name))
+        await writeFile(statePath, JSON.stringify(state))
         return account
       } finally {
         // In a `finally`, unlike the copies this replaces: a seed that throws
