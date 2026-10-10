@@ -45,7 +45,7 @@ test.describe('CashFlow branding', () => {
       }
 
       await page.goto('/login')
-      const icon = page.locator('link[rel="icon"][type="image/png"][sizes="1254x1254"]')
+      const icon = page.locator('link[rel="icon"][type="image/png"][sizes="64x64"]')
       await expect(icon).toHaveCount(1)
       const iconHref = await icon.getAttribute('href')
       expect(iconHref).not.toBeNull()
