@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { formatDate } from './format-date'
 
 const HCM = 'Asia/Ho_Chi_Minh'
@@ -71,5 +71,56 @@ describe('formatDate', () => {
     expect(formatDate('2026-09-09', { locale: 'en', timeZone: HCM, style: 'dayMonth' })).toBe(
       'Sep 9',
     )
+  })
+})
+
+describe('formatDate formatter cache', () => {
+  // A zone no other test in this file uses, so the first call below is a
+  // guaranteed cache miss whatever order the suite runs in.
+  const ZONE = 'Pacific/Auckland'
+
+  it('constructs one Intl.DateTimeFormat per (locale, options, timeZone) and returns identical strings', () => {
+    const spy = vi.spyOn(Intl, 'DateTimeFormat')
+    try {
+      const first = formatDate(INSTANT, { locale: 'vi', timeZone: ZONE, style: 'time' })
+      for (let i = 0; i < 50; i++) {
+        expect(formatDate(INSTANT, { locale: 'vi', timeZone: ZONE, style: 'time' })).toBe(first)
+      }
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      // Anything that changes the output is a different cache entry.
+      formatDate(INSTANT, { locale: 'en', timeZone: ZONE, style: 'time' })
+      formatDate(INSTANT, { locale: 'vi', timeZone: ZONE, style: 'date' })
+      formatDate(INSTANT, { locale: 'vi', timeZone: 'Asia/Tokyo', style: 'time' })
+      expect(spy).toHaveBeenCalledTimes(4)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('keeps zones apart: a cached formatter never leaks another zone’s wall clock', () => {
+    const tokyo = formatDate(INSTANT, { locale: 'vi', timeZone: 'Asia/Tokyo', style: 'time' })
+    const hcm = formatDate(INSTANT, { locale: 'vi', timeZone: HCM, style: 'time' })
+    expect(tokyo).toBe('02:30')
+    expect(hcm).toBe('00:30')
+    expect(formatDate(INSTANT, { locale: 'vi', timeZone: 'Asia/Tokyo', style: 'time' })).toBe(tokyo)
+  })
+
+  it('reads a calendar-date carrier in UTC through its own cache entry', () => {
+    const spy = vi.spyOn(Intl, 'DateTimeFormat')
+    try {
+      const a = formatDate('2026-09-09', {
+        locale: 'vi',
+        timeZone: 'America/Denver',
+        style: 'date',
+      })
+      const b = formatDate('2026-09-09', { locale: 'vi', timeZone: 'Asia/Tokyo', style: 'date' })
+      expect(a).toBe('09/09/2026')
+      expect(b).toBe('09/09/2026')
+      // Both carriers resolve to timeZone 'UTC', so they share one formatter.
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

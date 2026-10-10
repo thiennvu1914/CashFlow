@@ -1,6 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  type Ref,
+} from 'react'
 import { formatInTimeZone } from 'date-fns-tz'
 import { useTranslations } from 'next-intl'
 import { Receipt } from 'lucide-react'
@@ -42,6 +52,12 @@ import { groupByDay } from './transaction-day-group'
  * Delete is a `ConfirmDialog`, not `window.confirm` (spec §10): a native dialog
  * cannot be styled, cannot be translated, and says nothing about what the
  * action does to the balance.
+ *
+ * Why it is split into a list, a memoised row and a dialog: up to 200 rows are
+ * client-rendered and each owns a Base UI menu, so when the dialog's open state
+ * and the delete's pending state lived here, every change re-rendered every
+ * row and the press on "Delete" felt laggy. Now the dialog owns its own state,
+ * the row is `memo`ised, and the deleted row is hidden optimistically.
  */
 export interface TransactionRow {
   id: string
@@ -78,39 +94,89 @@ export function TransactionList({
 }) {
   const t = useTranslations()
   const [errors, setErrors] = useState<Record<string, string>>({})
-  /** The row awaiting confirmation, or `null`. One dialog for the whole list. */
-  const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
+  /**
+   * Rows whose delete the server has ACCEPTED. `useOptimistic` alone is not
+   * enough: its value reverts the moment the action's transition ends, but the
+   * server-sent list (the action's `revalidatePath` re-render) can commit a
+   * beat later, and in that gap the deleted row would flash back. Ids are never
+   * reused, so remembering an accepted delete for the component's lifetime is
+   * safe — the new props simply stop containing the row.
+   */
+  const [acceptedDeletes, setAcceptedDeletes] = useState<ReadonlySet<string>>(new Set())
+  const settled = useMemo(
+    () => transactions.filter((row) => !acceptedDeletes.has(row.id)),
+    [transactions, acceptedDeletes],
+  )
+  /**
+   * The ledger minus the row being deleted: hidden the instant the user
+   * confirms, and restored by React itself if the action fails or throws (the
+   * optimistic value reverts when the transition ends).
+   */
+  const [visible, hideRow] = useOptimistic(settled, (rows, hiddenId: string) =>
+    rows.filter((row) => row.id !== hiddenId),
+  )
+  const dialogRef = useRef<DeleteDialogHandle>(null)
   const submit = useActionSubmit(t)
 
   /** Drops any stale message for one row — a fresh attempt starts clean. */
-  function clearError(rowId: string) {
+  const clearError = useCallback((rowId: string) => {
     setErrors((prev) => {
       if (!(rowId in prev)) return prev
       const next = { ...prev }
       delete next[rowId]
       return next
     })
-  }
+  }, [])
 
-  async function confirmDelete(row: TransactionRow) {
-    await submit.run({
-      tag: 'TransactionList: delete failed',
-      action: () => deleteTransactionAction(row.id),
-      errorKeys: TRANSACTION_ERROR_KEYS,
-      onError: (failure) =>
-        failure === null
-          ? clearError(row.id)
-          : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
-      // The dialog closes on BOTH outcomes (spec §10, and the same reasoning
-      // `components/accounts/account-list.tsx` spells out): the row's
-      // `InlineAlert` renders BELOW the card, so a dialog left open puts its
-      // own scrim over the very message that explains the refusal — the user
-      // would see a dialog that appears to have done nothing.
-      onSettled: () => setPendingDelete(null),
+  /**
+   * Stable for the life of the list, so a memoised row never re-renders because
+   * the dialog opened, a delete went pending or another row's error changed.
+   */
+  const requestDelete = useCallback(
+    (row: TransactionRow) => {
+      // A retry starts clean: a previous attempt's message for this row goes
+      // before the confirmation reopens (same as `AccountList`).
+      clearError(row.id)
+      dialogRef.current?.open(row)
+    },
+    [clearError],
+  )
+
+  /** Resolves once the whole transition has ended, which is when the dialog closes. */
+  function confirmDelete(row: TransactionRow): Promise<void> {
+    return new Promise<void>((resolve) => {
+      startTransition(async () => {
+        hideRow(row.id)
+        try {
+          await submit.run({
+            tag: 'TransactionList: delete failed',
+            action: () => deleteTransactionAction(row.id),
+            errorKeys: TRANSACTION_ERROR_KEYS,
+            onError: (failure) =>
+              failure === null
+                ? clearError(row.id)
+                : setErrors((prev) => ({ ...prev, [row.id]: failure.message })),
+            onSuccess: () => setAcceptedDeletes((prev) => new Set(prev).add(row.id)),
+          })
+        } finally {
+          resolve()
+        }
+      })
     })
   }
 
-  if (transactions.length === 0) {
+  const groups = useMemo(
+    () =>
+      groupByDay(
+        visible,
+        (row) => formatInTimeZone(row.date, timezone, 'yyyy-MM-dd'),
+        today,
+        yesterday,
+      ),
+    [visible, timezone, today, yesterday],
+  )
+
+  if (visible.length === 0) {
     return (
       <EmptyState
         icon={Receipt}
@@ -120,13 +186,6 @@ export function TransactionList({
       />
     )
   }
-
-  const groups = groupByDay(
-    transactions,
-    (row) => formatInTimeZone(row.date, timezone, 'yyyy-MM-dd'),
-    today,
-    yesterday,
-  )
 
   return (
     <>
@@ -170,72 +229,17 @@ export function TransactionList({
                   : formatDate(group.day, { locale, timeZone: timezone, style: 'weekday' })}
             </h2>
             <ul className="divide-y divide-border">
-              {group.rows.map((row, rowIndex) => {
-                const positive = isBalanceIncreasing(row.type)
-                // Never render the raw rate — only a fallback-source hint.
-                const cacheFallback = row.fxRateSource.startsWith('cache-fallback:')
-                const rowName = row.category?.name ?? t(transactionTypeLabelKey(row.type))
-                const isLastRow =
-                  groupIndex === groups.length - 1 && rowIndex === group.rows.length - 1
-                return (
-                  <FinancialListRow
-                    key={row.id}
-                    title={rowName}
-                    meta={
-                      <>
-                        {/* Time only, not the full date (spec §14 fix round 1,
-                            finding 5): the day header above already says WHICH
-                            day, so repeating it here crowded the account name
-                            out of a 375 px row (`19:38 08/09/202…`, the
-                            account name truncated away entirely). */}
-                        <span className="tabular-nums">
-                          {formatDate(row.date, { locale, timeZone: timezone, style: 'time' })}
-                        </span>
-                        {' · '}
-                        {row.account.name}
-                        {cacheFallback && ` · ${t('transactions.rateFromCache')}`}
-                      </>
-                    }
-                    note={row.note}
-                    amount={
-                      <MoneyText
-                        // Display only — the sign is derived from `type`, never
-                        // stored or computed arithmetically; `formatMoney`'s
-                        // one `Number()` only feeds the formatter, and the
-                        // string it parses already came out of `Decimal`
-                        // arithmetic in the service.
-                        value={formatMoney(row.amount, row.currency, locale)}
-                        currency={row.currency}
-                        sign={positive ? '+' : '−'}
-                        // Spec §2: income is positive-toned, an ordinary
-                        // expense is `foreground`. A page of red spending reads
-                        // as a page of errors.
-                        tone={positive ? 'positive' : 'default'}
-                      />
-                    }
-                    actions={
-                      <RowActionsMenu
-                        label={t('common.rowActions', { name: rowName })}
-                        actions={[
-                          {
-                            id: 'delete',
-                            label: t('transactions.deleteAction'),
-                            tone: 'negative',
-                            onSelect: () => {
-                              // A retry starts clean: a previous attempt's
-                              // message for this row goes before the
-                              // confirmation reopens (same as `AccountList`).
-                              clearError(row.id)
-                              setPendingDelete(row)
-                            },
-                          },
-                        ]}
-                      />
-                    }
-                    className={cn(errors[row.id] && 'bg-negative/5', isLastRow && 'rounded-b-lg')}
-                  />
-                )
-              })}
+              {group.rows.map((row, rowIndex) => (
+                <TransactionListRow
+                  key={row.id}
+                  row={row}
+                  locale={locale}
+                  timezone={timezone}
+                  hasError={row.id in errors}
+                  isLastRow={groupIndex === groups.length - 1 && rowIndex === group.rows.length - 1}
+                  onRequestDelete={requestDelete}
+                />
+              ))}
             </ul>
           </section>
         ))}
@@ -249,16 +253,135 @@ export function TransactionList({
         </InlineAlert>
       ))}
 
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => !open && setPendingDelete(null)}
-        title={t('transactions.deleteConfirmTitle')}
-        description={t('transactions.deleteConfirmBody')}
-        confirmLabel={t('transactions.deleteConfirm')}
-        cancelLabel={t('common.cancel')}
-        pendingLabel={t('transactions.deletePending')}
-        onConfirm={() => (pendingDelete ? confirmDelete(pendingDelete) : undefined)}
-      />
+      <DeleteTransactionDialog handleRef={dialogRef} onConfirm={confirmDelete} />
     </>
+  )
+}
+
+/**
+ * One ledger row. `memo`ised, and every prop is a primitive, a row object that
+ * keeps its identity while the server data is unchanged, or the stable
+ * `onRequestDelete` — so opening the dialog, a delete going pending or a
+ * sibling's error never re-renders the other rows. It reads its own
+ * translations from context instead of taking `t`, whose identity is not
+ * guaranteed stable.
+ */
+const TransactionListRow = memo(function TransactionListRow({
+  row,
+  locale,
+  timezone,
+  hasError,
+  isLastRow,
+  onRequestDelete,
+}: {
+  row: TransactionRow
+  locale: Locale
+  timezone: string
+  hasError: boolean
+  isLastRow: boolean
+  onRequestDelete: (row: TransactionRow) => void
+}) {
+  const t = useTranslations()
+  const positive = isBalanceIncreasing(row.type)
+  // Never render the raw rate — only a fallback-source hint.
+  const cacheFallback = row.fxRateSource.startsWith('cache-fallback:')
+  const rowName = row.category?.name ?? t(transactionTypeLabelKey(row.type))
+  return (
+    <FinancialListRow
+      title={rowName}
+      meta={
+        <>
+          {/* Time only, not the full date (spec §14 fix round 1, finding 5): the
+              day header above already says WHICH day, so repeating it here
+              crowded the account name out of a 375 px row (`19:38 08/09/202…`,
+              the account name truncated away entirely). */}
+          <span className="tabular-nums">
+            {formatDate(row.date, { locale, timeZone: timezone, style: 'time' })}
+          </span>
+          {' · '}
+          {row.account.name}
+          {cacheFallback && ` · ${t('transactions.rateFromCache')}`}
+        </>
+      }
+      note={row.note}
+      amount={
+        <MoneyText
+          // Display only — the sign is derived from `type`, never stored or
+          // computed arithmetically; `formatMoney`'s one `Number()` only feeds
+          // the formatter, and the string it parses already came out of
+          // `Decimal` arithmetic in the service.
+          value={formatMoney(row.amount, row.currency, locale)}
+          currency={row.currency}
+          sign={positive ? '+' : '−'}
+          // Spec §2: income is positive-toned, an ordinary expense is
+          // `foreground`. A page of red spending reads as a page of errors.
+          tone={positive ? 'positive' : 'default'}
+        />
+      }
+      actions={
+        <RowActionsMenu
+          label={t('common.rowActions', { name: rowName })}
+          actions={[
+            {
+              id: 'delete',
+              label: t('transactions.deleteAction'),
+              tone: 'negative',
+              onSelect: () => onRequestDelete(row),
+            },
+          ]}
+        />
+      }
+      className={cn(hasError && 'bg-negative/5', isLastRow && 'rounded-b-lg')}
+    />
+  )
+})
+
+interface DeleteDialogHandle {
+  open: (row: TransactionRow) => void
+}
+
+/**
+ * The one confirmation for the whole list, with its own `pendingDelete` state:
+ * opening and closing it re-renders only this component, never the rows.
+ *
+ * It closes on BOTH outcomes (spec §10, and the same reasoning
+ * `components/accounts/account-list.tsx` spells out): the row's `InlineAlert`
+ * renders BELOW the card, so a dialog left open puts its own scrim over the very
+ * message that explains the refusal — the user would see a dialog that appears
+ * to have done nothing.
+ */
+function DeleteTransactionDialog({
+  handleRef,
+  onConfirm,
+}: {
+  handleRef: Ref<DeleteDialogHandle>
+  /** Resolves when the delete has settled, success or failure. */
+  onConfirm: (row: TransactionRow) => Promise<void>
+}) {
+  const t = useTranslations()
+  /** The row awaiting confirmation, or `null`. */
+  const [pendingDelete, setPendingDelete] = useState<TransactionRow | null>(null)
+  useImperativeHandle(handleRef, () => ({ open: setPendingDelete }), [])
+
+  async function confirm() {
+    if (!pendingDelete) return
+    try {
+      await onConfirm(pendingDelete)
+    } finally {
+      setPendingDelete(null)
+    }
+  }
+
+  return (
+    <ConfirmDialog
+      open={pendingDelete !== null}
+      onOpenChange={(open) => !open && setPendingDelete(null)}
+      title={t('transactions.deleteConfirmTitle')}
+      description={t('transactions.deleteConfirmBody')}
+      confirmLabel={t('transactions.deleteConfirm')}
+      cancelLabel={t('common.cancel')}
+      pendingLabel={t('transactions.deletePending')}
+      onConfirm={confirm}
+    />
   )
 }

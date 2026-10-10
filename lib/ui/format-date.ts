@@ -86,13 +86,39 @@ export function formatDate(
     : new Date(instantOrCarrier)
   const options = { ...OPTIONS[style], ...(locale === 'en' ? EN_OVERRIDES[style] : undefined) }
 
-  return new Intl.DateTimeFormat(INTL_LOCALE[locale], {
+  // A carrier is UTC midnight and means one calendar day everywhere; an
+  // instant means "the moment", and which day that is depends on the reader.
+  return dateFormatter(INTL_LOCALE[locale], {
     ...options,
-    // A carrier is UTC midnight and means one calendar day everywhere; an
-    // instant means "the moment", and which day that is depends on the reader.
     timeZone: isCarrier ? 'UTC' : timeZone,
     hourCycle: 'h23',
   }).format(instant)
+}
+
+/**
+ * Constructing an `Intl.DateTimeFormat` resolves locale data and the IANA zone
+ * and is by far the most expensive part of formatting a date — the ledger
+ * (up to 200 rows, one `time` call each) paid it per row per render. A
+ * formatter is a pure function of its locale and its FULL options object
+ * (timeZone and hourCycle included), so one instance per such key is safe to
+ * share across every caller and every user: nothing about the reader is
+ * captured except through the key itself. Same idea as the module-level
+ * formatters in `lib/ui/format-money.ts`, but lazy, because the zone is an
+ * open set. Bounded by locales x styles x the zones actually seen.
+ */
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>()
+
+function dateFormatter(
+  intlLocale: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = `${intlLocale}|${JSON.stringify(options)}`
+  let formatter = FORMATTERS.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(intlLocale, options)
+    FORMATTERS.set(key, formatter)
+  }
+  return formatter
 }
 
 /**
