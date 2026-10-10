@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { DEMO_EMAIL, DEMO_TIMEZONE } from './constants'
 import { clearDemoUser, seedDemoUser } from './demo-user'
@@ -301,6 +302,8 @@ afterAll(async () => {
   // The cached rate this suite's provider left behind. Scoped to its own
   // source so a neighbouring suite's USD/VND row is not collateral damage.
   await prisma.exchangeRate.deleteMany({ where: { source: DEMO_TEST_FX_SOURCE } })
+  // The in-process FX memo would otherwise outlive the rows just deleted.
+  resetFxMemoForTests()
 })
 
 describe('the production guard', () => {

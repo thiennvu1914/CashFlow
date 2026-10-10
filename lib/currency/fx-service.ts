@@ -81,17 +81,99 @@ function toRateResult(cached: {
   }
 }
 
+/*
+ * Per-process memo in front of `getLatestRate` (the app runs as one long-lived
+ * Node process, and every lookup it saves is a ~100 ms database round trip or
+ * a provider call on the transaction-create path).
+ *
+ * It only ever holds an answer `getLatestRate` itself returned, and hands back
+ * a copy of exactly that — same `rate`, `rateDecimal`, `effectiveDate`,
+ * `fetchedAt` and `source` — so a memoised answer is indistinguishable from
+ * the uncached one. Two kinds of answer are kept:
+ *
+ * - today's cached row, until that UTC day ends: once written it never
+ *   changes, because `getLatestRate` only fetches while it is missing;
+ * - a provider answer whose effective day is *before* today (the provider has
+ *   not rolled over yet), for `LAGGING_RATE_MEMO_MS`. A provider answer *for*
+ *   today is not memoised: the next call reads the row it was cached as, and
+ *   memoises that hit — so every later answer is the stored `Decimal(18, 6)`,
+ *   exactly what the uncached path would read back.
+ *
+ * A failed provider call is remembered separately, for
+ * `PROVIDER_FAILURE_MEMO_MS`, so `getUsableCurrentRate` can go straight to its
+ * last-known-good fallback instead of making every request wait out the
+ * provider timeout during an outage.
+ *
+ * An injected `providerOverride` bypasses all of it, reads and writes alike —
+ * a fake provider's answers must never be served to a later caller.
+ */
+const LAGGING_RATE_MEMO_MS = 10 * 60 * 1000
+const PROVIDER_FAILURE_MEMO_MS = 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const latestRateMemo = new Map<string, { result: CachedRateResult; expiresAt: number }>()
+const providerFailedUntil = new Map<string, number>()
+
+function pairKey(pair: CurrencyPair): string {
+  return `${pair.base}/${pair.quote}`
+}
+
+function latestRateMemoKey(pair: CurrencyPair, today: Date): string {
+  return `${pairKey(pair)}/${today.toISOString().slice(0, 10)}`
+}
+
+/** A fresh object and fresh Dates per caller: one request mutating its answer
+ * must not change what the next request is told. (`Decimal` is immutable.) */
+function copyRateResult(result: CachedRateResult): CachedRateResult {
+  return {
+    ...result,
+    effectiveDate: new Date(result.effectiveDate),
+    fetchedAt: new Date(result.fetchedAt),
+  }
+}
+
+function memoiseLatestRate(key: string, result: CachedRateResult, expiresAt: number) {
+  // Keys carry the UTC day, so a past day's entry is never read again; drop
+  // expired ones here to keep the map bounded in a long-lived process.
+  const now = Date.now()
+  for (const [staleKey, entry] of latestRateMemo) {
+    if (entry.expiresAt <= now) latestRateMemo.delete(staleKey)
+  }
+  latestRateMemo.set(key, { result: copyRateResult(result), expiresAt })
+}
+
+/**
+ * Whether the default provider failed for `pair` within the last
+ * `PROVIDER_FAILURE_MEMO_MS` — read by `getUsableCurrentRate` before it calls
+ * `getLatestRate`. Only a provider failure counts: a database error never
+ * reaches the memo.
+ */
+export function hasRecentProviderFailure(pair: CurrencyPair): boolean {
+  const until = providerFailedUntil.get(pairKey(pair))
+  return until !== undefined && Date.now() < until
+}
+
+/** Forgets every memoised rate and provider failure. Test files that write or
+ * delete `ExchangeRate` rows call this in their cleanup, because the memo would
+ * otherwise outlive the rows it was read from. */
+export function resetFxMemoForTests(): void {
+  latestRateMemo.clear()
+  providerFailedUntil.clear()
+}
+
 /**
  * Today's rate for `pair`, served from the cache when the current UTC day is
- * already stored and fetched from the provider otherwise.
+ * already stored and fetched from the provider otherwise — with the
+ * per-process memo above in front of both, unless a provider is injected.
  *
  * The fetched row is keyed by the provider's own effective day, not by
  * "today". open.er-api.com's `time_last_update_utc` lags the calendar: shortly
  * after 00:00 UTC it still reports yesterday, so the row lands on yesterday,
- * today's cache stays empty, and every call goes to the provider until it
- * rolls over. That is accepted — the alternative is filing yesterday's rate
- * under today's date, and Task 8's `getUsableCurrentRate` fallback is what
- * covers provider outages during that window.
+ * today's cache stays empty, and the provider is asked again — at most once
+ * per `LAGGING_RATE_MEMO_MS` — until it rolls over. That is accepted — the
+ * alternative is filing yesterday's rate under today's date, and Task 8's
+ * `getUsableCurrentRate` fallback is what covers provider outages during that
+ * window.
  *
  * A miss returns the provider's rate with its `effectiveDate` normalised to
  * that day's UTC start — the same value a later cache *hit* on the row returns,
@@ -106,17 +188,38 @@ export async function getLatestRate(
   pair: CurrencyPair,
   providerOverride?: ExchangeRateProvider,
 ): Promise<CachedRateResult> {
+  const useMemo = providerOverride === undefined
   const today = startOfUtcDay(new Date())
+  const memoKey = latestRateMemoKey(pair, today)
+  if (useMemo) {
+    const memo = latestRateMemo.get(memoKey)
+    if (memo && Date.now() < memo.expiresAt) return copyRateResult(memo.result)
+  }
+
   const cached = await findCached(pair, today)
-  if (cached) return toRateResult(cached)
+  if (cached) {
+    const hit = toRateResult(cached)
+    if (useMemo) memoiseLatestRate(memoKey, hit, today.getTime() + DAY_MS)
+    return hit
+  }
 
   const provider = providerOverride ?? defaultProvider
-  const fresh = await provider.getLatestRate(pair)
+  let fresh: RateResult
+  try {
+    fresh = await provider.getLatestRate(pair)
+  } catch (error) {
+    if (useMemo) providerFailedUntil.set(pairKey(pair), Date.now() + PROVIDER_FAILURE_MEMO_MS)
+    throw error
+  }
   const effectiveDate = startOfUtcDay(fresh.effectiveDate)
   await cacheRate(pair, effectiveDate, fresh)
   // decimal.js parses the number's shortest decimal representation — the same
   // digits the provider sent, and the same ones just written to the cache.
-  return { ...fresh, effectiveDate, rateDecimal: new Prisma.Decimal(fresh.rate) }
+  const result = { ...fresh, effectiveDate, rateDecimal: new Prisma.Decimal(fresh.rate) }
+  if (useMemo && effectiveDate.getTime() < today.getTime()) {
+    memoiseLatestRate(memoKey, result, Date.now() + LAGGING_RATE_MEMO_MS)
+  }
+  return result
 }
 
 /**

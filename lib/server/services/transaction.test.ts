@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import { ZodError } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { createTransactionSchema } from '@/lib/validation/transaction'
 import { instantToLocalDateTime, localDateTimeToInstant } from '@/lib/datetime/local-date-time'
@@ -79,6 +80,8 @@ const failingProvider: ExchangeRateProvider = {
  */
 async function clearFxCache() {
   await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+  // The in-process FX memo would otherwise outlive the rows just deleted.
+  resetFxMemoForTests()
 }
 
 describe('transaction service', () => {

@@ -39,6 +39,7 @@ function stubFetchRejection(error: unknown) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('OpenErApiProvider.getLatestRate', () => {
@@ -67,6 +68,20 @@ describe('OpenErApiProvider.getLatestRate', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url] = fetchMock.mock.calls[0] as [string, unknown]
     expect(url).toBe(`${BASE_URL}/latest/USD`)
+  })
+
+  it('gives up on the provider after 3 seconds', async () => {
+    // The lookup sits on the critical path of a transaction create; past 3 s
+    // the caller's last-known-good fallback is the better answer.
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    const fetchMock = stubFetch({ ok: true, status: 200, json: async () => successPayload() })
+    const provider = new OpenErApiProvider(BASE_URL)
+
+    await provider.getLatestRate({ base: 'USD', quote: 'VND' })
+
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(3_000)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.signal).toBe(timeout.mock.results[0].value)
   })
 
   it('rejects with the HTTP status when the response is not ok', async () => {

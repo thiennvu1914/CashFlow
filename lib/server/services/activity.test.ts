@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import type { Currency, TransactionType } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import { resolveReportRange } from '@/lib/reports/report-range'
 import {
   getActivitySummary,
@@ -148,6 +149,8 @@ describe('historical activity service', () => {
     try {
       await prisma.exchangeRate.deleteMany({ where: { source: { in: FAKE_SOURCES } } })
       await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+      // The in-process FX memo would otherwise outlive the rows just deleted.
+      resetFxMemoForTests()
       if (userIds.length > 0) {
         await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
         await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })

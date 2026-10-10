@@ -7,6 +7,7 @@ import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import { expect } from 'vitest'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { deleteOwnedRows } from '@/lib/server/demo/owned-rows'
 import { loadExportProfile, resolveExportFx } from './export-context'
@@ -199,6 +200,8 @@ export async function cleanupExportUsers(userIds: string[]) {
   // so a neighbouring suite's row cannot make an "FX unavailable" test pass a
   // rate it was never given.
   await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
+  // The in-process FX memo would otherwise outlive the rows just deleted.
+  resetFxMemoForTests()
   if (userIds.length === 0) return
   try {
     // The FK-safe order this file used to spell out inline now lives in

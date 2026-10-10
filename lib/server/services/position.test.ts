@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import {
   getAccountDistribution,
@@ -227,6 +228,8 @@ describe('current position service', () => {
     try {
       await prisma.exchangeRate.deleteMany({ where: { source: { in: FAKE_SOURCES } } })
       await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+      // The in-process FX memo would otherwise outlive the rows just deleted.
+      resetFxMemoForTests()
       if (userIds.length > 0) {
         await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
         // Payments before their parent: both foreign keys are ON DELETE

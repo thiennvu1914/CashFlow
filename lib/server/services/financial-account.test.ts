@@ -17,6 +17,7 @@ import { AccountNotFoundError } from './balance'
 import { createFinancialAccountSchema } from '@/lib/validation/financial-account'
 import { ArchivedAccountError, createTransaction } from './transaction'
 import { createTransfer } from './transfer'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 
 /**
@@ -735,6 +736,10 @@ describe('financial-account service', () => {
       afterEach(() => {
         const fetchCalls = fetchSpy.mock.calls.length
         vi.restoreAllMocks()
+        // `createTransaction` resolves FX (and caches today's rate) before it
+        // sees the archived account, so these cases write `ExchangeRate` rows;
+        // the in-process FX memo must not outlive the case that caused it.
+        resetFxMemoForTests()
         expect(fetchCalls).toBe(0)
       })
 

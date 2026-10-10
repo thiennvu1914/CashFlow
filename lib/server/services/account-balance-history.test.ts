@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import type { Currency, TransactionType } from '@prisma/client'
 import { fromZonedTime } from 'date-fns-tz'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { getAccountBalanceOverTime } from './account-balance-history'
 
@@ -180,6 +181,8 @@ describe('getAccountBalanceOverTime', () => {
     const userIds = createdUserIds.splice(0)
     try {
       await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+      // The in-process FX memo would otherwise outlive the rows just deleted.
+      resetFxMemoForTests()
       if (userIds.length > 0) {
         await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
         await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })

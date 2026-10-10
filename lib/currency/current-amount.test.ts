@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { convertToCurrentAmount } from './current-amount'
 import { FxUnavailableError } from './current-rate-policy'
+import { resetFxMemoForTests } from './fx-service'
 import type { ExchangeRateProvider } from './provider'
 
 /**
@@ -50,6 +51,8 @@ describe('convertToCurrentAmount', () => {
     vi.restoreAllMocks()
     await prisma.exchangeRate.deleteMany({ where: { source: { in: FAKE_SOURCES } } })
     await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+    // The in-process FX memo would otherwise outlive the rows just deleted.
+    resetFxMemoForTests()
   })
 
   it('returns the same amount when currencies match, without calling the provider', async () => {

@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { applyVndPerUsdRate, UnsupportedCurrencyPairError } from './apply-rate'
 import { historicalAmountIn } from './historical-amount'
 import { getUsableCurrentRate } from './current-rate-policy'
+import { resetFxMemoForTests } from './fx-service'
 import type { Currency, ExchangeRateProvider } from './provider'
 
 /**
@@ -24,6 +25,8 @@ function dec(value: string | number): Prisma.Decimal {
 
 async function cleanupRatesFor(pair: typeof PAIR) {
   await prisma.exchangeRate.deleteMany({ where: { base: pair.base, quote: pair.quote } })
+  // The in-process FX memo would otherwise outlive the rows just deleted.
+  resetFxMemoForTests()
 }
 
 describe('historicalAmountIn', () => {

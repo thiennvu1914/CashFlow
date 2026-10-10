@@ -8,6 +8,7 @@ import {
   getUsableCurrentRate,
   isFxUnavailableError,
 } from './current-rate-policy'
+import { resetFxMemoForTests } from './fx-service'
 import type { ExchangeRateProvider } from './provider'
 
 /**
@@ -15,6 +16,9 @@ import type { ExchangeRateProvider } from './provider'
  * dedicated `cashflow_test` database. Every test injects a fake provider and
  * `afterEach` deletes the pair's rows, so repeated runs stay identical and no
  * test ever reaches the network (asserted explicitly in the last case below).
+ * The provider-failure memo cases are the exception: an injected provider
+ * bypasses the memo, so they run the default one against the throwing `fetch`
+ * spy — which is exactly what an outage looks like to it.
  */
 
 const PAIR = { base: 'USD' as const, quote: 'VND' as const }
@@ -54,6 +58,9 @@ async function seedRate(fields: {
 
 async function cleanupRatesFor(pair: typeof PAIR) {
   await prisma.exchangeRate.deleteMany({ where: { base: pair.base, quote: pair.quote } })
+  // The in-process memo would otherwise keep answering with the rows just
+  // deleted, or keep a past test's provider failure in force.
+  resetFxMemoForTests()
 }
 
 describe('getUsableCurrentRate', () => {
@@ -71,8 +78,79 @@ describe('getUsableCurrentRate', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     await cleanupRatesFor(PAIR)
+  })
+
+  describe('after a live provider failure (default provider)', () => {
+    const t0 = new Date('2026-10-10T08:00:00.000Z')
+
+    beforeEach(() => {
+      // Only `Date` is faked: the memo reads `Date.now()`, and real timers keep
+      // the database driver untouched.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(t0)
+    })
+
+    it('goes straight to the last-known-good rate for 60 s, without calling the provider', async () => {
+      const recent = new Date(t0.getTime() - 2 * 60 * 60 * 1000)
+      await seedRate({
+        rate: 25000,
+        effectiveDate: recent,
+        fetchedAt: recent,
+        source: 'fresh-fake',
+      })
+
+      const first = await getUsableCurrentRate(PAIR)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(first.isFallback).toBe(true)
+
+      const todayRead = vi.spyOn(prisma.exchangeRate, 'findUnique')
+      vi.setSystemTime(new Date(t0.getTime() + 60 * 1000 - 1))
+      const second = await getUsableCurrentRate(PAIR)
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      // Not even today's cache row: the failure proved it was missing.
+      expect(todayRead).not.toHaveBeenCalled()
+      // The same fallback the uncached path gives: the row's own timestamps,
+      // still tagged and still logged.
+      expect(second).toEqual(first)
+      expect(second.source).toBe('cache-fallback:fresh-fake')
+      expect(second.fetchedAt.toISOString()).toBe(recent.toISOString())
+      expect(warnSpy).toHaveBeenCalledTimes(2)
+
+      vi.setSystemTime(new Date(t0.getTime() + 60 * 1000))
+      await getUsableCurrentRate(PAIR)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('still applies the 48h window on every call inside those 60 s', async () => {
+      // Accepted at t0 with 30 s to spare; 45 s later the very same row is past
+      // the window, and the cool-down must not keep serving it.
+      const nearEdge = new Date(t0.getTime() - MAX_FALLBACK_STALENESS_MS + 30 * 1000)
+      await seedRate({ rate: 24800, effectiveDate: nearEdge, fetchedAt: nearEdge, source: 'edge' })
+
+      const accepted = await getUsableCurrentRate(PAIR)
+      expect(accepted.isFallback).toBe(true)
+
+      vi.setSystemTime(new Date(t0.getTime() + 45 * 1000))
+      const thrown = await getUsableCurrentRate(PAIR).catch((e: unknown) => e)
+
+      expect(isFxUnavailableError(thrown)).toBe(true)
+      expect((thrown as FxUnavailableError).cause).toBeInstanceOf(Error)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not hold back an injected provider', async () => {
+      await expect(getUsableCurrentRate(PAIR)).rejects.toThrow(FxUnavailableError)
+
+      const live = await getUsableCurrentRate(PAIR, workingProvider(25300, 'injected'))
+
+      expect(live.isFallback).toBe(false)
+      expect(live.source).toBe('injected')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('returns a fresh rate with isFallback=false when the provider is available', async () => {

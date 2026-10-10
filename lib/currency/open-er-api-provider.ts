@@ -34,7 +34,11 @@ export class OpenErApiProvider implements ExchangeRateProvider {
     let response: Response
     try {
       response = await fetch(`${this.baseUrl}/latest/${pair.base}`, {
-        signal: AbortSignal.timeout(10_000),
+        // 3 s (was 10 s): this call sits on the path of every transaction
+        // create that misses today's cached row, so an unresponsive provider
+        // must fail fast — the caller's last-known-good fallback
+        // (`getUsableCurrentRate`) is a better answer than a request that hangs.
+        signal: AbortSignal.timeout(3_000),
         headers: { accept: 'application/json' },
         cache: 'no-store',
       })

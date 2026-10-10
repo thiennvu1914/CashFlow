@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import {
   ArchivedAccountError,
@@ -190,6 +191,8 @@ describe('archive vs activity concurrency (row locks)', () => {
     const userIds = createdUserIds.splice(0)
     try {
       await prisma.exchangeRate.deleteMany({ where: { base: PAIR.base, quote: PAIR.quote } })
+      // The in-process FX memo would otherwise outlive the rows just deleted.
+      resetFxMemoForTests()
       if (userIds.length > 0) {
         await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
         await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })

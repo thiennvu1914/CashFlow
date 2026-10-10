@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { createTransaction, updateTransaction, deleteTransaction } from './transaction'
 import { createTransfer } from './transfer'
@@ -313,6 +314,8 @@ describe('tenant isolation through the services', () => {
     vi.restoreAllMocks()
     await prisma.exchangeRate.deleteMany({ where: { source: 'fake' } })
     await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
+    // The in-process FX memo would otherwise outlive the rows just deleted.
+    resetFxMemoForTests()
     expect(fetchCalls).toBe(0)
   })
 

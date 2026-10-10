@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { getLatestRate, getHistoricalRate, getHistoricalRates } from './fx-service'
+import {
+  getLatestRate,
+  getHistoricalRate,
+  getHistoricalRates,
+  resetFxMemoForTests,
+} from './fx-service'
 import type { ExchangeRateProvider, RateResult } from './provider'
 
 /**
@@ -9,12 +14,17 @@ import type { ExchangeRateProvider, RateResult } from './provider'
  * dedicated `cashflow_test` database. Every test injects a fake provider and
  * `afterEach` deletes the pair's rows, so repeated runs stay identical and no
  * test ever reaches the network (asserted explicitly in the first case below).
+ * The exception is the memo suite, which has to run the default provider (an
+ * injected one bypasses the memo) and therefore stubs `fetch` instead.
  */
 
 const PAIR = { base: 'USD' as const, quote: 'VND' as const }
 
 async function cleanupRatesFor(pair: typeof PAIR) {
   await prisma.exchangeRate.deleteMany({ where: { base: pair.base, quote: pair.quote } })
+  // The in-process memo would otherwise keep answering with the rows just
+  // deleted.
+  resetFxMemoForTests()
 }
 
 function utcDay(date: Date): Date {
@@ -232,6 +242,173 @@ describe('getLatestRate', () => {
     expect(Number(rows[0].rate)).toBe(25100)
     expect(rows[0].fetchedAt.getTime()).toBe(new Date('2026-09-05T00:09:00.000Z').getTime())
     expect(rows[0].source).toBe('b')
+  })
+})
+
+/**
+ * The default provider answering with `timeLastUpdateUtc` as its publication
+ * instant — the `fetch` seam, because only the default provider goes through
+ * the memo. A new `Response` per call: a body can be read once.
+ */
+function stubProviderFetch(timeLastUpdateUtc: string, rate = 26025.122751) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(
+    async () =>
+      new Response(
+        JSON.stringify({
+          result: 'success',
+          time_last_update_utc: timeLastUpdateUtc,
+          rates: { USD: 1, VND: rate },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+  )
+}
+
+function forbidNetwork() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+    throw new Error('network access in test')
+  })
+}
+
+describe('getLatestRate memo (default provider)', () => {
+  afterEach(async () => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    await cleanupRatesFor(PAIR)
+  })
+
+  it("memoises today's cached row: two calls, one database read, the row's own values both times", async () => {
+    const fetchedAt = new Date('2026-09-05T01:02:03.000Z')
+    await prisma.exchangeRate.create({
+      data: {
+        ...PAIR,
+        rate: '25123.456789',
+        effectiveDate: utcDay(new Date()),
+        fetchedAt,
+        source: 'cached-source',
+      },
+    })
+    const fetchSpy = forbidNetwork()
+    const read = vi.spyOn(prisma.exchangeRate, 'findUnique')
+
+    const first = await getLatestRate(PAIR)
+    const second = await getLatestRate(PAIR)
+
+    expect(read).toHaveBeenCalledTimes(1)
+    // Indistinguishable from the uncached hit: same Decimal, same day, the
+    // row's own fetch instant and source — never a fresh `new Date()`.
+    expect(second).toEqual(first)
+    expect(second.rateDecimal.toString()).toBe('25123.456789')
+    expect(second.effectiveDate.getTime()).toBe(utcDay(new Date()).getTime())
+    expect(second.fetchedAt.getTime()).toBe(fetchedAt.getTime())
+    expect(second.source).toBe('cached-source')
+    // Every caller gets its own Dates, so one request mutating its answer
+    // cannot change what the next request is told.
+    expect(second.fetchedAt).not.toBe(first.fetchedAt)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps that memo for its own UTC day only', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-10T23:59:00.000Z'))
+    const fetchedAt = new Date('2026-10-10T00:05:00.000Z')
+    await prisma.exchangeRate.createMany({
+      data: [
+        {
+          ...PAIR,
+          rate: 25100,
+          effectiveDate: new Date('2026-10-10T00:00:00Z'),
+          fetchedAt,
+          source: 'day-1',
+        },
+        {
+          ...PAIR,
+          rate: 25200,
+          effectiveDate: new Date('2026-10-11T00:00:00Z'),
+          fetchedAt,
+          source: 'day-2',
+        },
+      ],
+    })
+    forbidNetwork()
+    const read = vi.spyOn(prisma.exchangeRate, 'findUnique')
+
+    expect((await getLatestRate(PAIR)).source).toBe('day-1')
+    vi.setSystemTime(new Date('2026-10-11T00:00:01.000Z'))
+    expect((await getLatestRate(PAIR)).source).toBe('day-2')
+    expect((await getLatestRate(PAIR)).source).toBe('day-2')
+
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not memoise a provider answer for today: the next call reads the row it wrote, and that hit is what's memoised", async () => {
+    // A miss returns the provider's own number; a hit returns the stored
+    // `Decimal(18, 6)`. Memoising only hits keeps every later answer identical
+    // to what the uncached path would have returned from the database.
+    const fetchSpy = stubProviderFetch(new Date().toUTCString(), 25321.123456)
+    const read = vi.spyOn(prisma.exchangeRate, 'findUnique')
+
+    await getLatestRate(PAIR)
+    const hit = await getLatestRate(PAIR)
+    const memoised = await getLatestRate(PAIR)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(2)
+    const row = await prisma.exchangeRate.findFirstOrThrow({
+      where: { base: PAIR.base, quote: PAIR.quote },
+    })
+    expect(hit.rateDecimal.toString()).toBe(row.rate.toString())
+    expect(hit.fetchedAt.getTime()).toBe(row.fetchedAt.getTime())
+    expect(memoised).toEqual(hit)
+  })
+
+  it("memoises a lagging provider answer (yesterday's rate) for ten minutes, with the fetch instant it really had", async () => {
+    // Shortly after 00:00 UTC the provider still publishes yesterday, so
+    // today's row stays empty and, unmemoised, every request re-fetched.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const t0 = new Date('2026-10-10T00:30:00.000Z')
+    vi.setSystemTime(t0)
+    const fetchSpy = stubProviderFetch('Fri, 09 Oct 2026 00:02:31 +0000')
+
+    const first = await getLatestRate(PAIR)
+    expect(first.effectiveDate.getTime()).toBe(Date.UTC(2026, 9, 9))
+    expect(first.fetchedAt.getTime()).toBe(t0.getTime())
+
+    vi.setSystemTime(new Date(t0.getTime() + 10 * 60 * 1000 - 1))
+    const second = await getLatestRate(PAIR)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(second).toEqual(first)
+    expect(second.fetchedAt.getTime()).toBe(t0.getTime())
+
+    const later = new Date(t0.getTime() + 10 * 60 * 1000)
+    vi.setSystemTime(later)
+    const third = await getLatestRate(PAIR)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(third.fetchedAt.getTime()).toBe(later.getTime())
+  })
+
+  it('is bypassed, read and write, by an injected provider, and forgotten by resetFxMemoForTests', async () => {
+    await prisma.exchangeRate.create({
+      data: {
+        ...PAIR,
+        rate: 25000,
+        effectiveDate: utcDay(new Date()),
+        fetchedAt: new Date('2026-09-05T01:02:03.000Z'),
+        source: 'cached-source',
+      },
+    })
+    forbidNetwork()
+    const read = vi.spyOn(prisma.exchangeRate, 'findUnique')
+
+    await getLatestRate(PAIR, forbiddenProvider) // injected: nothing memoised
+    await getLatestRate(PAIR) // so this reads, and memoises
+    await getLatestRate(PAIR, forbiddenProvider) // injected: reads anyway
+    await getLatestRate(PAIR) // memoised
+    expect(read).toHaveBeenCalledTimes(3)
+
+    resetFxMemoForTests()
+    await getLatestRate(PAIR)
+    expect(read).toHaveBeenCalledTimes(4)
   })
 })
 
