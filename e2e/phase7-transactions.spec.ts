@@ -204,10 +204,10 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
     // Re-open (by click this time) and Confirm removes it.
     await menuTrigger.click()
     await page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ }).click()
-    await page
-      .getByRole('dialog', { name: /Xóa giao dịch này\?|Delete this transaction\?/ })
-      .getByRole('button', { name: /^Xóa$|^Delete$/ })
-      .click()
+    await dialog.getByRole('button', { name: /^Xóa$|^Delete$/ }).click()
+    // The open dialog marks the page behind it aria-hidden, so a role query for
+    // the row matches nothing until it closes; wait for that first.
+    await expect(dialog).toBeHidden()
     await expect(row).toHaveCount(0)
   })
 

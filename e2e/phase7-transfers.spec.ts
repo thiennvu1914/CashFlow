@@ -191,10 +191,12 @@ test.describe.serial('Phase 7 Task 5b — transfers form, rate line, a11y and ro
     // Re-open and Confirm removes it.
     await menuTrigger.click()
     await page.getByRole('menuitem', { name: /Xóa lệnh chuyển|Delete transfer/ }).click()
-    await page
-      .getByRole('dialog', { name: /Xóa lệnh chuyển này\?|Delete this transfer\?/ })
-      .getByRole('button', { name: /^Xóa$|^Delete$/ })
-      .click()
+    await dialog.getByRole('button', { name: /^Xóa$|^Delete$/ }).click()
+    // The open dialog marks the page behind it aria-hidden, so a role query for
+    // the row matches nothing until it closes. Its closing is the "action
+    // settled" signal; only then does the row's absence mean anything (and the
+    // goto below can no longer overtake the in-flight delete).
+    await expect(dialog).toBeHidden()
     await expect(row).toHaveCount(0)
 
     await page.goto('/accounts')
