@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest'
 import { prisma } from '@/lib/prisma'
 import {
   listActiveFinancialAccounts,
+  listActiveAccountPickerRows,
   listAllFinancialAccounts,
   createFinancialAccount,
   updateFinancialAccount,
@@ -220,6 +221,45 @@ describe('financial-account service', () => {
 
       expect(activeOnly.map((a) => a.id)).toEqual([active.id])
       expect(all.map((a) => a.id).sort()).toEqual([active.id, toArchive.id].sort())
+    })
+  })
+
+  describe('listActiveAccountPickerRows', () => {
+    it('returns the same active accounts in the same order, with only the picker fields', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      for (const name of ['First', 'Second']) {
+        await createFinancialAccount(userId, {
+          name,
+          accountTypeId: accountType.id,
+          initialBalance: 0,
+          currency: name === 'First' ? 'VND' : 'USD',
+        })
+      }
+      const archived = await createFinancialAccount(userId, {
+        name: 'Gone',
+        accountTypeId: accountType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+      await prisma.financialAccount.update({
+        where: { userId_id: { userId, id: archived.id } },
+        data: { status: 'ARCHIVED' },
+      })
+      const other = await createUser()
+      const otherType = await createAccountType(other)
+      await createFinancialAccount(other, {
+        name: 'Not mine',
+        accountTypeId: otherType.id,
+        initialBalance: 0,
+        currency: 'VND',
+      })
+
+      const full = await listActiveFinancialAccounts(userId)
+      const picker = await listActiveAccountPickerRows(userId)
+
+      expect(picker).toEqual(full.map((a) => ({ id: a.id, name: a.name, currency: a.currency })))
+      expect(picker.map((a) => a.name)).toEqual(['First', 'Second'])
     })
   })
 

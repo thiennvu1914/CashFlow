@@ -6,6 +6,7 @@ const reads = vi.hoisted(() => ({
   state: vi.fn(),
   history: vi.fn(),
   position: vi.fn(),
+  agreements: vi.fn(),
   monthly: vi.fn(),
   trend: vi.fn(),
   budgets: vi.fn(),
@@ -17,7 +18,10 @@ vi.mock('./account-balance-history', () => ({
   loadBalanceHistory: reads.state,
   getAccountBalanceOverTime: reads.history,
 }))
-vi.mock('./position', () => ({ getCurrentPosition: reads.position }))
+vi.mock('./position', () => ({
+  getCurrentPosition: reads.position,
+  loadPositionAgreements: reads.agreements,
+}))
 vi.mock('./activity', () => ({ getActivitySummary: reads.monthly, getCashFlowTrend: reads.trend }))
 vi.mock('./budget', () => ({ getBudgetProgressForMonth: reads.budgets }))
 vi.mock('./savings-goal', () => ({ listSavingsGoals: reads.goals }))
@@ -39,6 +43,8 @@ it.each([false, true])(
     }
     reads.state.mockResolvedValue(state)
     reads.history.mockResolvedValue([])
+    const agreements = { debts: [], loans: [] }
+    reads.agreements.mockResolvedValue(agreements)
     let finish!: () => void
     reads.position.mockReturnValue(
       new Promise((resolve, reject) => {
@@ -63,8 +69,10 @@ it.each([false, true])(
       expect(read).toHaveBeenCalledTimes(1)
     }
     expect(reads.history).not.toHaveBeenCalled()
+    expect(reads.agreements).toHaveBeenCalledWith('owner', now)
     expect(reads.position).toHaveBeenCalledWith('owner', 'VND', {
       now,
+      agreements,
       accountState: { userId: 'owner', asOf: now, accounts: state.accounts, balances },
     })
     finish()

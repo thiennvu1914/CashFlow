@@ -5,9 +5,9 @@ import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import { resolveLocale } from '@/lib/i18n/config'
 import { getActivitySummary } from '@/lib/server/services/activity'
-import { getAccountBalancesForAccounts } from '@/lib/server/services/balance'
+import { getAccountBalancesForUser } from '@/lib/server/services/balance-timeline'
 import { listCategories } from '@/lib/server/services/category'
-import { listActiveFinancialAccounts } from '@/lib/server/services/financial-account'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
 import { listTransactions } from '@/lib/server/services/transaction'
 import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
@@ -36,9 +36,9 @@ export default async function TransactionsPage() {
   const today = todayCalendarDateInZone(timezone, now)
   const yesterday = todayCalendarDateInZone(timezone, new Date(now.getTime() - MS_PER_DAY))
 
-  const [transactions, accounts, categories, monthly] = await Promise.all([
+  const [transactions, accounts, categories, monthly, balances] = await Promise.all([
     listTransactions(user.id),
-    listActiveFinancialAccounts(user.id),
+    listActiveAccountPickerRows(user.id),
     // Both transaction types use the same picker payload. One tenant-scoped
     // read preserves the service ordering and avoids two parallel queries for
     // rows that are concatenated again below.
@@ -47,6 +47,10 @@ export default async function TransactionsPage() {
     // window — historical, restated at each row's own snapshot, so it consults
     // no current rate and an FX outage cannot reach it.
     getActivitySummary(user.id, displayCurrency, getPeriodBounds(timezone, 'month', now)),
+    // The account picker shows each account's balance (spec §2). Read beside
+    // the page's other queries instead of after the account list; joined by id
+    // below.
+    getAccountBalancesForUser(user.id, now),
   ])
 
   const monthTotalDescription = t('transactions.monthTotal', {
@@ -78,11 +82,6 @@ export default async function TransactionsPage() {
       </div>
     )
   }
-
-  // The account picker shows each account's balance (spec §2). Reuse the
-  // already tenant-scoped active rows above, retaining the helper's ownership
-  // validation and user-scoped aggregates without a duplicate account lookup.
-  const balances = await getAccountBalancesForAccounts(user.id, accounts, now)
 
   const accountOptions = accounts.map((account) => {
     const balance = balances.get(account.id)

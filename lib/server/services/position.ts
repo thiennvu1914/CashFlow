@@ -149,6 +149,12 @@ export interface CurrentPositionOptions {
    * against a clock that ticks between two awaits.
    */
   now?: Date
+  /**
+   * Debts and loans the caller already loaded with `loadPositionAgreements` for
+   * this same `userId` and `now`, so the position does not read them again.
+   * Internal request-local read reuse; never supplied from a client.
+   */
+  agreements?: PositionAgreements
   /** Internal request-local read reuse; never supplied from a client. */
   accountState?: {
     userId: string
@@ -156,6 +162,46 @@ export interface CurrentPositionOptions {
     accounts: (OwnedAccount & { name: string; currency: Currency; status: 'ACTIVE' | 'ARCHIVED' })[]
     balances: Map<string, Prisma.Decimal>
   }
+}
+
+/** The active debts and loans a position needs, as `getDebtsWithOutstanding` / `getLoansWithOutstanding` return them. */
+export interface PositionAgreements {
+  debts: Awaited<ReturnType<typeof getDebtsWithOutstanding>>
+  loans: Awaited<ReturnType<typeof getLoansWithOutstanding>>
+}
+
+/**
+ * The two agreement reads behind a position, independent of the accounts: a
+ * loader that already has to read accounts and balances can run this
+ * concurrently with them instead of waiting for them (each wait is one database
+ * round trip), then hand the result to `getCurrentPosition` as `agreements`.
+ *
+ * `today` is what `getDebtsWithOutstanding`/`getLoansWithOutstanding` use to
+ * derive `displayStatus` (OVERDUE against the user's calendar day) — and
+ * `displayStatus` is the one field of theirs a position never reads. Every
+ * amount comes from `outstanding`/`outstandingPrincipal`, which are pure
+ * arithmetic over the stored rows and do not depend on `today` at all, so the
+ * UTC reading of `asOf` used here cannot move a figure by a dong. The position
+ * deliberately takes no `timezone` option for a value it ignores; the pages
+ * that *do* render an overdue badge pass their own `todayCalendarDateInZone`.
+ */
+export async function loadPositionAgreements(
+  userId: string,
+  asOf: Date,
+): Promise<PositionAgreements> {
+  const today = formatInTimeZone(asOf, 'UTC', 'yyyy-MM-dd')
+  const [debts, loans] = await Promise.all([
+    // Active only, both of them: a written-off debt and a closed loan are
+    // history, not a position (they stay visible on their own pages).
+    //
+    // `includePayments: false` because the only figures read are
+    // `outstanding` / `outstandingPrincipal`, which come from those services'
+    // `groupBy` sums (Phase 8, finding B-7). Nothing on the position's pages
+    // renders an instalment, so nothing here pays for one.
+    getDebtsWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
+    getLoansWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
+  ])
+  return { debts, loans }
 }
 
 export async function getCurrentPosition(
@@ -187,31 +233,14 @@ export async function getCurrentPosition(
   // would also make the KPI strip disagree with the Account Balance Over Time
   // chart's current point, which is sampled at `now` too.
   // The debts and the loans travel with the balances rather than after them:
-  // three independent reads, one round trip's worth of latency. Neither
-  // service does any FX — each record keeps its own currency and the
-  // conversion happens below, outside every query.
-  //
-  // `today` is what `getDebtsWithOutstanding`/`getLoansWithOutstanding` use to
-  // derive `displayStatus` (OVERDUE against the user's calendar day) — and
-  // `displayStatus` is the one field of theirs this function never reads. Every
-  // amount below comes from `outstanding`/`outstandingPrincipal`, which are
-  // pure arithmetic over the stored rows and do not depend on `today` at all,
-  // so the UTC reading of `asOf` used here cannot move a figure by a dong. The
-  // position deliberately takes no `timezone` option for a value it ignores;
-  // the pages that *do* render an overdue badge pass their own
-  // `todayCalendarDateInZone`.
-  const today = formatInTimeZone(asOf, 'UTC', 'yyyy-MM-dd')
-  const [balances, debts, loans] = await Promise.all([
+  // independent reads, one round trip's worth of latency. A caller that already
+  // knows it will need a position (the dashboard, the Accounts page) starts
+  // them even earlier, alongside its own account reads, and passes them in as
+  // `options.agreements`. Neither service does any FX — each record keeps its
+  // own currency and the conversion happens below, outside every query.
+  const [balances, { debts, loans }] = await Promise.all([
     state ? Promise.resolve(state.balances) : getAccountBalancesForAccounts(userId, accounts, asOf),
-    // Active only, both of them: a written-off debt and a closed loan are
-    // history, not a position (they stay visible on their own pages).
-    //
-    // `includePayments: false` because the only figures read below are
-    // `outstanding` / `outstandingPrincipal`, which come from those services'
-    // `groupBy` sums (Phase 8, finding B-7). Nothing on this page renders an
-    // instalment, so nothing here pays for one.
-    getDebtsWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
-    getLoansWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
+    options.agreements ?? loadPositionAgreements(userId, asOf),
   ])
 
   // Nothing left owed contributes nothing, so a debt that has been repaid in

@@ -2,7 +2,7 @@ import { Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { resolveLocale } from '@/lib/i18n/config'
-import { listActiveFinancialAccounts } from '@/lib/server/services/financial-account'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
 import { listTransfers } from '@/lib/server/services/transfer'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { EmptyState } from '@/components/common/empty-state'
@@ -19,7 +19,7 @@ export default async function TransfersPage() {
   const locale = await resolveLocale()
   const t = await getTranslations()
   const [accounts, transfers] = await Promise.all([
-    listActiveFinancialAccounts(user.id),
+    listActiveAccountPickerRows(user.id),
     listTransfers(user.id),
   ])
 
@@ -29,7 +29,7 @@ export default async function TransfersPage() {
   // usefully submit), and the LIST too when there is no history yet (Task 5b
   // fix round 1, promoted minor): the two used to stack ("Chưa có lệnh
   // chuyển nào" over "Cần ít nhất hai tài khoản…"), which read as two
-  // different problems instead of one. `listActiveFinancialAccounts` already
+  // different problems instead of one. `listActiveAccountPickerRows` already
   // excludes archived accounts, so an archived second account cannot
   // silently make this branch pass.
   const needsTwoAccounts = accounts.length < 2

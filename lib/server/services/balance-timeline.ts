@@ -127,3 +127,20 @@ export async function getBalanceTimeline(
   }
   return result
 }
+
+/**
+ * Every account of the user with its current balance (as of `now`), from the
+ * one-statement timeline. For a caller that holds no accounts list yet: it
+ * can run concurrently with the page's own account read instead of waiting for
+ * it, then join by id. The arithmetic and the `now` cutoff are the timeline's —
+ * the same values `getAccountBalancesForAccounts(userId, accounts, now)` gives.
+ * Archived accounts are included (an unknown id is simply never looked up).
+ */
+export async function getAccountBalancesForUser(
+  userId: string,
+  now: Date,
+): Promise<Map<string, Prisma.Decimal>> {
+  const accounts = await prisma.financialAccount.findMany({ where: { userId } })
+  const timeline = await getBalanceTimeline(userId, accounts, [now])
+  return timeline.balances[0]
+}

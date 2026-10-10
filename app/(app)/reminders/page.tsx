@@ -7,7 +7,7 @@ import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
 import { listCategories } from '@/lib/server/services/category'
-import { listActiveFinancialAccounts } from '@/lib/server/services/financial-account'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
 import {
   listReminders,
   listUpcomingOccurrences,
@@ -149,7 +149,7 @@ export default async function RemindersPage({
     // Both reminder types need categories. One tenant-scoped read preserves
     // their relative ordering and is split in memory for the two form fields.
     listCategories(user.id),
-    listActiveFinancialAccounts(user.id),
+    listActiveAccountPickerRows(user.id),
   ])
   const expenseCategories = categories.filter((category) => category.type === 'EXPENSE')
   const incomeCategories = categories.filter((category) => category.type === 'INCOME')

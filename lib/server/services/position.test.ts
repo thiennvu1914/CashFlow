@@ -9,6 +9,7 @@ import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import {
   getAccountDistribution,
+  loadPositionAgreements,
   getCurrentPosition,
   getNetWorth,
   getTotalAccountBalance,
@@ -283,6 +284,31 @@ describe('current position service', () => {
       // The provider is the only thing that can populate the cache, so an
       // uncalled provider must leave no row of its own behind.
       expect(await prisma.exchangeRate.count({ where: { source: uniqueSource } })).toBe(0)
+    })
+
+    it('uses caller-supplied agreements instead of reading debts and loans again', async () => {
+      const s = await setup()
+      const { provider } = countingProvider()
+      const now = new Date()
+      const expected = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: provider,
+        now,
+      })
+      const agreements = await loadPositionAgreements(s.userId, now)
+
+      // Any debt/loan read after this point would show up as a query here.
+      const debtFindMany = vi.spyOn(prisma.debt, 'findMany')
+      const loanFindMany = vi.spyOn(prisma.loan, 'findMany')
+      const actual = await getCurrentPosition(s.userId, 'VND', {
+        providerOverride: provider,
+        now,
+        agreements,
+      })
+
+      expect(debtFindMany).not.toHaveBeenCalled()
+      expect(loanFindMany).not.toHaveBeenCalled()
+      expect(actual.totalBalance.toString()).toBe(expected.totalBalance.toString())
+      expect(actual.netWorth.toString()).toBe(expected.netWorth.toString())
     })
 
     it('converts every foreign-currency balance before summing (the raw-native regression)', async () => {

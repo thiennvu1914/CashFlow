@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getBalanceTimeline } from './balance-timeline'
+import { getAccountBalancesForUser, getBalanceTimeline } from './balance-timeline'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import type { TransactionType } from '@prisma/client'
@@ -628,6 +628,65 @@ describe('balance service', () => {
         new Date(createdAt.getTime() - 1),
       )
       expect(justBefore.toNumber()).toBe(0)
+    })
+  })
+
+  describe('getAccountBalancesForUser', () => {
+    it('returns exactly the balances getAccountBalancesForAccounts derives, with no accounts list supplied', async () => {
+      const now = new Date('2026-06-15T00:00:00.000Z')
+      const s = await setupUserAccount(1000, 'VND', new Date('2026-01-01T00:00:00.000Z'))
+      const accountB = await prisma.financialAccount.create({
+        data: {
+          userId: s.userId,
+          name: 'B',
+          accountTypeId: (
+            await prisma.accountType.findFirstOrThrow({ where: { userId: s.userId } })
+          ).id,
+          initialBalance: 5,
+          currency: 'USD',
+          status: 'ARCHIVED',
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+      })
+      await makeTx(s.userId, s.accountId, 'INCOME', 700, new Date('2026-03-01T00:00:00.000Z'))
+      await makeTx(s.userId, s.accountId, 'EXPENSE', 120.5, new Date('2026-04-01T00:00:00.000Z'))
+      // Future-dated: must not move a current balance.
+      await makeTx(s.userId, s.accountId, 'EXPENSE', 999, new Date('2026-09-01T00:00:00.000Z'))
+      await prisma.transfer.create({
+        data: {
+          userId: s.userId,
+          fromAccountId: s.accountId,
+          toAccountId: accountB.id,
+          fromAmount: 250_000,
+          toAmount: 10,
+          exchangeRateUsed: 0.00004,
+          date: new Date('2026-05-01T00:00:00.000Z'),
+        },
+      })
+
+      const accounts = await prisma.financialAccount.findMany({ where: { userId: s.userId } })
+      const expected = await getAccountBalancesForAccounts(s.userId, accounts, now)
+      const actual = await getAccountBalancesForUser(s.userId, now)
+
+      expect(actual.size).toBe(2)
+      for (const account of accounts) {
+        expect(actual.get(account.id)?.toString()).toBe(expected.get(account.id)?.toString())
+      }
+      expect(actual.get(s.accountId)?.toString()).toBe('-248420.5')
+    })
+
+    it('never includes another tenant account', async () => {
+      const mine = await setupUserAccount(1)
+      const theirs = await setupUserAccount(2)
+      const balances = await getAccountBalancesForUser(mine.userId, new Date())
+      expect([...balances.keys()]).toEqual([mine.accountId])
+      expect(balances.has(theirs.accountId)).toBe(false)
+    })
+
+    it('returns an empty map for a user with no accounts', async () => {
+      const s = await setupUserAccount(1)
+      await prisma.financialAccount.deleteMany({ where: { userId: s.userId } })
+      expect((await getAccountBalancesForUser(s.userId, new Date())).size).toBe(0)
     })
   })
 })

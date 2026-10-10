@@ -217,6 +217,21 @@ export async function listActiveFinancialAccounts(userId: string) {
   })
 }
 
+/**
+ * The active accounts as the transaction, transfer and reminder pickers use
+ * them: id, name and currency only. Same filter and order as
+ * `listActiveFinancialAccounts`, minus its `accountType` include — Prisma runs
+ * an include as a second sequential round trip (~100 ms here), and no picker
+ * renders the type.
+ */
+export async function listActiveAccountPickerRows(userId: string) {
+  return prisma.financialAccount.findMany({
+    where: { userId, status: 'ACTIVE' },
+    select: { id: true, name: true, currency: true },
+    orderBy: { createdAt: 'asc' },
+  })
+}
+
 export async function listAllFinancialAccounts(userId: string) {
   return prisma.financialAccount.findMany({
     where: { userId },

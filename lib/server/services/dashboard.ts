@@ -5,7 +5,7 @@ import { orNullIfFxUnavailable } from '@/lib/ui/or-null-if-fx-unavailable'
 import { getAccountBalanceOverTime, loadBalanceHistory } from './account-balance-history'
 import { getActivitySummary, getCashFlowTrend } from './activity'
 import { getBudgetProgressForMonth } from './budget'
-import { getCurrentPosition } from './position'
+import { getCurrentPosition, loadPositionAgreements } from './position'
 import { listDashboardOccurrences } from './reminder'
 import { listSavingsGoals } from './savings-goal'
 import { listTransactions } from './transaction'
@@ -26,12 +26,18 @@ export async function getDashboardData(
   const [finance, monthly, cashFlowTrend, recentTransactions, budgets, goals, occurrences] =
     await Promise.all([
       (async () => {
-        const state = await loadBalanceHistory(userId, timezone, limits.months, now)
+        // The debts and loans do not depend on the accounts, so they load beside
+        // the account + timeline reads rather than after them.
+        const [state, agreements] = await Promise.all([
+          loadBalanceHistory(userId, timezone, limits.months, now),
+          loadPositionAgreements(userId, now),
+        ])
         const balances = state.timeline.balances.at(-1)
         if (!balances) throw new Error('Dashboard requires a current balance point')
         const position = await orNullIfFxUnavailable(
           getCurrentPosition(userId, displayCurrency, {
             now,
+            agreements,
             accountState: { userId, asOf: now, accounts: state.accounts, balances },
           }),
         )
