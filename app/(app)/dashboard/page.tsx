@@ -20,14 +20,16 @@ import { DASHBOARD_OCCURRENCE_LIMITS, buildDashboardViewModel } from '@/lib/ui/d
 import { formatDate } from '@/lib/ui/format-date'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { BudgetProgressList } from '@/components/budgets/budget-progress-list'
-import { AccountBalanceHistoryChart } from '@/components/dashboard/account-balance-history-chart'
-import { AccountDistributionChart } from '@/components/dashboard/account-distribution-chart'
-import { CashFlowTrendChart } from '@/components/dashboard/cash-flow-trend-chart'
 import { CHART_HEIGHT } from '@/components/dashboard/chart-theme'
 import { DebtLoanOverview } from '@/components/dashboard/debt-loan-overview'
-import { ExpenseByCategoryChart } from '@/components/dashboard/expense-by-category-chart'
 import { FxRateStatus } from '@/components/dashboard/fx-rate-status'
-import { IncomeVsExpenseChart } from '@/components/dashboard/income-vs-expense-chart'
+import {
+  AccountBalanceHistoryChart,
+  AccountDistributionChart,
+  CashFlowTrendChart,
+  ExpenseByCategoryChart,
+  IncomeVsExpenseChart,
+} from '@/components/dashboard/lazy-charts'
 import { OnboardingCard } from '@/components/dashboard/onboarding-card'
 import { RecentTransactions } from '@/components/dashboard/recent-transactions'
 import { SummaryPanel } from '@/components/dashboard/summary-panel'

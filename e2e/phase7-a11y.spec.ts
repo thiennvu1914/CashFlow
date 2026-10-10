@@ -719,9 +719,12 @@ test.describe.serial('Phase 7 — accessibility', () => {
     // income vs expense, account distribution) — `>=` rather than an exact
     // count, so adding a sixth chart does not fail this, while every figure
     // that exists is still checked individually below.
-    await expect(figures).not.toHaveCount(0)
+    // The charts are lazy-loaded (`components/dashboard/lazy-charts.tsx`), so
+    // they arrive after the heading: wait for them rather than counting once.
+    await expect
+      .poll(() => figures.count(), { message: 'the dashboard renders its charts' })
+      .toBeGreaterThanOrEqual(5)
     const count = await figures.count()
-    expect(count, 'the dashboard renders its charts').toBeGreaterThanOrEqual(5)
 
     // (c) each chart's accessible name IS the page's composed, translated
     // summary — every one of the five `*Summary` keys opens "Biểu đồ …", so a
