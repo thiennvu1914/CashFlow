@@ -314,6 +314,65 @@ test.describe.serial('Phase 7 — confirmations', () => {
     )
   })
 
+  /**
+   * One delete at a time, and never a silent refusal: the dialog has already
+   * closed, so a second delete confirmed while the first is in flight would be
+   * refused by the list's lock without a word. Every other row's delete item
+   * is disabled until the first settles instead. The second row is created
+   * here and deleted for real at the end, so the seed is exactly what the
+   * cases below expect.
+   */
+  test('while a delete is in flight, no other row offers its own delete', async ({ page }) => {
+    await createTransactionViaUi(page, {
+      type: 'EXPENSE',
+      accountName: 'Cash',
+      categoryName: 'Transportation',
+      amount: 20_000,
+    })
+    const firstMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
+    const otherMenu = page.getByRole('button', { name: rowMenuName('Transportation') })
+    const deleteItem = page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ })
+    const dialog = page.getByRole('dialog')
+    await expect(otherMenu).toBeVisible()
+
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const isListPage = (url: URL) => url.pathname === '/transactions'
+    await page.route(isListPage, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback()
+      await held
+      await route.abort('failed')
+    })
+
+    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
+    await expect(firstMenu).toHaveCount(0)
+
+    // In flight: the other row's delete cannot be chosen.
+    await otherMenu.click()
+    await expect(deleteItem).toBeDisabled()
+    await page.keyboard.press('Escape')
+
+    // Settled (as a failure, so nothing was deleted): now it can.
+    release()
+    await expect(firstMenu).toBeVisible()
+    await page.unroute(isListPage)
+    await otherMenu.click()
+    await expect(deleteItem).toBeEnabled()
+
+    // Put the seed back: delete the extra row for real, and wait until the
+    // server has done it before the next case reads the page.
+    await deleteItem.click()
+    const deleted = page.waitForResponse(
+      (response) => response.request().method() === 'POST' && isListPage(new URL(response.url())),
+    )
+    await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
+    expect((await deleted).ok()).toBe(true)
+    await page.reload()
+    await expect(firstMenu).toBeVisible()
+    await expect(otherMenu).toHaveCount(0)
+  })
+
   for (const action of DESTRUCTIVE) {
     test(`${action.name}: asks first, Cancel changes nothing, Confirm does it`, async ({
       page,

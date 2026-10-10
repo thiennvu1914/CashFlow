@@ -31,7 +31,7 @@ import { InlineAlert } from '@/components/common/inline-alert'
 import { MoneyText } from '@/components/common/money-text'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
 import { groupByDay } from './transaction-day-group'
-import { withoutAccepted, withoutRow } from './transaction-delete-visibility'
+import { hideDeletedRow, settledLedger } from './transaction-delete-visibility'
 
 /**
  * The ledger (spec §6.2).
@@ -105,15 +105,22 @@ export function TransactionList({
    */
   const [acceptedDeletes, setAcceptedDeletes] = useState<ReadonlySet<string>>(new Set())
   const settled = useMemo(
-    () => withoutAccepted(transactions, acceptedDeletes),
+    () => settledLedger(transactions, acceptedDeletes),
     [transactions, acceptedDeletes],
   )
   /**
-   * The ledger minus the row being deleted: hidden the instant the user
-   * confirms, and restored by React itself if the action fails or throws (the
-   * optimistic value reverts when the transition ends).
+   * The ledger minus the row being deleted, with every other row's delete
+   * disabled: both the instant the user confirms, and both restored by React
+   * itself when the transition ends (the optimistic value reverts), whether
+   * the action succeeded, failed or threw.
+   *
+   * "A delete is in flight" is optimistic too because `submit.locked` cannot
+   * say it here: `submit.run` sets it inside this transition, and React holds
+   * an async transition's state updates back until the action finishes, so it
+   * never renders as `true` — tried, and `e2e/phase7-confirm-dialogs` still
+   * found the other row's delete enabled mid-flight.
    */
-  const [visible, hideRow] = useOptimistic(settled, withoutRow<TransactionRow>)
+  const [ledger, hideRow] = useOptimistic(settled, hideDeletedRow<TransactionRow>)
   const dialogRef = useRef<DeleteDialogHandle>(null)
   const submit = useActionSubmit(t)
 
@@ -129,7 +136,7 @@ export function TransactionList({
 
   /**
    * Stable for the life of the list, so a memoised row never re-renders because
-   * the dialog opened, a delete went pending or another row's error changed.
+   * the dialog opened or another row's error changed.
    */
   const requestDelete = useCallback(
     (row: TransactionRow) => {
@@ -145,8 +152,10 @@ export function TransactionList({
    * Fire-and-forget: the dialog has already closed, so nothing awaits this.
    * `hideRow` runs INSIDE the `run` callback (synchronously, so still within
    * the transition) rather than before it: `submit.run` refuses a second delete
-   * while one is in flight, and a row hidden before that refusal would snap
-   * back with no message. The refused row simply stays visible.
+   * while one is in flight, and a row hidden — and every delete locked — before
+   * that refusal would snap back with no message. No second delete can be
+   * chosen meanwhile (`ledger.deleteInFlight` disables them), so the guard only
+   * matters for a same-tick race, where the refused row simply stays visible.
    */
   function confirmDelete(row: TransactionRow) {
     startTransition(async () => {
@@ -169,15 +178,15 @@ export function TransactionList({
   const groups = useMemo(
     () =>
       groupByDay(
-        visible,
+        ledger.rows,
         (row) => formatInTimeZone(row.date, timezone, 'yyyy-MM-dd'),
         today,
         yesterday,
       ),
-    [visible, timezone, today, yesterday],
+    [ledger.rows, timezone, today, yesterday],
   )
 
-  if (visible.length === 0) {
+  if (ledger.rows.length === 0) {
     return (
       <EmptyState
         icon={Receipt}
@@ -238,6 +247,7 @@ export function TransactionList({
                   timezone={timezone}
                   hasError={row.id in errors}
                   isLastRow={groupIndex === groups.length - 1 && rowIndex === group.rows.length - 1}
+                  deleteDisabled={ledger.deleteInFlight}
                   onRequestDelete={requestDelete}
                 />
               ))}
@@ -262,10 +272,11 @@ export function TransactionList({
 /**
  * One ledger row. `memo`ised, and every prop is a primitive, a row object that
  * keeps its identity while the server data is unchanged, or the stable
- * `onRequestDelete` — so opening the dialog, a delete going pending or a
- * sibling's error never re-renders the other rows. It reads its own
- * translations from context instead of taking `t`, whose identity is not
- * guaranteed stable.
+ * `onRequestDelete` — so opening the dialog or a sibling's error never
+ * re-renders the other rows. A delete going in flight does, once each way,
+ * because every row's delete item has to disable (`deleteDisabled`). It reads
+ * its own translations from context instead of taking `t`, whose identity is
+ * not guaranteed stable.
  */
 const TransactionListRow = memo(function TransactionListRow({
   row,
@@ -273,6 +284,7 @@ const TransactionListRow = memo(function TransactionListRow({
   timezone,
   hasError,
   isLastRow,
+  deleteDisabled,
   onRequestDelete,
 }: {
   row: TransactionRow
@@ -280,6 +292,8 @@ const TransactionListRow = memo(function TransactionListRow({
   timezone: string
   hasError: boolean
   isLastRow: boolean
+  /** Another delete is in flight (`LedgerView.deleteInFlight`). */
+  deleteDisabled: boolean
   onRequestDelete: (row: TransactionRow) => void
 }) {
   const t = useTranslations()
@@ -328,6 +342,7 @@ const TransactionListRow = memo(function TransactionListRow({
               label: t('transactions.deleteAction'),
               tone: 'negative',
               onSelect: () => onRequestDelete(row),
+              disabled: deleteDisabled,
             },
           ]}
         />

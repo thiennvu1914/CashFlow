@@ -137,7 +137,12 @@ export function digestOf(e: unknown): string | undefined {
  * its own submit trigger while `submit.locked` (a `<fieldset disabled>`, a
  * `<Button disabled>`, or — for `ConfirmDialog` — its own buttons on the same
  * lock), so no second click can reach `run` while the first is still in
- * flight.
+ * flight. `TransactionList` is the one caller that cannot use the lock for
+ * this: its confirmation closes at once and it calls `run` inside a
+ * transition, where `locked` never renders as `true` (React holds an async
+ * transition's updates back until it ends). It disables every row's delete on
+ * its own optimistic flag instead (`LedgerView.deleteInFlight` in
+ * `components/transactions/transaction-delete-visibility.ts`).
  */
 export async function runActionSubmit<E extends string>(
   run: SubmitState['run'],
