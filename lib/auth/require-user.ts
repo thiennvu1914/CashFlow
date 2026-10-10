@@ -1,5 +1,6 @@
 import { cache } from 'react'
 import { cookies, headers } from 'next/headers'
+import { parseCookie } from 'next/dist/compiled/@edge-runtime/cookies'
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth/auth'
 
@@ -11,35 +12,64 @@ export class UnauthorizedError extends Error {
 }
 
 /**
- * The request headers Better Auth authenticates, with `cookie` rebuilt from
- * `cookies()` rather than taken from `headers()` as it stands.
+ * The request headers Better Auth authenticates: the request's own `Cookie`
+ * header, with the cookies the current Server Action changed laid over it.
  *
- * The two differ in exactly one place, and it matters because the session is
- * cached in a cookie (`session.cookieCache` in `lib/auth/create-auth.ts`).
- * After a Server Action writes a cookie, Next re-renders the route inside the
- * action's own response; in that render `cookies()` reflects the action's
- * writes (`synchronizeMutableCookies` in
+ * Not the header as it stands, because the session is cached in a cookie
+ * (`session.cookieCache` in `lib/auth/create-auth.ts`). After a Server Action
+ * writes a cookie, Next re-renders the route inside the action's own response;
+ * in that render `cookies()` reflects the action's writes
+ * (`synchronizeMutableCookies` in
  * `node_modules/next/dist/server/async-storage/request-store.js`) but
  * `headers()` is still the ORIGINAL request, cookie header and all ("TODO: does
  * this need to update headers as well?" — same function). So `updateProfile`'s
  * re-render would read the cache cookie from BEFORE the save and paint the old
  * locale, theme, currency and timezone, although the action had just
- * re-issued the cache. Through `cookies()` the session read sees the same
- * cookies as every other read in the render.
+ * re-issued the cache.
  *
- * Values are re-encoded because `cookies()` hands them back decoded and Better
- * Auth decodes again when it parses the header.
+ * Not `cookies()` alone either, because it keeps the LAST copy of a repeated
+ * name (`parseCookie` in `node_modules/next/dist/compiled/@edge-runtime/cookies`)
+ * while Better Auth reads the session cookies with better-call's
+ * `parseCookies`, which keeps the FIRST (`node_modules/better-call/dist/cookies.mjs`).
+ * A name repeats when another host under the parent domain plants a
+ * `__Secure-` session cookie with `Domain=`, copied from the planter's own
+ * account; browsers send the older cookie — the user's own — first, so
+ * last-wins would hand the request to the planted account.
+ *
+ * So a cookie whose `cookies()` value differs from Next's own parse of the raw
+ * header, or is missing from it, is one the action wrote. It goes first and
+ * its raw copies are dropped, so both of Better Auth's readers see the action's
+ * value: better-call's first-wins parse and Better Auth's own last-wins
+ * `parseCookies`, which reassembles chunked cookies
+ * (`node_modules/better-auth/dist/cookies/session-store.mjs`). An empty value
+ * is a deletion — `cookies().delete()` stores one, and Better Auth's
+ * `Max-Age=0` expiry reaches `cookies().set` as one through `nextCookies()` —
+ * so that name is dropped entirely rather than resurrected from the raw
+ * header. Every other pair stays as the browser sent it, in its order; outside
+ * a Server Action nothing differs and the header goes through untouched. (A
+ * write equal to the raw header's last copy of a repeated name looks
+ * unchanged, and Better Auth then sees what it saw before the action.)
+ *
+ * Written values are re-encoded because `cookies()` hands them back decoded
+ * and Better Auth decodes again when it parses the header.
  */
 async function sessionRequestHeaders(): Promise<Headers> {
   const requestHeaders = new Headers(await headers())
-  const cookieStore = await cookies()
-  requestHeaders.set(
-    'cookie',
-    cookieStore
-      .getAll()
-      .map(({ name, value }) => `${name}=${encodeURIComponent(value)}`)
-      .join('; '),
-  )
+  const sent = requestHeaders.get('cookie') ?? ''
+  const asSent = parseCookie(sent)
+  const changed = new Set<string>()
+  const written: string[] = []
+  for (const { name, value } of (await cookies()).getAll()) {
+    if (asSent.get(name) === value) continue
+    changed.add(name)
+    if (value !== '') written.push(`${name}=${encodeURIComponent(value)}`)
+  }
+  if (changed.size === 0) return requestHeaders
+  const untouched = sent
+    .split(';')
+    .map((pair) => pair.trim())
+    .filter((pair) => pair !== '' && !changed.has(pair.split('=', 1)[0].trim()))
+  requestHeaders.set('cookie', [...written, ...untouched].join('; '))
   return requestHeaders
 }
 
