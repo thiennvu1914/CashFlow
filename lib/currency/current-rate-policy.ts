@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { log } from '@/lib/server/log'
-import { getLatestRate, hasRecentProviderFailure } from './fx-service'
+import { getLatestRate, hasRecentProviderFailure, startOfUtcDay } from './fx-service'
 import type { CachedRateResult } from './fx-service'
 import type { CurrencyPair, ExchangeRateProvider } from './provider'
 
@@ -101,12 +101,24 @@ async function getLastKnownGoodCurrentRate(pair: CurrencyPair): Promise<CachedRa
  * a fallback, or a refusal carrying `cause`. The staleness window is evaluated
  * afresh on every call — nothing here is memoised — so a row that has aged out
  * of `MAX_FALLBACK_STALENESS_MS` is refused even in the middle of an outage.
+ *
+ * Today's own row is the exception: it is exactly what `getLatestRate`'s
+ * today-row lookup returns, so it comes back as that — untagged,
+ * `isFallback: false`, not logged. It can surface here because every row the
+ * app writes is keyed by a UTC day start, so when it exists it is the newest
+ * candidate: during the provider cool-down (which skips that lookup), or when
+ * a concurrent request writes it while this one's provider call is failing.
+ * Tagging it would store a live rate under `cache-fallback:` provenance on
+ * every transaction created meanwhile.
  */
 async function fallBackOrRefuse(pair: CurrencyPair, cause: unknown): Promise<UsableRateResult> {
   // Anything the fallback query itself throws (a database error) is a real
   // fault and propagates untouched.
   const fallback = await getLastKnownGoodCurrentRate(pair)
   if (!fallback) throw new FxUnavailableError({ cause })
+  if (fallback.effectiveDate.getTime() === startOfUtcDay(new Date()).getTime()) {
+    return { ...fallback, isFallback: false }
+  }
   // A fixed event name: never the provider error payload, a rate, or a URL
   // — logs must stay free of financial data and provider credentials. It goes
   // through the server logger so a production host gets one JSON line with a
@@ -125,12 +137,14 @@ async function fallBackOrRefuse(pair: CurrencyPair, cause: unknown): Promise<Usa
  * so the UI can say the figure may be out of date. When nothing qualifies this
  * throws `FxUnavailableError` rather than inventing a rate.
  *
- * For a minute after the default provider fails, the first two steps are
- * skipped: the failure already showed today's row missing (the provider is
- * only asked when it is), and nothing in this process writes it while the
- * provider is not being asked — so the answer is the one the full chain would
- * reach, minus a provider timeout on every request of an outage. An injected
- * provider always runs the full chain.
+ * For a minute after the default provider fails — or until a default-provider
+ * lookup succeeds, whichever is first — the provider is not asked and the
+ * policy goes straight to the fallback query, sparing every request of an
+ * outage the provider timeout. Today's row can still land in that minute (a
+ * lookup that was already in flight when the failure was recorded), and the
+ * fallback query then returns it first; `fallBackOrRefuse` serves it untagged,
+ * exactly as the today-row lookup would. An injected provider always runs the
+ * full chain.
  */
 export async function getUsableCurrentRate(
   pair: CurrencyPair,

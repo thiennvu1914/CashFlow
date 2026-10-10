@@ -5,6 +5,7 @@ import {
   getLatestRate,
   getHistoricalRate,
   getHistoricalRates,
+  hasRecentProviderFailure,
   resetFxMemoForTests,
 } from './fx-service'
 import type { ExchangeRateProvider, RateResult } from './provider'
@@ -385,6 +386,34 @@ describe('getLatestRate memo (default provider)', () => {
     const third = await getLatestRate(PAIR)
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(third.fetchedAt.getTime()).toBe(later.getTime())
+  })
+
+  it('starts the provider cool-down on a default-provider failure and ends it on the next success', async () => {
+    const fetchSpy = forbidNetwork()
+    await expect(getLatestRate(PAIR)).rejects.toThrow()
+    expect(hasRecentProviderFailure(PAIR)).toBe(true)
+
+    // A lookup already in flight when that failure was recorded can still
+    // succeed. Once one has, the provider is demonstrably up again and the
+    // cool-down must not keep sending requests to the fallback.
+    fetchSpy.mockRestore()
+    stubProviderFetch(new Date().toUTCString())
+    await getLatestRate(PAIR)
+
+    expect(hasRecentProviderFailure(PAIR)).toBe(false)
+  })
+
+  it('never starts the cool-down for an injected provider', async () => {
+    const failing: ExchangeRateProvider = {
+      getLatestRate: async () => {
+        throw new Error('provider down')
+      },
+      getHistoricalRate: async () => null,
+    }
+
+    await expect(getLatestRate(PAIR, failing)).rejects.toThrow('provider down')
+
+    expect(hasRecentProviderFailure(PAIR)).toBe(false)
   })
 
   it('is bypassed, read and write, by an injected provider, and forgotten by resetFxMemoForTests', async () => {

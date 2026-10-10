@@ -111,7 +111,9 @@ describe('getUsableCurrentRate', () => {
       const second = await getUsableCurrentRate(PAIR)
 
       expect(fetchSpy).toHaveBeenCalledTimes(1)
-      // Not even today's cache row: the failure proved it was missing.
+      // Not even the today-row lookup: the cool-down goes straight to the
+      // fallback query (which still finds today's row if one lands meanwhile —
+      // see below).
       expect(todayRead).not.toHaveBeenCalled()
       // The same fallback the uncached path gives: the row's own timestamps,
       // still tagged and still logged.
@@ -140,6 +142,46 @@ describe('getUsableCurrentRate', () => {
       expect(isFxUnavailableError(thrown)).toBe(true)
       expect((thrown as FxUnavailableError).cause).toBeInstanceOf(Error)
       expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it("serves today's row untagged if it lands during those 60 s: it is today's cache, not a fallback", async () => {
+      // Yesterday's row is the honest fallback while today's is missing…
+      await seedRate({
+        rate: 25000,
+        effectiveDate: new Date('2026-10-09T00:00:00.000Z'),
+        fetchedAt: new Date('2026-10-09T00:10:00.000Z'),
+        source: 'open.er-api.com',
+      })
+      const degraded = await getUsableCurrentRate(PAIR)
+      expect(degraded.isFallback).toBe(true)
+      expect(degraded.source).toBe('cache-fallback:open.er-api.com')
+
+      // …until a lookup that was already in flight when the provider failed
+      // lands and writes today's row. From then on the fallback query returns
+      // that row first — and it must come back exactly as the today-row lookup
+      // would return it, or every transaction created in the rest of the
+      // cool-down would store a live rate under `cache-fallback:` provenance.
+      const todayFetchedAt = new Date(t0.getTime() + 5 * 1000)
+      await seedRate({
+        rate: '25432.123456',
+        effectiveDate: new Date('2026-10-10T00:00:00.000Z'),
+        fetchedAt: todayFetchedAt,
+        source: 'open.er-api.com',
+      })
+      const todayRead = vi.spyOn(prisma.exchangeRate, 'findUnique')
+      vi.setSystemTime(new Date(t0.getTime() + 30 * 1000))
+
+      const result = await getUsableCurrentRate(PAIR)
+
+      expect(result.isFallback).toBe(false)
+      expect(result.source).toBe('open.er-api.com')
+      expect(result.rateDecimal.toString()).toBe('25432.123456')
+      expect(result.effectiveDate.toISOString()).toBe('2026-10-10T00:00:00.000Z')
+      expect(result.fetchedAt.toISOString()).toBe(todayFetchedAt.toISOString())
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(todayRead).not.toHaveBeenCalled()
+      // Logged for the real fallback only.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
     })
 
     it('does not hold back an injected provider', async () => {
@@ -355,6 +397,35 @@ describe('getUsableCurrentRate', () => {
     expect(isFxUnavailableError(thrown)).toBe(true)
     expect((thrown as FxUnavailableError).cause).toBeInstanceOf(Error)
     expect(((thrown as FxUnavailableError).cause as Error).message).toBe('provider down')
+  })
+
+  it("serves today's row untagged when a concurrent lookup writes it while this one's provider call fails", async () => {
+    // The race without any cool-down: the today-row lookup misses, a
+    // concurrent request writes the row while this request's provider call is
+    // failing, and the fallback query then returns it.
+    const today = new Date()
+    const todayStart = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+    )
+    const racingProvider: ExchangeRateProvider = {
+      getLatestRate: async () => {
+        await seedRate({
+          rate: 25111,
+          effectiveDate: todayStart,
+          fetchedAt: today,
+          source: 'concurrent',
+        })
+        throw new Error('provider down')
+      },
+      getHistoricalRate: async () => null,
+    }
+
+    const result = await getUsableCurrentRate(PAIR, racingProvider)
+
+    expect(result.isFallback).toBe(false)
+    expect(result.source).toBe('concurrent')
+    expect(result.effectiveDate.getTime()).toBe(todayStart.getTime())
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('ignores a cached row whose effectiveDate is in the future', async () => {

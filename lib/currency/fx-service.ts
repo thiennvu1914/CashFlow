@@ -16,7 +16,8 @@ import { OpenErApiProvider } from './open-er-api-provider'
 
 const defaultProvider = new OpenErApiProvider()
 
-function startOfUtcDay(date: Date): Date {
+/** The UTC start of the day containing `date` — the `ExchangeRate` cache key. */
+export function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
 }
 
@@ -91,8 +92,10 @@ function toRateResult(cached: {
  * `fetchedAt` and `source` — so a memoised answer is indistinguishable from
  * the uncached one. Two kinds of answer are kept:
  *
- * - today's cached row, until that UTC day ends: once written it never
- *   changes, because `getLatestRate` only fetches while it is missing;
+ * - today's cached row, until that UTC day ends: `getLatestRate` only writes
+ *   it while it is missing, so it changes at most when two first-of-the-day
+ *   misses race and the second upsert overwrites the first — and either way
+ *   the memo holds a real provider answer for that day, as it was read back;
  * - a provider answer whose effective day is *before* today (the provider has
  *   not rolled over yet), for `LAGGING_RATE_MEMO_MS`. A provider answer *for*
  *   today is not memoised: the next call reads the row it was cached as, and
@@ -102,7 +105,9 @@ function toRateResult(cached: {
  * A failed provider call is remembered separately, for
  * `PROVIDER_FAILURE_MEMO_MS`, so `getUsableCurrentRate` can go straight to its
  * last-known-good fallback instead of making every request wait out the
- * provider timeout during an outage.
+ * provider timeout during an outage. A successful call — say one that was
+ * already in flight when another request's call failed — ends that early: the
+ * provider is demonstrably up again.
  *
  * An injected `providerOverride` bypasses all of it, reads and writes alike —
  * a fake provider's answers must never be served to a later caller.
@@ -211,6 +216,7 @@ export async function getLatestRate(
     if (useMemo) providerFailedUntil.set(pairKey(pair), Date.now() + PROVIDER_FAILURE_MEMO_MS)
     throw error
   }
+  if (useMemo) providerFailedUntil.delete(pairKey(pair))
   const effectiveDate = startOfUtcDay(fresh.effectiveDate)
   await cacheRate(pair, effectiveDate, fresh)
   // decimal.js parses the number's shortest decimal representation — the same
