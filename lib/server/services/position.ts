@@ -166,6 +166,9 @@ export interface CurrentPositionOptions {
 
 /** The active debts and loans a position needs, as `getDebtsWithOutstanding` / `getLoansWithOutstanding` return them. */
 export interface PositionAgreements {
+  /** The user and the cutoff they were loaded for — checked like `accountState`'s. */
+  userId: string
+  asOf: Date
   debts: Awaited<ReturnType<typeof getDebtsWithOutstanding>>
   loans: Awaited<ReturnType<typeof getLoansWithOutstanding>>
 }
@@ -201,7 +204,7 @@ export async function loadPositionAgreements(
     getDebtsWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
     getLoansWithOutstanding(userId, today, { activeOnly: true, includePayments: false }),
   ])
-  return { debts, loans }
+  return { userId, asOf, debts, loans }
 }
 
 export async function getCurrentPosition(
@@ -221,6 +224,19 @@ export async function getCurrentPosition(
       if (account.userId !== userId) throw new AccountNotFoundError(account.id)
       if (!state.balances.has(account.id)) throw new Error('Missing position account balance')
     }
+  }
+  // The same guard for supplied debts and loans: they are reused only for the
+  // user and cutoff they were loaded for, and every row must be that user's.
+  const supplied = options.agreements
+  if (supplied && (supplied.userId !== userId || supplied.asOf.getTime() !== asOf.getTime())) {
+    throw new Error('Position agreements must belong to this user and cutoff')
+  }
+  if (
+    supplied &&
+    (supplied.debts.some(({ debt }) => debt.userId !== userId) ||
+      supplied.loans.some(({ loan }) => loan.userId !== userId))
+  ) {
+    throw new Error('Position agreement rows must belong to this user')
   }
   const accounts = state
     ? state.accounts.filter((account) => account.status === 'ACTIVE')

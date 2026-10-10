@@ -311,6 +311,37 @@ describe('current position service', () => {
       expect(actual.netWorth.toString()).toBe(expected.netWorth.toString())
     })
 
+    it('refuses caller-supplied agreements loaded for another user or cutoff', async () => {
+      // The same guard `accountState` has: supplied reads are trusted only for
+      // the user and the instant they were loaded for.
+      const owner = await setup()
+      const other = await setup()
+      await seedDebt(owner.userId, { direction: 'RECEIVABLE', originalAmount: '500000' })
+      await seedLoan(owner.userId, { principal: '1000000' })
+      const { provider } = countingProvider()
+      const now = new Date()
+      const agreements = await loadPositionAgreements(owner.userId, now)
+      const position = (userId: string, options: Parameters<typeof getCurrentPosition>[2]) =>
+        getCurrentPosition(userId, 'VND', { providerOverride: provider, now, ...options })
+
+      await expect(position(other.userId, { agreements })).rejects.toThrow(
+        'Position agreements must belong to this user and cutoff',
+      )
+      await expect(
+        position(owner.userId, { agreements, now: new Date(now.getTime() + 1) }),
+      ).rejects.toThrow('Position agreements must belong to this user and cutoff')
+      // Relabelled for the other user: the rows inside still betray the owner.
+      const relabelled = { ...agreements, userId: other.userId }
+      await expect(
+        position(other.userId, { agreements: { ...relabelled, loans: [] } }),
+      ).rejects.toThrow('Position agreement rows must belong to this user')
+      await expect(
+        position(other.userId, { agreements: { ...relabelled, debts: [] } }),
+      ).rejects.toThrow('Position agreement rows must belong to this user')
+      // The owner's own agreements still answer.
+      await expect(position(owner.userId, { agreements })).resolves.toBeDefined()
+    })
+
     it('converts every foreign-currency balance before summing (the raw-native regression)', async () => {
       const s = await setup()
       const { provider } = countingProvider()
