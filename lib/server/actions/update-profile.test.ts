@@ -13,6 +13,7 @@ const requireUserMock = vi.hoisted(() => vi.fn())
 const refreshSessionCacheMock = vi.hoisted(() => vi.fn())
 const updateMock = vi.hoisted(() => vi.fn())
 const cookieSetMock = vi.hoisted(() => vi.fn())
+const logWarnMock = vi.hoisted(() => vi.fn())
 
 class MockUnauthorizedError extends Error {
   constructor() {
@@ -29,6 +30,10 @@ vi.mock('@/lib/auth/require-user', () => ({
 
 vi.mock('@/lib/prisma', () => ({
   prisma: { user: { update: updateMock } },
+}))
+
+vi.mock('@/lib/server/log', () => ({
+  log: { warn: logWarnMock },
 }))
 
 vi.mock('next/headers', () => ({
@@ -65,6 +70,7 @@ beforeEach(() => {
   refreshSessionCacheMock.mockReset()
   updateMock.mockReset()
   cookieSetMock.mockReset()
+  logWarnMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
   refreshSessionCacheMock.mockResolvedValue(undefined)
   updateMock.mockResolvedValue(undefined)
@@ -103,6 +109,27 @@ describe('updateProfile', () => {
     expect(updateMock.mock.invocationCallOrder[0]).toBeLessThan(
       refreshSessionCacheMock.mock.invocationCallOrder[0],
     )
+  })
+
+  it('reports success and still writes both mirror cookies when the cache refresh fails, logging a fixed event', async () => {
+    // The row is committed by then; the old cache cookie heals within its five
+    // minutes, so a refresh failure is no reason to tell the user the save failed.
+    const failure = new Error('Failed to get session')
+    refreshSessionCacheMock.mockRejectedValueOnce(failure)
+
+    const result = await updateProfile(validInput)
+
+    expect(result).toEqual({ ok: true })
+    expect(cookieSetMock).toHaveBeenCalledWith('NEXT_LOCALE', 'en', expect.anything())
+    expect(cookieSetMock).toHaveBeenCalledWith('cashflow-theme', 'dark', expect.anything())
+    // Before the refresh, so a refresh that throws can never skip them.
+    for (const call of cookieSetMock.mock.invocationCallOrder) {
+      expect(call).toBeLessThan(refreshSessionCacheMock.mock.invocationCallOrder[0])
+    }
+    expect(logWarnMock).toHaveBeenCalledTimes(1)
+    expect(logWarnMock).toHaveBeenCalledWith('profile.session_cache_refresh_failed', {
+      error: failure,
+    })
   })
 
   it('never lets an injected isDemo or userId reach prisma, and the where.id comes only from requireUser()', async () => {

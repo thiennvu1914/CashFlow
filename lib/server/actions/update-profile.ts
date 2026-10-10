@@ -7,6 +7,7 @@ import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
 import { LOCALE_COOKIE } from '@/lib/i18n/config'
 import { THEME_COOKIE } from '@/lib/theme/config'
 import { preferenceCookieOptions } from '@/lib/server/preference-cookies'
+import { log } from '@/lib/server/log'
 
 export type UpdateProfileResult = { ok: true } | { ok: false; error: 'INVALID_INPUT' }
 
@@ -37,19 +38,12 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
     },
   })
 
-  // The session is cached in a signed cookie for five minutes, user row
-  // included (`session.cookieCache` in `lib/auth/create-auth.ts`), so every
-  // field just written would otherwise keep its OLD value — in the re-render
-  // Next runs inside this action's response, and on every request after it —
-  // until that cache expired. Re-reading past the cache re-issues it from the
-  // row written above; hence after the update, never before.
-  await refreshSessionCache()
-
   // The database row is the source of truth; these two cookies are its mirror,
   // and they exist for the pages that have no session to ask — login, register,
   // forgot/reset password (spec §3, §4). Written here because this action is
   // the only client-reachable writer of `locale`/`theme`, so the mirror cannot
-  // drift from the row.
+  // drift from the row — and before the cache refresh below, so a refresh that
+  // fails cannot leave the mirror behind the row.
   //
   // Not `httpOnly`: both are presentation preferences with nothing to protect,
   // and a flag that guards nothing only blocks a future client-side read.
@@ -61,6 +55,23 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
   const options = await preferenceCookieOptions()
   cookieStore.set(LOCALE_COOKIE, parsed.data.locale, options)
   cookieStore.set(THEME_COOKIE, parsed.data.theme, options)
+
+  // The session is cached in a signed cookie for five minutes, user row
+  // included (`session.cookieCache` in `lib/auth/create-auth.ts`), so every
+  // field just written would otherwise keep its OLD value — in the re-render
+  // Next runs inside this action's response, and on every request after it —
+  // until that cache expired. Re-reading past the cache re-issues it from the
+  // row written above; hence after the update, never before.
+  //
+  // Best effort: the profile is already saved, so a failed refresh must not
+  // be reported as a failed save. The stale cache heals by itself within its
+  // five minutes. Better Auth rethrows a failed read as a fixed-message
+  // `APIError`, and `log` keeps only an error's name, message and digest.
+  try {
+    await refreshSessionCache()
+  } catch (error) {
+    log.warn('profile.session_cache_refresh_failed', { error })
+  }
 
   return { ok: true }
 }
