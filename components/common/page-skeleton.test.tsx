@@ -50,9 +50,12 @@ describe('PageSkeleton', () => {
 /**
  * The ruled set of route-level skeletons (owner item H5), asserted as a file
  * list rather than in a browser: a missing `loading.tsx` is invisible on a fast
- * local navigation, and an EXTRA one is just as much a defect — `/categories`,
- * `/goals`, `/settings` and the auth screens were ruled out (each is a short
- * page whose skeleton would flash for less time than it takes to read).
+ * local navigation, and an EXTRA one is just as much a defect — the auth screens
+ * were ruled out (a short page whose skeleton would flash for less time than it
+ * takes to read). `/categories`, `/goals` and `/settings` were ruled out under
+ * owner item H5 too, and were added back by the latency-fixes plan (Task 9):
+ * their sidebar links are not prefetched, so a click showed nothing until the
+ * server answered, and the skeleton is what fills that gap.
  *
  * The walk is RECURSIVE (fix round 1, Minor 6). It used to read only the
  * direct children of `app/(app)`, so a `loading.tsx` in a nested segment — the
@@ -66,11 +69,14 @@ describe('route-level skeletons', () => {
   const RULED = [
     'accounts',
     'budgets',
+    'categories',
     'dashboard',
     'debts',
+    'goals',
     'loans',
     'reminders',
     'reports',
+    'settings',
     'transactions',
     'transfers',
   ]
@@ -100,15 +106,15 @@ describe('route-level skeletons', () => {
 
   it('exists for the ruled routes and for no others, at any depth', () => {
     expect(skeletonSegments()).toEqual(RULED)
-    // And the routes that were ruled out really exist — otherwise this test
-    // would pass by simply not having those pages any more.
+    // And the routes the skeleton list is about really exist — otherwise this
+    // test would pass by simply not having those pages any more.
     const routes = segments()
     for (const route of ['categories', 'goals', 'settings']) {
       expect(routes, `${route} is still a route`).toContain(route)
     }
   })
 
-  it('every skeleton renders through PageSkeleton — one shape, nine routes', () => {
+  it('every skeleton renders through PageSkeleton — one shape, twelve routes', () => {
     for (const route of RULED) {
       const source = fs.readFileSync(path.join(APP_DIR, route, 'loading.tsx'), 'utf8')
       expect(source, route).toContain('<PageSkeleton')
