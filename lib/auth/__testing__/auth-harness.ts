@@ -97,6 +97,35 @@ export function makeTestAuth(overrides: Partial<CreateAuthOptions> = {}): TestAu
   return { auth, db, sent, baseURL: overrides.baseURL ?? TEST_BASE_URL }
 }
 
+/**
+ * Applies a response's `Set-Cookie` lines to `jar` (cookie name → value) the
+ * way a browser would, including deleting every cookie the response expires
+ * with `Max-Age=0` — which is how Better Auth clears a cookie.
+ *
+ * Exists because `response.headers.get('set-cookie')`, which the older tests
+ * here pass straight back as their `cookie` header, joins every line with ", "
+ * and keeps the attributes, so only the FIRST cookie in it survives parsing.
+ * That was harmless while sign-in set one cookie. With the session cookie cache
+ * on (`lib/auth/create-auth.ts`) sign-in sets two, and a test about the cache
+ * has to send both, exactly as a browser does.
+ */
+export function storeSetCookies(jar: Map<string, string>, headers: Headers): Map<string, string> {
+  for (const line of headers.getSetCookie()) {
+    const [pair, ...attributes] = line.split(';')
+    const separator = pair.indexOf('=')
+    const name = pair.slice(0, separator).trim()
+    const expired = attributes.some((attribute) => attribute.trim().toLowerCase() === 'max-age=0')
+    if (expired) jar.delete(name)
+    else jar.set(name, pair.slice(separator + 1).trim())
+  }
+  return jar
+}
+
+/** The `Cookie` request header a browser holding `jar` would send. */
+export function cookieHeader(jar: Map<string, string>): string {
+  return [...jar].map(([name, value]) => `${name}=${value}`).join('; ')
+}
+
 export interface RequestOptions {
   /** Value for `x-forwarded-for`. Allocate it with `nextTestIp()`. */
   ip?: string

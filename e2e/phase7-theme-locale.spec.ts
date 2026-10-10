@@ -131,9 +131,16 @@ test.describe.serial('Phase 7 — theme and locale', () => {
     await page.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
     await expect(page.getByText(/Đã lưu hồ sơ|Profile saved/)).toBeVisible()
 
+    // Already English on THIS page, before any navigation: the save's own
+    // response re-renders the route (the action writes cookies), and that
+    // render must read the session cache the action just re-issued, not the
+    // stale cache cookie still on the original request
+    // (`sessionRequestHeaders` in `lib/auth/require-user.ts`).
+    const rail = page.getByRole('navigation', { name: /^Primary$/ })
+    await expect(rail.getByRole('link', { name: 'Transactions' })).toBeVisible()
+
     await page.goto('/dashboard')
     await expect(page.locator('html')).toHaveAttribute('lang', 'en')
-    const rail = page.getByRole('navigation', { name: /^Primary$/ })
     await expect(rail.getByRole('link', { name: 'Transactions' })).toBeVisible()
     await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
 

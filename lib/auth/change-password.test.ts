@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
+  cookieHeader,
   makeTestAuth,
   nextTestIp,
   signUp,
   signIn,
   signInAndGetCookie,
   sessionUser,
+  storeSetCookies,
   changePassword,
   type TestAuth,
 } from './__testing__/auth-harness'
@@ -67,7 +69,15 @@ describe('change-password HTTP surface', () => {
     // form's try/catch is known to be handling the status Better Auth
     // actually returns.
     expect(response.status).toBe(400)
-    expect(response.headers.get('set-cookie')).toBeFalsy()
+    // No new session token. The response does re-issue the `session_data`
+    // cache cookie: change-password reads the session authoritatively,
+    // bypassing the cookie cache (`sensitiveSessionMiddleware` in
+    // `node_modules/better-auth/dist/api/routes/session.mjs`), and a database
+    // read of the session writes the cache back — for the SAME session, so
+    // nothing is rotated.
+    expect(
+      response.headers.getSetCookie().some((line) => line.startsWith('better-auth.session_token=')),
+    ).toBe(false)
 
     // Nothing changed: the old password still signs in and the original
     // session is still live.
@@ -104,8 +114,12 @@ describe('change-password HTTP surface', () => {
     )
     expect(response.status).toBe(200)
 
-    const rotatedCookie = response.headers.get('set-cookie')
-    expect(rotatedCookie).toBeTruthy()
+    // Through the browser-shaped jar, not the raw `set-cookie` echo: this
+    // response sets several cookies (the cache re-issued by the authoritative
+    // session read, then the new session's token and cache), and the echo
+    // only keeps the first.
+    const rotatedCookie = cookieHeader(storeSetCookies(new Map(), response.headers))
+    expect(rotatedCookie).toContain('better-auth.session_token=')
 
     // The old password no longer signs in; the new one does.
     expect((await signIn(auth, { email: TEST_EMAIL, password: OLD_PASSWORD }, { ip })).status).toBe(
@@ -115,7 +129,10 @@ describe('change-password HTTP surface', () => {
       200,
     )
 
-    // Cookie B (the other session) is gone.
+    // Cookie B (the other session) is gone. `cookieB` is the raw echo, which
+    // carries only the session token, so this pins the DATABASE revocation; a
+    // browser that also holds B's fresh cache cookie keeps answering for up to
+    // the owner-approved five minutes (`lib/auth/session-cache.test.ts`).
     expect(await sessionUser(auth, { ip, cookie: cookieB })).toBeNull()
 
     // Cookie A's original value is also gone — `deleteUserSessions` deleted
@@ -123,7 +140,7 @@ describe('change-password HTTP surface', () => {
     // rotated cookie handed back in this response's `set-cookie` header is a
     // live session for the same user.
     expect(await sessionUser(auth, { ip, cookie: cookieA })).toBeNull()
-    const rotatedUser = await sessionUser(auth, { ip, cookie: rotatedCookie as string })
+    const rotatedUser = await sessionUser(auth, { ip, cookie: rotatedCookie })
     expect(rotatedUser).toMatchObject({ email: TEST_EMAIL })
   })
 })

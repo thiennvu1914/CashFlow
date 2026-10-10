@@ -1,7 +1,7 @@
 'use server'
 
 import { cookies } from 'next/headers'
-import { requireUser } from '@/lib/auth/require-user'
+import { refreshSessionCache, requireUser } from '@/lib/auth/require-user'
 import { prisma } from '@/lib/prisma'
 import { profileSchema, type ProfileInput } from '@/lib/validation/profile'
 import { LOCALE_COOKIE } from '@/lib/i18n/config'
@@ -36,6 +36,14 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
       timezone: parsed.data.timezone,
     },
   })
+
+  // The session is cached in a signed cookie for five minutes, user row
+  // included (`session.cookieCache` in `lib/auth/create-auth.ts`), so every
+  // field just written would otherwise keep its OLD value — in the re-render
+  // Next runs inside this action's response, and on every request after it —
+  // until that cache expired. Re-reading past the cache re-issues it from the
+  // row written above; hence after the update, never before.
+  await refreshSessionCache()
 
   // The database row is the source of truth; these two cookies are its mirror,
   // and they exist for the pages that have no session to ask — login, register,

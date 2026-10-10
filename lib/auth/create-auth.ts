@@ -1,4 +1,5 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth'
+import { nextCookies } from 'better-auth/next-js'
 import { isNonProductionEnvironment } from '@/lib/server/env'
 import { log } from '@/lib/server/log'
 import { USER_FIELD_DEFAULTS } from './user-defaults'
@@ -213,6 +214,53 @@ export function createAuth(options: CreateAuthOptions) {
       // their session after the real owner resets.
       revokeSessionsOnPasswordReset: true,
     },
+    session: {
+      // Owner-approved trade-off (2026-10-10): a signed cookie caches the session
+      // and user for 5 minutes so page renders and server actions skip two
+      // sequential DB reads across the Singapore→Sydney link. The cost: a session
+      // revoked elsewhere (sign-out on another device, password reset) stays
+      // usable on a device that still holds a fresh cache cookie for up to 5 min.
+      //
+      // Sign-out on the SAME device is unaffected: `/sign-out` expires the
+      // cache cookie together with the session token (`deleteSessionCookie` in
+      // `node_modules/better-auth/dist/cookies/index.mjs`). Better Auth's own
+      // sensitive endpoints (change-password, revoke-sessions) bypass the cache
+      // for an authoritative read regardless (`sensitiveSessionMiddleware` in
+      // `node_modules/better-auth/dist/api/routes/session.mjs`).
+      //
+      // The encoding is left at its "compact" default: base64url JSON plus an
+      // HMAC-SHA256 of it under the auth secret. Readable by whoever holds the
+      // cookie (it is the user's own profile, and the cookie is HttpOnly), but a
+      // cookie edited to claim, say, `isDemo: true` fails the signature check
+      // and is answered from the database instead. `refreshCache` stays at its
+      // `false` default on purpose: it would re-sign the cache before expiry
+      // WITHOUT reading the database, so an active device would never notice a
+      // revocation and the 5-minute bound would be gone.
+      cookieCache: { enabled: true, maxAge: 5 * 60 },
+    },
+    // `nextCookies()` (`node_modules/better-auth/dist/integrations/next-js.mjs`)
+    // copies the `Set-Cookie` lines of every `auth.api.*` call made inside a
+    // Server Action into Next's `cookies()`, so the action's response carries
+    // them. Without it a server-side `getSession` could compute a fresh cache
+    // cookie and silently drop it — and `updateProfile` relies on exactly that
+    // write (`refreshSessionCache` in `lib/auth/require-user.ts`).
+    //
+    // In a Server Component render `cookies()` is read-only; the plugin
+    // swallows that write per cookie, so a render still authenticates, it just
+    // cannot re-issue the cache. (Its check meant to also skip the session's
+    // daily expiry refresh during a render reads the `rsc` request header,
+    // which Next 16.3.4 hides from `headers()` — `HIDDEN_REQUEST_HEADERS` in
+    // `node_modules/next/dist/server/async-storage/request-store.js` — so a
+    // render can still extend the session row without its cookie, exactly as
+    // before this plugin was added.) Requests through `app/api/auth/[...all]`
+    // (sign-in, sign-out) are skipped by the plugin and set their cookies on
+    // the Response as before.
+    //
+    // Must stay LAST: it can only forward cookies set by plugins that run
+    // before it, and Better Auth warns when a plugin with `after` hooks follows
+    // it (`warnIfCookiePluginNotLast` in
+    // `node_modules/better-auth/dist/integrations/cookie-plugin-guard.mjs`).
+    plugins: [nextCookies()],
     user: {
       // `input: false` on every additional field means none of them can be set
       // through Better Auth's own sign-up / update-user request bodies —

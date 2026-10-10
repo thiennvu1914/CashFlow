@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * `lib/prisma.ts` or `lib/auth/auth.ts`.
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
+const refreshSessionCacheMock = vi.hoisted(() => vi.fn())
 const updateMock = vi.hoisted(() => vi.fn())
 const cookieSetMock = vi.hoisted(() => vi.fn())
 
@@ -22,6 +23,7 @@ class MockUnauthorizedError extends Error {
 
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
+  refreshSessionCache: refreshSessionCacheMock,
   UnauthorizedError: MockUnauthorizedError,
 }))
 
@@ -60,9 +62,11 @@ const expectedData = {
 
 beforeEach(() => {
   requireUserMock.mockReset()
+  refreshSessionCacheMock.mockReset()
   updateMock.mockReset()
   cookieSetMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
+  refreshSessionCacheMock.mockResolvedValue(undefined)
   updateMock.mockResolvedValue(undefined)
 })
 
@@ -90,6 +94,17 @@ describe('updateProfile', () => {
     expect(cookieSetMock).toHaveBeenCalledWith('cashflow-theme', 'dark', expectedOptions)
   })
 
+  it('refreshes the cached session after the write, so the re-render and later requests see the new preferences', async () => {
+    await updateProfile(validInput)
+
+    // The session cookie cache carries locale/theme/baseCurrency/timezone;
+    // re-reading it BEFORE the row changed would re-cache the old values.
+    expect(refreshSessionCacheMock).toHaveBeenCalledTimes(1)
+    expect(updateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSessionCacheMock.mock.invocationCallOrder[0],
+    )
+  })
+
   it('never lets an injected isDemo or userId reach prisma, and the where.id comes only from requireUser()', async () => {
     const result = await updateProfile({
       ...validInput,
@@ -114,6 +129,7 @@ describe('updateProfile', () => {
 
     expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
     expect(updateMock).not.toHaveBeenCalled()
+    expect(refreshSessionCacheMock).not.toHaveBeenCalled()
   })
 
   it('rejects when requireUser() rejects with UnauthorizedError, and never calls update', async () => {
@@ -121,5 +137,6 @@ describe('updateProfile', () => {
 
     await expect(updateProfile(validInput)).rejects.toThrow('Not authenticated')
     expect(updateMock).not.toHaveBeenCalled()
+    expect(refreshSessionCacheMock).not.toHaveBeenCalled()
   })
 })
