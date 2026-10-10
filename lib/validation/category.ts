@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 /**
  * Same as `account-type.ts`, including where the message surfaces (Task 17,

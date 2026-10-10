@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import { moneyAmountSchema } from '@/lib/validation/money'
 import { LOCAL_DATE_TIME_RE, isRealLocalDateTime } from '@/lib/datetime/local-date-time'
 

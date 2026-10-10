@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import { USER_FIELD_DEFAULTS } from '@/lib/auth/user-defaults'
 
 /**

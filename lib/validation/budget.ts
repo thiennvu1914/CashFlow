@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import { MAX_BUDGET_YEAR, MIN_BUDGET_YEAR } from '@/lib/datetime/calendar-month'
 import { moneyAmountSchema } from '@/lib/validation/money'
 

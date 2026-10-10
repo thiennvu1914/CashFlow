@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 /**
  * The three `max` messages here and in `profile.ts` are ones a user can reach

@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 /**
  * `name`'s `max` carries copy rather than Zod's own "Too big: expected string

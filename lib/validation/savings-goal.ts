@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import { optionalCalendarDateSchema } from '@/lib/validation/calendar-date'
 import { moneyAmountSchema } from '@/lib/validation/money'
 

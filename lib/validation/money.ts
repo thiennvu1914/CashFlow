@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 
 /**
  * Every money column in this schema is `Decimal(18, 2)` — exactly 2

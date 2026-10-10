@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import * as z from 'zod'
 import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-date'
 
 /**
