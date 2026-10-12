@@ -32,6 +32,13 @@ class MockAccountLockedError extends Error {
   }
 }
 
+class MockAccountFollowedByGoalError extends Error {
+  constructor() {
+    super('A savings goal follows this account, so its currency cannot be changed.')
+    this.name = 'AccountFollowedByGoalError'
+  }
+}
+
 class MockInvalidAccountTypeError extends Error {
   constructor() {
     super('Account type does not belong to the user or is not active')
@@ -65,6 +72,7 @@ vi.mock('@/lib/server/services/financial-account', () => ({
   archiveFinancialAccount: archiveFinancialAccountMock,
   AccountHasNonZeroBalanceError: MockAccountHasNonZeroBalanceError,
   AccountLockedError: MockAccountLockedError,
+  AccountFollowedByGoalError: MockAccountFollowedByGoalError,
   InvalidAccountTypeError: MockInvalidAccountTypeError,
 }))
 
@@ -198,6 +206,15 @@ describe('updateFinancialAccountAction', () => {
     const result = await updateFinancialAccountAction('account_1', validUpdateInput)
 
     expect(result).toEqual({ ok: false, error: 'ACCOUNT_LOCKED' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps AccountFollowedByGoalError to FOLLOWED_BY_GOAL and does not revalidate', async () => {
+    updateFinancialAccountMock.mockRejectedValue(new MockAccountFollowedByGoalError())
+
+    const result = await updateFinancialAccountAction('account_1', validUpdateInput)
+
+    expect(result).toEqual({ ok: false, error: 'FOLLOWED_BY_GOAL' })
     expect(revalidatePathMock).not.toHaveBeenCalled()
   })
 

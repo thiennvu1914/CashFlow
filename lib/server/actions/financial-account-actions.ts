@@ -24,6 +24,7 @@ import type {
 export type FinancialAccountActionError =
   | 'NON_ZERO_BALANCE'
   | 'ACCOUNT_LOCKED'
+  | 'FOLLOWED_BY_GOAL'
   | 'ARCHIVED_ACCOUNT'
   | 'INVALID_ACCOUNT_TYPE'
   | 'INVALID_INPUT'
@@ -38,6 +39,9 @@ function mapError(e: unknown): FinancialAccountActionResult {
   }
   if (e instanceof accountService.AccountLockedError) {
     return { ok: false, error: 'ACCOUNT_LOCKED' }
+  }
+  if (e instanceof accountService.AccountFollowedByGoalError) {
+    return { ok: false, error: 'FOLLOWED_BY_GOAL' }
   }
   if (e instanceof ArchivedAccountError) return { ok: false, error: 'ARCHIVED_ACCOUNT' }
   if (e instanceof accountService.InvalidAccountTypeError) {

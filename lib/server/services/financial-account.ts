@@ -42,6 +42,25 @@ export class AccountLockedError extends Error {
 }
 
 /**
+ * Thrown when an update would change the currency of an account a savings goal
+ * follows (money-source linking, spec 2026-10-12 §6.7).
+ *
+ * A linked goal's progress IS this account's balance and its currency is this
+ * account's, but linking records no transaction — so a fresh account the
+ * activity lock does not yet cover could otherwise switch VND to USD under the
+ * goal and leave a dollar balance read against a dong target. Any goal counts,
+ * archived ones too: an archived goal still reads in its own currency. Only an
+ * actual change is refused (the edit form re-sends an unchanged currency), and
+ * the opening balance stays editable — the goal's progress is derived from it.
+ */
+export class AccountFollowedByGoalError extends Error {
+  constructor() {
+    super('A savings goal follows this account, so its currency cannot be changed.')
+    this.name = 'AccountFollowedByGoalError'
+  }
+}
+
+/**
  * True once anything has been recorded against the account.
  *
  * Both kinds of activity count: a transaction filed against the account, and a
@@ -285,7 +304,7 @@ export async function updateFinancialAccount(
     // Ownership-scoped and first: another user's id is a P2025 here, before any
     // status or activity is read for it. The ACTIVE requirement is the lock
     // helper's own — an archived account is frozen outright.
-    await lockAccountsForUpdate(tx, userId, [accountId])
+    const [locked] = await lockAccountsForUpdate(tx, userId, [accountId])
 
     if (parsed.accountTypeId !== undefined) {
       await assertActiveAccountType(userId, parsed.accountTypeId, tx)
@@ -298,6 +317,16 @@ export async function updateFinancialAccount(
     // one of the two locked fields is actually present.
     if (parsed.currency !== undefined || parsed.initialBalance !== undefined) {
       if (await accountHasActivity(userId, accountId, tx)) throw new AccountLockedError()
+    }
+
+    // A goal that follows the account fixes its currency (see
+    // `AccountFollowedByGoalError`). Read under the account's row lock, which
+    // linking a goal takes too, so a link and a currency change cannot cross.
+    if (parsed.currency !== undefined && parsed.currency !== locked.currency) {
+      const followers = await tx.savingsGoal.count({
+        where: { userId, linkedAccountId: accountId },
+      })
+      if (followers > 0) throw new AccountFollowedByGoalError()
     }
 
     // Rebuilt field-by-field (never `data: parsed`) so an undefined key is

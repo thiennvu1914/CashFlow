@@ -45,6 +45,13 @@ class MockSavingsGoalLinkedError extends Error {
   }
 }
 
+class MockSavingsGoalCurrencyLockedError extends Error {
+  constructor() {
+    super('This goal already has entries in its currency.')
+    this.name = 'SavingsGoalCurrencyLockedError'
+  }
+}
+
 class MockSavingsGoalWithdrawalExceedsProgressError extends Error {
   constructor() {
     super("That would take this goal's progress below zero.")
@@ -65,6 +72,7 @@ vi.mock('@/lib/server/services/savings-goal', () => ({
   updateSavingsGoalEntry: updateSavingsGoalEntryMock,
   deleteSavingsGoalEntry: deleteSavingsGoalEntryMock,
   SavingsGoalArchivedError: MockSavingsGoalArchivedError,
+  SavingsGoalCurrencyLockedError: MockSavingsGoalCurrencyLockedError,
   SavingsGoalLinkedError: MockSavingsGoalLinkedError,
   SavingsGoalWithdrawalExceedsProgressError: MockSavingsGoalWithdrawalExceedsProgressError,
 }))
@@ -212,6 +220,7 @@ describe('updateSavingsGoalAction', () => {
   it.each([
     [new MockSavingsGoalArchivedError(), 'ARCHIVED'],
     [new ArchivedAccountError(), 'ARCHIVED_ACCOUNT'],
+    [new MockSavingsGoalCurrencyLockedError(), 'CURRENCY_LOCKED'],
     [new ZodError([]), 'INVALID_INPUT'],
     [notFoundError(), 'NOT_FOUND'],
   ])('maps %o to its code and does not revalidate', async (error, code) => {
@@ -238,7 +247,12 @@ describe('entry actions', () => {
     const result = await addSavingsGoalEntryAction('goal_1', validEntryInput)
 
     expect(result).toEqual({ ok: true })
-    expect(addSavingsGoalEntryMock).toHaveBeenCalledWith(FIXED_USER.id, 'goal_1', validEntryInput)
+    expect(addSavingsGoalEntryMock).toHaveBeenCalledWith(
+      FIXED_USER.id,
+      'goal_1',
+      validEntryInput,
+      CONTEXT,
+    )
     expectGoalPagesRevalidated()
   })
 
@@ -252,6 +266,7 @@ describe('entry actions', () => {
       FIXED_USER.id,
       'entry_1',
       validEntryInput,
+      CONTEXT,
     )
     expectGoalPagesRevalidated()
   })
@@ -267,9 +282,12 @@ describe('entry actions', () => {
   })
 
   it('refuses an invalid entry before the service is reached', async () => {
+    // Tomorrow in the session user's zone (ruling P11: no future entries).
+    const tomorrow = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString().slice(0, 10)
     for (const input of [
       { ...validEntryInput, amount: 0 },
       { ...validEntryInput, date: '2026-02-30' },
+      { ...validEntryInput, date: tomorrow },
       { ...validEntryInput, kind: 'GIFT' as 'CONTRIBUTION' },
     ]) {
       expect(await addSavingsGoalEntryAction('goal_1', input)).toEqual({

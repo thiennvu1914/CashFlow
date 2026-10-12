@@ -31,6 +31,7 @@ export const GENERIC_ERROR_KEY = 'errors.generic'
 export const ACCOUNT_ERROR_KEYS: Record<FinancialAccountActionError, string> = {
   NON_ZERO_BALANCE: 'errors.account.NON_ZERO_BALANCE',
   ACCOUNT_LOCKED: 'errors.account.ACCOUNT_LOCKED',
+  FOLLOWED_BY_GOAL: 'errors.account.FOLLOWED_BY_GOAL',
   ARCHIVED_ACCOUNT: 'errors.account.ARCHIVED_ACCOUNT',
   INVALID_ACCOUNT_TYPE: 'errors.account.INVALID_ACCOUNT_TYPE',
   INVALID_INPUT: 'errors.account.INVALID_INPUT',
@@ -66,6 +67,7 @@ export const BUDGET_ERROR_KEYS: Record<BudgetActionError, string> = {
 export const SAVINGS_GOAL_ERROR_KEYS: Record<SavingsGoalActionError, string> = {
   ARCHIVED: 'errors.goal.ARCHIVED',
   ARCHIVED_ACCOUNT: 'errors.goal.ARCHIVED_ACCOUNT',
+  CURRENCY_LOCKED: 'errors.goal.CURRENCY_LOCKED',
   LINKED: 'errors.goal.LINKED',
   WITHDRAWAL_EXCEEDS_PROGRESS: 'errors.goal.WITHDRAWAL_EXCEEDS_PROGRESS',
   INVALID_INPUT: 'errors.goal.INVALID_INPUT',

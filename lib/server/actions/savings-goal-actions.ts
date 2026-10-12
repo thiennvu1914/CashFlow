@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireUser } from '@/lib/auth/require-user'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { mapCommonActionError } from './map-action-error'
 import { ArchivedAccountError } from '@/lib/server/services/account-lock'
 import {
@@ -13,6 +14,7 @@ import {
   updateSavingsGoalEntry,
   updateSavingsGoalProgress,
   SavingsGoalArchivedError,
+  SavingsGoalCurrencyLockedError,
   SavingsGoalLinkedError,
   SavingsGoalWithdrawalExceedsProgressError,
   type SavingsGoalContext,
@@ -50,13 +52,16 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * `/transactions` are deliberately absent — a savings goal cannot alter either.
  *
  * Codes beyond the shared tail: `ARCHIVED` (the goal), `ARCHIVED_ACCOUNT` (a
- * new link to an archived account), `LINKED` (an entry on a goal whose
- * progress is its account's balance) and `WITHDRAWAL_EXCEEDS_PROGRESS` (an
- * entry write that would take progress below zero).
+ * new link to an archived account), `CURRENCY_LOCKED` (an edit that would
+ * re-denominate a goal's entries), `LINKED` (an entry on a goal whose progress
+ * is its account's balance) and `WITHDRAWAL_EXCEEDS_PROGRESS` (an entry write
+ * that would take progress below zero). An entry dated after the user's today
+ * (ruling P11) is a field error of the entry schema, so it is INVALID_INPUT.
  */
 export type SavingsGoalActionError =
   | 'ARCHIVED'
   | 'ARCHIVED_ACCOUNT'
+  | 'CURRENCY_LOCKED'
   | 'LINKED'
   | 'WITHDRAWAL_EXCEEDS_PROGRESS'
   | 'INVALID_INPUT'
@@ -67,6 +72,7 @@ export type SavingsGoalActionResult = { ok: true } | { ok: false; error: Savings
 function mapError(e: unknown): SavingsGoalActionResult {
   if (e instanceof SavingsGoalArchivedError) return { ok: false, error: 'ARCHIVED' }
   if (e instanceof ArchivedAccountError) return { ok: false, error: 'ARCHIVED_ACCOUNT' }
+  if (e instanceof SavingsGoalCurrencyLockedError) return { ok: false, error: 'CURRENCY_LOCKED' }
   if (e instanceof SavingsGoalLinkedError) return { ok: false, error: 'LINKED' }
   if (e instanceof SavingsGoalWithdrawalExceedsProgressError) {
     return { ok: false, error: 'WITHDRAWAL_EXCEEDS_PROGRESS' }
@@ -74,11 +80,17 @@ function mapError(e: unknown): SavingsGoalActionResult {
   return mapCommonActionError(e)
 }
 
-/** The session user's zone — an opening contribution is dated today there.
+/** The session user's zone — "today" is decided there: the date of an
+ *  opening contribution, and the latest date an entry may carry.
  *  `resolveProfileDefaults` cannot throw: it falls back to CashFlow's defaults
  *  for an out-of-enum stored value. */
 function goalContext(user: Parameters<typeof resolveProfileDefaults>[0]): SavingsGoalContext {
   return { timezone: resolveProfileDefaults(user).timezone }
+}
+
+/** An entry, parsed against the session user's today (ruling P11). */
+function parseEntry(input: SavingsGoalEntryInput, context: SavingsGoalContext) {
+  return savingsGoalEntrySchema(todayCalendarDateInZone(context.timezone)).parse(input)
 }
 
 /** Both pages a goal appears on. Called only after a write actually happened,
@@ -122,7 +134,8 @@ export async function addSavingsGoalEntryAction(
 ): Promise<SavingsGoalActionResult> {
   const user = await requireUser()
   try {
-    await addSavingsGoalEntry(user.id, goalId, savingsGoalEntrySchema.parse(input))
+    const context = goalContext(user)
+    await addSavingsGoalEntry(user.id, goalId, parseEntry(input, context), context)
   } catch (e) {
     return mapError(e)
   }
@@ -137,7 +150,8 @@ export async function updateSavingsGoalEntryAction(
 ): Promise<SavingsGoalActionResult> {
   const user = await requireUser()
   try {
-    await updateSavingsGoalEntry(user.id, entryId, savingsGoalEntrySchema.parse(input))
+    const context = goalContext(user)
+    await updateSavingsGoalEntry(user.id, entryId, parseEntry(input, context), context)
   } catch (e) {
     return mapError(e)
   }

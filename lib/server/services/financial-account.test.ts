@@ -10,6 +10,7 @@ import {
   updateFinancialAccount,
   archiveFinancialAccount,
   accountsWithActivity,
+  AccountFollowedByGoalError,
   AccountLockedError,
   AccountHasNonZeroBalanceError,
   InvalidAccountTypeError,
@@ -127,6 +128,7 @@ describe('financial-account service', () => {
     const userIds = createdUserIds.splice(0)
     if (userIds.length === 0) return
     try {
+      await prisma.savingsGoal.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
       await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
@@ -264,6 +266,96 @@ describe('financial-account service', () => {
   })
 
   describe('updateFinancialAccount', () => {
+    /**
+     * A savings goal linked to an account takes the account's currency and
+     * reads its balance as progress (money-source linking, spec 2026-10-12
+     * §6.7). Linking writes no transaction, so without its own guard a fresh
+     * account's currency could change underneath the goal and leave a USD
+     * balance rendered against a VND target. Any goal counts — archived
+     * ones too, since an archived goal is still read in its own currency.
+     */
+    async function followWithGoal(userId: string, accountId: string, archived = false) {
+      return prisma.savingsGoal.create({
+        data: {
+          userId,
+          name: 'Following',
+          targetAmount: 1_000_000,
+          currency: 'VND',
+          linkedAccountId: accountId,
+          status: archived ? 'ARCHIVED' : 'ACTIVE',
+        },
+      })
+    }
+
+    it.each([false, true])(
+      'refuses to change the currency of an account a savings goal follows, with no activity (archived goal: %s)',
+      async (archived) => {
+        const userId = await createUser()
+        const accountType = await createAccountType(userId)
+        const created = await createFinancialAccount(userId, {
+          name: 'Followed',
+          accountTypeId: accountType.id,
+          initialBalance: 10,
+          currency: 'VND',
+        })
+        await followWithGoal(userId, created.id, archived)
+
+        await expect(
+          updateFinancialAccount(userId, created.id, { currency: 'USD' }),
+        ).rejects.toThrow(AccountFollowedByGoalError)
+
+        const stored = await prisma.financialAccount.findUniqueOrThrow({
+          where: { userId_id: { userId, id: created.id } },
+        })
+        expect(stored.currency).toBe('VND')
+      },
+    )
+
+    it('still edits a followed account that keeps its currency, opening balance included', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Followed',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      await followWithGoal(userId, created.id)
+
+      // The edit form re-sends the unchanged currency whenever the account has
+      // no activity, so only an actual change is refused. The opening balance
+      // is fine to change: the goal's progress is derived from it.
+      const updated = await updateFinancialAccount(userId, created.id, {
+        name: 'Renamed',
+        currency: 'VND',
+        initialBalance: 500,
+      })
+
+      expect(updated.name).toBe('Renamed')
+      expect(updated.currency).toBe('VND')
+      expect(updated.initialBalance.toString()).toBe('500')
+    })
+
+    it('frees the currency again once no goal follows the account', async () => {
+      const userId = await createUser()
+      const accountType = await createAccountType(userId)
+      const created = await createFinancialAccount(userId, {
+        name: 'Was followed',
+        accountTypeId: accountType.id,
+        initialBalance: 10,
+        currency: 'VND',
+      })
+      const goal = await followWithGoal(userId, created.id)
+      await prisma.savingsGoal.update({
+        where: { userId_id: { userId, id: goal.id } },
+        data: { linkedAccountId: null },
+      })
+
+      const updated = await updateFinancialAccount(userId, created.id, { currency: 'USD' })
+
+      expect(updated.currency).toBe('USD')
+    })
+
     it('may freely change name, description, currency, and initialBalance before any activity exists', async () => {
       const userId = await createUser()
       const accountType = await createAccountType(userId)

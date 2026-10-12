@@ -1,5 +1,10 @@
 import { Prisma } from '@prisma/client'
-import type { RecordStatus, SavingsGoalEntryKind, SavingsGoalStatus } from '@prisma/client'
+import type {
+  Currency,
+  RecordStatus,
+  SavingsGoalEntryKind,
+  SavingsGoalStatus,
+} from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { calendarDateToUtcCarrier, todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import {
@@ -12,7 +17,7 @@ import {
   type UpdateSavingsGoalInput,
   type UpdateSavingsGoalProgressInput,
 } from '@/lib/validation/savings-goal'
-import { ArchivedAccountError } from './account-lock'
+import { ArchivedAccountError, lockAccountRows } from './account-lock'
 import { getBalanceTimeline } from './balance-timeline'
 
 /**
@@ -39,11 +44,13 @@ import { getBalanceTimeline } from './balance-timeline'
  *    The only balance import is the read-only `./balance-timeline`.
  * 3. **An unlinked goal's progress never goes below zero.** A withdrawal — or
  *    an edit or delete of an entry — that would take it negative is refused
- *    with `SavingsGoalWithdrawalExceedsProgressError`. The check reads the sum
- *    under a `FOR UPDATE` lock on the goal row, taken by every entry writer, so
- *    two concurrent withdrawals queue and the second sees the first's
- *    committed entry (`lockGoalForEntries` sets out why the sum has to be a
- *    separate statement *after* the lock). Entries are refused outright on a
+ *    with `SavingsGoalWithdrawalExceedsProgressError`, and no entry may be dated
+ *    after today in the user's zone (ruling P11), the same `date <= now` a
+ *    linked goal's balance uses. The check reads the sum under a `FOR UPDATE`
+ *    lock on the goal row, taken by every entry writer, so two concurrent
+ *    withdrawals queue and the second sees the first's committed entry
+ *    (`lockGoalForEntries` sets out why the sum has to be a separate statement
+ *    *after* the lock). Entries are refused outright on a
  *    linked goal (`SavingsGoalLinkedError`) — its progress is not theirs — and
  *    on an archived one.
  * 4. **ACHIEVED is derived from that progress.** Every read re-derives the
@@ -56,9 +63,15 @@ import { getBalanceTimeline } from './balance-timeline'
  * 5. **Each goal keeps its own currency.** `User.baseCurrency` is display-only
  *    (ledger ruling R5-3) and nothing here converts a target or a progress
  *    figure; a linked goal's currency *is* its account's, so the balance it
- *    reads is already in it. There is no FX import at all, and money is
- *    `Prisma.Decimal` end to end; the only `toNumber()` for a goal is the
- *    progress bar's width in `lib/ui/savings-goal-view-model.ts`.
+ *    reads is already in it — the account service refuses to change the
+ *    currency of an account a goal follows (`AccountFollowedByGoalError`), a
+ *    link is written under the account's row lock so the two cannot cross, a
+ *    goal whose entries are denominated in its currency cannot be re-denominated
+ *    (`SavingsGoalCurrencyLockedError`), and every read renders a linked goal in
+ *    its account's currency regardless of the stored copy. There is no FX
+ *    import at all, and money is `Prisma.Decimal` end to end; the only
+ *    `toNumber()` for a goal is the progress bar's width in
+ *    `lib/ui/savings-goal-view-model.ts`.
  *
  * `userId` always arrives as an argument (server actions pass
  * `requireUser().id`) and scopes every query — there is no ambient user here.
@@ -115,9 +128,24 @@ export class SavingsGoalWithdrawalExceedsProgressError extends Error {
   }
 }
 
-/** What a create needs to know about the user that only the session has. */
+/**
+ * Thrown when an edit would re-denominate a goal that already has entries: a
+ * change of its currency, or a link to an account in another currency. The
+ * entries are amounts in the goal's currency — 2,000,000 VND put aside must
+ * not quietly become 2,000,000 USD, and nothing here converts. A goal with no
+ * entries may change currency (or adopt its account's) freely.
+ */
+export class SavingsGoalCurrencyLockedError extends Error {
+  constructor() {
+    super('This goal already has entries in its currency, which cannot change.')
+    this.name = 'SavingsGoalCurrencyLockedError'
+  }
+}
+
+/** What a write needs to know about the user that only the session has. */
 export interface SavingsGoalContext {
-  /** The user's IANA zone: an opening contribution is dated *today* there. */
+  /** The user's IANA zone: "today" is decided there — the date of an opening
+   *  contribution, and the latest date an entry may carry (ruling P11). */
   timezone: string
 }
 
@@ -235,18 +263,31 @@ function progressFromSums(rows: EntrySumRow[]): Prisma.Decimal {
   )
 }
 
-/** One unlinked goal's progress: one grouped query over its entries. */
+/** One unlinked goal's progress, and how many entries it has: one grouped
+ *  query over its entries. */
+async function entrySummary(
+  db: Prisma.TransactionClient,
+  userId: string,
+  goalId: string,
+): Promise<{ progress: Prisma.Decimal; count: number }> {
+  const rows = await db.savingsGoalEntry.groupBy({
+    by: ['kind'],
+    where: { userId, goalId },
+    _sum: { amount: true },
+    _count: { _all: true },
+  })
+  return {
+    progress: progressFromSums(rows),
+    count: rows.reduce((count, row) => count + row._count._all, 0),
+  }
+}
+
 async function entryProgress(
   db: Prisma.TransactionClient,
   userId: string,
   goalId: string,
 ): Promise<Prisma.Decimal> {
-  const rows = await db.savingsGoalEntry.groupBy({
-    by: ['kind'],
-    where: { userId, goalId },
-    _sum: { amount: true },
-  })
-  return progressFromSums(rows)
+  return (await entrySummary(db, userId, goalId)).progress
 }
 
 /**
@@ -276,8 +317,13 @@ async function accountProgress(
   return balances.get(account.id) as Prisma.Decimal
 }
 
-/** The row every surface renders: definition, link summary, derived progress
- *  and the status derived from it. */
+/**
+ * The row every surface renders: definition, link summary, derived progress
+ * and the status derived from it. A linked goal is rendered in its account's
+ * currency — the currency its progress actually is — rather than trusting the
+ * stored copy, as a second line of defence behind the guards that keep the two
+ * equal.
+ */
 function toRow(
   goal: SavingsGoalRecord,
   account: LinkableAccount | null,
@@ -286,6 +332,7 @@ function toRow(
 ): SavingsGoalRow {
   return {
     ...goal,
+    currency: account ? account.currency : goal.currency,
     status: deriveSavingsGoalStatus(progress, goal.targetAmount, goal.status),
     linkedAccount: account && { id: account.id, name: account.name, status: account.status },
     progress,
@@ -437,33 +484,39 @@ function prismaNotFound(model: 'Savings goal' | 'Savings goal entry' | 'Account'
   )
 }
 
-/** The user's own account by id, or `null` — another user's id included. */
-function findAccount(userId: string, accountId: string): Promise<LinkableAccount | null> {
-  return prisma.financialAccount.findUnique({
+/**
+ * Locks the account a goal is about to follow and reads it under that lock:
+ * `FOR UPDATE` through the shared `lockAccountRows` (another user's id is a
+ * P2025), taken FIRST in the goal's transaction — the account-first order
+ * every account writer uses.
+ *
+ * The lock is what makes the link and the account's currency guard serialize:
+ * `updateFinancialAccount` counts the goals that follow an account under the
+ * same row lock, so a currency change either commits first (and the link,
+ * reading under the lock, adopts the new currency) or waits and then sees the
+ * goal and is refused. Linking still moves no money.
+ */
+async function lockAccountToFollow(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  accountId: string,
+): Promise<LinkableAccount> {
+  await lockAccountRows(tx, userId, [accountId], { requireActive: false })
+  return tx.financialAccount.findUniqueOrThrow({
     where: { userId_id: { userId, id: accountId } },
     select: LINKED_ACCOUNT_SELECT,
   })
 }
 
 /**
- * The account a goal is about to follow must be the user's own (else P2025)
- * and ACTIVE — unless it is the account the goal already follows, so an
- * account archived since does not block editing the goal's name.
- *
- * No lock: linking moves no money, and an account archived a moment later
- * leaves a goal that simply follows an archived account (whose balance is zero
- * by construction) — the same state as archiving it after the link.
+ * The account a goal is about to follow must be ACTIVE — unless it is the
+ * account the goal already follows, so an account archived since does not block
+ * editing the goal's name.
  */
-function assertLinkable(
-  account: LinkableAccount | null,
-  accountId: string,
-  currentLinkId: string | null,
-): LinkableAccount {
-  if (!account) throw prismaNotFound('Account', accountId)
+function assertLinkable(account: LinkableAccount, currentLinkId: string | null): void {
   if (account.status !== 'ACTIVE' && account.id !== currentLinkId) {
     throw new ArchivedAccountError()
   }
-  return account
 }
 
 /** `undefined` (no deadline) stays `null`; a `yyyy-MM-dd` becomes its
@@ -487,7 +540,8 @@ function todayCarrier(timezone: string, now: Date): Date {
  * its first render.
  *
  * - **Linked**: the goal takes the account's currency (whatever `currency`
- *   says), and its starting progress is the account's balance as of `now`.
+ *   says), read under the account's row lock (`lockAccountToFollow`), and its
+ *   starting progress is the account's balance as of `now`.
  * - **Unlinked**: an `initialContribution` above zero becomes the goal's first
  *   CONTRIBUTION entry, dated today in the user's zone, written in the same
  *   statement as the goal (a nested create), so a goal never exists without
@@ -509,25 +563,25 @@ export async function createSavingsGoal(
     note: parsed.note ?? null,
   }
 
-  if (parsed.linkedAccountId !== undefined) {
-    const account = assertLinkable(
-      await findAccount(userId, parsed.linkedAccountId),
-      parsed.linkedAccountId,
-      null,
-    )
-    const progress = await accountProgress(userId, account, now)
-    const goal = await prisma.savingsGoal.create({
-      omit: GOAL_OMIT,
-      data: {
-        ...definition,
-        currency: account.currency,
-        linkedAccountId: account.id,
-        // 'ACTIVE' as the stored value because there is no stored row yet; a
-        // new goal cannot be archived.
-        status: deriveSavingsGoalStatus(progress, targetAmount, 'ACTIVE'),
-      },
+  const linkId = parsed.linkedAccountId
+  if (linkId !== undefined) {
+    return prisma.$transaction(async (tx) => {
+      const account = await lockAccountToFollow(tx, userId, linkId)
+      assertLinkable(account, null)
+      const progress = await accountProgress(userId, account, now)
+      const goal = await tx.savingsGoal.create({
+        omit: GOAL_OMIT,
+        data: {
+          ...definition,
+          currency: account.currency,
+          linkedAccountId: account.id,
+          // 'ACTIVE' as the stored value because there is no stored row yet; a
+          // new goal cannot be archived.
+          status: deriveSavingsGoalStatus(progress, targetAmount, 'ACTIVE'),
+        },
+      })
+      return toRow(goal, account, progress)
     })
-    return toRow(goal, account, progress)
   }
 
   const initial = new Prisma.Decimal(parsed.initialContribution ?? 0)
@@ -555,15 +609,16 @@ export async function createSavingsGoal(
  * Changes a goal's definition — name, target, currency, deadline, note — and
  * its progress SOURCE (`linkedAccountId`), but never its progress. Linking
  * adopts the account's currency; unlinking keeps the goal's entries, which
- * become its progress again (spec §6.7).
+ * become its progress again (spec §6.7). A goal that has entries keeps its
+ * currency (`SavingsGoalCurrencyLockedError`): neither an explicit change nor a
+ * link to an account in another currency may re-denominate them.
  *
- * The existing row is read through the composite key, so another user's goal
- * id raises P2025 (propagated untouched). Its stored status decides ARCHIVED,
- * and the new status is derived against the progress the goal will have —
- * the account's balance (the account itself read side by side with the row),
- * or the entry sum (likewise).
- * That progress can change under a concurrent entry write; the stored status
- * is then one write stale, which no read trusts (every read re-derives it).
+ * One transaction, locks in the order every writer shares: the account to
+ * follow (`lockAccountToFollow`), then the goal row (`lockGoalRow`). Under the
+ * goal lock nothing about the goal can change — an archive committed a moment
+ * earlier is seen (and refused), never overwritten with the status read before
+ * it, and the entries the currency rule counts cannot move (entry writers take
+ * the same lock). Another user's goal id is a P2025.
  */
 export async function updateSavingsGoal(
   userId: string,
@@ -573,40 +628,39 @@ export async function updateSavingsGoal(
 ): Promise<SavingsGoalRow> {
   const parsed = updateSavingsGoalSchema.parse(input)
   const linkId = parsed.linkedAccountId
-  const [existing, linkTarget, unlinkedProgress] = await Promise.all([
-    prisma.savingsGoal.findUniqueOrThrow({
-      where: { userId_id: { userId, id: goalId } },
-      select: { status: true, linkedAccountId: true },
-    }),
-    linkId === undefined ? null : findAccount(userId, linkId),
-    linkId === undefined ? entryProgress(prisma, userId, goalId) : null,
-  ])
-  if (existing.status === 'ARCHIVED') throw new SavingsGoalArchivedError()
-
-  const account =
-    linkId === undefined ? null : assertLinkable(linkTarget, linkId, existing.linkedAccountId)
-  const progress = account
-    ? await accountProgress(userId, account, now)
-    : (unlinkedProgress as Prisma.Decimal)
-
   const targetAmount = new Prisma.Decimal(parsed.targetAmount)
-  const goal = await prisma.savingsGoal.update({
-    omit: GOAL_OMIT,
-    where: { userId_id: { userId, id: goalId } },
-    data: {
-      name: parsed.name,
-      targetAmount,
-      currency: account?.currency ?? parsed.currency,
-      // An edit that clears the deadline field stores `null` — the absence has
-      // to be written, not skipped, or the old deadline would survive. The
-      // link likewise: absent means unlinked.
-      deadline: deadlineCarrier(parsed.deadline),
-      note: parsed.note ?? null,
-      linkedAccountId: account?.id ?? null,
-      status: deriveSavingsGoalStatus(progress, targetAmount, existing.status),
-    },
+
+  return prisma.$transaction(async (tx) => {
+    const account = linkId === undefined ? null : await lockAccountToFollow(tx, userId, linkId)
+    const existing = await lockGoalRow(tx, userId, goalId)
+    if (existing.status === 'ARCHIVED') throw new SavingsGoalArchivedError()
+    if (account) assertLinkable(account, existing.linkedAccountId)
+
+    const entries = await entrySummary(tx, userId, goalId)
+    const currency = account ? account.currency : parsed.currency
+    if (entries.count > 0 && currency !== existing.currency) {
+      throw new SavingsGoalCurrencyLockedError()
+    }
+    const progress = account ? await accountProgress(userId, account, now) : entries.progress
+
+    const goal = await tx.savingsGoal.update({
+      omit: GOAL_OMIT,
+      where: { userId_id: { userId, id: goalId } },
+      data: {
+        name: parsed.name,
+        targetAmount,
+        currency,
+        // An edit that clears the deadline field stores `null` — the absence has
+        // to be written, not skipped, or the old deadline would survive. The
+        // link likewise: absent means unlinked.
+        deadline: deadlineCarrier(parsed.deadline),
+        note: parsed.note ?? null,
+        linkedAccountId: account?.id ?? null,
+        status: deriveSavingsGoalStatus(progress, targetAmount, existing.status),
+      },
+    })
+    return toRow(goal, account, progress)
   })
-  return toRow(goal, account, progress)
 }
 
 /**
@@ -635,49 +689,65 @@ export async function archiveSavingsGoal(
   })
 }
 
-interface EntryGoal {
+interface LockedGoal {
   status: SavingsGoalStatus
+  currency: Currency
+  linkedAccountId: string | null
   targetAmount: Prisma.Decimal
 }
 
 /**
- * Takes an exclusive lock on one goal row, tenant-scoped in the SQL itself,
- * and refuses a goal that cannot take entries (archived, or linked).
+ * Takes an exclusive lock on one goal row, tenant-scoped in the SQL itself, and
+ * returns what the writers decide on. Every writer that reads a goal to decide
+ * a write takes it — the entry writers and `updateSavingsGoal` — and an
+ * archive (an `UPDATE`) conflicts with it, so whatever this returns stays true
+ * until the caller commits.
  *
- * Every entry writer takes it first, inside its `prisma.$transaction`, so the
- * entries of one goal only ever change under this lock: the progress the
- * writer reads next is the true, post-commit sum, and two withdrawals that
- * would each fit alone cannot both pass — the second queues, then sees the
- * first. An edit or archive of the goal (an `UPDATE`) conflicts with it too, so
- * a goal linked or archived a moment earlier is seen as such.
- *
- * The progress is read by a SEPARATE statement after this one, never as a
- * subquery of it: under READ COMMITTED a statement that waited for a row lock
- * re-checks only the locked row, while its subqueries keep the snapshot taken
- * before the wait — they would miss exactly the concurrent entry this lock
- * exists to see.
- *
- * Only a goal row is locked — no account, no other goal — so there is no lock
- * order to get wrong against the account-first writers.
+ * Entry writers lock only this row; `updateSavingsGoal` locks the account it
+ * links to first, then this row — the account-first order every account
+ * writer uses — so no two paths can wait on each other in a cycle.
  */
-async function lockGoalForEntries(
+async function lockGoalRow(
   tx: Prisma.TransactionClient,
   userId: string,
   goalId: string,
-): Promise<EntryGoal> {
-  const locked = await tx.$queryRaw<
-    { status: SavingsGoalStatus; linkedAccountId: string | null; targetAmount: Prisma.Decimal }[]
-  >`
-    SELECT "status", "linkedAccountId", "targetAmount"
+): Promise<LockedGoal> {
+  const locked = await tx.$queryRaw<LockedGoal[]>`
+    SELECT "status", "currency", "linkedAccountId", "targetAmount"
     FROM "SavingsGoal"
     WHERE "userId" = ${userId} AND "id" = ${goalId}
     FOR UPDATE`
   // Empty means another user's goal or none at all — indistinguishable.
   if (locked.length === 0) throw prismaNotFound('Savings goal', goalId)
   const [goal] = locked
+  return { ...goal, targetAmount: new Prisma.Decimal(goal.targetAmount) }
+}
+
+/**
+ * The goal lock every entry writer takes first (`lockGoalRow`), refusing a
+ * goal that cannot take entries (archived, or linked).
+ *
+ * Inside the writer's `prisma.$transaction`, so the entries of one goal only
+ * ever change under this lock: the progress the writer reads next is the true,
+ * post-commit sum, and two withdrawals that would each fit alone cannot both
+ * pass — the second queues, then sees the first. A goal linked or archived a
+ * moment earlier is seen as such.
+ *
+ * The progress is read by a SEPARATE statement after this one, never as a
+ * subquery of it: under READ COMMITTED a statement that waited for a row lock
+ * re-checks only the locked row, while its subqueries keep the snapshot taken
+ * before the wait — they would miss exactly the concurrent entry this lock
+ * exists to see.
+ */
+async function lockGoalForEntries(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  goalId: string,
+): Promise<LockedGoal> {
+  const goal = await lockGoalRow(tx, userId, goalId)
   if (goal.status === 'ARCHIVED') throw new SavingsGoalArchivedError()
   if (goal.linkedAccountId !== null) throw new SavingsGoalLinkedError()
-  return { status: goal.status, targetAmount: new Prisma.Decimal(goal.targetAmount) }
+  return goal
 }
 
 /**
@@ -698,21 +768,32 @@ async function storeDerivedStatus(
   tx: Prisma.TransactionClient,
   userId: string,
   goalId: string,
-  goal: EntryGoal,
+  goal: LockedGoal,
   progress: Prisma.Decimal,
 ): Promise<void> {
   const status = deriveSavingsGoalStatus(progress, goal.targetAmount, goal.status)
   if (status === goal.status) return
-  await tx.savingsGoal.update({ where: { userId_id: { userId, id: goalId } }, data: { status } })
+  // `select`: an update returns the row by default, and nothing here may read
+  // the deprecated `currentProgress` back.
+  await tx.savingsGoal.update({
+    where: { userId_id: { userId, id: goalId } },
+    data: { status },
+    select: { id: true },
+  })
 }
 
-/** The columns an entry's input writes. */
-function entryData(input: SavingsGoalEntryInput) {
+/**
+ * The columns an entry's input writes, after parsing it against the user's
+ * today — no entry may be dated later (ruling P11).
+ */
+function entryData(input: SavingsGoalEntryInput, context: SavingsGoalContext, now: Date) {
+  const today = todayCalendarDateInZone(context.timezone, now)
+  const parsed = savingsGoalEntrySchema(today).parse(input)
   return {
-    kind: input.kind,
-    amount: new Prisma.Decimal(input.amount),
-    date: calendarDateToUtcCarrier(input.date),
-    note: input.note ?? null,
+    kind: parsed.kind,
+    amount: new Prisma.Decimal(parsed.amount),
+    date: calendarDateToUtcCarrier(parsed.date),
+    note: parsed.note ?? null,
   }
 }
 
@@ -746,16 +827,18 @@ async function lockedEntry(
 /**
  * Records one "+ contribution" or "− withdrawal" on an unlinked goal.
  *
- * Parsed before the transaction opens, so a malformed input never takes the
- * lock. Under the goal lock: the progress so far, the new progress with this
- * entry, the zero floor, the insert, and the derived status.
+ * Parsed before the transaction opens, so a malformed or future-dated input
+ * never takes the lock. Under the goal lock: the progress so far, the new
+ * progress with this entry, the zero floor, the insert, and the derived status.
  */
 export async function addSavingsGoalEntry(
   userId: string,
   goalId: string,
   input: SavingsGoalEntryInput,
+  context: SavingsGoalContext,
+  now: Date = new Date(),
 ): Promise<SavingsGoalEntryRow> {
-  const data = entryData(savingsGoalEntrySchema.parse(input))
+  const data = entryData(input, context, now)
 
   return prisma.$transaction(async (tx) => {
     const goal = await lockGoalForEntries(tx, userId, goalId)
@@ -779,8 +862,10 @@ export async function updateSavingsGoalEntry(
   userId: string,
   entryId: string,
   input: SavingsGoalEntryInput,
+  context: SavingsGoalContext,
+  now: Date = new Date(),
 ): Promise<SavingsGoalEntryRow> {
-  const data = entryData(savingsGoalEntrySchema.parse(input))
+  const data = entryData(input, context, now)
   const goalId = await goalIdOfEntry(userId, entryId)
 
   return prisma.$transaction(async (tx) => {

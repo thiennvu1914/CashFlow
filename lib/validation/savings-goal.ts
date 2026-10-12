@@ -3,6 +3,11 @@ import {
   calendarDateStringSchema,
   optionalCalendarDateSchema,
 } from '@/lib/validation/calendar-date'
+import {
+  CALENDAR_DATE_RE,
+  compareCalendarDates,
+  isRealCalendarDate,
+} from '@/lib/datetime/calendar-date'
 import { moneyAmountSchema } from '@/lib/validation/money'
 
 /**
@@ -112,7 +117,7 @@ export const updateSavingsGoalSchema = z.object({ ...savingsGoalFields })
  * fits under what is saved is a cross-row question the service answers under
  * the goal's row lock.
  */
-export const savingsGoalEntrySchema = z.object({
+const savingsGoalEntryFields = z.object({
   kind: z.enum(['CONTRIBUTION', 'WITHDRAWAL'], { error: 'Choose contribute or withdraw' }),
   amount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
   /**
@@ -130,6 +135,34 @@ export const savingsGoalEntrySchema = z.object({
 })
 
 /**
+ * The entry schema for a user whose calendar day is `today`
+ * (`todayCalendarDateInZone(user.timezone)`): an entry may not be dated after
+ * it (ruling P11). Money put aside tomorrow has not been put aside yet — a
+ * linked goal's account balance counts nothing dated after now either, so the
+ * two progress sources agree on what "saved" means.
+ *
+ * A factory rather than a constant because "today" belongs to the user's zone,
+ * which neither this module nor a browser clock knows: the action builds it
+ * from the session, the service from the context it is given, and a form from
+ * the day its page was rendered for. The refinement sits on `date` so a form
+ * highlights that field.
+ *
+ * Zod runs an object refinement even when a field already failed, so a date
+ * that is not a real calendar date is left to the field's own message rather
+ * than compared (and given a second, misleading one).
+ */
+export function savingsGoalEntrySchema(today: string) {
+  return savingsGoalEntryFields.refine(
+    (entry) => !isCalendarDate(entry.date) || compareCalendarDates(entry.date, today) <= 0,
+    { message: 'The date cannot be later than today', path: ['date'] },
+  )
+}
+
+function isCalendarDate(value: unknown): value is string {
+  return typeof value === 'string' && CALENDAR_DATE_RE.test(value) && isRealCalendarDate(value)
+}
+
+/**
  * @deprecated Transitional (money-source linking Task 9 → Task 10): the
  * Savings page's "Cập nhật tiến độ / Update progress" dialog still posts an
  * absolute "current amount". The service records the difference as one entry
@@ -142,6 +175,6 @@ export const updateSavingsGoalProgressSchema = z.object({
 
 export type CreateSavingsGoalInput = z.infer<typeof createSavingsGoalSchema>
 export type UpdateSavingsGoalInput = z.infer<typeof updateSavingsGoalSchema>
-export type SavingsGoalEntryInput = z.infer<typeof savingsGoalEntrySchema>
+export type SavingsGoalEntryInput = z.infer<typeof savingsGoalEntryFields>
 /** @deprecated See `updateSavingsGoalProgressSchema`. */
 export type UpdateSavingsGoalProgressInput = z.infer<typeof updateSavingsGoalProgressSchema>

@@ -200,13 +200,37 @@ describe('updateSavingsGoalSchema', () => {
 })
 
 describe('savingsGoalEntrySchema', () => {
-  const ENTRY = { kind: 'CONTRIBUTION', amount: 2_000_000, date: '2026-03-12', note: 'Bonus' }
+  /** The user's calendar day the schema is built for. */
+  const TODAY = '2026-03-12'
+  const ENTRY = { kind: 'CONTRIBUTION', amount: 2_000_000, date: TODAY, note: 'Bonus' }
 
-  it('accepts a contribution and a withdrawal, with or without a note', () => {
-    expect(savingsGoalEntrySchema.parse(ENTRY)).toEqual(ENTRY)
+  it('accepts a contribution and a withdrawal, with or without a note, up to today', () => {
+    expect(savingsGoalEntrySchema(TODAY).parse(ENTRY)).toEqual(ENTRY)
     expect(
-      savingsGoalEntrySchema.parse({ kind: 'WITHDRAWAL', amount: 0.01, date: '2024-02-29' }),
+      savingsGoalEntrySchema(TODAY).parse({ kind: 'WITHDRAWAL', amount: 0.01, date: '2024-02-29' }),
     ).toEqual({ kind: 'WITHDRAWAL', amount: 0.01, date: '2024-02-29' })
+  })
+
+  it('refuses a date after today, on the date field (ruling P11)', () => {
+    // Money put aside tomorrow has not been put aside: a linked goal's balance
+    // counts nothing dated after now, and an entry may not either.
+    const result = savingsGoalEntrySchema(TODAY).safeParse({ ...ENTRY, date: '2026-03-13' })
+
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['date'], message: 'The date cannot be later than today' }),
+    ])
+    // A date that is not a real day gets its own message only, never a second
+    // claim that it lies in the future.
+    for (const date of ['soon', '9999-99-99', '2999-02-30']) {
+      expect(messagesFor(savingsGoalEntrySchema(TODAY), { ...ENTRY, date })).not.toContain(
+        'The date cannot be later than today',
+      )
+    }
+    // The bound is the caller's today, not a clock read inside the schema.
+    expect(savingsGoalEntrySchema('2026-03-13').parse({ ...ENTRY, date: '2026-03-13' }).date).toBe(
+      '2026-03-13',
+    )
   })
 
   it.each([
@@ -224,7 +248,7 @@ describe('savingsGoalEntrySchema', () => {
     [{ note: 'x'.repeat(501) }, 'Keep the note under 500 characters'],
     [{ note: 7 }, 'Enter the note as text'],
   ])('rejects %o with product copy', (patch, message) => {
-    expect(messagesFor(savingsGoalEntrySchema, { ...ENTRY, ...patch })).toContain(message)
+    expect(messagesFor(savingsGoalEntrySchema(TODAY), { ...ENTRY, ...patch })).toContain(message)
   })
 })
 
@@ -274,9 +298,13 @@ describe('no raw Zod text can reach the UI', () => {
     [updateSavingsGoalSchema, { ...VALID, name: '' }],
     [updateSavingsGoalSchema, { ...VALID, deadline: 'nope' }],
     [updateSavingsGoalSchema, { ...VALID, linkedAccountId: '' }],
-    [savingsGoalEntrySchema, {}],
-    [savingsGoalEntrySchema, { kind: 'GIFT', amount: 'lots', date: 20260312, note: 7 }],
-    [savingsGoalEntrySchema, { kind: 'WITHDRAWAL', amount: 0, date: 'soon' }],
+    [savingsGoalEntrySchema('2026-03-12'), {}],
+    [
+      savingsGoalEntrySchema('2026-03-12'),
+      { kind: 'GIFT', amount: 'lots', date: 20260312, note: 7 },
+    ],
+    [savingsGoalEntrySchema('2026-03-12'), { kind: 'WITHDRAWAL', amount: 0, date: 'soon' }],
+    [savingsGoalEntrySchema('2026-03-12'), { kind: 'WITHDRAWAL', amount: 1, date: '2026-03-13' }],
     [updateSavingsGoalProgressSchema, {}],
     [updateSavingsGoalProgressSchema, { progress: -1 }],
     [updateSavingsGoalProgressSchema, { progress: 'lots' }],
