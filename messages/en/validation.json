@@ -66,5 +66,7 @@
   "Use at most 2 decimal places": "Use at most 2 decimal places",
   "Use at most 3 decimal places": "Use at most 3 decimal places",
   "Whole months only": "Whole months only",
-  "Whole numbers only": "Whole numbers only"
+  "Whole numbers only": "Whole numbers only",
+  "Choose a due day from 1 to 31": "Choose a due day from 1 to 31",
+  "The due day does not match the next due date": "The due day does not match the next due date"
 }

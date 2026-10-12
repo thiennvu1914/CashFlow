@@ -130,18 +130,16 @@ describe('createLoanSchema', () => {
     expect(messagesFor(createLoanSchema, { ...VALID_LOAN, ...patch })).toContain(message)
   })
 
-  it('strips a client-supplied status and due day', () => {
-    // Neither is the form's business: a loan is created ACTIVE, only `closeLoan`
-    // changes that, and `dueDayOfMonth` is the anchor the service derives from
-    // `nextDueDate` — a crafted request must not be able to set a schedule the
-    // dates do not agree with.
+  it('strips a client-supplied status', () => {
+    // A loan is created ACTIVE; only `closeLoan` changes that. (A crafted
+    // `dueDayOfMonth` is not stripped but checked against the due date — see
+    // "the schedule anchor" below.)
     const parsed = createLoanSchema.parse({
       ...VALID_LOAN,
-      ...({ status: 'CLOSED', dueDayOfMonth: 5 } as object),
+      ...({ status: 'CLOSED' } as object),
     })
 
     expect('status' in parsed).toBe(false)
-    expect('dueDayOfMonth' in parsed).toBe(false)
   })
 
   it('keeps both dates as strings rather than coercing them to Dates', () => {
@@ -155,6 +153,67 @@ describe('createLoanSchema', () => {
     expect(parsed.nextDueDate).toBe('2026-02-01')
     expect(typeof parsed.startDate).toBe('string')
     expect(typeof parsed.nextDueDate).toBe('string')
+  })
+
+  describe('the schedule anchor (dueDayOfMonth)', () => {
+    it('is optional, and accepts a day that explains the clamped due date', () => {
+      expect(createLoanSchema.parse(VALID_LOAN).dueDayOfMonth).toBeUndefined()
+      // Started Jan 31: first due Feb 28, anchored on the 31st.
+      expect(
+        createLoanSchema.parse({ ...VALID_LOAN, nextDueDate: '2026-02-28', dueDayOfMonth: 31 })
+          .dueDayOfMonth,
+      ).toBe(31)
+      // A leap-year Feb 29 start, yearly: first due Feb 28 2029, anchored on 29.
+      expect(
+        createLoanSchema.parse({
+          ...VALID_LOAN,
+          paymentFrequency: 'YEARLY',
+          nextDueDate: '2029-02-28',
+          dueDayOfMonth: 29,
+        }).dueDayOfMonth,
+      ).toBe(29)
+      // The anchor equal to the due date's own day is the ordinary case.
+      expect(
+        createLoanSchema.parse({ ...VALID_LOAN, nextDueDate: '2026-02-15', dueDayOfMonth: 15 })
+          .dueDayOfMonth,
+      ).toBe(15)
+    })
+
+    it('refuses an anchor that does not explain the due date, on the anchor field', () => {
+      expect(
+        messagesFor(createLoanSchema, {
+          ...VALID_LOAN,
+          nextDueDate: '2026-02-28',
+          dueDayOfMonth: 5,
+        }),
+      ).toContain('The due day does not match the next due date')
+      // 30 would clamp to Feb 28 too, but 29 would not be Feb 28 in a leap year
+      // — and in 2026 a due date of the 27th is no clamp of anything.
+      expect(
+        messagesFor(createLoanSchema, {
+          ...VALID_LOAN,
+          nextDueDate: '2026-02-27',
+          dueDayOfMonth: 31,
+        }),
+      ).toContain('The due day does not match the next due date')
+    })
+
+    it('is not checked for a weekly loan, which has no day of the month', () => {
+      expect(
+        createLoanSchema.parse({
+          ...VALID_LOAN,
+          paymentFrequency: 'WEEKLY',
+          nextDueDate: '2026-02-08',
+          dueDayOfMonth: 1,
+        }).dueDayOfMonth,
+      ).toBe(1)
+    })
+
+    it.each([[0], [32], [1.5], [Number.NaN], ['5']])('rejects %o with product copy', (value) => {
+      expect(messagesFor(createLoanSchema, { ...VALID_LOAN, dueDayOfMonth: value })).toContain(
+        'Choose a due day from 1 to 31',
+      )
+    })
   })
 
   describe('the account the loan was received into (money-source linking)', () => {

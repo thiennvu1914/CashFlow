@@ -122,11 +122,17 @@ function selectedOption(value: string): RegExp {
 }
 
 describe('LoanPaymentForm amounts', () => {
-  it('pre-fills the total with the scheduled instalment and leaves the interest blank', () => {
+  it('pre-fills the total with the scheduled instalment and the interest with 0', () => {
     const html = render()
 
     expect(inputMarkup(html, 'loan-payment-total')).toContain('value="900000"')
-    expect(inputMarkup(html, 'loan-payment-interest')).not.toContain('value=')
+    expect(inputMarkup(html, 'loan-payment-interest')).toContain('value="0"')
+  })
+
+  it("starts a correction on the instalment's own interest, not 0", () => {
+    const html = render({ payment: PAYMENT })
+
+    expect(inputMarkup(html, 'loan-payment-interest')).toContain('value="100000.00"')
   })
 
   it('shows the principal as the total minus the interest, read-only, starting as the whole total', () => {

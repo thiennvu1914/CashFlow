@@ -66,5 +66,7 @@
   "Use at most 2 decimal places": "Chỉ được tối đa 2 chữ số thập phân",
   "Use at most 3 decimal places": "Chỉ được tối đa 3 chữ số thập phân",
   "Whole months only": "Chỉ nhập số tháng nguyên",
-  "Whole numbers only": "Chỉ nhập số nguyên"
+  "Whole numbers only": "Chỉ nhập số nguyên",
+  "Choose a due day from 1 to 31": "Hãy chọn ngày đến hạn từ 1 đến 31",
+  "The due day does not match the next due date": "Ngày đến hạn không khớp với kỳ tới"
 }

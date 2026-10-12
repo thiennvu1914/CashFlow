@@ -474,18 +474,69 @@ describe('loan service', () => {
       }
     })
 
-    it('ignores a client-supplied status and anchor day', async () => {
-      // Zod strips both and the service writes neither from input: a crafted
-      // request cannot create an already-closed loan, nor an anchor that
-      // disagrees with the stored due date.
+    it('ignores a client-supplied status', async () => {
+      // Zod strips it and the service writes none from input: a crafted request
+      // cannot create an already-closed loan.
       const loan = await createLoan(fx.userId, {
         ...BASE_LOAN,
         nextDueDate: '2026-01-31',
-        ...({ status: 'CLOSED', dueDayOfMonth: 5 } as object),
+        ...({ status: 'CLOSED' } as object),
       })
 
       expect(loan.status).toBe('ACTIVE')
       expect(loan.dueDayOfMonth).toBe(31)
+    })
+
+    it('refuses an anchor that does not explain the due date, writing nothing', async () => {
+      await expect(
+        createLoan(fx.userId, { ...BASE_LOAN, nextDueDate: '2026-01-31', dueDayOfMonth: 5 }),
+      ).rejects.toThrow()
+
+      expect(await prisma.loan.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('keeps a provided anchor of 31 when the first due date is the clamped Feb 28, so the next instalment is Mar 31', async () => {
+      const loan = await createLoan(fx.userId, {
+        ...BASE_LOAN,
+        startDate: '2026-01-31',
+        nextDueDate: '2026-02-28',
+        dueDayOfMonth: 31,
+      })
+      expect(loan.dueDayOfMonth).toBe(31)
+
+      const { nextDueDate } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 90_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-28',
+      })
+
+      expect(formatCalendarDate(nextDueDate)).toBe('2026-03-31')
+    })
+
+    it('keeps a Feb 29 anchor on a yearly loan: Feb 28 2029, then Feb 29 2032', async () => {
+      const loan = await createLoan(fx.userId, {
+        ...BASE_LOAN,
+        startDate: '2028-02-29',
+        paymentFrequency: 'YEARLY',
+        nextDueDate: '2029-02-28',
+        dueDayOfMonth: 29,
+      })
+      expect(loan.dueDayOfMonth).toBe(29)
+
+      const first = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 90_000,
+        interestAmount: 0,
+        paymentDate: '2029-02-28',
+      })
+      expect(formatCalendarDate(first.nextDueDate)).toBe('2030-02-28')
+    })
+
+    it('anchors on the typed due date when no anchor is provided, as before', async () => {
+      const loan = await createLoan(fx.userId, { ...BASE_LOAN, nextDueDate: '2026-02-28' })
+
+      expect(loan.dueDayOfMonth).toBe(28)
     })
 
     it('rejects an impossible date rather than storing a rolled-over one', async () => {

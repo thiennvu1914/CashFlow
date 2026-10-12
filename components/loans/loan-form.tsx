@@ -10,7 +10,7 @@ import { createLoanAction } from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { paymentFrequencyLabelKey } from '@/lib/ui/labels'
-import { defaultNextDueDate } from '@/lib/ui/loan-schedule'
+import { defaultNextDueDate, scheduleAnchorDay } from '@/lib/ui/loan-schedule'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
 import { DebtAccountField } from '@/components/debts/debt-account-field'
@@ -131,9 +131,13 @@ export function LoanForm({
   async function onSubmit(values: CreateLoanInput) {
     // The currency of a linked loan is the account's; with no account the
     // choice stands and no account id travels.
+    // The anchor day travels too: the start date's day while the next due date
+    // is the pre-filled one, so a loan started on the 31st stays on the 31st
+    // after its first (clamped) Feb 28 due date.
+    const dueDayOfMonth = scheduleAnchorDay(values.startDate, values.nextDueDate, nextDueTouched)
     const input: CreateLoanInput = account
-      ? { ...values, currency: account.currency }
-      : { ...values, accountId: undefined }
+      ? { ...values, dueDayOfMonth, currency: account.currency }
+      : { ...values, dueDayOfMonth, accountId: undefined }
     await submit.run({
       tag: 'LoanForm: create failed',
       action: () => createLoanAction(input),

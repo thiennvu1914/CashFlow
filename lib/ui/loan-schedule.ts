@@ -22,3 +22,21 @@ export function defaultNextDueDate(startDate: string, frequency: PaymentFrequenc
   if (!isRealCalendarDate(startDate)) return null
   return formatCalendarDate(advanceByFrequency(calendarDateToUtcCarrier(startDate), frequency))
 }
+
+/**
+ * The anchor day (`dueDayOfMonth`) the create form sends with the loan.
+ *
+ * While the next due date is the pre-filled one (one period after the start
+ * date), the anchor is the START date's day: a loan started on the 31st is
+ * first due on Feb 28, and anchoring on that clamped 28 would pin the schedule
+ * to the 28th for ever (Feb 28 → Mar 28), silently changing the user's due day.
+ * Once the user types a due date of their own, the anchor is that date's day —
+ * what they typed is what they meant, as it always was.
+ */
+export function scheduleAnchorDay(
+  startDate: string,
+  nextDueDate: string,
+  nextDueTyped: boolean,
+): number {
+  return Number((nextDueTyped ? nextDueDate : startDate).slice(8, 10))
+}

@@ -41,8 +41,10 @@ const TODAY = todayInZone(TIMEZONE)
  *  same month arithmetic `e2e/phase6.spec.ts` uses, so a test run on the 31st
  *  expects the 28th/29th and not a rollover. */
 const FIRST_DUE = formatCalendarDate(addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1))
+// Two months after the start, from the START day: the form anchors the schedule on
+// it (Jan 31 start: Feb 28, then Mar 31 — not Mar 28).
 const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
-  addMonthsUtcClamped(calendarDateToUtcCarrier(FIRST_DUE), 1),
+  addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 2),
 )
 
 /** A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,
@@ -260,7 +262,7 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     const interest = dialog.getByLabel('Lãi')
     const principal = dialog.getByLabel('Gốc')
 
-    // Pre-filled with the scheduled instalment; the interest is blank, so Gốc is
+    // Pre-filled with the scheduled instalment; the interest is 0, so Gốc is
     // the whole total — a computed figure, never an em dash.
     await expect(total).toHaveValue('900000')
     await expect(principal).toHaveValue(/^900.000(,00)?\s?VND$/)

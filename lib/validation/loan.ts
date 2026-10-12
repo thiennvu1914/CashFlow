@@ -99,61 +99,93 @@ const editableLoanFields = {
     .optional(),
 }
 
-export const createLoanSchema = z.object({
-  ...editableLoanFields,
-  /** Strictly positive, matching `Loan_principal_positive`: a loan of zero is
-   *  nothing to track. */
-  principal: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
-  /** With an account, ignored by the service: the loan takes the account's
-   *  currency (spec §4 — cross-currency linking is out of scope). */
-  currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
-  /**
-   * Percent per year, informational only — nothing in this app computes
-   * interest from it (the user reads their instalment off their own statement
-   * and types the principal and interest parts in). It is stored so the loan's
-   * terms are visible next to its history.
-   *
-   * 0 is allowed: an interest-free loan from family is one of the commonest
-   * loans there is. 100 is the ceiling because the field is a *percentage*, and
-   * a user who types their principal into it (100000000) should be told the
-   * number is not a rate rather than have it stored.
-   */
-  interestRate: z
-    .number({ error: 'Enter the interest rate' })
-    .min(0, 'Rate cannot be negative')
-    .max(100, 'Rate cannot exceed 100 %')
-    .refine(hasAtMostThreeDecimalPlaces, 'Use at most 3 decimal places'),
-  /** A calendar date (ruling R6-7): the day the loan started, which is the same
-   *  day in every timezone. Only the service turns it into a carrier. */
-  startDate: calendarDateStringSchema,
-  /**
-   * Whole months, 1–600 (fifty years). The cap is a sanity bound rather than a
-   * product limit: no personal loan runs longer, and a mistyped 20260 would
-   * otherwise be stored as a term.
-   */
-  termMonths: z
-    .number({ error: 'Enter the term in months' })
-    .int('Whole months only')
-    .min(1, 'The term must be at least 1 month')
-    .max(600, 'The term cannot exceed 600 months'),
-  paymentFrequency: z.enum(['WEEKLY', 'MONTHLY', 'YEARLY'], {
-    error: 'Choose a payment frequency',
-  }),
-  /**
-   * The next instalment's due date, and the *source of the schedule's anchor*:
-   * the service stores its day of the month as `dueDayOfMonth` and advances the
-   * due date from that anchor after every payment, so a loan due on the 31st
-   * goes Jan 31 → Feb 28 → Mar 31 rather than drifting.
-   *
-   * Required, and shares `calendarDateStringSchema`'s wording with `startDate`:
-   * both are dates the user must supply, so the same typo must not fail
-   * differently in the two fields.
-   */
-  nextDueDate: calendarDateStringSchema,
-  /** The account the principal was received into — its CASH_IN is dated on
-   *  `startDate`, so no separate "money moved on" date is asked for. */
-  accountId: linkedAccountIdSchema,
-})
+export const createLoanSchema = z
+  .object({
+    ...editableLoanFields,
+    /** Strictly positive, matching `Loan_principal_positive`: a loan of zero is
+     *  nothing to track. */
+    principal: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
+    /** With an account, ignored by the service: the loan takes the account's
+     *  currency (spec §4 — cross-currency linking is out of scope). */
+    currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
+    /**
+     * Percent per year, informational only — nothing in this app computes
+     * interest from it (the user reads their instalment off their own statement
+     * and types the principal and interest parts in). It is stored so the loan's
+     * terms are visible next to its history.
+     *
+     * 0 is allowed: an interest-free loan from family is one of the commonest
+     * loans there is. 100 is the ceiling because the field is a *percentage*, and
+     * a user who types their principal into it (100000000) should be told the
+     * number is not a rate rather than have it stored.
+     */
+    interestRate: z
+      .number({ error: 'Enter the interest rate' })
+      .min(0, 'Rate cannot be negative')
+      .max(100, 'Rate cannot exceed 100 %')
+      .refine(hasAtMostThreeDecimalPlaces, 'Use at most 3 decimal places'),
+    /** A calendar date (ruling R6-7): the day the loan started, which is the same
+     *  day in every timezone. Only the service turns it into a carrier. */
+    startDate: calendarDateStringSchema,
+    /**
+     * Whole months, 1–600 (fifty years). The cap is a sanity bound rather than a
+     * product limit: no personal loan runs longer, and a mistyped 20260 would
+     * otherwise be stored as a term.
+     */
+    termMonths: z
+      .number({ error: 'Enter the term in months' })
+      .int('Whole months only')
+      .min(1, 'The term must be at least 1 month')
+      .max(600, 'The term cannot exceed 600 months'),
+    paymentFrequency: z.enum(['WEEKLY', 'MONTHLY', 'YEARLY'], {
+      error: 'Choose a payment frequency',
+    }),
+    /**
+     * The next instalment's due date, and the *source of the schedule's anchor*:
+     * the service stores its day of the month as `dueDayOfMonth` and advances the
+     * due date from that anchor after every payment, so a loan due on the 31st
+     * goes Jan 31 → Feb 28 → Mar 31 rather than drifting.
+     *
+     * Required, and shares `calendarDateStringSchema`'s wording with `startDate`:
+     * both are dates the user must supply, so the same typo must not fail
+     * differently in the two fields.
+     */
+    nextDueDate: calendarDateStringSchema,
+    /**
+     * The day of the month the schedule is anchored on, when it is not simply the
+     * next due date's own day. A loan that starts on the 31st is first due on
+     * Feb 28 (the clamped date), and deriving the anchor from that date would pin
+     * it to the 28th for ever; the form sends the start date's day (or the day of
+     * a due date the user typed) so Jan 31 → Feb 28 → Mar 31 holds. Optional:
+     * absent, the service anchors on `nextDueDate`'s own day. Not checked for
+     * WEEKLY, which has no day of the month.
+     */
+    dueDayOfMonth: z
+      .number({ error: 'Choose a due day from 1 to 31' })
+      .int('Choose a due day from 1 to 31')
+      .min(1, 'Choose a due day from 1 to 31')
+      .max(31, 'Choose a due day from 1 to 31')
+      .optional(),
+    /** The account the principal was received into — its CASH_IN is dated on
+     *  `startDate`, so no separate "money moved on" date is asked for. */
+    accountId: linkedAccountIdSchema,
+  })
+  .refine(
+    /**
+     * The anchor must explain the due date: the next due date is the anchor day
+     * clamped to its month's length. Anything else is an anchor that disagrees
+     * with the stored date, so the first advance would jump to a day nobody
+     * picked (ruling R6-6a).
+     */
+    ({ nextDueDate, dueDayOfMonth, paymentFrequency }) => {
+      if (dueDayOfMonth === undefined || paymentFrequency === 'WEEKLY') return true
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(nextDueDate)
+      if (!match) return true // the date's own error is reported on its field
+      const lastDay = new Date(Date.UTC(Number(match[1]), Number(match[2]), 0)).getUTCDate()
+      return Number(match[3]) === Math.min(dueDayOfMonth, lastDay)
+    },
+    { message: 'The due day does not match the next due date', path: ['dueDayOfMonth'] },
+  )
 
 /**
  * An edit changes only what can be corrected or renegotiated: who the lender

@@ -106,8 +106,10 @@ const TOMORROW = formatCalendarDate(
  * into March.
  */
 const FIRST_DUE = formatCalendarDate(addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1))
+// Two months after the start, from the START day: the form anchors the schedule on
+// it (Jan 31 start: Feb 28, then Mar 31 — not Mar 28).
 const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
-  addMonthsUtcClamped(calendarDateToUtcCarrier(FIRST_DUE), 1),
+  addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 2),
 )
 
 /** The day of the month the MONTHLY income reminder is anchored to. */
@@ -672,10 +674,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Tracking only (see the debt payment above).
     await dialog.getByLabel(/^Trả từ tài khoản$|^Paid from account$/).selectOption('')
 
-    // Pre-filled with the scheduled instalment; interest blank, so Gốc starts as
+    // Pre-filled with the scheduled instalment and interest 0, so Gốc starts as
     // the whole total.
     await expect(total).toHaveValue('1100000')
-    await expect(interest).toHaveValue('')
+    await expect(interest).toHaveValue('0')
     await expect(principal).toHaveValue(/^1.100.000(,00)?\s?VND$/)
 
     await total.fill('1085000')

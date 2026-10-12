@@ -103,11 +103,11 @@ export function LoanPaymentForm({
       ? payment.accountId!
       : ''
     : defaultPaymentAccountId(options, loan.disbursementAccountId, mostRecentAccountId)
-  // The total starts on the scheduled instalment (a correction: on what was
-  // recorded). The interest has no default on a new instalment: the user reads
-  // it off their statement, and a pre-filled `0` would state a figure nobody
-  // gave. (Neither can hit the `0`-default hazard of the create forms — this
-  // form mounts only after hydration — but the interest still stays blank.)
+  // The total starts on the scheduled instalment and the interest on 0 (a
+  // correction: on what was recorded), so a 0 % loan needs no extra input and
+  // Gốc starts as the whole total; the user types the interest off their
+  // statement when there is some. (This form mounts only after hydration, so
+  // pre-filled numbers cannot hit the create forms' DOM-default hazard.)
   const initialTotal = Number(payment ? payment.totalInput : loan.scheduledPaymentInput)
   const {
     control,
@@ -119,12 +119,8 @@ export function LoanPaymentForm({
     defaultValues: {
       paymentDate: payment ? payment.date : today,
       totalAmount: initialTotal,
-      ...(payment
-        ? {
-            interestAmount: Number(payment.interestInput),
-            note: payment.note ?? undefined,
-          }
-        : {}),
+      interestAmount: payment ? Number(payment.interestInput) : 0,
+      ...(payment ? { note: payment.note ?? undefined } : {}),
       accountId: initialAccountId === '' ? undefined : initialAccountId,
     },
   })
@@ -212,6 +208,7 @@ export function LoanPaymentForm({
                 type="number"
                 step="0.01"
                 className="pr-14"
+                defaultValue={payment ? payment.interestInput : 0}
                 {...register('interestAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
               />
               {currencySuffix}

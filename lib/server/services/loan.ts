@@ -677,12 +677,15 @@ export async function getLoanOutstandingPrincipal(
  * client-supplied `status` is ignored rather than obeyed — a new loan is ACTIVE,
  * and only `closeLoan` changes that.
  *
- * `dueDayOfMonth` is *derived* here, from the UTC day of the first due date's
- * carrier, and is never accepted from the client (ruling R6-6a): an anchor that
- * disagreed with the stored due date would make the very first advance jump to a
- * day the user never picked. Deriving it is also what makes the anchor
- * unambiguous — "the day my instalment falls on" is exactly the day the user
- * just entered.
+ * `dueDayOfMonth` is the anchor the schedule advances from (ruling R6-6a). It
+ * is the optional `dueDayOfMonth` of the input when the form sent one — a loan
+ * started on the 31st is first due on Feb 28, and the anchor has to stay 31, not
+ * be re-derived as 28 — else the UTC day of the first due date's carrier ("the
+ * day my instalment falls on" is exactly the day the user just entered).
+ * `createLoanSchema` refuses a provided anchor that does not explain the due
+ * date (the date must be the anchor clamped to its month), so an anchor that
+ * disagreed with the stored date cannot make the first advance jump to a day
+ * the user never picked.
  *
  * Without `accountId` ("don't record in an account") this is the single insert
  * it always was: no FX lookup, no transaction, the currency the user chose.
@@ -725,10 +728,10 @@ export async function createLoan(
     paymentFrequency: parsed.paymentFrequency,
     scheduledPaymentAmount: new Prisma.Decimal(String(parsed.scheduledPaymentAmount)),
     nextDueDate,
-    // Read in UTC, because a carrier has no other zone: for `2026-01-31` this
-    // is 31, and that is what keeps the schedule off the 28th from February
-    // onwards.
-    dueDayOfMonth: nextDueDate.getUTCDate(),
+    // Without a provided anchor, read in UTC, because a carrier has no other
+    // zone: for `2026-01-31` this is 31, and that is what keeps the schedule
+    // off the 28th from February onwards.
+    dueDayOfMonth: parsed.dueDayOfMonth ?? nextDueDate.getUTCDate(),
     notes: parsed.notes ?? null,
   }
 
