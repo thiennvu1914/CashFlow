@@ -36,5 +36,11 @@
   "writeOffPending": "Đang xóa nợ…",
   "writtenOffSection": "Công nợ đã xóa ({count})",
   "emptyTitle": "Chưa có công nợ",
-  "emptyBody": "Thêm khoản phải thu hoặc phải trả đầu tiên."
+  "emptyBody": "Thêm khoản phải thu hoặc phải trả đầu tiên.",
+  "linkedNote": {
+    "lend": "Cho mượn – {person}",
+    "borrow": "Mượn – {person}",
+    "collect": "Thu nợ – {person}",
+    "repay": "Trả nợ – {person}"
+  }
 }

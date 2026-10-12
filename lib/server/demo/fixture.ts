@@ -39,6 +39,7 @@ import { addCalendarMonths, getCalendarMonth } from '@/lib/datetime/calendar-mon
 import type { CalendarMonth } from '@/lib/datetime/calendar-month'
 import { localDateTimeToInstant } from '@/lib/datetime/local-date-time'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
+import { DEFAULT_LOCALE } from '@/lib/i18n/locale'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { seedDefaultsForUser } from '@/lib/server/defaults'
 import { createBudget } from '@/lib/server/services/budget'
@@ -369,23 +370,34 @@ export async function seedDemoFixture(
   const savingsGoals = 2
 
   // --- Debt (receivable) with payments -------------------------------------
-  const debt = await createDebt(userId, {
-    direction: 'RECEIVABLE',
-    person: 'Nguyen Van An',
-    description: 'Lent for a motorbike repair',
-    originalAmount: 5_000_000,
-    currency: 'VND',
-    dueDate: shiftCalendarDate(today, 45),
-  })
-  await recordDebtPayment(userId, debt.id, {
-    amount: 2_000_000,
-    date: shiftCalendarDate(today, -21),
-    note: 'First instalment',
-  })
-  await recordDebtPayment(userId, debt.id, {
-    amount: 1_000_000,
-    date: shiftCalendarDate(today, -7),
-  })
+  // Recorded without an account, as before money-source linking: the demo
+  // ledger's balances are built from the transactions above alone, so the
+  // context only has to be well-formed.
+  const debtContext = { timezone: DEMO_TIMEZONE, locale: DEFAULT_LOCALE }
+  const debt = await createDebt(
+    userId,
+    {
+      direction: 'RECEIVABLE',
+      person: 'Nguyen Van An',
+      description: 'Lent for a motorbike repair',
+      originalAmount: 5_000_000,
+      currency: 'VND',
+      dueDate: shiftCalendarDate(today, 45),
+    },
+    debtContext,
+  )
+  await recordDebtPayment(
+    userId,
+    debt.id,
+    { amount: 2_000_000, date: shiftCalendarDate(today, -21), note: 'First instalment' },
+    debtContext,
+  )
+  await recordDebtPayment(
+    userId,
+    debt.id,
+    { amount: 1_000_000, date: shiftCalendarDate(today, -7) },
+    debtContext,
+  )
   const debts = 1
   const debtPayments = 2
 

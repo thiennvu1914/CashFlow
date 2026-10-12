@@ -25,7 +25,20 @@ import { moneyAmountSchema } from '@/lib/validation/money'
  * ACTIVE and only `writeOffDebt` ever changes that, so a client that posts a
  * status is ignored rather than obeyed. The derived states (OPEN,
  * PARTIALLY_PAID, PAID, OVERDUE) are not stored at all.
+ *
+ * `accountId` (money-source linking, spec 2026-10-12 §6.2) is the account the
+ * money moved through, on create and on a payment. Absent means "don't record
+ * in an account" — the agreement predates the app, or the cash never touched a
+ * tracked account — and nothing moves. Only an id is checked here; whether it
+ * is the user's own, active account in the right currency is decided by the
+ * service under the account's row lock.
  */
+
+/** Same field and copy as the reminder form's account: an id or nothing. */
+const linkedAccountIdSchema = z
+  .string({ error: 'Choose an account' })
+  .min(1, 'Choose an account')
+  .optional()
 
 /** Shared so the create form and the edit form cannot word the same field
  *  differently — the edit form is the create form minus the three fields that
@@ -53,16 +66,38 @@ const editableDebtFields = {
     .optional(),
 }
 
-export const createDebtSchema = z.object({
-  // "Who owes whom" rather than "direction": the user is answering a question
-  // about their own situation, not picking an enum.
-  direction: z.enum(['RECEIVABLE', 'PAYABLE'], { error: 'Choose who owes whom' }),
-  ...editableDebtFields,
-  /** Strictly positive, matching `Debt_originalAmount_positive`: a debt of zero
-   *  is already settled and can never receive a payment. */
-  originalAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
-  currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
-})
+export const createDebtSchema = z
+  .object({
+    // "Who owes whom" rather than "direction": the user is answering a question
+    // about their own situation, not picking an enum.
+    direction: z.enum(['RECEIVABLE', 'PAYABLE'], { error: 'Choose who owes whom' }),
+    ...editableDebtFields,
+    /** Strictly positive, matching `Debt_originalAmount_positive`: a debt of zero
+     *  is already settled and can never receive a payment. */
+    originalAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
+    /** With an account, ignored by the service: the debt takes the account's
+     *  currency (spec §4 — cross-currency linking is out of scope). */
+    currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
+    accountId: linkedAccountIdSchema,
+    /**
+     * The day the lent or borrowed money moved — the opening transaction's
+     * date (the form defaults it to today in the user's zone). A calendar date
+     * like the due date, so an untouched input's `''` reads as absent; it is
+     * required exactly when `accountId` is set, by the refinement below.
+     */
+    movedOn: optionalCalendarDateSchema,
+  })
+  .superRefine((value, ctx) => {
+    // On `movedOn` itself, so the form highlights the date field. Without an
+    // account nothing moves, so there is no day to ask for.
+    if (value.accountId !== undefined && value.movedOn === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['movedOn'],
+        message: 'Enter the date the money moved',
+      })
+    }
+  })
 
 /**
  * An edit changes only what can be corrected or renegotiated: who the debt is
@@ -100,6 +135,8 @@ export const recordDebtPaymentSchema = z.object({
     .string({ error: 'Enter the note as text' })
     .max(500, 'Keep the note under 500 characters')
     .optional(),
+  /** The account the repayment moved through; absent records no money. */
+  accountId: linkedAccountIdSchema,
 })
 
 export type CreateDebtInput = z.infer<typeof createDebtSchema>

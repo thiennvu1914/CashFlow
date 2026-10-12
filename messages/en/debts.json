@@ -36,5 +36,11 @@
   "writeOffPending": "Writing off…",
   "writtenOffSection": "Written-off debts ({count})",
   "emptyTitle": "No debts yet",
-  "emptyBody": "Add your first receivable or payable."
+  "emptyBody": "Add your first receivable or payable.",
+  "linkedNote": {
+    "lend": "Lent to {person}",
+    "borrow": "Borrowed from {person}",
+    "collect": "Repaid by {person}",
+    "repay": "Repaid to {person}"
+  }
 }

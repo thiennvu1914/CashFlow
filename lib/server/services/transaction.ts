@@ -90,8 +90,12 @@ interface ExpectedTransactionRow {
  * inside the same millisecond compare equal; that is accepted, because the
  * account locks already make the write itself safe and this check exists to
  * protect the *decision*, not to be a cryptographic version tag.
+ *
+ * Exported for the money-source linking paths (`debt.ts`), which edit and
+ * delete a linked transaction from its source record under the same rule and
+ * the same lock order — accounts, then the source row, then this one.
  */
-async function lockAndVerifyTransactionRow(
+export async function lockAndVerifyTransactionRow(
   tx: Prisma.TransactionClient,
   userId: string,
   transactionId: string,

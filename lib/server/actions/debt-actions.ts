@@ -3,14 +3,21 @@
 import { revalidatePath } from 'next/cache'
 import { requireUser } from '@/lib/auth/require-user'
 import { mapCommonActionError } from './map-action-error'
+import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { ArchivedAccountError } from '@/lib/server/services/account-lock'
 import {
   createDebt,
+  deleteDebtPayment,
   recordDebtPayment,
   updateDebt,
+  updateDebtPayment,
   writeOffDebt,
   DebtNotActiveError,
   DebtOverpaymentError,
+  type DebtLinkContext,
 } from '@/lib/server/services/debt'
+import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked-transaction'
+import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
   createDebtSchema,
   recordDebtPaymentSchema,
@@ -19,6 +26,7 @@ import {
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
+import { resolveProfileDefaults } from '@/lib/validation/profile'
 
 /**
  * Server actions never throw a domain error to the client: every mapped
@@ -28,14 +36,15 @@ import {
  * a silent `ok: false` the UI shrugs off.
  *
  * `input`/`id` always come from the client; `userId` never does — every call
- * into the service below is `(user.id, ...)` from `requireUser()`.
+ * into the service below is `(user.id, ...)` from `requireUser()`, and the
+ * real FX policy runs (no `providerOverride` is ever passed here).
  *
  * Unlike `savings-goal-actions.ts`, each action here `parse`s the input itself
  * before calling the service (the same shape as `transaction-actions.ts`'
- * `toServiceInput`). Two reasons, both about `recordDebtPayment`: its write
- * happens inside an interactive transaction that takes an exclusive row lock,
- * so an input the schema was always going to reject would otherwise open a
- * transaction and hold that lock only to throw — and its date field is a
+ * `toServiceInput`). Two reasons, both about the payment writes: they happen
+ * inside an interactive transaction that takes exclusive row locks, so an
+ * input the schema was always going to reject would otherwise open a
+ * transaction and hold those locks only to throw — and their date field is a
  * *calendar string* the service turns into a UTC carrier with
  * `calendarDateToUtcCarrier`, which raises a bare `RangeError` (not a
  * `ZodError`) for a value that never passed the schema, and a `RangeError`
@@ -44,26 +53,65 @@ import {
  * correctly mapped. The service re-parses, exactly as it does for every other
  * caller — it never trusts an action to have done it.
  *
- * Nothing here moves money — a debt is tracking only, and recording a
- * repayment writes a `DebtPayment` and nothing else — so nothing here
- * revalidates a ledger page: `/debts` is the page that changed, and
- * `/dashboard` because a later group's widget reads the same debts.
- * `/accounts` and `/transactions` are deliberately absent.
+ * Money-source linking (spec 2026-10-12 §6.2): a debt or payment recorded in
+ * an account writes a Transaction too, so the writes that can do that take the
+ * session user's timezone and locale (`DebtLinkContext`, resolved here because
+ * only this layer has the session) and revalidate the ledger pages as well.
+ * Editing a debt's terms and writing one off still move no money, so those two
+ * leave `/accounts` and `/transactions` alone.
+ *
+ * The four linked-write failures get their own codes rather than one generic
+ * "couldn't record it": `ACCOUNT_CURRENCY_MISMATCH` (the account is not in the
+ * debt's currency — deliberately not `transaction-actions`' `CURRENCY_MISMATCH`,
+ * whose copy tells the user to delete and re-enter a transaction),
+ * `ARCHIVED_ACCOUNT`, `FX_UNAVAILABLE`, and `CONFLICT` for a payment or linked
+ * transaction that changed while the user was editing it.
  */
-export type DebtActionError = 'OVERPAYMENT' | 'NOT_ACTIVE' | 'INVALID_INPUT' | 'NOT_FOUND'
+export type DebtActionError =
+  | 'OVERPAYMENT'
+  | 'NOT_ACTIVE'
+  | 'FX_UNAVAILABLE'
+  | 'ARCHIVED_ACCOUNT'
+  | 'ACCOUNT_CURRENCY_MISMATCH'
+  | 'CONFLICT'
+  | 'INVALID_INPUT'
+  | 'NOT_FOUND'
 
 export type DebtActionResult = { ok: true } | { ok: false; error: DebtActionError }
 
 function mapError(e: unknown): DebtActionResult {
   if (e instanceof DebtOverpaymentError) return { ok: false, error: 'OVERPAYMENT' }
   if (e instanceof DebtNotActiveError) return { ok: false, error: 'NOT_ACTIVE' }
+  if (isFxUnavailableError(e)) return { ok: false, error: 'FX_UNAVAILABLE' }
+  if (e instanceof ArchivedAccountError) return { ok: false, error: 'ARCHIVED_ACCOUNT' }
+  if (e instanceof LinkedAccountCurrencyMismatchError) {
+    return { ok: false, error: 'ACCOUNT_CURRENCY_MISMATCH' }
+  }
+  if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   return mapCommonActionError(e)
 }
 
-/** Both pages a debt appears on. Called only after a write actually happened,
- *  so a rejected action leaves the caches alone. */
+/** The session user's zone and language, as every money-capable write needs
+ *  them. `resolveProfileDefaults` cannot throw: it falls back to CashFlow's
+ *  defaults for an out-of-enum stored value. */
+function linkContext(user: Parameters<typeof resolveProfileDefaults>[0]): DebtLinkContext {
+  const { timezone, locale } = resolveProfileDefaults(user)
+  return { timezone, locale }
+}
+
+/** The two pages a debt's own terms appear on. Called only after a write
+ *  actually happened, so a rejected action leaves the caches alone. */
 function revalidateDebtPages(): void {
   revalidatePath('/debts')
+  revalidatePath('/dashboard')
+}
+
+/** Every page a write that may have moved money re-renders: the debt, the
+ *  account balances, the ledger and the dashboard. */
+function revalidateMoneyPages(): void {
+  revalidatePath('/debts')
+  revalidatePath('/accounts')
+  revalidatePath('/transactions')
   revalidatePath('/dashboard')
 }
 
@@ -72,11 +120,11 @@ export async function createDebtAction(input: CreateDebtInput): Promise<DebtActi
   try {
     // Inside the `try`, so a `ZodError` from the parse is mapped by the same
     // clause as one raised by the service.
-    await createDebt(user.id, createDebtSchema.parse(input))
+    await createDebt(user.id, createDebtSchema.parse(input), linkContext(user))
   } catch (e) {
     return mapError(e)
   }
-  revalidateDebtPages()
+  revalidateMoneyPages()
   return { ok: true }
 }
 
@@ -103,11 +151,49 @@ export async function recordDebtPaymentAction(
 ): Promise<DebtActionResult> {
   const user = await requireUser()
   try {
-    await recordDebtPayment(user.id, debtId, recordDebtPaymentSchema.parse(input))
+    await recordDebtPayment(
+      user.id,
+      debtId,
+      recordDebtPaymentSchema.parse(input),
+      linkContext(user),
+    )
   } catch (e) {
     return mapError(e)
   }
-  revalidateDebtPages()
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** Corrects a recorded payment — amount, date, note, account — and its linked
+ *  transaction with it. Same input shape as recording one. */
+export async function updateDebtPaymentAction(
+  paymentId: string,
+  input: RecordDebtPaymentInput,
+): Promise<DebtActionResult> {
+  const user = await requireUser()
+  try {
+    await updateDebtPayment(
+      user.id,
+      paymentId,
+      recordDebtPaymentSchema.parse(input),
+      linkContext(user),
+    )
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** Removes a recorded payment and, when it moved money, its transaction. */
+export async function deleteDebtPaymentAction(paymentId: string): Promise<DebtActionResult> {
+  const user = await requireUser()
+  try {
+    await deleteDebtPayment(user.id, paymentId)
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
   return { ok: true }
 }
 

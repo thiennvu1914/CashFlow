@@ -1,11 +1,16 @@
 import { Prisma } from '@prisma/client'
 import type { Debt, DebtPayment, DebtStoredStatus } from '@prisma/client'
+import { createTranslator } from 'next-intl'
 import { prisma } from '@/lib/prisma'
+import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import {
   calendarDateToUtcCarrier,
   compareCalendarDates,
   formatCalendarDate,
 } from '@/lib/datetime/calendar-date'
+import { localDateTimeToInstant } from '@/lib/datetime/local-date-time'
+import type { Locale } from '@/lib/i18n/locale'
 import {
   createDebtSchema,
   recordDebtPaymentSchema,
@@ -14,6 +19,15 @@ import {
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
+import enDebtMessages from '@/messages/en/debts.json'
+import viDebtMessages from '@/messages/vi/debts.json'
+import { lockAccountsForUpdate } from './account-lock'
+import {
+  LinkedAccountCurrencyMismatchError,
+  SNAPSHOT_PAIR,
+  insertTransactionInTx,
+} from './linked-transaction'
+import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
 
 /**
  * Debt service (spec §4.9) — money someone owes the user (RECEIVABLE) or the
@@ -21,16 +35,18 @@ import {
  *
  * Five invariants live here and are never delegated to the UI:
  *
- * 1. **Tracking only.** Nothing in this file creates a Transaction or a
- *    Transfer, reads or writes a FinancialAccount, or changes a balance — it
- *    imports none of `transaction.ts`, `transfer.ts`, `balance.ts` or
- *    `financial-account.ts`, and `debt.test.ts` proves the absence twice over:
- *    structurally (no such import specifier appears in this source) and
- *    behaviourally (the account/transaction/transfer counts, the seeded rows
- *    and the derived balance are re-asserted after *every* case). Recording a
- *    repayment is bookkeeping about an agreement between two people; whether
- *    the cash also moved through a tracked account is a separate fact the user
- *    records separately, and no automatic rule can tell the two apart.
+ * 1. **Money moves only through an account the user chose** (money-source
+ *    linking, spec 2026-10-12 §4 and §6.2, which supersedes §4.9's "tracking
+ *    only"). Creating a debt or recording a payment *with* an account writes
+ *    the matching Transaction in the same database transaction, through the
+ *    shared core `insertTransactionInTx` — CASH_OUT when the user lent and
+ *    CASH_IN when they were repaid (RECEIVABLE), CASH_IN when they borrowed and
+ *    CASH_OUT when they repaid (PAYABLE) — and links it with a composite,
+ *    `ON DELETE RESTRICT` foreign key. *Without* an account (an agreement that
+ *    predates the app, or cash that never touched a tracked account) the debt
+ *    is bookkeeping between two people and nothing else is written. Editing or
+ *    deleting a payment keeps both sides in step; writing a debt off moves no
+ *    money and creates nothing.
  * 2. **Outstanding is derived, never stored.** `originalAmount − Σ payments`,
  *    computed on read (spec §5, "never store what can drift"). A stored copy
  *    would be a second source of truth that a rolled-back write, a deleted
@@ -44,17 +60,24 @@ import {
  * 4. **No overpayment, ever.** A payment above what is still owed is refused
  *    (`DebtOverpaymentError`); a payment of exactly what is left is accepted.
  *    That rule is a cross-row invariant, so no CHECK constraint can express it
- *    and it is enforced here — under a row lock, see below.
+ *    and it is enforced here — under a row lock, see below. An edited payment
+ *    is measured against what is owed *without* it.
  * 5. **Money is `Prisma.Decimal` end to end.** Every amount that enters is
  *    built with `new Prisma.Decimal(String(...))` so a 2-decimal input is
  *    exact, and there is no `toNumber()` anywhere in this file. Each debt keeps
  *    its own currency and nothing here converts one (`User.baseCurrency` is
- *    display-only, ledger ruling R5-3), so there is no FX import at all.
+ *    display-only, ledger ruling R5-3): a linked account must already hold the
+ *    debt's currency (`LinkedAccountCurrencyMismatchError` otherwise), and a
+ *    debt created with an account simply takes that account's currency. The
+ *    only FX involved is the USD/VND snapshot every Transaction carries.
  *
  * `userId` always arrives as an argument (server actions pass
  * `requireUser().id`) and scopes every query — including the raw locking
  * `SELECT` below. Every single-row lookup goes through the composite `userId_id`
- * key, so another user's debt id is a P2025, never a usable reference.
+ * key, so another user's debt, payment or account id is a P2025, never a usable
+ * reference. The user's timezone and locale arrive the same way, as a
+ * `DebtLinkContext` the action layer builds from the session user — this
+ * module makes no assumption about whose request it is serving.
  *
  * ## Why a row lock, and not Serializable
  *
@@ -72,7 +95,9 @@ import {
  * commits and then re-reads the real, post-commit sum — and is refused with
  * `DebtOverpaymentError`, the same error it would have got had the two arrived
  * a second apart. Serialisation, not optimism, exactly as
- * `lib/server/services/account-lock.ts` does it for accounts.
+ * `lib/server/services/account-lock.ts` does it for accounts. Every payment
+ * writer — record, edit, delete — takes this lock, so under it the payment rows
+ * of one debt cannot change.
  *
  * Serializable was the other candidate (and is what this group's plan
  * proposed). It is rejected here because it converts a *predictable* domain
@@ -94,12 +119,57 @@ import {
  *   WRITTEN_OFF and is refused with `DebtNotActiveError`, so no payment can
  *   ever be recorded against a debt that was already closed.
  *
- * There is deliberately no FX call, no network access and no non-database work
- * of any kind inside either transaction: an interactive transaction holds a
- * pooled connection and its locks for its whole duration under Prisma's 5s
- * default timeout, so anything slow in there would stall every other writer on
- * the same debt (the reasoning `account-lock.ts` sets out at length).
+ * ## Lock order: accounts, then the debt row, then transaction rows
+ *
+ * A linked write takes up to three kinds of lock, and always in this order:
+ *
+ * 1. the account(s) — `lockAccountsForUpdate`, one sorted statement, taken
+ *    *explicitly before* the debt lock even though `insertTransactionInTx`
+ *    locks its account again later (re-locking a row the same transaction
+ *    already holds returns at once);
+ * 2. the Debt row — `lockDebtRow`;
+ * 3. the linked Transaction row — `lockAndVerifyTransactionRow`.
+ *
+ * It is the order `createTransaction` (account), `updateTransaction`
+ * (accounts, then the transaction row) and `deleteTransaction` already use, and
+ * the paths with no account keep today's single debt lock. No path anywhere
+ * holds a debt lock while waiting for an account, or a transaction-row lock
+ * while waiting for a debt, so no two of them can wait on each other in a
+ * cycle: a linked payment racing an edit of another transaction in the same
+ * account queues on that account; a payment moved from account A to B racing a
+ * transaction moved from B to A both lock {A, B} in the same sorted statement;
+ * a write-off (debt lock only) never waits on an account. Locking the debt
+ * first and letting `insertTransactionInTx` take the account second would hold
+ * the debt while waiting on an account — harmless today, but one future path
+ * that went the other way round would deadlock against it.
+ *
+ * Which account to lock for an edit or a delete is read from a copy taken
+ * before the transaction opens, so under the locks the payment and its linked
+ * transaction are re-verified against that copy; a row that changed in
+ * between is a `ConcurrentModificationError`, exactly as `updateTransaction`
+ * treats its own stale copy.
+ *
+ * FX is fetched *before* any transaction opens, and only when a linked
+ * transaction will be written with a new snapshot: an interactive transaction
+ * holds a pooled connection and its locks for its whole duration under Prisma's
+ * 5s default timeout, so a provider call in there would stall every other
+ * writer on the same account and debt (the reasoning `account-lock.ts` sets out
+ * at length). Inside the transactions there is database work and nothing else.
  */
+
+/**
+ * What a write needs to know about the user that only the session has, passed
+ * by the action layer from `resolveProfileDefaults(user)`.
+ */
+export interface DebtLinkContext {
+  /** The user's IANA zone. A payment or money-moved *date* becomes the linked
+   *  transaction's instant at 12:00 that day in this zone, so it lands on the
+   *  same calendar day the user picked whichever zone later reads it. */
+  timezone: string
+  /** The language of the default transaction note, rendered once at write
+   *  time and stored — never re-rendered on read. */
+  locale: Locale
+}
 
 /**
  * Thrown when a payment would take a debt past settled.
@@ -120,7 +190,8 @@ export class DebtOverpaymentError extends Error {
 }
 
 /**
- * Thrown when a written-off debt would receive a payment or an edit.
+ * Thrown when a written-off debt would receive a payment or an edit — of the
+ * debt itself or of a payment already recorded against it.
  *
  * A distinct error rather than a P2025: the row exists and the user can still
  * see it in their list, so "that debt no longer exists" would be a lie. A
@@ -144,12 +215,12 @@ export class DebtNotActiveError extends Error {
  * Prisma's answer for a nonexistent id. Rebuilt here (rather than exported from
  * `account-lock.ts`, where the equivalent helper is private and speaks about
  * financial accounts) so the tenant-isolation contract every action error map
- * and test already pins down — a foreign debt id is a P2025 — holds for the
- * locking path too.
+ * and test already pins down — a foreign id is a P2025 — holds for the locking
+ * path too, and for a payment that vanished between its pre-read and the lock.
  */
-function prismaNotFound(debtId: string): Prisma.PrismaClientKnownRequestError {
+function prismaNotFound(model: 'Debt' | 'Debt payment', id: string) {
   return new Prisma.PrismaClientKnownRequestError(
-    `An operation failed because it depends on one or more records that were required but not found. Debt ${debtId} was not found for this user.`,
+    `An operation failed because it depends on one or more records that were required but not found. ${model} ${id} was not found for this user.`,
     { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
   )
 }
@@ -160,12 +231,13 @@ function prismaNotFound(debtId: string): Prisma.PrismaClientKnownRequestError {
  * Must be called inside `prisma.$transaction`: the lock is held until that
  * transaction commits or rolls back, and taking it on the bare client would
  * release it immediately and prove nothing (`account-lock.ts` makes the same
- * point about accounts). Shared by `recordDebtPayment` and `writeOffDebt` so
+ * point about accounts). Shared by every payment writer and `writeOffDebt` so
  * that "the same lock" is literally the same statement, which is what makes
- * their race resolve deterministically either way round.
+ * their races resolve deterministically either way round.
  *
- * Exactly one row is ever locked here, so there is no lock-ordering deadlock to
- * avoid — the reason `lockAccountRows` has to sort its ids does not arise.
+ * Exactly one debt row is ever locked here, so there is no ordering among debt
+ * rows to get wrong; its place relative to accounts and transaction rows is
+ * the lock order in the module comment.
  */
 async function lockDebtRow(
   tx: Prisma.TransactionClient,
@@ -179,7 +251,44 @@ async function lockDebtRow(
     FOR UPDATE`
   // An empty result means the id is not this user's debt — or does not exist at
   // all, and the two must be indistinguishable.
-  if (locked.length === 0) throw prismaNotFound(debtId)
+  if (locked.length === 0) throw prismaNotFound('Debt', debtId)
+}
+
+/** Spec §4's mapping: the movement the account sees when the debt opens… */
+const OPENING_TYPE = { RECEIVABLE: 'CASH_OUT', PAYABLE: 'CASH_IN' } as const
+/** …and when a repayment is made against it — always the opposite direction. */
+const PAYMENT_TYPE = { RECEIVABLE: 'CASH_IN', PAYABLE: 'CASH_OUT' } as const
+
+/** The default note's label for each movement (`debts.linkedNote.*`). */
+const OPENING_NOTE = { RECEIVABLE: 'lend', PAYABLE: 'borrow' } as const
+const PAYMENT_NOTE = { RECEIVABLE: 'collect', PAYABLE: 'repay' } as const
+
+const LINKED_NOTE_MESSAGES = {
+  vi: { debts: viDebtMessages },
+  en: { debts: enDebtMessages },
+} as const
+
+/**
+ * A linked transaction's note when the user gave none: "Cho mượn – An",
+ * "Repaid by An", … in the user's locale, rendered once here and stored.
+ *
+ * `createTranslator` is the same engine `getTranslations` runs, minus the
+ * request scope this service does not have; `person` is substituted as a
+ * value, never parsed as ICU syntax, so a name with braces or quotes is safe.
+ */
+function linkedNote(
+  locale: Locale,
+  kind: 'lend' | 'borrow' | 'collect' | 'repay',
+  person: string,
+): string {
+  const t = createTranslator({ locale, messages: LINKED_NOTE_MESSAGES[locale] })
+  return t(`debts.linkedNote.${kind}`, { person })
+}
+
+/** A calendar date (`yyyy-MM-dd`) as a linked transaction's instant: 12:00 in
+ *  the user's zone, so it never crosses a day boundary in any zone. */
+function linkedInstant(calendarDate: string, timezone: string): Date {
+  return localDateTimeToInstant(`${calendarDate}T12:00`, timezone)
 }
 
 /** The one status a debt row actually stores, plus the four states derived from
@@ -195,8 +304,19 @@ export type DebtDisplayStatus = 'OPEN' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' |
  * history right under the figure. Written as a `GetPayload` so a later phase
  * that widens the include widens every caller with it, rather than silently not
  * seeing the new relation.
+ *
+ * Money-source linking widened it: the debt carries `openingTransactionId`
+ * and each payment its `transactionId` (null when nothing was recorded in an
+ * account), and both bring the *account* of their linked transaction — the
+ * account a payment form pre-selects (spec §6.2) and an edit form starts from.
+ * Only that id: the rest of the transaction is the Transactions page's to show.
  */
-export type DebtRow = Prisma.DebtGetPayload<{ include: { payments: true } }>
+export type DebtRow = Prisma.DebtGetPayload<{
+  include: {
+    payments: { include: { transaction: { select: { accountId: true } } } }
+    openingTransaction: { select: { accountId: true } }
+  }
+}>
 
 /**
  * The same derived figures over a debt read *without* its history — what
@@ -236,8 +356,15 @@ const PAYMENT_ORDER = [
 ] satisfies Prisma.DebtPaymentOrderByWithRelationInput[]
 
 /** The one include every read here uses, so no caller can accidentally fetch a
- *  debt without its payments or with them in a different order. */
-const WITH_PAYMENTS = { payments: { orderBy: PAYMENT_ORDER } } satisfies Prisma.DebtInclude
+ *  debt without its payments or with them in a different order — or without
+ *  the linked accounts `DebtRow` promises. */
+const WITH_PAYMENTS = {
+  payments: {
+    orderBy: PAYMENT_ORDER,
+    include: { transaction: { select: { accountId: true } } },
+  },
+  openingTransaction: { select: { accountId: true } },
+} satisfies Prisma.DebtInclude
 
 /** Live debts before closed ones — the order the Debts page renders. */
 const STATUS_RANK: Record<DebtStoredStatus, number> = { ACTIVE: 0, WRITTEN_OFF: 1 }
@@ -442,34 +569,86 @@ export async function getDebtOutstanding(userId: string, debtId: string): Promis
 }
 
 /**
- * Records a new debt.
+ * Records a new debt — with an account, together with the money that moved.
  *
  * Fields are listed explicitly rather than spread, so the authenticated
  * `userId` can never be overridden regardless of Zod's stripping behaviour and
  * a client-supplied `status` is ignored rather than obeyed — a new debt is
  * ACTIVE, and only `writeOffDebt` changes that.
+ *
+ * Without `accountId` ("don't record in an account") this is the single
+ * insert it always was: no FX lookup, no transaction, the currency the user
+ * chose. With one, the debt and its opening transaction (spec §4: CASH_OUT for
+ * a RECEIVABLE, CASH_IN for a PAYABLE, `originalAmount`, dated 12:00 on
+ * `movedOn` in the user's zone) commit together or not at all, and the debt
+ * takes the account's currency — the form's currency choice only applies when
+ * no account is involved. The transaction's note is the user's notes when
+ * given, else the localized "Cho mượn – {person}" / "Mượn – {person}" label.
+ *
+ * Only the account is locked (by `insertTransactionInTx`): the debt row is
+ * being created inside this transaction, so no one else can see it, let alone
+ * lock it, before it commits.
  */
-export async function createDebt(userId: string, input: CreateDebtInput): Promise<DebtRow> {
+export async function createDebt(
+  userId: string,
+  input: CreateDebtInput,
+  context: DebtLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<DebtRow> {
   const parsed = createDebtSchema.parse(input)
+  const data = {
+    userId,
+    direction: parsed.direction,
+    person: parsed.person,
+    description: parsed.description ?? null,
+    // `String()` first, for every amount in this file: that is the exact
+    // representation `lib/validation/money.ts` inspected when it accepted
+    // the value as having at most 2 decimal places (and the one the pg
+    // adapter serialises), so what is stored is precisely what was
+    // validated — rather than whatever the Decimal constructor makes of a
+    // raw double.
+    originalAmount: new Prisma.Decimal(String(parsed.originalAmount)),
+    dueDate: dueDateCarrier(parsed.dueDate),
+    notes: parsed.notes ?? null,
+  }
 
-  return prisma.debt.create({
-    data: {
+  const { accountId, movedOn } = parsed
+  if (accountId === undefined) {
+    return prisma.debt.create({
+      data: { ...data, currency: parsed.currency },
+      include: WITH_PAYMENTS,
+    })
+  }
+  // `createDebtSchema` refuses an account without a money-moved date, so this
+  // is a caller bug that skipped the parse, not a user error.
+  if (movedOn === undefined) {
+    throw new RangeError('createDebt: movedOn is required when accountId is set')
+  }
+
+  // Before the transaction opens: never a provider call under a row lock, and
+  // an outage leaves no debt behind rather than one without its transaction.
+  const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
+
+  return prisma.$transaction(async (tx) => {
+    const opening = await insertTransactionInTx(
+      tx,
       userId,
-      direction: parsed.direction,
-      person: parsed.person,
-      description: parsed.description ?? null,
-      // `String()` first, for every amount in this file: that is the exact
-      // representation `lib/validation/money.ts` inspected when it accepted
-      // the value as having at most 2 decimal places (and the one the pg
-      // adapter serialises), so what is stored is precisely what was
-      // validated — rather than whatever the Decimal constructor makes of a
-      // raw double.
-      originalAmount: new Prisma.Decimal(String(parsed.originalAmount)),
-      currency: parsed.currency,
-      dueDate: dueDateCarrier(parsed.dueDate),
-      notes: parsed.notes ?? null,
-    },
-    include: WITH_PAYMENTS,
+      {
+        accountId,
+        type: OPENING_TYPE[parsed.direction],
+        amount: data.originalAmount,
+        date: linkedInstant(movedOn, context.timezone),
+        note:
+          parsed.notes ?? linkedNote(context.locale, OPENING_NOTE[parsed.direction], parsed.person),
+      },
+      fx,
+    )
+    return tx.debt.create({
+      // `opening.currency` was copied from the locked account row, so the
+      // debt and its opening transaction cannot disagree about the currency.
+      data: { ...data, currency: opening.currency, openingTransactionId: opening.id },
+      include: WITH_PAYMENTS,
+    })
   })
 }
 
@@ -519,57 +698,323 @@ export async function updateDebt(
 }
 
 /**
- * Records a repayment against a debt.
+ * Locks the debt (after any accounts — see the lock order), re-reads it through
+ * the typed client and refuses a written-off one.
+ *
+ * The raw SELECT in `lockDebtRow` is only the lock — `$queryRaw` gives no
+ * guarantee about how a DECIMAL column arrives in JS, and money must never
+ * travel through a float — so the row every decision is made on comes from
+ * Prisma's typed client. Under the lock, so a write-off that committed first is
+ * visible here and no payment can be recorded, edited or removed on an
+ * already-closed debt.
+ */
+async function lockActiveDebt(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  debtId: string,
+): Promise<Debt> {
+  await lockDebtRow(tx, userId, debtId)
+  const debt = await tx.debt.findUniqueOrThrow({ where: { userId_id: { userId, id: debtId } } })
+  if (debt.status !== 'ACTIVE') throw new DebtNotActiveError()
+  return debt
+}
+
+/**
+ * What is still owed on a locked debt, leaving out `exceptPaymentId` — the
+ * payment being edited, which must not count against its own new amount.
+ *
+ * Summed under the debt lock: this is the authoritative figure, not the one a
+ * caller may have read a moment ago.
+ */
+async function outstandingUnderLock(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  debt: Debt,
+  exceptPaymentId?: string,
+): Promise<Prisma.Decimal> {
+  const paid =
+    (
+      await tx.debtPayment.aggregate({
+        where: {
+          userId,
+          debtId: debt.id,
+          ...(exceptPaymentId === undefined ? {} : { id: { not: exceptPaymentId } }),
+        },
+        _sum: { amount: true },
+      })
+    )._sum.amount ?? new Prisma.Decimal(0)
+  return deriveDebtOutstanding(debt.originalAmount, paid)
+}
+
+/**
+ * Records a repayment against a debt — with an account, together with the
+ * money that moved.
  *
  * The whole read-check-write happens inside one interactive transaction that
- * first takes an exclusive row lock on the Debt row, for the reasons set out in
- * the module comment: without it two concurrent payments would both read the
+ * takes an exclusive row lock on the Debt row, for the reasons set out in the
+ * module comment: without it two concurrent payments would both read the
  * same outstanding amount, both pass the check, and together take the debt past
  * settled.
  *
- * Tracking only: the single write is the `DebtPayment` row. No account, no
- * transaction, no balance, and no FX — a payment inherits the debt's currency,
- * so there is nothing to convert and nothing slow inside the lock.
+ * With `accountId`, the linked transaction (spec §4: CASH_IN when a RECEIVABLE
+ * is repaid to the user, CASH_OUT when the user repays a PAYABLE) is written in
+ * the same transaction, dated 12:00 on the payment day in the user's zone, with
+ * the user's note or the localized "Thu nợ – {person}" / "Trả nợ – {person}"
+ * label. The account is locked *before* the debt (the module's lock order) and
+ * must hold the debt's currency. Every check — account, debt status,
+ * over-payment — runs before anything is written, so a refusal leaves no orphan
+ * transaction behind. Without an account it is the single `DebtPayment` insert
+ * it always was, with no FX lookup.
  */
 export async function recordDebtPayment(
   userId: string,
   debtId: string,
   input: RecordDebtPaymentInput,
+  context: DebtLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<DebtPayment> {
   const parsed = recordDebtPaymentSchema.parse(input)
   const amount = new Prisma.Decimal(String(parsed.amount))
   const date = calendarDateToUtcCarrier(parsed.date)
+  const { accountId } = parsed
+  // FX only when money moves, and before the transaction opens.
+  const fx =
+    accountId === undefined ? null : await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
 
   return prisma.$transaction(async (tx) => {
-    // 1. Exclusive row lock, tenant-scoped, or P2025 for an id that is not
-    //    this user's.
-    await lockDebtRow(tx, userId, debtId)
+    // 1. The account first, so this path holds nothing while it queues behind
+    //    another writer on the same account (P2025 for another user's,
+    //    `ArchivedAccountError` for an archived one).
+    if (accountId !== undefined) await lockAccountsForUpdate(tx, userId, [accountId])
 
-    // 2. Typed re-read under the lock. The raw SELECT is only the lock —
-    //    `$queryRaw` gives no guarantee about how a DECIMAL column arrives in
-    //    JS, and money must never travel through a float, so the row the
-    //    decision is made on comes from Prisma's typed client.
-    const debt = await tx.debt.findUniqueOrThrow({
-      where: { userId_id: { userId, id: debtId } },
-    })
-    // Under the lock, so a write-off that committed first is visible here and
-    // no payment can land against an already-closed debt.
-    if (debt.status !== 'ACTIVE') throw new DebtNotActiveError()
+    // 2. The debt: exclusive row lock, tenant-scoped (P2025 for an id that is
+    //    not this user's), then the status check under it.
+    const debt = await lockActiveDebt(tx, userId, debtId)
 
-    // 3. Sum under the same lock: this is the authoritative outstanding amount,
-    //    not the one a caller may have read a moment ago.
-    const paid =
-      (await tx.debtPayment.aggregate({ where: { userId, debtId }, _sum: { amount: true } }))._sum
-        .amount ?? new Prisma.Decimal(0)
-    const outstanding = deriveDebtOutstanding(debt.originalAmount, paid)
-    // `gt`, so a payment of exactly what is left is accepted — settling a debt
-    // is the most common last payment there is.
+    // 3. `gt`, so a payment of exactly what is left is accepted — settling a
+    //    debt is the most common last payment there is.
+    const outstanding = await outstandingUnderLock(tx, userId, debt)
     if (amount.gt(outstanding)) throw new DebtOverpaymentError(outstanding)
 
-    // 4. The one write. Tracking only — nothing else is touched.
+    // 4. The money, when it moved through an account. The account lock is
+    //    already ours, so the core's own lock returns at once.
+    const transaction =
+      accountId !== undefined && fx !== null
+        ? await insertTransactionInTx(
+            tx,
+            userId,
+            {
+              accountId,
+              type: PAYMENT_TYPE[debt.direction],
+              amount,
+              date: linkedInstant(parsed.date, context.timezone),
+              note:
+                parsed.note ??
+                linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person),
+              expectedCurrency: debt.currency,
+            },
+            fx,
+          )
+        : null
+
     return tx.debtPayment.create({
-      data: { userId, debtId, amount, date, note: parsed.note ?? null },
+      data: {
+        userId,
+        debtId,
+        amount,
+        date,
+        note: parsed.note ?? null,
+        transactionId: transaction?.id ?? null,
+      },
     })
+  })
+}
+
+/**
+ * Re-reads a payment under its debt's lock and confirms it is still linked the
+ * way the pre-transaction copy said.
+ *
+ * Every payment writer holds the debt lock, so from here the payment row
+ * cannot change — but it may already have changed between the pre-read and
+ * the lock, and the accounts this request locked were chosen from that pre-read.
+ * A payment that vanished is a P2025; one whose link changed (another edit
+ * added or removed its account) is a `ConcurrentModificationError`, as
+ * `updateTransaction` treats its own stale copy.
+ */
+async function verifyPaymentUnderLock(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  expected: DebtPayment,
+): Promise<void> {
+  const current = await tx.debtPayment.findUnique({
+    where: { userId_id: { userId, id: expected.id } },
+  })
+  if (!current) throw prismaNotFound('Debt payment', expected.id)
+  if (current.transactionId !== expected.transactionId) throw new ConcurrentModificationError()
+}
+
+/**
+ * Corrects a recorded payment — its amount, its date, its note, and which
+ * account (if any) the money moved through — keeping the linked transaction in
+ * step (spec §6.2).
+ *
+ * The rules are the ones the other writers already follow:
+ *
+ * - **Over-payment** is measured against what is owed *without* this payment,
+ *   so correcting 300,000 to 400,000 on a debt with 400,000 left before it is
+ *   accepted; `DebtOverpaymentError.outstanding` is then what would have fit.
+ * - **The linked transaction follows the payment.** Account → same or another
+ *   account: the same transaction row is updated (amount, date at 12:00 local,
+ *   note, account). Account → none: the link is cleared and the transaction
+ *   deleted (in that order — the link is `ON DELETE RESTRICT`). None → account:
+ *   a transaction is created, exactly as `recordDebtPayment` would. The new
+ *   account must hold the debt's currency.
+ * - **FX follows ruling R-6** (`updateTransaction`): a new snapshot is taken
+ *   only when the transaction's economic content changes — a new transaction,
+ *   another account, another amount, another instant — and fetched before the
+ *   transaction opens; a note-only edit keeps the snapshot exactly and needs no
+ *   rate at all.
+ * - **Frozen history**: a payment of a written-off debt cannot be edited.
+ *
+ * Concurrency: the payment and its linked transaction are read once outside
+ * the transaction (to choose the accounts to lock and to decide the FX
+ * question), then accounts → debt → transaction row are locked in the module's
+ * order and both rows re-verified against that copy.
+ */
+export async function updateDebtPayment(
+  userId: string,
+  paymentId: string,
+  input: RecordDebtPaymentInput,
+  context: DebtLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<DebtPayment> {
+  const parsed = recordDebtPaymentSchema.parse(input)
+  // The schema refuses zero, so `insertTransactionInTx`'s RangeError and the
+  // amount CHECKs are unreachable from here.
+  const amount = new Prisma.Decimal(String(parsed.amount))
+  const date = calendarDateToUtcCarrier(parsed.date)
+  const instant = linkedInstant(parsed.date, context.timezone)
+  const nextAccountId = parsed.accountId
+
+  // Ownership-scoped and first: another user's payment id is a P2025 here,
+  // before any FX call or lock is taken for it.
+  const { transaction: linked, ...existing } = await prisma.debtPayment.findUniqueOrThrow({
+    where: { userId_id: { userId, id: paymentId } },
+    include: { transaction: true },
+  })
+
+  const economicChange =
+    nextAccountId !== undefined &&
+    (linked === null ||
+      linked.accountId !== nextAccountId ||
+      // Compared as Decimal: 200000 and the stored "200000.00" are one amount.
+      !amount.equals(linked.amount) ||
+      instant.getTime() !== linked.date.getTime())
+  const fx = economicChange ? await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride) : null
+
+  return prisma.$transaction(async (tx) => {
+    // 1. Accounts: the one the linked transaction leaves and the one it joins,
+    //    in one sorted statement (`lockAccountsForUpdate` de-duplicates), so an
+    //    archived account can neither lose nor gain the movement.
+    const accountIds = [linked?.accountId, nextAccountId].filter(
+      (id): id is string => id !== undefined,
+    )
+    const accounts = await lockAccountsForUpdate(tx, userId, accountIds)
+
+    // 2. The debt, then the payment re-verified under its lock.
+    const debt = await lockActiveDebt(tx, userId, existing.debtId)
+    await verifyPaymentUnderLock(tx, userId, existing)
+
+    // 3. The linked transaction row, last, against its pre-read copy: the
+    //    Transactions page may have moved or edited it since.
+    if (linked) await lockAndVerifyTransactionRow(tx, userId, linked.id, linked)
+
+    const outstanding = await outstandingUnderLock(tx, userId, debt, paymentId)
+    if (amount.gt(outstanding)) throw new DebtOverpaymentError(outstanding)
+
+    const note =
+      parsed.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person)
+    let transactionId: string | null = null
+    if (nextAccountId !== undefined && linked === null) {
+      // `economicChange` is true for a new link, so `fx` is set.
+      if (fx === null) throw new RangeError('updateDebtPayment: a new link needs an FX snapshot')
+      const created = await insertTransactionInTx(
+        tx,
+        userId,
+        {
+          accountId: nextAccountId,
+          type: PAYMENT_TYPE[debt.direction],
+          amount,
+          date: instant,
+          note,
+          expectedCurrency: debt.currency,
+        },
+        fx,
+      )
+      transactionId = created.id
+    } else if (nextAccountId !== undefined && linked !== null) {
+      // The locked row of the account the money now moves through —
+      // `lockAccountsForUpdate` resolved every id it was given or threw.
+      const target = accounts.find((account) => account.id === nextAccountId)
+      if (target?.currency !== debt.currency) throw new LinkedAccountCurrencyMismatchError()
+      await tx.transaction.update({
+        where: { userId_id: { userId, id: linked.id } },
+        data: {
+          accountId: nextAccountId,
+          amount,
+          currency: target.currency,
+          date: instant,
+          note,
+          ...(fx
+            ? {
+                vndPerUsdAtEntry: fx.rateDecimal,
+                fxRateFetchedAt: fx.fetchedAt,
+                fxRateEffectiveAt: fx.effectiveDate,
+                fxRateSource: fx.source,
+              }
+            : {}),
+        },
+      })
+      transactionId = linked.id
+    }
+
+    const updated = await tx.debtPayment.update({
+      where: { userId_id: { userId, id: paymentId } },
+      data: { amount, date, note: parsed.note ?? null, transactionId },
+    })
+    // Account → none: only now that the payment no longer references it can
+    // the transaction go (`ON DELETE RESTRICT`).
+    if (nextAccountId === undefined && linked !== null) {
+      await tx.transaction.delete({ where: { userId_id: { userId, id: linked.id } } })
+    }
+    return updated
+  })
+}
+
+/**
+ * Removes a recorded payment and, when it was recorded in an account, the
+ * transaction that moved its money (spec §6.2) — both or neither.
+ *
+ * Same locks and re-verification as `updateDebtPayment` (the linked account,
+ * then the debt, then the transaction row), so an archived account's frozen
+ * history is respected exactly as `deleteTransaction` respects it, and a
+ * payment of a written-off debt cannot be removed. The payment row goes first:
+ * it references the transaction, and that link is `ON DELETE RESTRICT`.
+ */
+export async function deleteDebtPayment(userId: string, paymentId: string): Promise<void> {
+  const { transaction: linked, ...existing } = await prisma.debtPayment.findUniqueOrThrow({
+    where: { userId_id: { userId, id: paymentId } },
+    include: { transaction: true },
+  })
+
+  await prisma.$transaction(async (tx) => {
+    if (linked) await lockAccountsForUpdate(tx, userId, [linked.accountId])
+    await lockActiveDebt(tx, userId, existing.debtId)
+    await verifyPaymentUnderLock(tx, userId, existing)
+    if (linked) await lockAndVerifyTransactionRow(tx, userId, linked.id, linked)
+
+    await tx.debtPayment.delete({ where: { userId_id: { userId, id: paymentId } } })
+    if (linked) await tx.transaction.delete({ where: { userId_id: { userId, id: linked.id } } })
   })
 }
 
@@ -580,7 +1025,9 @@ export async function recordDebtPayment(
  * zeroed: what happened stays readable, and the page shows the debt as written
  * off from then on. Only its meaning changes — a written-off debt is excluded
  * from Net Worth and the dashboard's totals (Group 4 onwards) and can receive
- * no further payments or edits.
+ * no further payments or edits. No money moves either: nothing here touches a
+ * transaction, and those its opening or its payments recorded in an account
+ * stay exactly where they are (spec 2026-10-12 §4).
  *
  * Runs in a transaction taking the same row lock as `recordDebtPayment`, which
  * is what makes the payment-vs-write-off race resolve cleanly in both

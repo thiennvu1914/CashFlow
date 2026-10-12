@@ -110,6 +110,10 @@ const FULL_EXPORT_SHEETS = [
  */
 const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
 
+/** The session context the debt service's writes take. Every debt here is
+ *  recorded without an account, so only its shape matters. */
+const DEBT_CONTEXT = { timezone: TEST_TIMEZONE, locale: 'vi' } as const
+
 /**
  * The workbook this fixture produced BEFORE Task 4 changed what the Debts and
  * Loans sheets fetch: captured from the pre-change build and pasted here
@@ -267,44 +271,62 @@ describe('full export workbook', () => {
    * down, and a receivable settled *after* its due date.
    */
   async function seedDebts(userId: string) {
-    const receivable = await createDebt(userId, {
-      direction: 'RECEIVABLE',
-      person: 'An',
-      originalAmount: 1_000_000,
-      currency: 'VND',
-      dueDate: '2026-04-30',
-      description: 'lent for the deposit',
-      notes: 'paying in instalments',
-    })
-    await recordDebtPayment(userId, receivable.id, {
-      amount: 300_000,
-      date: '2026-03-05',
-      note: 'first instalment',
-    })
-    await recordDebtPayment(userId, receivable.id, { amount: 200_000, date: '2026-03-06' })
+    const receivable = await createDebt(
+      userId,
+      {
+        direction: 'RECEIVABLE',
+        person: 'An',
+        originalAmount: 1_000_000,
+        currency: 'VND',
+        dueDate: '2026-04-30',
+        description: 'lent for the deposit',
+        notes: 'paying in instalments',
+      },
+      DEBT_CONTEXT,
+    )
+    await recordDebtPayment(
+      userId,
+      receivable.id,
+      { amount: 300_000, date: '2026-03-05', note: 'first instalment' },
+      DEBT_CONTEXT,
+    )
+    await recordDebtPayment(
+      userId,
+      receivable.id,
+      { amount: 200_000, date: '2026-03-06' },
+      DEBT_CONTEXT,
+    )
 
-    const payable = await createDebt(userId, {
-      direction: 'PAYABLE',
-      person: 'Binh',
-      originalAmount: 400,
-      currency: 'USD',
-    })
+    const payable = await createDebt(
+      userId,
+      { direction: 'PAYABLE', person: 'Binh', originalAmount: 400, currency: 'USD' },
+      DEBT_CONTEXT,
+    )
     // Paid down first, THEN written off: a written-off debt takes no further
     // payments, and the point of this row is that the history survives the
     // write-off.
-    await recordDebtPayment(userId, payable.id, { amount: 100, date: '2026-03-04' })
+    await recordDebtPayment(userId, payable.id, { amount: 100, date: '2026-03-04' }, DEBT_CONTEXT)
     await writeOffDebt(userId, payable.id)
 
-    const settled = await createDebt(userId, {
-      direction: 'RECEIVABLE',
-      person: 'Chi',
-      originalAmount: 100_000,
-      currency: 'VND',
-      // Behind `EXPORT_NOW`, and settled two weeks late: a repaid debt is
-      // repaid, never overdue.
-      dueDate: '2026-03-01',
-    })
-    await recordDebtPayment(userId, settled.id, { amount: 100_000, date: '2026-03-07' })
+    const settled = await createDebt(
+      userId,
+      {
+        direction: 'RECEIVABLE',
+        person: 'Chi',
+        originalAmount: 100_000,
+        currency: 'VND',
+        // Behind `EXPORT_NOW`, and settled two weeks late: a repaid debt is
+        // repaid, never overdue.
+        dueDate: '2026-03-01',
+      },
+      DEBT_CONTEXT,
+    )
+    await recordDebtPayment(
+      userId,
+      settled.id,
+      { amount: 100_000, date: '2026-03-07' },
+      DEBT_CONTEXT,
+    )
     return { receivable, payable, settled }
   }
 
@@ -1437,14 +1459,13 @@ describe('full export workbook', () => {
       currentProgress: 0,
     })
     // No description, no notes, no due date.
-    const debt = await createDebt(s.userId, {
-      direction: 'RECEIVABLE',
-      person: 'Duc',
-      originalAmount: 500_000,
-      currency: 'VND',
-    })
+    const debt = await createDebt(
+      s.userId,
+      { direction: 'RECEIVABLE', person: 'Duc', originalAmount: 500_000, currency: 'VND' },
+      DEBT_CONTEXT,
+    )
     // And a repayment with no note of its own.
-    await recordDebtPayment(s.userId, debt.id, { amount: 50_000, date: '2026-03-06' })
+    await recordDebtPayment(s.userId, debt.id, { amount: 50_000, date: '2026-03-06' }, DEBT_CONTEXT)
     // No notes.
     const loan = await createLoan(s.userId, {
       lender: 'Agribank',

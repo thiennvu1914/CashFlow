@@ -1,38 +1,49 @@
-import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { getAccountBalance } from '@/lib/server/services/balance'
+import type { CreateDebtInput, RecordDebtPaymentInput } from '@/lib/validation/debt'
+import { ArchivedAccountError } from './account-lock'
+import { LinkedAccountCurrencyMismatchError } from './linked-transaction'
+import { ConcurrentModificationError, createTransaction, updateTransaction } from './transaction'
 import {
-  createDebt,
+  createDebt as createDebtIn,
+  deleteDebtPayment,
   deriveDebtDisplayStatus,
   deriveDebtOutstanding,
   getDebtOutstanding,
   getDebtsWithOutstanding,
   listDebts,
-  recordDebtPayment,
+  recordDebtPayment as recordDebtPaymentIn,
   updateDebt,
+  updateDebtPayment as updateDebtPaymentIn,
   writeOffDebt,
   DebtNotActiveError,
   DebtOverpaymentError,
+  type DebtLinkContext,
   type DebtTotals,
   type DebtWithOutstanding,
 } from './debt'
 
 /**
- * Group 2's data-layer acceptance check (spec §4.9).
+ * Group 2's data-layer acceptance check (spec §4.9), extended by money-source
+ * linking (spec 2026-10-12 §4, §6.2).
  *
- * Six properties are what this suite exists to hold:
+ * Six properties are what the `debt service` block exists to hold:
  *
- * 1. **Nothing here moves money.** The fixture seeds an account and an EXPENSE
- *    transaction, and `afterEach` re-asserts the account / transaction /
- *    transfer counts, the two seeded rows field for field, and the account's
- *    derived balance — after *every* case, not just a dedicated one. A stray
- *    write to any of them fails the test that made it.
+ * 1. **Without an account, nothing moves.** The fixture seeds an account and an
+ *    EXPENSE transaction, and `afterEach` re-asserts the account / transaction
+ *    /transfer counts, the two seeded rows field for field, and the account's
+ *    derived balance — after *every* case, not just a dedicated one. Every case
+ *    in that block records its debts and payments with no account (the
+ *    "don't record in an account" choice), so a stray write to the ledger fails
+ *    the test that made it.
  * 2. **Outstanding is derived, never stored.** Every assertion goes through
  *    `originalAmount − Σ payments`; there is no column to check, and the
  *    `groupBy` sum and the included payment rows are asserted to agree.
@@ -55,6 +66,12 @@ import {
  * `fetch` is a throwing spy for every test and `afterEach` asserts it was never
  * called: a debt keeps its own currency and nothing here converts one, so any
  * network access would be a bug rather than a slow test.
+ *
+ * The `money-source linking` block below covers the other choice — a debt or a
+ * payment recorded in an account — where the matching Transaction is written in
+ * the same database transaction (spec §4's mapping, an injected FX provider for
+ * the snapshot, balances moving, refusals writing nothing, payment edits and
+ * deletes keeping both sides consistent, and the lock order).
  */
 
 /** UTC+7, no DST — so no assertion below depends on a DST date. */
@@ -68,6 +85,37 @@ const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
  * date passed.
  */
 const TODAY = '2026-03-15'
+
+/**
+ * What the action layer passes from the session (`resolveProfileDefaults(user)`):
+ * the zone a calendar date is pinned to 12:00 in, and the language a default
+ * transaction note is written in.
+ */
+const CONTEXT: DebtLinkContext = { timezone: TEST_TIMEZONE, locale: 'vi' }
+
+/** The three writes that take a context, with the test default applied — the
+ *  `…In` originals are called directly where a case needs another locale. */
+function createDebt(userId: string, input: CreateDebtInput, provider?: ExchangeRateProvider) {
+  return createDebtIn(userId, input, CONTEXT, provider)
+}
+
+function recordDebtPayment(
+  userId: string,
+  debtId: string,
+  input: RecordDebtPaymentInput,
+  provider?: ExchangeRateProvider,
+) {
+  return recordDebtPaymentIn(userId, debtId, input, CONTEXT, provider)
+}
+
+function updateDebtPayment(
+  userId: string,
+  paymentId: string,
+  input: RecordDebtPaymentInput,
+  provider?: ExchangeRateProvider,
+) {
+  return updateDebtPaymentIn(userId, paymentId, input, CONTEXT, provider)
+}
 
 interface DebtFixture {
   userId: string
@@ -775,6 +823,103 @@ describe('debt service', () => {
     })
   })
 
+  describe('payment edit and delete', () => {
+    it('edits the amount, date and note of a payment', async () => {
+      const debt = await createDebt(fx.userId, BASE_DEBT)
+      const payment = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 250_000,
+        date: '2026-03-01',
+        note: 'First',
+      })
+
+      const updated = await updateDebtPayment(fx.userId, payment.id, {
+        amount: 300_000.5,
+        date: '2026-03-02',
+      })
+
+      expect(updated.id).toBe(payment.id)
+      expect(updated.debtId).toBe(debt.id)
+      expect(updated.amount.toString()).toBe('300000.5')
+      expect(formatCalendarDate(updated.date)).toBe('2026-03-02')
+      // A cleared note is written as null, not skipped.
+      expect(updated.note).toBeNull()
+      expect(updated.transactionId).toBeNull()
+      expect((await getDebtOutstanding(fx.userId, debt.id)).toString()).toBe('699999.5')
+    })
+
+    it('measures an edit against what is owed without the payment being edited', async () => {
+      const debt = await createDebt(fx.userId, BASE_DEBT)
+      await recordDebtPayment(fx.userId, debt.id, { amount: 600_000, date: '2026-03-01' })
+      const second = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 300_000,
+        date: '2026-03-02',
+      })
+
+      // 600,000 + 400,000 settles the debt exactly — the edited payment's own
+      // old 300,000 must not count against it.
+      await updateDebtPayment(fx.userId, second.id, { amount: 400_000, date: '2026-03-02' })
+      const caught = await captureRejection(
+        updateDebtPayment(fx.userId, second.id, { amount: 400_000.01, date: '2026-03-02' }),
+      )
+
+      expect(caught).toBeInstanceOf(DebtOverpaymentError)
+      // What would have fitted: the original amount minus every *other* payment.
+      expect((caught as DebtOverpaymentError).outstanding.toString()).toBe('400000')
+      const stored = await prisma.debtPayment.findUniqueOrThrow({
+        where: { userId_id: { userId: fx.userId, id: second.id } },
+      })
+      expect(stored.amount.toString()).toBe('400000')
+      expect((await getDebtOutstanding(fx.userId, debt.id)).toString()).toBe('0')
+    })
+
+    it('deletes a payment, and the outstanding amount comes back', async () => {
+      const debt = await createDebt(fx.userId, BASE_DEBT)
+      const kept = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 100_000,
+        date: '2026-03-01',
+      })
+      const removed = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 250_000,
+        date: '2026-03-02',
+      })
+
+      await deleteDebtPayment(fx.userId, removed.id)
+
+      const payments = await prisma.debtPayment.findMany({
+        where: { userId: fx.userId, debtId: debt.id },
+      })
+      expect(payments.map((payment) => payment.id)).toEqual([kept.id])
+      expect((await getDebtOutstanding(fx.userId, debt.id)).toString()).toBe('900000')
+    })
+
+    it('refuses to edit or delete a payment of a written-off debt — its history is frozen', async () => {
+      const debt = await createDebt(fx.userId, BASE_DEBT)
+      const payment = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 100_000,
+        date: '2026-03-01',
+      })
+      await writeOffDebt(fx.userId, debt.id)
+
+      await expect(
+        updateDebtPayment(fx.userId, payment.id, { amount: 1, date: '2026-03-01' }),
+      ).rejects.toThrow(DebtNotActiveError)
+      await expect(deleteDebtPayment(fx.userId, payment.id)).rejects.toThrow(DebtNotActiveError)
+
+      const stored = await prisma.debtPayment.findUniqueOrThrow({
+        where: { userId_id: { userId: fx.userId, id: payment.id } },
+      })
+      expect(stored).toEqual(payment)
+    })
+
+    it('answers a payment id that does not exist with P2025', async () => {
+      await expectPrismaCode(
+        updateDebtPayment(fx.userId, 'missing-payment', { amount: 1, date: TODAY }),
+        'P2025',
+      )
+      await expectPrismaCode(deleteDebtPayment(fx.userId, 'missing-payment'), 'P2025')
+    })
+  })
+
   describe('concurrency', () => {
     it('lets only one of two concurrent payments through when both would fit alone', async () => {
       // Three runs, because a race that passes once may simply have been
@@ -856,7 +1001,10 @@ describe('debt service', () => {
         dueDate: '2027-01-31',
         notes: 'Theirs',
       })
-      await recordDebtPayment(other.userId, theirs.id, { amount: 1_000, date: '2026-03-01' })
+      const theirPayment = await recordDebtPayment(other.userId, theirs.id, {
+        amount: 1_000,
+        date: '2026-03-01',
+      })
       const before = await prisma.debt.findUniqueOrThrow({
         where: { userId_id: { userId: other.userId, id: theirs.id } },
         include: { payments: true },
@@ -869,13 +1017,18 @@ describe('debt service', () => {
       await expectPrismaCode(updateDebt(fx.userId, theirs.id, { person: 'Stolen' }), 'P2025')
       await expectPrismaCode(writeOffDebt(fx.userId, theirs.id), 'P2025')
       await expectPrismaCode(getDebtOutstanding(fx.userId, theirs.id), 'P2025')
+      await expectPrismaCode(
+        updateDebtPayment(fx.userId, theirPayment.id, { amount: 1, date: TODAY }),
+        'P2025',
+      )
+      await expectPrismaCode(deleteDebtPayment(fx.userId, theirPayment.id), 'P2025')
 
       const after = await prisma.debt.findUniqueOrThrow({
         where: { userId_id: { userId: other.userId, id: theirs.id } },
         include: { payments: true },
       })
       // Byte-identical, `updatedAt` and the payment row included: not one of
-      // the four attempts reached a write.
+      // the six attempts reached a write.
       expect(after).toEqual(before)
       // And the debt is invisible to the other user's reads, not merely
       // unwritable.
@@ -955,7 +1108,7 @@ describe('debt service', () => {
     })
   })
 
-  describe('tracking only — no money moves', () => {
+  describe('without an account — no money moves', () => {
     it('leaves accounts, transactions, transfers and the balance untouched by every mutation', async () => {
       // Every mutation the service has, in the sequence a real user would
       // produce, ending in a write-off. `afterEach` checks the ledger after
@@ -967,14 +1120,23 @@ describe('debt service', () => {
         dueDate: '2026-06-30',
         notes: 'Tracking only',
       })
-      await recordDebtPayment(fx.userId, debt.id, { amount: 400_000, date: '2026-03-01' })
+      const first = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 400_000,
+        date: '2026-03-01',
+      })
       await updateDebt(fx.userId, debt.id, {
         person: 'Nguyen An',
         description: 'Edited',
         dueDate: '2026-07-31',
         notes: 'Edited',
       })
-      await recordDebtPayment(fx.userId, debt.id, { amount: 600_000, date: '2026-03-10' })
+      await updateDebtPayment(fx.userId, first.id, { amount: 300_000, date: '2026-03-02' })
+      const extra = await recordDebtPayment(fx.userId, debt.id, {
+        amount: 100_000,
+        date: '2026-03-05',
+      })
+      await deleteDebtPayment(fx.userId, extra.id)
+      await recordDebtPayment(fx.userId, debt.id, { amount: 700_000, date: '2026-03-10' })
       await captureRejection(
         recordDebtPayment(fx.userId, debt.id, { amount: 1, date: '2026-03-11' }),
       )
@@ -1005,34 +1167,1069 @@ describe('debt service', () => {
         }),
       ).toEqual(ledger.transaction)
     })
+  })
+})
 
-    /**
-     * The structural half of "no money moves": the service cannot touch the
-     * ledger because it does not import anything that writes to it.
-     *
-     * Reading the source is deliberate rather than fragile. The behavioural
-     * checks can only catch a write they happen to provoke, whereas a later
-     * phase adding "record the repayment as a transaction too" would
-     * reintroduce exactly the coupling spec §4.9 exists to avoid — and
-     * importing the module is the first step of doing so. Only import
-     * specifiers are matched, so the doc comment may keep naming these modules
-     * to say why they are absent.
-     */
-    it('imports nothing that could move money or reach a live rate', () => {
-      const source = readFileSync(fileURLToPath(new URL('./debt.ts', import.meta.url)), 'utf8')
+/**
+ * Money-source linking for debts (spec 2026-10-12 §4, §6.2, §6.8) against the
+ * real database.
+ *
+ * Every FX lookup goes through an injected fake provider whose snapshot values
+ * are asserted exactly, and `fetch` is a throwing spy, so nothing here can reach
+ * the network. The USD/VND `ExchangeRate` cache rows are global, so `afterEach`
+ * deletes them and resets the in-process FX memo (the rule
+ * `transaction.test.ts` follows).
+ *
+ * "No FX lookup happened" is proved with `failingProvider` over an empty cache
+ * (`beforeEach` empties it; a case that has already cached a rate empties it
+ * again): a lookup there could only end in `FxUnavailableError`, so a write
+ * that succeeds never asked.
+ */
+describe('money-source linking', () => {
+  const LINK_FX_SOURCE = 'debt-link-fake'
+  const createdUserIds: string[] = []
+  let fetchSpy: MockInstance
 
-      for (const forbidden of [
-        'services/transaction',
-        'services/transfer',
-        'services/balance',
-        'services/financial-account',
-        'current-rate-policy',
-        'fx-service',
-        'current-amount',
-        'historical-amount',
-      ]) {
-        expect(source).not.toMatch(new RegExp(`from '[^']*${forbidden}`))
-      }
+  function fakeProvider(rate = 25000, source = LINK_FX_SOURCE) {
+    // In the past, so a service that stamped "now" instead of the provider's
+    // own fetch instant could not pass an equality check.
+    const fetchedAt = new Date(Date.now() - 5 * 60 * 1000)
+    const effectiveDate = new Date()
+    const provider: ExchangeRateProvider = {
+      getLatestRate: async () => ({ rate, effectiveDate, fetchedAt, source }),
+      getHistoricalRate: async () => null,
+    }
+    return { provider, fetchedAt, effectiveDate }
+  }
+
+  const failingProvider: ExchangeRateProvider = {
+    getLatestRate: async () => {
+      throw new Error('provider down')
+    },
+    getHistoricalRate: async () => null,
+  }
+
+  /** The `ExchangeRate` cache key — the `fxRateEffectiveAt` a live lookup stores. */
+  function utcDayStart(date: Date): Date {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+  }
+
+  async function clearFxCache() {
+    await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
+    // The in-process memo would otherwise outlive the rows just deleted.
+    resetFxMemoForTests()
+  }
+
+  /**
+   * A user with three active accounts — two in VND, one in USD — and an archived
+   * VND one. Each funded account starts at a distinct round figure, so every
+   * balance assertion below is a delta anyone can check by eye.
+   */
+  async function setup() {
+    const user = await prisma.user.create({
+      data: {
+        id: randomUUID(),
+        email: `debt-link-${randomUUID()}@example.com`,
+        name: 'Debt Link Test',
+        emailVerified: false,
+        timezone: TEST_TIMEZONE,
+      },
     })
+    createdUserIds.push(user.id)
+    const accountType = await prisma.accountType.create({ data: { userId: user.id, name: 'Cash' } })
+    const account = (name: string, currency: 'VND' | 'USD', initialBalance: string) =>
+      prisma.financialAccount.create({
+        data: {
+          userId: user.id,
+          name,
+          accountTypeId: accountType.id,
+          initialBalance: new Prisma.Decimal(initialBalance),
+          currency,
+        },
+      })
+    const wallet = await account('Wallet', 'VND', '5000000')
+    const bank = await account('Bank', 'VND', '2000000')
+    const dollars = await account('Dollars', 'USD', '1000')
+    const archived = await account('Old', 'VND', '0')
+    await prisma.financialAccount.update({
+      where: { userId_id: { userId: user.id, id: archived.id } },
+      data: { status: 'ARCHIVED' },
+    })
+    return {
+      userId: user.id,
+      walletId: wallet.id,
+      bankId: bank.id,
+      dollarsId: dollars.id,
+      archivedId: archived.id,
+    }
+  }
+
+  type Setup = Awaited<ReturnType<typeof setup>>
+
+  async function balanceOf(s: Setup, accountId: string): Promise<string> {
+    return (await getAccountBalance(s.userId, accountId)).toString()
+  }
+
+  async function transactionCount(s: Setup): Promise<number> {
+    return prisma.transaction.count({ where: { userId: s.userId } })
+  }
+
+  async function transactionById(s: Setup, id: string | null) {
+    if (id === null) throw new Error('expected a linked transaction')
+    return prisma.transaction.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  async function paymentById(s: Setup, id: string) {
+    return prisma.debtPayment.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  /** A RECEIVABLE of 1,000,000 recorded with no account, so the cases about
+   *  payments start from an untouched ledger. */
+  function unlinkedDebt(s: Setup, overrides: Partial<CreateDebtInput> = {}) {
+    return createDebt(s.userId, { ...BASE_DEBT, ...overrides })
+  }
+
+  beforeEach(async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('network access in test')
+    })
+    // The FX fallback path warns by design; silenced to keep the output pristine.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Today's USD/VND row is shared by every suite, so a rate another file left
+    // behind would otherwise be served instead of this file's fake provider.
+    await clearFxCache()
+  })
+
+  afterEach(async () => {
+    const fetchCalls = fetchSpy.mock.calls.length
+    vi.restoreAllMocks()
+    const userIds = createdUserIds.splice(0)
+    try {
+      await clearFxCache()
+      if (userIds.length > 0) {
+        // Payments and debts first: they reference the transactions now.
+        await prisma.debtPayment.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.debt.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+      }
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    }
+    expect(fetchCalls).toBe(0)
+  })
+
+  describe('createDebt with an account', () => {
+    it('records a RECEIVABLE as a CASH_OUT on the money-moved day, in the account currency', async () => {
+      const s = await setup()
+      const { provider, fetchedAt, effectiveDate } = fakeProvider()
+
+      const debt = await createDebt(
+        s.userId,
+        // `currency: 'USD'` is the form's leftover choice: with an account, the
+        // debt is in the account's currency, whatever the form said.
+        { ...BASE_DEBT, currency: 'USD', accountId: s.walletId, movedOn: '2026-03-10' },
+        provider,
+      )
+
+      expect(debt.currency).toBe('VND')
+      expect(debt.openingTransactionId).not.toBeNull()
+      // What the payment picker pre-selects (spec §6.2) travels with the row.
+      expect(debt.openingTransaction).toEqual({ accountId: s.walletId })
+
+      const opening = await transactionById(s, debt.openingTransactionId)
+      expect(opening).toMatchObject({
+        accountId: s.walletId,
+        type: 'CASH_OUT',
+        currency: 'VND',
+        categoryId: null,
+        // No notes given: the label, rendered once in the user's locale.
+        note: 'Cho mượn – Nguyen An',
+        fxRateSource: LINK_FX_SOURCE,
+      })
+      expect(opening.amount.toString()).toBe('1000000')
+      // 12:00 on 2026-03-10 in Asia/Ho_Chi_Minh (UTC+7): the same calendar day
+      // in every zone the user could later read it in.
+      expect(opening.date.toISOString()).toBe('2026-03-10T05:00:00.000Z')
+      expect(opening.vndPerUsdAtEntry.toString()).toBe('25000')
+      expect(opening.fxRateFetchedAt.toISOString()).toBe(fetchedAt.toISOString())
+      expect(opening.fxRateEffectiveAt.toISOString()).toBe(utcDayStart(effectiveDate).toISOString())
+
+      expect(await balanceOf(s, s.walletId)).toBe('4000000')
+      expect(await transactionCount(s)).toBe(1)
+    })
+
+    it('records a PAYABLE as a CASH_IN, carrying the user notes as the transaction note', async () => {
+      const s = await setup()
+
+      const debt = await createDebt(
+        s.userId,
+        {
+          direction: 'PAYABLE',
+          person: 'Binh',
+          originalAmount: 300_000,
+          currency: 'VND',
+          notes: 'For the rent',
+          accountId: s.bankId,
+          movedOn: '2026-03-01',
+        },
+        fakeProvider().provider,
+      )
+
+      const opening = await transactionById(s, debt.openingTransactionId)
+      expect(opening).toMatchObject({ accountId: s.bankId, type: 'CASH_IN', note: 'For the rent' })
+      expect(opening.amount.toString()).toBe('300000')
+      expect(await balanceOf(s, s.bankId)).toBe('2300000')
+    })
+
+    it('records nothing and asks for no rate without an account, keeping the chosen currency', async () => {
+      const s = await setup()
+
+      const debt = await createDebt(s.userId, { ...BASE_DEBT, currency: 'USD' }, failingProvider)
+
+      expect(debt.currency).toBe('USD')
+      expect(debt.openingTransactionId).toBeNull()
+      expect(debt.openingTransaction).toBeNull()
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+
+    it("refuses another user's account with P2025 and writes nothing for either user", async () => {
+      const s = await setup()
+      const other = await setup()
+
+      await expectPrismaCode(
+        createDebt(
+          s.userId,
+          { ...BASE_DEBT, accountId: other.walletId, movedOn: '2026-03-10' },
+          fakeProvider().provider,
+        ),
+        'P2025',
+      )
+
+      expect(await prisma.debt.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await transactionCount(other)).toBe(0)
+      expect(await balanceOf(other, other.walletId)).toBe('5000000')
+    })
+
+    it('refuses an archived account and writes nothing', async () => {
+      const s = await setup()
+
+      await expect(
+        createDebt(
+          s.userId,
+          { ...BASE_DEBT, accountId: s.archivedId, movedOn: '2026-03-10' },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await prisma.debt.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('writes nothing when no usable rate exists — no debt without its transaction', async () => {
+      const s = await setup()
+
+      await expect(
+        createDebt(
+          s.userId,
+          { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-10' },
+          failingProvider,
+        ),
+      ).rejects.toThrow(FxUnavailableError)
+
+      expect(await prisma.debt.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+  })
+
+  describe('recordDebtPayment with an account', () => {
+    it('records a RECEIVABLE repayment as a CASH_IN on the payment day; outstanding and balance move', async () => {
+      const s = await setup()
+      const { provider, fetchedAt } = fakeProvider()
+      const debt = await createDebt(
+        s.userId,
+        { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-01' },
+        provider,
+      )
+
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 250_000, date: '2026-03-15', accountId: s.bankId },
+        provider,
+      )
+
+      const linked = await transactionById(s, payment.transactionId)
+      expect(linked).toMatchObject({
+        accountId: s.bankId,
+        type: 'CASH_IN',
+        currency: 'VND',
+        note: 'Thu nợ – Nguyen An',
+        fxRateSource: LINK_FX_SOURCE,
+      })
+      expect(linked.amount.toString()).toBe('250000')
+      expect(linked.date.toISOString()).toBe('2026-03-15T05:00:00.000Z')
+      expect(linked.fxRateFetchedAt.toISOString()).toBe(fetchedAt.toISOString())
+      // The payment row itself keeps its calendar-date carrier.
+      expect(formatCalendarDate(payment.date)).toBe('2026-03-15')
+
+      expect((await getDebtOutstanding(s.userId, debt.id)).toString()).toBe('750000')
+      expect(await balanceOf(s, s.bankId)).toBe('2250000')
+      // And the read the Debts page uses carries the link and its account.
+      const [listed] = await listDebts(s.userId)
+      expect(listed.payments).toHaveLength(1)
+      expect(listed.payments[0]).toMatchObject({
+        transactionId: linked.id,
+        transaction: { accountId: s.bankId },
+      })
+    })
+
+    it('records a PAYABLE repayment as a CASH_OUT carrying the user note', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s, { direction: 'PAYABLE', person: 'Binh' })
+
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 100_000, date: '2026-03-02', note: 'Cash at lunch', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      const linked = await transactionById(s, payment.transactionId)
+      expect(linked).toMatchObject({ type: 'CASH_OUT', note: 'Cash at lunch' })
+      expect(payment.note).toBe('Cash at lunch')
+      expect(await balanceOf(s, s.walletId)).toBe('4900000')
+    })
+
+    it('records nothing and asks for no rate without an account', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 100_000, date: '2026-03-02' },
+        failingProvider,
+      )
+
+      expect(payment.transactionId).toBeNull()
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('refuses an overpayment and leaves no orphan transaction behind', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      await recordDebtPayment(s.userId, debt.id, { amount: 600_000, date: '2026-03-01' })
+
+      const caught = await captureRejection(
+        recordDebtPayment(
+          s.userId,
+          debt.id,
+          { amount: 400_000.01, date: '2026-03-02', accountId: s.walletId },
+          fakeProvider().provider,
+        ),
+      )
+
+      expect(caught).toBeInstanceOf(DebtOverpaymentError)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(1)
+    })
+
+    it('refuses an account in another currency than the debt', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+
+      await expect(
+        recordDebtPayment(
+          s.userId,
+          debt.id,
+          { amount: 100, date: '2026-03-02', accountId: s.dollarsId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(LinkedAccountCurrencyMismatchError)
+
+      expect(await transactionCount(s)).toBe(0)
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('refuses an archived account', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+
+      await expect(
+        recordDebtPayment(
+          s.userId,
+          debt.id,
+          { amount: 100, date: '2026-03-02', accountId: s.archivedId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it("refuses another user's account, and another user's debt, with P2025", async () => {
+      const s = await setup()
+      const other = await setup()
+      const mine = await unlinkedDebt(s)
+      const theirs = await unlinkedDebt(other)
+      const { provider } = fakeProvider()
+
+      await expectPrismaCode(
+        recordDebtPayment(
+          s.userId,
+          mine.id,
+          { amount: 100, date: '2026-03-02', accountId: other.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+      await expectPrismaCode(
+        recordDebtPayment(
+          s.userId,
+          theirs.id,
+          { amount: 100, date: '2026-03-02', accountId: s.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+
+      expect(
+        await prisma.debtPayment.count({ where: { userId: { in: [s.userId, other.userId] } } }),
+      ).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await transactionCount(other)).toBe(0)
+    })
+
+    it('writes nothing when no usable rate exists', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+
+      await expect(
+        recordDebtPayment(
+          s.userId,
+          debt.id,
+          { amount: 100, date: '2026-03-02', accountId: s.walletId },
+          failingProvider,
+        ),
+      ).rejects.toThrow(FxUnavailableError)
+
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+  })
+
+  describe('default notes', () => {
+    it.each([
+      ['vi', ['Cho mượn – An', 'Thu nợ – An', 'Mượn – Binh', 'Trả nợ – Binh']],
+      ['en', ['Lent to An', 'Repaid by An', 'Borrowed from Binh', 'Repaid to Binh']],
+    ] as const)('writes the label in the user locale (%s)', async (locale, expected) => {
+      const s = await setup()
+      const context: DebtLinkContext = { timezone: TEST_TIMEZONE, locale }
+      const { provider } = fakeProvider()
+      const link = { accountId: s.walletId, movedOn: '2026-03-01' }
+
+      const lent = await createDebtIn(
+        s.userId,
+        { ...BASE_DEBT, person: 'An', ...link },
+        context,
+        provider,
+      )
+      const repaidToMe = await recordDebtPaymentIn(
+        s.userId,
+        lent.id,
+        { amount: 1, date: '2026-03-02', accountId: s.walletId },
+        context,
+        provider,
+      )
+      const borrowed = await createDebtIn(
+        s.userId,
+        { ...BASE_DEBT, direction: 'PAYABLE', person: 'Binh', ...link },
+        context,
+        provider,
+      )
+      const repaidByMe = await recordDebtPaymentIn(
+        s.userId,
+        borrowed.id,
+        { amount: 1, date: '2026-03-02', accountId: s.walletId },
+        context,
+        provider,
+      )
+
+      const notes = await Promise.all(
+        [
+          lent.openingTransactionId,
+          repaidToMe.transactionId,
+          borrowed.openingTransactionId,
+          repaidByMe.transactionId,
+        ].map(async (id) => (await transactionById(s, id)).note),
+      )
+      expect(notes).toEqual(expected)
+    })
+  })
+
+  describe('updateDebtPayment', () => {
+    /** A RECEIVABLE of 1,000,000 with no account and one payment of 200,000
+     *  recorded in the wallet on 2026-03-05 — wallet balance 5,200,000. */
+    async function linkedPayment(s: Setup) {
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 200_000, date: '2026-03-05', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      expect(await balanceOf(s, s.walletId)).toBe('5200000')
+      return { debt, payment, transaction: await transactionById(s, payment.transactionId) }
+    }
+
+    it('updates the linked transaction amount and re-snapshots FX for an economic change', async () => {
+      const s = await setup()
+      const { debt, payment, transaction } = await linkedPayment(s)
+      // A different rate is only observable once today's cached one is gone.
+      await clearFxCache()
+      const second = fakeProvider(26000, 'debt-link-fake-2')
+
+      const updated = await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 300_000, date: '2026-03-05', accountId: s.walletId },
+        second.provider,
+      )
+
+      expect(updated.transactionId).toBe(transaction.id)
+      const after = await transactionById(s, transaction.id)
+      expect(after.amount.toString()).toBe('300000')
+      expect(after.vndPerUsdAtEntry.toString()).toBe('26000')
+      expect(after.fxRateSource).toBe('debt-link-fake-2')
+      expect(after.fxRateFetchedAt.toISOString()).toBe(second.fetchedAt.toISOString())
+      expect(await balanceOf(s, s.walletId)).toBe('5300000')
+      expect((await getDebtOutstanding(s.userId, debt.id)).toString()).toBe('700000')
+    })
+
+    it('moves the transaction to the new payment day', async () => {
+      const s = await setup()
+      const { payment, transaction } = await linkedPayment(s)
+
+      await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 200_000, date: '2026-03-07', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      const after = await transactionById(s, transaction.id)
+      expect(after.date.toISOString()).toBe('2026-03-07T05:00:00.000Z')
+      expect(formatCalendarDate((await paymentById(s, payment.id)).date)).toBe('2026-03-07')
+    })
+
+    it('keeps the FX snapshot exactly, and asks for no rate, when only the note changes', async () => {
+      const s = await setup()
+      const { payment, transaction } = await linkedPayment(s)
+      await clearFxCache()
+
+      await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 200_000, date: '2026-03-05', note: 'Corrected', accountId: s.walletId },
+        failingProvider,
+      )
+
+      const after = await transactionById(s, transaction.id)
+      expect(after.note).toBe('Corrected')
+      expect(after.vndPerUsdAtEntry.toString()).toBe(transaction.vndPerUsdAtEntry.toString())
+      expect(after.fxRateFetchedAt).toEqual(transaction.fxRateFetchedAt)
+      expect(after.fxRateEffectiveAt).toEqual(transaction.fxRateEffectiveAt)
+      expect(after.fxRateSource).toBe(transaction.fxRateSource)
+      expect((await paymentById(s, payment.id)).note).toBe('Corrected')
+    })
+
+    it('moves the same transaction to another account, re-snapshotting for the move', async () => {
+      const s = await setup()
+      const { payment, transaction } = await linkedPayment(s)
+      await clearFxCache()
+      const second = fakeProvider(26000, 'debt-link-fake-2')
+
+      await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 200_000, date: '2026-03-05', accountId: s.bankId },
+        second.provider,
+      )
+
+      const after = await transactionById(s, transaction.id)
+      expect(after.accountId).toBe(s.bankId)
+      expect(after.fxRateSource).toBe('debt-link-fake-2')
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect(await balanceOf(s, s.bankId)).toBe('2200000')
+      expect(await transactionCount(s)).toBe(1)
+    })
+
+    it('deletes the linked transaction when the account is removed, asking for no rate', async () => {
+      const s = await setup()
+      const { payment, transaction } = await linkedPayment(s)
+      await clearFxCache()
+
+      const updated = await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 200_000, date: '2026-03-05' },
+        failingProvider,
+      )
+
+      expect(updated.transactionId).toBeNull()
+      expect(
+        await prisma.transaction.count({ where: { userId: s.userId, id: transaction.id } }),
+      ).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+
+    it('creates a linked transaction when an account is added', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPayment(s.userId, debt.id, {
+        amount: 150_000,
+        date: '2026-03-03',
+        note: 'Late note',
+      })
+
+      const updated = await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 150_000, date: '2026-03-03', note: 'Late note', accountId: s.bankId },
+        fakeProvider().provider,
+      )
+
+      const linked = await transactionById(s, updated.transactionId)
+      expect(linked).toMatchObject({ accountId: s.bankId, type: 'CASH_IN', note: 'Late note' })
+      expect(linked.date.toISOString()).toBe('2026-03-03T05:00:00.000Z')
+      expect(await balanceOf(s, s.bankId)).toBe('2150000')
+    })
+
+    it('keeps the over-payment rule and changes neither side when it refuses', async () => {
+      const s = await setup()
+      const { debt, payment, transaction } = await linkedPayment(s)
+      await recordDebtPayment(s.userId, debt.id, { amount: 700_000, date: '2026-03-06' })
+
+      const caught = await captureRejection(
+        updateDebtPayment(
+          s.userId,
+          payment.id,
+          { amount: 300_000.01, date: '2026-03-05', accountId: s.walletId },
+          fakeProvider().provider,
+        ),
+      )
+
+      expect(caught).toBeInstanceOf(DebtOverpaymentError)
+      expect((caught as DebtOverpaymentError).outstanding.toString()).toBe('300000')
+      expect(await transactionById(s, transaction.id)).toEqual(transaction)
+      expect((await paymentById(s, payment.id)).amount.toString()).toBe('200000')
+    })
+
+    it('refuses an account in another currency, and an archived account, changing nothing', async () => {
+      const s = await setup()
+      const { payment, transaction } = await linkedPayment(s)
+      const { provider } = fakeProvider()
+
+      await expect(
+        updateDebtPayment(
+          s.userId,
+          payment.id,
+          { amount: 200_000, date: '2026-03-05', accountId: s.dollarsId },
+          provider,
+        ),
+      ).rejects.toThrow(LinkedAccountCurrencyMismatchError)
+      await expect(
+        updateDebtPayment(
+          s.userId,
+          payment.id,
+          { amount: 200_000, date: '2026-03-05', accountId: s.archivedId },
+          provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await transactionById(s, transaction.id)).toEqual(transaction)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it("refuses another user's payment, and moving mine into another user's account", async () => {
+      const s = await setup()
+      const other = await setup()
+      const mine = await linkedPayment(s)
+      const theirs = await linkedPayment(other)
+      const { provider } = fakeProvider()
+
+      await expectPrismaCode(
+        updateDebtPayment(
+          s.userId,
+          theirs.payment.id,
+          { amount: 1, date: '2026-03-05', accountId: s.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+      await expectPrismaCode(
+        updateDebtPayment(
+          s.userId,
+          mine.payment.id,
+          { amount: 200_000, date: '2026-03-05', accountId: other.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+
+      expect(await transactionById(other, theirs.transaction.id)).toEqual(theirs.transaction)
+      expect(await paymentById(other, theirs.payment.id)).toEqual(theirs.payment)
+      expect(await transactionById(s, mine.transaction.id)).toEqual(mine.transaction)
+    })
+
+    it('refuses a payment of a written-off debt', async () => {
+      const s = await setup()
+      const { debt, payment, transaction } = await linkedPayment(s)
+      await writeOffDebt(s.userId, debt.id)
+
+      await expect(
+        updateDebtPayment(
+          s.userId,
+          payment.id,
+          { amount: 1, date: '2026-03-05', accountId: s.walletId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(DebtNotActiveError)
+
+      expect(await transactionById(s, transaction.id)).toEqual(transaction)
+    })
+  })
+
+  describe('deleteDebtPayment', () => {
+    it('removes the payment and its transaction, and the balance comes back', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 400_000, date: '2026-03-05', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      expect(await balanceOf(s, s.walletId)).toBe('5400000')
+
+      await deleteDebtPayment(s.userId, payment.id)
+
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect((await getDebtOutstanding(s.userId, debt.id)).toString()).toBe('1000000')
+    })
+
+    it("refuses another user's payment and leaves both of its rows in place", async () => {
+      const s = await setup()
+      const other = await setup()
+      const debt = await unlinkedDebt(other)
+      const theirs = await recordDebtPayment(
+        other.userId,
+        debt.id,
+        { amount: 1_000, date: '2026-03-05', accountId: other.walletId },
+        fakeProvider().provider,
+      )
+
+      await expectPrismaCode(deleteDebtPayment(s.userId, theirs.id), 'P2025')
+
+      expect(await paymentById(other, theirs.id)).toEqual(theirs)
+      expect(await transactionCount(other)).toBe(1)
+    })
+
+    it('refuses a payment of a written-off debt', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 1_000, date: '2026-03-05', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      await writeOffDebt(s.userId, debt.id)
+
+      await expect(deleteDebtPayment(s.userId, payment.id)).rejects.toThrow(DebtNotActiveError)
+
+      expect(await transactionCount(s)).toBe(1)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+  })
+
+  describe('writeOffDebt', () => {
+    it('creates no transaction and keeps the linked ones — no money moves', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const debt = await createDebt(
+        s.userId,
+        { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-01' },
+        provider,
+      )
+      await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 100_000, date: '2026-03-02', accountId: s.walletId },
+        provider,
+      )
+
+      await writeOffDebt(s.userId, debt.id)
+
+      expect(await transactionCount(s)).toBe(2)
+      expect(await balanceOf(s, s.walletId)).toBe('4100000')
+    })
+  })
+
+  describe('database constraints', () => {
+    it("rejects a link to another user's transaction even bypassing the service", async () => {
+      const s = await setup()
+      const other = await setup()
+      const debt = await unlinkedDebt(s)
+      const theirDebt = await createDebt(
+        other.userId,
+        { ...BASE_DEBT, accountId: other.walletId, movedOn: '2026-03-01' },
+        fakeProvider().provider,
+      )
+
+      // The composite (userId, openingTransactionId) foreign key, not the
+      // service: a debt cannot name a transaction that is not its user's.
+      await expectPrismaCode(
+        prisma.debt.update({
+          where: { userId_id: { userId: s.userId, id: debt.id } },
+          data: { openingTransactionId: theirDebt.openingTransactionId },
+        }),
+        'P2003',
+      )
+    })
+
+    it('refuses to delete a linked transaction out from under its debt (Restrict)', async () => {
+      const s = await setup()
+      const debt = await createDebt(
+        s.userId,
+        { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-01' },
+        fakeProvider().provider,
+      )
+
+      await expectPrismaCode(
+        prisma.transaction.delete({
+          where: { userId_id: { userId: s.userId, id: debt.openingTransactionId as string } },
+        }),
+        'P2003',
+      )
+
+      expect(await transactionCount(s)).toBe(1)
+    })
+  })
+
+  /**
+   * Lock order: accounts first, then the debt row, then transaction rows — the
+   * order `createTransaction`/`updateTransaction`/`deleteTransaction` already
+   * use for accounts and transaction rows, so the new linked paths can run
+   * beside them without a deadlock. `holdAccountLock` parks an interactive
+   * transaction on an account row lock until the test releases it (the pattern
+   * in `concurrency.test.ts`), so these cases decide the interleaving rather
+   * than hoping the scheduler does.
+   */
+  describe('lock order and concurrency', () => {
+    const LOCK_WAIT_MS = 300
+    /** Every lock a case took, so one that fails before its own `release()`
+     *  still frees the row instead of stalling the cleanup behind it. */
+    const heldLocks: { release: () => Promise<void> }[] = []
+
+    afterEach(async () => {
+      // Runs before the suite's cleanup; releasing twice is harmless.
+      for (const lock of heldLocks.splice(0)) await lock.release()
+    })
+
+    function hasSettledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+      const settled = promise.then(
+        () => true,
+        () => true,
+      )
+      const timer = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))
+      return Promise.race([settled, timer])
+    }
+
+    async function holdAccountLock(
+      userId: string,
+      accountId: string,
+      mutate: (tx: Prisma.TransactionClient) => Promise<void> = async () => {},
+    ) {
+      let openGate: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        openGate = resolve
+      })
+      let signalAcquired: () => void = () => {}
+      const acquired = new Promise<void>((resolve) => {
+        signalAcquired = resolve
+      })
+      const held = prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM "FinancialAccount" WHERE "userId"=${userId} AND "id"=${accountId} FOR UPDATE`
+          await mutate(tx)
+          signalAcquired()
+          await gate
+        },
+        { timeout: 30_000, maxWait: 30_000 },
+      )
+      // If the holder fails before taking the lock, surface that instead of hanging.
+      await Promise.race([acquired, held])
+      const lock = {
+        release: async () => {
+          openGate()
+          await held
+        },
+      }
+      heldLocks.push(lock)
+      return lock
+    }
+
+    it('a linked payment waits on the account before it takes the debt lock', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const { provider } = fakeProvider()
+      // Warms the FX cache too, so the payment below waits on nothing but the
+      // row lock.
+      await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 1, date: '2026-03-01', accountId: s.bankId },
+        provider,
+      )
+      const lock = await holdAccountLock(s.userId, s.walletId)
+
+      const pending = recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 100_000, date: '2026-03-02', accountId: s.walletId },
+        provider,
+      )
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+
+      // The payment is queued on the account, so it holds no debt lock yet: a
+      // write-off — which takes only the debt lock — goes straight through.
+      // Had the payment locked the debt first, this would wait behind it.
+      const writeOff = writeOffDebt(s.userId, debt.id)
+      expect(await hasSettledWithin(writeOff, LOCK_WAIT_MS)).toBe(true)
+      await expect(writeOff).resolves.toMatchObject({ status: 'WRITTEN_OFF' })
+
+      await lock.release()
+      // It then sees the committed write-off under the debt lock and writes
+      // nothing — not even the transaction.
+      await expect(pending).rejects.toThrow(DebtNotActiveError)
+      expect(await prisma.debtPayment.count({ where: { userId: s.userId } })).toBe(1)
+      expect(await transactionCount(s)).toBe(1)
+    }, 30_000)
+
+    it('a linked payment and a transaction edit on the same account both complete', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      for (const run of [1, 2, 3]) {
+        const debt = await unlinkedDebt(s, { person: `Race ${run}` })
+        const ordinary = await createTransaction(
+          s.userId,
+          { accountId: s.walletId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+          provider,
+        )
+
+        const results = await Promise.allSettled([
+          recordDebtPayment(
+            s.userId,
+            debt.id,
+            { amount: 10_000, date: '2026-03-02', accountId: s.walletId },
+            provider,
+          ),
+          updateTransaction(
+            s.userId,
+            ordinary.id,
+            { accountId: s.walletId, type: 'CASH_IN', amount: 2000, date: new Date('2026-03-01') },
+            provider,
+          ),
+        ])
+
+        // Serialised on the wallet's row lock, never deadlocked against each other.
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      }
+    }, 30_000)
+
+    it('a payment moved between two accounts races a transaction moved the other way without deadlock', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      for (const run of [1, 2, 3]) {
+        const debt = await unlinkedDebt(s, { person: `Swap ${run}` })
+        const payment = await recordDebtPayment(
+          s.userId,
+          debt.id,
+          { amount: 10_000, date: '2026-03-02', accountId: s.walletId },
+          provider,
+        )
+        const ordinary = await createTransaction(
+          s.userId,
+          { accountId: s.bankId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+          provider,
+        )
+
+        // wallet → bank for the payment, bank → wallet for the transaction: the
+        // opposite-order pair, safe only because both lock the two accounts in
+        // one sorted statement before anything else.
+        const results = await Promise.allSettled([
+          updateDebtPayment(
+            s.userId,
+            payment.id,
+            { amount: 10_000, date: '2026-03-02', accountId: s.bankId },
+            provider,
+          ),
+          updateTransaction(
+            s.userId,
+            ordinary.id,
+            { accountId: s.walletId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+            provider,
+          ),
+        ])
+
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      }
+    }, 30_000)
+
+    it('refuses a payment edit whose linked transaction changed after it was read', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const { provider } = fakeProvider()
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 10_000, date: '2026-03-02', accountId: s.walletId },
+        provider,
+      )
+      const transactionId = payment.transactionId as string
+      // Another session edits the linked transaction (as the Transactions page
+      // still can until linked rows are locked there) while holding the wallet.
+      const lock = await holdAccountLock(s.userId, s.walletId, async (tx) => {
+        await tx.transaction.update({
+          where: { userId_id: { userId: s.userId, id: transactionId } },
+          data: { note: 'Edited elsewhere' },
+        })
+      })
+
+      const pending = updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 20_000, date: '2026-03-02', accountId: s.walletId },
+        provider,
+      )
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+      await lock.release()
+
+      // The edit decided its FX and its write against a copy that no longer
+      // exists, so it is refused rather than overwriting the other change.
+      await expect(pending).rejects.toThrow(ConcurrentModificationError)
+      const stored = await transactionById(s, transactionId)
+      expect(stored.note).toBe('Edited elsewhere')
+      expect(stored.amount.toString()).toBe('10000')
+      expect((await paymentById(s, payment.id)).amount.toString()).toBe('10000')
+    }, 30_000)
   })
 })

@@ -28,6 +28,8 @@ function payment(
     amount: new Prisma.Decimal('250000'),
     date: new Date('2026-03-02T00:00:00.000Z'),
     note: null,
+    transactionId: null,
+    transaction: null,
     createdAt: CREATED_AT,
     ...overrides,
   }
@@ -45,9 +47,11 @@ function debt(overrides: Partial<DebtRow> = {}): DebtRow {
     dueDate: null,
     status: 'ACTIVE',
     notes: null,
+    openingTransactionId: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     payments: [],
+    openingTransaction: null,
     ...overrides,
   }
 }

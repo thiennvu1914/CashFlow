@@ -17,6 +17,10 @@ import { createDebtSchema, recordDebtPaymentSchema, updateDebtSchema } from './d
  * carries no `direction`, no `originalAmount` and no `currency`. Those three
  * define *which* debt a row is, and changing one after payments exist would
  * rewrite history rather than correct it.
+ *
+ * Money-source linking (spec 2026-10-12 §6.2) adds the optional account a debt
+ * or a payment is recorded in, and — on create — the day the money moved,
+ * which is required exactly when an account is chosen.
  */
 
 /** The shapes Zod's own messages take, none of which may reach a form. */
@@ -113,6 +117,51 @@ describe('createDebtSchema', () => {
 
     expect('status' in parsed).toBe(false)
   })
+
+  describe('recording the debt in an account', () => {
+    it('accepts an account with the day the money moved', () => {
+      const input = { ...VALID_DEBT, accountId: 'acc_1', movedOn: '2026-03-10' }
+
+      expect(createDebtSchema.parse(input)).toEqual(input)
+    })
+
+    it.each([undefined, ''])(
+      'requires the money-moved date when an account is chosen (%o), on that field',
+      (movedOn) => {
+        const result = createDebtSchema.safeParse({ ...VALID_DEBT, accountId: 'acc_1', movedOn })
+
+        expect(result.success).toBe(false)
+        // On `movedOn` itself, so the form highlights the date field rather
+        // than showing a form-level error the user has to map to a field.
+        expect(result.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([
+          [['movedOn'], 'Enter the date the money moved'],
+        ])
+      },
+    )
+
+    it.each([
+      [{ movedOn: '10/03/2026' }, 'Enter a date as yyyy-MM-dd'],
+      [{ movedOn: '2026-02-30' }, 'Enter a real date'],
+      [{ accountId: '' }, 'Choose an account'],
+    ])('rejects %o with product copy', (patch, message) => {
+      expect(
+        messagesFor(createDebtSchema, {
+          ...VALID_DEBT,
+          accountId: 'acc_1',
+          movedOn: '2026-03-10',
+          ...patch,
+        }),
+      ).toContain(message)
+    })
+
+    it('needs no money-moved date without an account, and reads an empty one as absent', () => {
+      // "Don't record in an account" is the agreement-that-predates-the-app
+      // case: nothing moves, so there is no day for it to have moved on.
+      expect(createDebtSchema.parse(VALID_DEBT).movedOn).toBeUndefined()
+      expect(createDebtSchema.parse({ ...VALID_DEBT, movedOn: '' }).movedOn).toBeUndefined()
+      expect(createDebtSchema.parse(VALID_DEBT).accountId).toBeUndefined()
+    })
+  })
 })
 
 describe('updateDebtSchema', () => {
@@ -165,6 +214,13 @@ describe('recordDebtPaymentSchema', () => {
     expect(recordDebtPaymentSchema.parse({ amount: 100, date: '2026-03-15' }).note).toBeUndefined()
   })
 
+  it('accepts an optional account to record the payment in', () => {
+    const input = { ...VALID_PAYMENT, accountId: 'acc_1' }
+
+    expect(recordDebtPaymentSchema.parse(input)).toEqual(input)
+    expect(recordDebtPaymentSchema.parse(VALID_PAYMENT).accountId).toBeUndefined()
+  })
+
   it.each([
     [{ amount: 0 }, 'Amount must be greater than zero'],
     [{ amount: -1 }, 'Amount must be greater than zero'],
@@ -180,6 +236,7 @@ describe('recordDebtPaymentSchema', () => {
     [{ date: '15/03/2026' }, 'Enter a date as yyyy-MM-dd'],
     [{ date: '2026-02-30' }, 'Enter a real date'],
     [{ note: 'x'.repeat(501) }, 'Keep the note under 500 characters'],
+    [{ accountId: '' }, 'Choose an account'],
   ])('rejects %o with product copy', (patch, message) => {
     expect(messagesFor(recordDebtPaymentSchema, { ...VALID_PAYMENT, ...patch })).toContain(message)
   })
@@ -219,6 +276,9 @@ describe('no raw Zod text reaches a form', () => {
       [createDebtSchema, { ...VALID_DEBT, dueDate: '2026-02-30' }],
       [createDebtSchema, { ...VALID_DEBT, notes: false }],
       [createDebtSchema, { ...VALID_DEBT, notes: 'x'.repeat(501) }],
+      [createDebtSchema, { ...VALID_DEBT, accountId: 42, movedOn: '2026-03-10' }],
+      [createDebtSchema, { ...VALID_DEBT, accountId: 'acc_1' }],
+      [createDebtSchema, { ...VALID_DEBT, accountId: 'acc_1', movedOn: 20260310 }],
       [updateDebtSchema, {}],
       [updateDebtSchema, { person: '   ' }],
       [updateDebtSchema, { person: 'An', dueDate: '30/06/2026' }],
@@ -236,6 +296,7 @@ describe('no raw Zod text reaches a form', () => {
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, date: '2026-13-01' }],
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, note: 12 }],
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, note: 'x'.repeat(501) }],
+      [recordDebtPaymentSchema, { ...VALID_PAYMENT, accountId: 7 }],
     ]
 
     for (const [schema, input] of cases) {

@@ -280,6 +280,14 @@ model Transaction {
   account  FinancialAccount @relation(fields: [userId, accountId], references: [userId, id])
   category Category?        @relation(fields: [userId, categoryId], references: [userId, id])
 
+  /// Back-relations of the money-source links (spec 2026-10-12 §5): the debt
+  /// whose opening money movement this row records, or the debt payment it
+  /// records. At most one of each, by the unique constraints on the linking
+  /// side; the links are `onDelete: Restrict`, so a linked row cannot be
+  /// deleted out from under its debt.
+  openedDebt  Debt?        @relation("DebtOpeningTransaction")
+  debtPayment DebtPayment? @relation("DebtPaymentTransaction")
+
   @@unique([userId, id])
   @@index([userId, date])
   @@index([userId, accountId, date])
@@ -435,11 +443,18 @@ enum DebtStoredStatus {
 }
 
 /// Money someone owes the user (RECEIVABLE) or the user owes someone else
-/// (PAYABLE), spec §4.9. Tracking only: there is no foreign key and no code
-/// path from here to FinancialAccount or Transaction, so recording a repayment
-/// changes no balance — `lib/server/services/debt.ts` imports nothing that
-/// could, and `debt.test.ts` re-asserts the account counts and a derived
-/// balance after every mutation.
+/// (PAYABLE), spec §4.9.
+///
+/// Money-source linking (spec 2026-10-12 §4–§6.2, superseding §4.9's "tracking
+/// only"): when the user records a debt against one of their accounts, the
+/// money that moved is an ordinary Transaction created in the same database
+/// transaction — CASH_OUT for a RECEIVABLE (I lent), CASH_IN for a PAYABLE (I
+/// borrowed) — and `openingTransactionId` points at it. Without an account
+/// ("don't record in an account", for agreements that predate the app) it stays
+/// NULL and nothing moves. The link is a composite `(userId,
+/// openingTransactionId)` foreign key, so it can never name another user's
+/// transaction, and `onDelete: Restrict` (not SetNull, which would null
+/// `userId` too), so the transaction cannot be deleted out from under the debt.
 ///
 /// The outstanding amount is never stored: it is `originalAmount` minus the sum
 /// of this debt's `DebtPayment` rows, computed in `debt.ts`
@@ -463,23 +478,27 @@ enum DebtStoredStatus {
 /// CHECK constraint in this model's migration, since Prisma's schema language
 /// has no CHECK syntax.
 model Debt {
-  id             String           @id @default(cuid())
-  userId         String
-  direction      DebtDirection
-  person         String
-  description    String?
-  originalAmount Decimal          @db.Decimal(18, 2)
-  currency       Currency
+  id                   String           @id @default(cuid())
+  userId               String
+  direction            DebtDirection
+  person               String
+  description          String?
+  originalAmount       Decimal          @db.Decimal(18, 2)
+  currency             Currency
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
-  dueDate        DateTime?
-  status         DebtStoredStatus @default(ACTIVE)
-  notes          String?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  dueDate              DateTime?
+  status               DebtStoredStatus @default(ACTIVE)
+  notes                String?
+  /// The opening money movement, when the debt was recorded in an account.
+  openingTransactionId String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
-  payments DebtPayment[]
+  payments           DebtPayment[]
+  openingTransaction Transaction?  @relation("DebtOpeningTransaction", fields: [userId, openingTransactionId], references: [userId, id], onDelete: Restrict)
 
   @@unique([userId, id])
+  @@unique([userId, openingTransactionId])
   @@index([userId, status])
 }
 
@@ -495,19 +514,28 @@ model Debt {
 /// `date` is a calendar date carrier, like `Debt.dueDate` — "I was paid back on
 /// the 12th" names a day, not a moment. `DebtPayment_amount_positive` (> 0) is
 /// a database CHECK constraint in this model's migration.
+///
+/// `transactionId` links the payment to the CASH_IN (RECEIVABLE) or CASH_OUT
+/// (PAYABLE) that recorded it in an account, when the user chose one — same
+/// composite, unique, `onDelete: Restrict` shape as `Debt.openingTransactionId`.
+/// The transaction is dated 12:00 on the payment day in the user's zone, so it
+/// lands on the same calendar day the payment names.
 model DebtPayment {
-  id        String   @id @default(cuid())
-  userId    String
-  debtId    String
-  amount    Decimal  @db.Decimal(18, 2)
+  id            String   @id @default(cuid())
+  userId        String
+  debtId        String
+  amount        Decimal  @db.Decimal(18, 2)
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
-  date      DateTime
-  note      String?
-  createdAt DateTime @default(now())
+  date          DateTime
+  note          String?
+  transactionId String?
+  createdAt     DateTime @default(now())
 
-  debt Debt @relation(fields: [userId, debtId], references: [userId, id])
+  debt        Debt         @relation(fields: [userId, debtId], references: [userId, id])
+  transaction Transaction? @relation("DebtPaymentTransaction", fields: [userId, transactionId], references: [userId, id], onDelete: Restrict)
 
   @@unique([userId, id])
+  @@unique([userId, transactionId])
   @@index([userId, debtId, date])
 }
 

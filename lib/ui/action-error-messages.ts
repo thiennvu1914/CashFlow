@@ -70,6 +70,10 @@ export const SAVINGS_GOAL_ERROR_KEYS: Record<SavingsGoalActionError, string> = {
 export const DEBT_ERROR_KEYS: Record<DebtActionError, string> = {
   OVERPAYMENT: 'errors.debt.OVERPAYMENT',
   NOT_ACTIVE: 'errors.debt.NOT_ACTIVE',
+  FX_UNAVAILABLE: 'errors.debt.FX_UNAVAILABLE',
+  ARCHIVED_ACCOUNT: 'errors.debt.ARCHIVED_ACCOUNT',
+  ACCOUNT_CURRENCY_MISMATCH: 'errors.debt.ACCOUNT_CURRENCY_MISMATCH',
+  CONFLICT: 'errors.debt.CONFLICT',
   INVALID_INPUT: 'errors.debt.INVALID_INPUT',
   NOT_FOUND: 'errors.debt.NOT_FOUND',
 }

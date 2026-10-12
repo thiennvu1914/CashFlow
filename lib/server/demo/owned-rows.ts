@@ -42,6 +42,11 @@ interface OwnedRowDeletion {
  *
  * Budget comes before Category for the same reason: a CATEGORY budget
  * references one, so deleting the category first is a foreign-key violation.
+ *
+ * Debts and loans, with their payment histories, come before the transactions:
+ * money-source linking (spec 2026-10-12 §5) has a debt or payment recorded in
+ * an account reference the Transaction that moved its money, `ON DELETE
+ * RESTRICT`, so the transaction cannot go first.
  */
 export const OWNED_ROW_DELETIONS: readonly OwnedRowDeletion[] = [
   {
@@ -57,14 +62,6 @@ export const OWNED_ROW_DELETIONS: readonly OwnedRowDeletion[] = [
     model: 'savingsGoal',
     deleteMany: (c, ids) => c.savingsGoal.deleteMany({ where: { userId: { in: ids } } }),
   },
-  {
-    model: 'transaction',
-    deleteMany: (c, ids) => c.transaction.deleteMany({ where: { userId: { in: ids } } }),
-  },
-  {
-    model: 'transfer',
-    deleteMany: (c, ids) => c.transfer.deleteMany({ where: { userId: { in: ids } } }),
-  },
   // Debts, loans and their payment histories.
   {
     model: 'debtPayment',
@@ -76,6 +73,14 @@ export const OWNED_ROW_DELETIONS: readonly OwnedRowDeletion[] = [
     deleteMany: (c, ids) => c.loanPayment.deleteMany({ where: { userId: { in: ids } } }),
   },
   { model: 'loan', deleteMany: (c, ids) => c.loan.deleteMany({ where: { userId: { in: ids } } }) },
+  {
+    model: 'transaction',
+    deleteMany: (c, ids) => c.transaction.deleteMany({ where: { userId: { in: ids } } }),
+  },
+  {
+    model: 'transfer',
+    deleteMany: (c, ids) => c.transfer.deleteMany({ where: { userId: { in: ids } } }),
+  },
   {
     model: 'financialAccount',
     deleteMany: (c, ids) => c.financialAccount.deleteMany({ where: { userId: { in: ids } } }),

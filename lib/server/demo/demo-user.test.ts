@@ -170,6 +170,28 @@ async function createOtherUser(): Promise<string> {
       currency: 'VND',
     },
   })
+  // The debt and its payment are each linked to the transaction that moved
+  // the money (spec 2026-10-12 §5). Those links are `ON DELETE RESTRICT`
+  // foreign keys pointing at Transaction, so they are what makes the delete
+  // order put debts and payments ahead of transactions: the other way round,
+  // `deleteOwnedRows` on this user fails with P2003.
+  const linkedTransaction = (type: 'CASH_IN' | 'CASH_OUT', amount: string, date: string) =>
+    prisma.transaction.create({
+      data: {
+        userId,
+        accountId: account.id,
+        type,
+        amount: new Prisma.Decimal(amount),
+        currency: 'VND',
+        date: new Date(date),
+        vndPerUsdAtEntry: new Prisma.Decimal('25000'),
+        fxRateFetchedAt: new Date(date),
+        fxRateEffectiveAt: new Date('2026-01-10T00:00:00.000Z'),
+        fxRateSource: 'demo-neighbour',
+      },
+    })
+  const opening = await linkedTransaction('CASH_IN', '300000', '2026-01-10T05:00:00.000Z')
+  const repayment = await linkedTransaction('CASH_OUT', '50000', '2026-01-20T05:00:00.000Z')
   const debt = await prisma.debt.create({
     data: {
       userId,
@@ -177,6 +199,7 @@ async function createOtherUser(): Promise<string> {
       person: 'Someone Else',
       originalAmount: new Prisma.Decimal('300000'),
       currency: 'VND',
+      openingTransactionId: opening.id,
     },
   })
   await prisma.debtPayment.create({
@@ -185,6 +208,7 @@ async function createOtherUser(): Promise<string> {
       debtId: debt.id,
       amount: new Prisma.Decimal('50000'),
       date: new Date('2026-01-20T00:00:00.000Z'),
+      transactionId: repayment.id,
     },
   })
 
