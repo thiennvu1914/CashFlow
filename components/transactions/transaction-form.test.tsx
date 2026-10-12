@@ -351,11 +351,11 @@ describe('TransactionForm opened from a reminder', () => {
     occurrenceId: 'occ_1',
   }
 
-  function renderPrefilled(prefill: OccurrencePrefill) {
+  function renderPrefilled(prefill: OccurrencePrefill, accounts: Account[] = ACCOUNTS) {
     return renderToStaticMarkup(
       <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
         <TransactionForm
-          accounts={ACCOUNTS}
+          accounts={accounts}
           categories={CATEGORIES}
           timezone={TIMEZONE}
           locale="vi"
@@ -399,7 +399,44 @@ describe('TransactionForm opened from a reminder', () => {
     expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Salary'])
   })
 
+  it('says "đã nhận" for an income reminder', () => {
+    const html = renderPrefilled({ ...PREFILL, type: 'INCOME', categoryId: 'cat_salary' })
+
+    expect(html).toContain(
+      'Điền sẵn từ nhắc nhở «Rent» — lưu giao dịch sẽ đánh dấu nhắc nhở là đã nhận.',
+    )
+  })
+
   it('shows no reminder notice on an ordinary create form', () => {
     expect(render(ACCOUNTS)).not.toContain('Điền sẵn từ nhắc nhở')
+  })
+
+  /**
+   * The form's amount is the reminder's, in the reminder's currency, and the
+   * transaction takes the account's: with no account from the reminder, the
+   * first account in the list could put a 1.250.000 VND bill on a USD account
+   * as 1,250,000 USD.
+   */
+  describe('choosing the account when the reminder has none to offer', () => {
+    const USD_FIRST: Account[] = [
+      { id: 'acc_usd', name: 'Dollars', currency: 'USD', balance: '500.00' },
+      { id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' },
+    ]
+    const CURRENCY_NOTE =
+      'Nhắc nhở này tính bằng VND, còn tài khoản đã chọn dùng USD — hãy kiểm tra lại số tiền trước khi lưu.'
+
+    it("picks the first account in the reminder's currency, not the first account", () => {
+      const html = renderPrefilled({ ...PREFILL, accountId: null }, USD_FIRST)
+
+      expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Cash · 1.000.000 VND'])
+      expect(html).not.toContain(CURRENCY_NOTE)
+    })
+
+    it('says so beside the account when no account holds the reminder’s currency', () => {
+      const html = renderPrefilled({ ...PREFILL, accountId: null }, [USD_FIRST[0]])
+
+      expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Dollars · 500,00 USD'])
+      expect(html).toContain(CURRENCY_NOTE)
+    })
   })
 })

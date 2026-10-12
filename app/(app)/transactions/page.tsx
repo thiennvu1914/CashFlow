@@ -64,7 +64,7 @@ export default async function TransactionsPage({
     // below.
     getAccountBalancesForUser(user.id, now),
     // Beside the other reads, so a Paid hand-off costs no extra wait.
-    occurrenceId ? getOccurrencePrefill(user.id, occurrenceId, timezone) : null,
+    occurrenceId ? getOccurrencePrefill(user.id, occurrenceId, timezone, now) : null,
   ])
 
   // The month total needs a summary query and the ledger a 200-row one; neither

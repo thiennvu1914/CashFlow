@@ -1,6 +1,6 @@
 {
   "title": "Reminders",
-  "description": "Bills and expected income — press Paid to record the transaction",
+  "description": "Bills and expected income — press Paid or Received to record the transaction",
   "tabs": "View",
   "tabDue": "Due",
   "tabDefinitions": "Schedule",
@@ -19,6 +19,7 @@
   "morePeriods": "+{count, plural, one {# period} other {# periods}}",
   "expandPeriods": "See the remaining {count, plural, one {# period} other {# periods}} of {name}",
   "payAction": "Paid",
+  "receiveAction": "Received",
   "payPending": "Recording…",
   "acknowledgeAction": "Mark only",
   "dismissAction": "Dismiss",

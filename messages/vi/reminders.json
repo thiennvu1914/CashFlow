@@ -1,6 +1,6 @@
 {
   "title": "Nhắc nhở",
-  "description": "Hóa đơn và thu nhập dự kiến — bấm Đã trả để ghi giao dịch",
+  "description": "Hóa đơn và thu nhập dự kiến — bấm Đã trả hoặc Đã nhận để ghi giao dịch",
   "tabs": "Chế độ xem",
   "tabDue": "Sắp đến hạn",
   "tabDefinitions": "Lịch nhắc",
@@ -19,6 +19,7 @@
   "morePeriods": "+{count, plural, other {# kỳ}}",
   "expandPeriods": "Xem {count, plural, other {# kỳ}} còn lại của {name}",
   "payAction": "Đã trả",
+  "receiveAction": "Đã nhận",
   "payPending": "Đang ghi…",
   "acknowledgeAction": "Chỉ đánh dấu",
   "dismissAction": "Bỏ qua",

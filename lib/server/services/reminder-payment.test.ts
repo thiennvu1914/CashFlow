@@ -14,10 +14,13 @@ import {
   dismissOccurrence,
   getOccurrencePrefill,
   listUpcomingOccurrences,
+  lockPendingOccurrence,
+  markOccurrencePaidInTx,
   materializeDueOccurrences,
   payOccurrence,
 } from './reminder'
-import { SNAPSHOT_PAIR } from './linked-transaction'
+import { ArchivedAccountError } from './account-lock'
+import { InvalidCategoryError, SNAPSHOT_PAIR } from './linked-transaction'
 import { createTransaction, deleteTransaction, updateTransaction } from './transaction'
 
 /**
@@ -368,6 +371,68 @@ describe('payOccurrence — one tap records the transaction', () => {
       expect(await transactionCount(s.userId)).toBe(1)
     }
   })
+
+  it('lets a Paid that already holds the occurrence win over a Dismiss that read it as pending', async () => {
+    const s = await setup()
+    const occurrence = await pendingOccurrence(s.userId, {
+      accountId: s.walletId,
+      categoryId: s.housingId,
+    })
+    // The row Paid will link — recorded beforehand, so the interleaving below
+    // is only the occurrence lock and the two writes to it.
+    const paidWith = await createTransaction(
+      s.userId,
+      { accountId: s.walletId, type: 'EXPENSE', categoryId: s.housingId, amount: 1, date: NOW },
+      fakeProvider().provider,
+    )
+
+    // Paid's order, by hand: lock the occurrence, and while the lock is held
+    // the Dismiss starts — it sees PENDING in any read it makes — then Paid
+    // marks the row and commits.
+    let dismissed: ReturnType<typeof dismissOccurrence> | undefined
+    await prisma.$transaction(async (tx) => {
+      await lockPendingOccurrence(tx, s.userId, occurrence.id)
+      dismissed = dismissOccurrence(s.userId, occurrence.id, NOW)
+      // Long enough for the Dismiss to reach the row and wait on the lock.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      await markOccurrencePaidInTx(tx, s.userId, occurrence.id, paidWith.id, NOW)
+    })
+    const answer = await dismissed!
+
+    // The Dismiss changed nothing: the occurrence is paid, with its
+    // transaction, and that is what the Dismiss reports back.
+    expect(answer.status).toBe('ACKNOWLEDGED')
+    const stored = await storedOccurrence(s.userId, occurrence.id)
+    expect(stored.status).toBe('ACKNOWLEDGED')
+    expect(stored.transactionId).toBe(paidWith.id)
+  })
+
+  it('records an upcoming bill paid early on today, so the balance moves now (Ruling P8)', async () => {
+    const s = await setup()
+    // Due on 20 March, paid on the 15th: the money moved today.
+    const occurrence = await pendingOccurrence(s.userId, {
+      startDate: '2026-03-20',
+      accountId: s.walletId,
+      categoryId: s.housingId,
+    })
+
+    const result = await payOccurrence(
+      s.userId,
+      occurrence.id,
+      TIMEZONE,
+      fakeProvider().provider,
+      NOW,
+    )
+
+    if (result.status !== 'created') throw new Error('expected a created transaction')
+    const transaction = await prisma.transaction.findUniqueOrThrow({
+      where: { userId_id: { userId: s.userId, id: result.transactionId } },
+    })
+    // Dated now, not 12:00 on the 20th — so it counts in today's balance and
+    // this month's budget rather than appearing next week.
+    expect(transaction.date.toISOString()).toBe(NOW.toISOString())
+    expect((await getAccountBalance(s.userId, s.walletId)).toString()).toBe('3750000')
+  })
 })
 
 describe('payOccurrence — falls back to the prefilled form', () => {
@@ -437,6 +502,15 @@ describe('payOccurrence — falls back to the prefilled form', () => {
     expect(prefill.currency).toBe('USD')
     expect(prefill.amount).toBe('20.00')
     expect(prefill.accountId).toBeNull()
+  })
+
+  it('offers today, not a future due day, for an upcoming occurrence (Ruling P8)', async () => {
+    const s = await setup()
+    const occurrence = await pendingOccurrence(s.userId, { startDate: '2026-03-20' })
+
+    const prefill = await expectNeedsForm(s, occurrence.id)
+
+    expect(prefill.date).toBe('2026-03-15')
   })
 
   it('answers with the prefill when the reminder has no category', async () => {
@@ -528,6 +602,19 @@ describe('getOccurrencePrefill', () => {
     })
   })
 
+  it('reads the payment day as today for an occurrence still ahead, and the due day once it has passed', async () => {
+    const s = await setup()
+    const upcoming = await pendingOccurrence(s.userId, { startDate: '2026-03-20' })
+    const overdue = await pendingOccurrence(s.userId, { title: 'Water', startDate: '2026-03-10' })
+
+    expect((await getOccurrencePrefill(s.userId, upcoming.id, TIMEZONE, NOW))?.date).toBe(
+      '2026-03-15',
+    )
+    expect((await getOccurrencePrefill(s.userId, overdue.id, TIMEZONE, NOW))?.date).toBe(
+      '2026-03-10',
+    )
+  })
+
   it('reads nothing for an answered occurrence, another user’s, or an unknown id', async () => {
     const s = await setup()
     const other = await setup()
@@ -590,6 +677,46 @@ describe('createTransaction with an occurrenceId', () => {
     expect(await transactionCount(s.userId)).toBe(0)
     expect((await storedOccurrence(s.userId, occurrence.id)).status).toBe('DISMISSED')
   })
+
+  it.each([
+    ['an archived account', ArchivedAccountError],
+    ['a category of the wrong type', InvalidCategoryError],
+  ] as const)(
+    'rolls the link back with the transaction when the write is refused for %s',
+    async (label, errorClass) => {
+      const s = await setup()
+      const occurrence = await pendingOccurrence(s.userId)
+      if (errorClass === ArchivedAccountError) {
+        await prisma.financialAccount.update({
+          where: { userId_id: { userId: s.userId, id: s.walletId } },
+          data: { status: 'ARCHIVED' },
+        })
+      }
+
+      await expect(
+        createTransaction(
+          s.userId,
+          {
+            accountId: s.walletId,
+            type: 'EXPENSE',
+            // An INCOME category on an EXPENSE: refused by the core, after the
+            // occurrence was locked.
+            categoryId: label === 'a category of the wrong type' ? s.salaryId : s.housingId,
+            amount: 1_250_000,
+            date: NOW,
+            occurrenceId: occurrence.id,
+          },
+          fakeProvider().provider,
+        ),
+      ).rejects.toBeInstanceOf(errorClass)
+
+      expect(await transactionCount(s.userId)).toBe(0)
+      const stored = await storedOccurrence(s.userId, occurrence.id)
+      expect(stored.status).toBe('PENDING')
+      expect(stored.actionedAt).toBeNull()
+      expect(stored.transactionId).toBeNull()
+    },
+  )
 
   it('refuses another user’s occurrence with P2025, writing nothing', async () => {
     const s = await setup()

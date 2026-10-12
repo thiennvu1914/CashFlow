@@ -47,11 +47,11 @@ const OCCURRENCE: OccurrenceDto = {
   status: 'PENDING',
 }
 
-function renderActions(): string {
+function renderActions(occurrence: OccurrenceDto = OCCURRENCE): string {
   return renderToStaticMarkup(
     <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
       <OccurrencePaidProvider>
-        <OccurrenceActions occurrence={OCCURRENCE} locale="vi" timeZone={TIMEZONE} />
+        <OccurrenceActions occurrence={occurrence} locale="vi" timeZone={TIMEZONE} />
       </OccurrencePaidProvider>
     </NextIntlClientProvider>,
   )
@@ -65,6 +65,13 @@ function buttonLabels(html: string): string[] {
 describe('OccurrenceActions', () => {
   it('offers Paid first, then Mark only and Dismiss', () => {
     expect(buttonLabels(renderActions())).toEqual(['Đã trả', 'Chỉ đánh dấu', 'Bỏ qua'])
+  })
+
+  it('says Received rather than Paid for expected income (Ruling P9)', () => {
+    const html = renderActions({ ...OCCURRENCE, type: 'INCOME', title: 'Salary' })
+
+    expect(buttonLabels(html)).toEqual(['Đã nhận', 'Chỉ đánh dấu', 'Bỏ qua'])
+    expect(html).toContain('aria-label="Đã nhận Salary · 15/04/2026"')
   })
 
   it('names each button after its row, by title and visible due date', () => {

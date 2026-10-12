@@ -180,12 +180,19 @@ function defaultValues(accounts: AccountOption[], timezone: string): FormInput {
 /**
  * The form's values for a reminder occurrence's "Paid" that could not be
  * recorded in one tap (money-source linking spec 2026-10-12 §6.6): the
- * reminder's type, expected amount and title, its account and category when
- * the pickers offer them (else the form's own default account, and no
- * category), and its due day — at the current time when that is today in the
+ * reminder's type, expected amount and title, its category when the picker
+ * offers it, and its payment day (the server's: the due day, or today for a
+ * bill not due yet, Ruling P8) — at the current time when that is today in the
  * user's zone, so the balance moves at once, else 12:00, the same rule a
  * one-tap Paid follows (`calendarDateToEntryInstant`). `occurrenceId` rides
  * along unrendered, so saving links the occurrence.
+ *
+ * The account is the reminder's own when the picker offers it; otherwise the
+ * first account in the reminder's currency, because the amount is in that
+ * currency and a transaction takes its account's — the first account of any
+ * currency could record a 1.250.000 VND bill as 1,250,000 USD. Only when no
+ * account holds that currency does it fall back to the first one, and the form
+ * then says so beside the account field.
  */
 function prefillValues(
   prefill: OccurrencePrefill,
@@ -194,12 +201,15 @@ function prefillValues(
   timezone: string,
 ): FormInput {
   const [today, nowTime] = nowInZone(timezone).split('T')
-  const accountOffered = accounts.some((account) => account.id === prefill.accountId)
+  const account =
+    accounts.find((candidate) => candidate.id === prefill.accountId) ??
+    accounts.find((candidate) => candidate.currency === prefill.currency) ??
+    accounts[0]
   const categoryOffered = categories.some(
     (category) => category.id === prefill.categoryId && category.type === prefill.type,
   )
   return {
-    accountId: accountOffered && prefill.accountId ? prefill.accountId : (accounts[0]?.id ?? ''),
+    accountId: account?.id ?? '',
     categoryId: categoryOffered && prefill.categoryId ? prefill.categoryId : undefined,
     type: prefill.type,
     datePart: prefill.date,
@@ -511,7 +521,7 @@ export function TransactionForm({
         {/* Says why the form arrived filled in, and what saving it also does. */}
         {prefill && occurrenceId && (
           <InlineAlert tone="neutral">
-            {t('transactions.fromReminder', { title: prefill.note })}
+            {t('transactions.fromReminder', { title: prefill.note, type: prefill.type })}
           </InlineAlert>
         )}
 
@@ -628,6 +638,22 @@ export function TransactionForm({
             )
           }
         </FormField>
+
+        {/* A reminder's amount is in the reminder's currency; saved into an
+            account of another, it would be recorded as that many units of the
+            account's. The form cannot convert it, so it says so here, next to
+            the choice that caused it, for as long as the two differ. */}
+        {prefill &&
+          occurrenceId &&
+          selectedAccount &&
+          selectedAccount.currency !== prefill.currency && (
+            <InlineAlert tone="warning">
+              {t('transactions.fromReminderCurrency', {
+                currency: prefill.currency,
+                accountCurrency: selectedAccount.currency,
+              })}
+            </InlineAlert>
+          )}
 
         {needsCategory && (
           <FormField

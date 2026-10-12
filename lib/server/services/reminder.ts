@@ -4,7 +4,12 @@ import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
 import { prisma } from '@/lib/prisma'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
-import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import {
+  calendarDateToUtcCarrier,
+  compareCalendarDates,
+  formatCalendarDate,
+  todayCalendarDateInZone,
+} from '@/lib/datetime/calendar-date'
 import { calendarDateToEntryInstant } from '@/lib/datetime/local-date-time'
 import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
 import {
@@ -942,7 +947,9 @@ export interface OccurrencePrefill {
   accountId: string | null
   /** The reminder's category while it is ACTIVE and of the reminder's type. */
   categoryId: string | null
-  /** `yyyy-MM-dd`: the due day as the user's list shows it, in their zone. */
+  /** `yyyy-MM-dd`, in the user's zone: the day the money moved — the due day
+   *  the user's list shows, or today when that day is still ahead (Ruling P8:
+   *  "Paid" says it has moved already). */
   date: string
   /** The reminder's title — the transaction's note unless the user edits it. */
   note: string
@@ -972,10 +979,16 @@ type PayableOccurrence = Prisma.ReminderOccurrenceGetPayload<{
 
 /**
  * The prefill for `occurrence`, read in the *viewer's* zone (`timezone`, from
- * their profile) — the zone the Reminders list renders `dueAt` in — so the
- * transaction lands on the day the user saw next to the button, even after a
+ * their profile) — the zone the Reminders list renders `dueAt` in — so an
+ * overdue bill lands on the day the user saw next to the button, even after a
  * move away from the zone the reminder was created in (ruling R6-22 anchors
  * the schedule there; display, and so this, follows the viewer).
+ *
+ * The payment day is the earlier of that due day and the user's today (Ruling
+ * P8). "Paid" on a bill that is not due yet says the money moved now: dated on
+ * the future due day instead, the balance would not move until then and the
+ * expense could land in next month's budget. An overdue bill keeps its due
+ * day — the closest record of when it was paid that the app has.
  *
  * The account and the category are kept only while a transaction could be
  * recorded against them exactly as `insertTransactionInTx` would check:
@@ -983,8 +996,10 @@ type PayableOccurrence = Prisma.ReminderOccurrenceGetPayload<{
  * written into a VND wallet would record 20 VND), the category ACTIVE and of
  * the reminder's type. Both null-out cases are what send Paid to the form.
  */
-function toPrefill(occurrence: PayableOccurrence, timezone: string): OccurrencePrefill {
+function toPrefill(occurrence: PayableOccurrence, timezone: string, now: Date): OccurrencePrefill {
   const { reminder } = occurrence
+  const dueDay = formatInTimeZone(occurrence.dueAt, timezone, 'yyyy-MM-dd')
+  const today = todayCalendarDateInZone(timezone, now)
   const accountUsable =
     reminder.account?.status === 'ACTIVE' && reminder.account.currency === reminder.currency
   const categoryUsable =
@@ -995,7 +1010,7 @@ function toPrefill(occurrence: PayableOccurrence, timezone: string): OccurrenceP
     currency: reminder.currency,
     accountId: accountUsable ? reminder.accountId : null,
     categoryId: categoryUsable ? reminder.categoryId : null,
-    date: formatInTimeZone(occurrence.dueAt, timezone, 'yyyy-MM-dd'),
+    date: compareCalendarDates(dueDay, today) > 0 ? today : dueDay,
     note: reminder.title,
     occurrenceId: occurrence.id,
   }
@@ -1006,18 +1021,22 @@ function toPrefill(occurrence: PayableOccurrence, timezone: string): OccurrenceP
  * null — for an answered occurrence, another user's, or an id that does not
  * exist, which the Transactions page then simply ignores (a stale or edited
  * link opens the ordinary empty form, never an error page).
+ *
+ * `now` decides the user's today, which caps the payment day (Ruling P8); the
+ * page passes its own request instant.
  */
 export async function getOccurrencePrefill(
   userId: string,
   occurrenceId: string,
   timezone: string,
+  now: Date = new Date(),
 ): Promise<OccurrencePrefill | null> {
   const occurrence = await prisma.reminderOccurrence.findUnique({
     where: { userId_id: { userId, id: occurrenceId } },
     include: PAYABLE_OCCURRENCE_INCLUDE,
   })
   if (!occurrence || occurrence.status !== 'PENDING') return null
-  return toPrefill(occurrence, timezone)
+  return toPrefill(occurrence, timezone, now)
 }
 
 /**
@@ -1033,10 +1052,11 @@ export async function getOccurrencePrefill(
  * ACKNOWLEDGED with `actionedAt = now` and the new `transactionId`. Either
  * both rows change or neither does.
  *
- * The transaction is dated on the due day as the user sees it
- * (`calendarDateToEntryInstant`, Ruling P4): the current instant when that is
- * today, so the balance moves at once; otherwise 12:00 that day in the user's
- * zone, so it never crosses into another day.
+ * The transaction is dated on the payment day `toPrefill` reads — the due day
+ * as the user sees it, or today for a bill not due yet (Ruling P8) — through
+ * `calendarDateToEntryInstant` (Ruling P4): the current instant when that is
+ * today, so the balance moves at once; otherwise (an overdue bill) 12:00 on
+ * its due day in the user's zone, so it never crosses into another day.
  *
  * Otherwise nothing is written and no rate is fetched: the answer is
  * `needs-form`, with the prefill the create form opens with. The same answer
@@ -1067,7 +1087,7 @@ export async function payOccurrence(
   })
   if (occurrence.status !== 'PENDING') throw new OccurrenceNotPendingError()
 
-  const prefill = toPrefill(occurrence, timezone)
+  const prefill = toPrefill(occurrence, timezone, now)
   const { accountId, categoryId } = prefill
   if (accountId === null || categoryId === null) return { status: 'needs-form', prefill }
 

@@ -34,9 +34,10 @@ import { SegmentedControl } from '@/components/common/segmented-control'
  * they are waiting for, each in its own currency and never converted to
  * `User.baseCurrency` (ledger ruling R5-3).
  *
- * **Only "Đã trả / Paid" records a transaction** (money-source linking spec
- * 2026-10-12 §2 Q6, §6.6). A reminder is a note about money the user expects to
- * move; Paid is the user saying it did, and records it — in one tap when the
+ * **Only "Đã trả / Paid" records a transaction** ("Đã nhận / Received" on
+ * expected income, Ruling P9; money-source linking spec 2026-10-12 §2 Q6,
+ * §6.6). A reminder is a note about money the user expects to move; Paid is
+ * the user saying it did, and records it — in one tap when the
  * reminder names a usable account and category, otherwise through the
  * Transactions page's create form, pre-filled. "Chỉ đánh dấu / Mark only" and
  * "Bỏ qua / Dismiss" change the occurrence's status and nothing else, and the

@@ -23,7 +23,9 @@ import { useAnnouncePaid } from './occurrence-paid-notice'
  * Mark only", or "Bỏ qua / Dismiss" (money-source linking spec 2026-10-12 §2
  * Q6, §6.6).
  *
- * **Paid** is the answer that records the money. When the reminder names an
+ * **Paid** — "Đã nhận / Received" on expected income (Ruling P9), the same
+ * action under the word that fits it — is the answer that records the money.
+ * When the reminder names an
  * account and a category that can take the transaction, one tap records it —
  * its type, expected amount, category and account, on the due day — and the
  * page says so above the list with an Edit link (`OccurrencePaidNotice`; the
@@ -143,6 +145,10 @@ export function OccurrenceActions({
    * sighted user sees, not the internal carrier format nobody looks at.
    */
   const rowName = `${occurrence.title} · ${formatDate(occurrence.dueDate, { locale, timeZone, style: 'date' })}`
+  /** A bill is paid; income is received (Ruling P9). */
+  const payLabel = t(
+    occurrence.type === 'INCOME' ? 'reminders.receiveAction' : 'reminders.payAction',
+  )
 
   return (
     // No `w-full` (fix round 1, finding 6): this root renders in two flex
@@ -166,10 +172,10 @@ export function OccurrenceActions({
           // below the icon rail and the compact 36 px from `md` up.
           className="h-11 md:h-9"
           disabled={submit.locked}
-          aria-label={`${t('reminders.payAction')} ${rowName}`}
+          aria-label={`${payLabel} ${rowName}`}
           onClick={pay}
         >
-          {paying ? t('reminders.payPending') : t('reminders.payAction')}
+          {paying ? t('reminders.payPending') : payLabel}
         </Button>
         <Button
           type="button"
