@@ -40,6 +40,7 @@
   "account": "Tài khoản",
   "accountNone": "Không ghi vào tài khoản",
   "accountOption": "{name} · {currency}",
+  "accountOptionArchived": "{name} · {currency} (đã lưu trữ)",
   "accountHelper": "Tiền đã đi qua tài khoản nào? Số dư tài khoản sẽ cập nhật theo.",
   "movedOn": "Tiền đi ngày",
   "currencyFromAccount": "Theo tiền tệ của tài khoản đã chọn",

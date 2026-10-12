@@ -34,6 +34,8 @@ function dto(overrides: Partial<DebtDto> = {}): DebtDto {
         amountInput: '400000.00',
         note: null,
         accountId: null,
+        accountName: null,
+        accountArchived: false,
       },
     ],
     editable: { person: 'Minh', description: '', dueDate: '', notes: '' },

@@ -5,6 +5,10 @@ export interface DebtAccountOption {
   id: string
   name: string
   currency: Currency
+  /** Archived since the payment being edited was recorded: shown, labelled,
+   *  so the edit does not silently switch to "don't record". The server still
+   *  refuses it (ARCHIVED_ACCOUNT), which is the user's cue to choose again. */
+  archived?: boolean
 }
 
 /**

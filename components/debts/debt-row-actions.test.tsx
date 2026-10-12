@@ -39,6 +39,8 @@ const PAYMENT = {
   amountInput: '250000.00',
   note: 'Đợt một',
   accountId: 'acc_bank',
+  accountName: 'Ngân hàng',
+  accountArchived: false,
 }
 
 function debt(overrides: Partial<DebtDto> = {}): DebtDto {
@@ -157,5 +159,24 @@ describe('DebtPaymentForm correcting a recorded payment', () => {
     })
     expect(accountSelect(html)).toMatch(selectedOption(''))
     expect(html).not.toContain(viDebts.paymentEditLinkedNote)
+  })
+
+  it("keeps the payment's account selected, labelled archived, when it has been archived since", () => {
+    const html = render({
+      payment: {
+        ...PAYMENT,
+        accountId: 'acc_old',
+        accountName: 'Ví cũ',
+        accountArchived: true,
+      },
+      mostRecentAccountId: 'acc_wallet',
+    })
+    const select = accountSelect(html)
+
+    expect(select).toContain('Ví cũ · VND (đã lưu trữ)')
+    expect(select).toMatch(selectedOption('acc_old'))
+    // Not "don't record": saving that would unlink the payment and delete its
+    // transaction.
+    expect(select).not.toMatch(selectedOption(''))
   })
 })

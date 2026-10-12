@@ -45,7 +45,7 @@
     "OVERPAYMENT": "That payment is more than what is still owed.",
     "NOT_ACTIVE": "This debt has been written off and can no longer be changed.",
     "FX_UNAVAILABLE": "Exchange rates are temporarily unavailable, so the account transaction could not be recorded. Please try again shortly.",
-    "ARCHIVED_ACCOUNT": "This account is archived. Choose an active account.",
+    "ARCHIVED_ACCOUNT": "That account is archived. Choose an active account, or \"Don't record in an account\".",
     "ACCOUNT_CURRENCY_MISMATCH": "Choose an account in the same currency as this debt.",
     "CONFLICT": "The payment or its linked transaction changed while you were editing. Reload and try again.",
     "INVALID_INPUT": "Check the highlighted fields.",

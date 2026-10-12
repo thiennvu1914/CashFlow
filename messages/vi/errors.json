@@ -45,7 +45,7 @@
     "OVERPAYMENT": "Khoản thanh toán lớn hơn số còn nợ.",
     "NOT_ACTIVE": "Khoản nợ này đã được xóa nợ và không thể thay đổi.",
     "FX_UNAVAILABLE": "Tỷ giá tạm thời không khả dụng nên chưa thể ghi giao dịch vào tài khoản. Vui lòng thử lại sau một lát.",
-    "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ. Hãy chọn một tài khoản đang hoạt động.",
+    "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ — chọn tài khoản khác hoặc \"Không ghi vào tài khoản\".",
     "ACCOUNT_CURRENCY_MISMATCH": "Hãy chọn tài khoản cùng loại tiền với khoản nợ này.",
     "CONFLICT": "Khoản thanh toán hoặc giao dịch liên kết đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",

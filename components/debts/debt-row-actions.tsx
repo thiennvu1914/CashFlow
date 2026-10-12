@@ -235,11 +235,26 @@ export function DebtPaymentForm({
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-payment-${name}-${uid}`
   // A debt moves money only in its own currency, so the picker lists no other.
-  const options = accounts.filter((account) => account.currency === debt.currency)
+  const activeOptions = accounts.filter((account) => account.currency === debt.currency)
+  // The account a correction started on may have been archived since; it stays
+  // in the list, labelled, rather than the picker falling back to "don't
+  // record" (which would unlink the payment and delete its transaction on save).
+  const options: DebtAccountOption[] =
+    payment?.accountId && payment.accountArchived
+      ? [
+          ...activeOptions,
+          {
+            id: payment.accountId,
+            name: payment.accountName ?? '',
+            currency: debt.currency,
+            archived: true,
+          },
+        ]
+      : activeOptions
   // A new payment starts on the debt's opening account, else the most recently
   // used one. A correction starts on what the payment actually used — never a
   // pre-selection of its own, or saving a note fix would silently link the
-  // payment (or, had its account since been archived, unlink it).
+  // payment.
   const initialAccountId = payment
     ? options.some((option) => option.id === payment.accountId)
       ? payment.accountId!

@@ -1340,7 +1340,10 @@ describe('money-source linking', () => {
       expect(debt.currency).toBe('VND')
       expect(debt.openingTransactionId).not.toBeNull()
       // What the payment picker pre-selects (spec §6.2) travels with the row.
-      expect(debt.openingTransaction).toEqual({ accountId: s.walletId })
+      expect(debt.openingTransaction).toMatchObject({
+        accountId: s.walletId,
+        account: { status: 'ACTIVE' },
+      })
 
       const opening = await transactionById(s, debt.openingTransactionId)
       expect(opening).toMatchObject({

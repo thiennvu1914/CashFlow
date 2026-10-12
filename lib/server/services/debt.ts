@@ -310,12 +310,20 @@ export type DebtDisplayStatus = 'OPEN' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' |
  * and each payment its `transactionId` (null when nothing was recorded in an
  * account), and both bring the *account* of their linked transaction — the
  * account a payment form pre-selects (spec §6.2) and an edit form starts from.
- * Only that id: the rest of the transaction is the Transactions page's to show.
+ * Only the account's id, name and status (`LINKED_ACCOUNT`): the rest of the
+ * transaction is the Transactions page's to show, and the name and status let an
+ * edit form keep an account archived since the payment shown rather than
+ * silently offering "don't record" in its place.
  */
+const LINKED_ACCOUNT = {
+  accountId: true,
+  account: { select: { name: true, status: true } },
+} satisfies Prisma.TransactionSelect
+
 export type DebtRow = Prisma.DebtGetPayload<{
   include: {
-    payments: { include: { transaction: { select: { accountId: true } } } }
-    openingTransaction: { select: { accountId: true } }
+    payments: { include: { transaction: { select: typeof LINKED_ACCOUNT } } }
+    openingTransaction: { select: typeof LINKED_ACCOUNT }
   }
 }>
 
@@ -362,9 +370,9 @@ const PAYMENT_ORDER = [
 const WITH_PAYMENTS = {
   payments: {
     orderBy: PAYMENT_ORDER,
-    include: { transaction: { select: { accountId: true } } },
+    include: { transaction: { select: LINKED_ACCOUNT } },
   },
-  openingTransaction: { select: { accountId: true } },
+  openingTransaction: { select: LINKED_ACCOUNT },
 } satisfies Prisma.DebtInclude
 
 /** Live debts before closed ones — the order the Debts page renders. */

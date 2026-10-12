@@ -47,6 +47,11 @@ export interface DebtPaymentDto {
   /** The account this repayment moved money through, or null when nothing was
    *  recorded in an account. Pre-selects the edit form's picker. */
   accountId: string | null
+  /** That account's name, and whether it has been archived since — the edit
+   *  form keeps an archived account selected, labelled, instead of silently
+   *  offering "don't record". */
+  accountName: string | null
+  accountArchived: boolean
 }
 
 export interface DebtDto {
@@ -157,6 +162,8 @@ export function toDebtDto(
       amountInput: p.amount.toFixed(2),
       note: p.note,
       accountId: p.transaction?.accountId ?? null,
+      accountName: p.transaction?.account.name ?? null,
+      accountArchived: p.transaction?.account.status === 'ARCHIVED',
     })),
     editable: {
       person: debt.person,

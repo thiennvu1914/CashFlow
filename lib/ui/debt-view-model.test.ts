@@ -264,6 +264,8 @@ describe('toDebtDto', () => {
         amountInput: '100000.00',
         note: 'First instalment',
         accountId: null,
+        accountName: null,
+        accountArchived: false,
       },
       // Two decimals show on a VND amount that genuinely carries them rather
       // than being rounded away.
@@ -274,6 +276,8 @@ describe('toDebtDto', () => {
         amountInput: '150000.25',
         note: null,
         accountId: null,
+        accountName: null,
+        accountArchived: false,
       },
     ])
   })
@@ -282,9 +286,16 @@ describe('toDebtDto', () => {
     const dto = toDebtDto(
       row({
         openingTransactionId: 'tx_open',
-        openingTransaction: { accountId: 'acc_wallet' },
+        openingTransaction: {
+          accountId: 'acc_wallet',
+          account: { name: 'Wallet', status: 'ACTIVE' },
+        },
         payments: [
-          payment({ id: 'pay_1', transactionId: 'tx_1', transaction: { accountId: 'acc_bank' } }),
+          payment({
+            id: 'pay_1',
+            transactionId: 'tx_1',
+            transaction: { accountId: 'acc_bank', account: { name: 'Bank', status: 'ARCHIVED' } },
+          }),
           payment({ id: 'pay_2' }),
         ],
       }),
@@ -292,6 +303,9 @@ describe('toDebtDto', () => {
 
     expect(dto.openingAccountId).toBe('acc_wallet')
     expect(dto.payments.map((p) => p.accountId)).toEqual(['acc_bank', null])
+    // The name and archived state let the edit form keep an archived account selected.
+    expect(dto.payments[0]).toMatchObject({ accountName: 'Bank', accountArchived: true })
+    expect(dto.payments[1]).toMatchObject({ accountName: null, accountArchived: false })
     expect(toDebtDto(row()).openingAccountId).toBeNull()
   })
 

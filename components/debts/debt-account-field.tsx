@@ -45,7 +45,10 @@ export function DebtAccountField({
           <option value="">{t('debts.accountNone')}</option>
           {accounts.map((account) => (
             <option key={account.id} value={account.id}>
-              {t('debts.accountOption', { name: account.name, currency: account.currency })}
+              {t(account.archived ? 'debts.accountOptionArchived' : 'debts.accountOption', {
+                name: account.name,
+                currency: account.currency,
+              })}
             </option>
           ))}
         </select>

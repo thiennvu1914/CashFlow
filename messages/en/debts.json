@@ -40,6 +40,7 @@
   "account": "Account",
   "accountNone": "Don't record in an account",
   "accountOption": "{name} · {currency}",
+  "accountOptionArchived": "{name} · {currency} (archived)",
   "accountHelper": "Which account did the money go through? Its balance updates to match.",
   "movedOn": "Money moved on",
   "currencyFromAccount": "Taken from the selected account",
