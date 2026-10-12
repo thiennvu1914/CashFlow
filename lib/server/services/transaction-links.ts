@@ -51,6 +51,26 @@ interface LinkRow {
  * The debt or loan behind each of `transactionIds`, keyed by transaction id;
  * an id nothing owns is simply absent from the map.
  *
+ * `db` is the caller's transaction client when the answer must be read under
+ * the caller's locks (`updateTransaction`/`deleteTransaction`); otherwise it
+ * reads from the pool. The ledger, which does not have its page's ids yet when
+ * it starts, uses `listTransactionLinks` in `transaction.ts` instead.
+ */
+export async function findTransactionLinks(
+  userId: string,
+  transactionIds: readonly string[],
+  db: Prisma.TransactionClient = prisma,
+): Promise<Map<string, TransactionLink>> {
+  if (transactionIds.length === 0) return new Map()
+  return findTransactionLinksAmong(userId, Prisma.join([...new Set(transactionIds)]), db)
+}
+
+/**
+ * The statement behind both lookups: the debt or loan behind each transaction
+ * id `wantedIds` yields — the inside of an `IN (…)`, either a list of bound ids
+ * or a subquery selecting one `"id"` column. Built only from `Prisma.sql`
+ * fragments by this module's callers, never from strings.
+ *
  * Each source table is read once — one `SELECT` per link column, every one
  * scoped by `userId`, and a payment joined to its own agreement through the
  * composite `(userId, id)` key so a name can only ever come from the same
@@ -61,46 +81,40 @@ interface LinkRow {
  * their row locks), and every round trip to the production database is about
  * 100 ms. One statement costs one, from the pool or from a transaction alike.
  *
- * `db` is the caller's transaction client when the answer must be read under
- * the caller's locks; the ledger passes nothing and reads from the pool.
- *
  * Every link column is covered by a `(userId, <column>)` unique index, so each
  * branch is an index lookup per id rather than a scan.
  */
-export async function findTransactionLinks(
+export async function findTransactionLinksAmong(
   userId: string,
-  transactionIds: readonly string[],
+  wantedIds: Prisma.Sql,
   db: Prisma.TransactionClient = prisma,
 ): Promise<Map<string, TransactionLink>> {
-  const links = new Map<string, TransactionLink>()
-  if (transactionIds.length === 0) return links
-
-  const ids = Prisma.join([...new Set(transactionIds)])
   const rows = await db.$queryRaw<LinkRow[]>`
     SELECT d."openingTransactionId" AS "transactionId", 'debt' AS "kind",
            d."id" AS "sourceId", d."person" AS "name"
       FROM "Debt" d
-     WHERE d."userId" = ${userId} AND d."openingTransactionId" IN (${ids})
+     WHERE d."userId" = ${userId} AND d."openingTransactionId" IN (${wantedIds})
     UNION ALL
     SELECT p."transactionId", 'debt', d."id", d."person"
       FROM "DebtPayment" p
       JOIN "Debt" d ON d."userId" = p."userId" AND d."id" = p."debtId"
-     WHERE p."userId" = ${userId} AND p."transactionId" IN (${ids})
+     WHERE p."userId" = ${userId} AND p."transactionId" IN (${wantedIds})
     UNION ALL
     SELECT l."disbursementTransactionId", 'loan', l."id", l."lender"
       FROM "Loan" l
-     WHERE l."userId" = ${userId} AND l."disbursementTransactionId" IN (${ids})
+     WHERE l."userId" = ${userId} AND l."disbursementTransactionId" IN (${wantedIds})
     UNION ALL
     SELECT p."principalTransactionId", 'loan', l."id", l."lender"
       FROM "LoanPayment" p
       JOIN "Loan" l ON l."userId" = p."userId" AND l."id" = p."loanId"
-     WHERE p."userId" = ${userId} AND p."principalTransactionId" IN (${ids})
+     WHERE p."userId" = ${userId} AND p."principalTransactionId" IN (${wantedIds})
     UNION ALL
     SELECT p."interestTransactionId", 'loan', l."id", l."lender"
       FROM "LoanPayment" p
       JOIN "Loan" l ON l."userId" = p."userId" AND l."id" = p."loanId"
-     WHERE p."userId" = ${userId} AND p."interestTransactionId" IN (${ids})`
+     WHERE p."userId" = ${userId} AND p."interestTransactionId" IN (${wantedIds})`
 
+  const links = new Map<string, TransactionLink>()
   for (const row of rows) {
     links.set(
       row.transactionId,

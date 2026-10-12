@@ -10,7 +10,11 @@ import {
   insertTransactionInTx,
   resolveCategoryId,
 } from './linked-transaction'
-import { LinkedTransactionError, findTransactionLinks } from './transaction-links'
+import {
+  LinkedTransactionError,
+  findTransactionLinks,
+  findTransactionLinksAmong,
+} from './transaction-links'
 
 /**
  * Transaction service (spec §4.4, §6.3).
@@ -166,6 +170,8 @@ export class CurrencyMismatchError extends Error {
   }
 }
 
+const MS_PER_MINUTE = 60_000
+
 /** How many rows the transactions list loads when no caller says otherwise. */
 export const DEFAULT_TRANSACTION_LIST_LIMIT = 200
 
@@ -190,11 +196,7 @@ export const MAX_TRANSACTION_LIST_LIMIT = 500
  *    should not be shipped to a client component.
  */
 export async function listTransactions(userId: string, options?: { limit?: number }) {
-  const requested = options?.limit ?? DEFAULT_TRANSACTION_LIST_LIMIT
-  if (!Number.isInteger(requested) || requested <= 0) {
-    throw new RangeError(`listTransactions: limit must be a positive integer, got ${requested}`)
-  }
-  const take = Math.min(requested, MAX_TRANSACTION_LIST_LIMIT)
+  const take = listTake(options)
 
   return prisma.transaction.findMany({
     where: { userId },
@@ -216,10 +218,48 @@ export async function listTransactions(userId: string, options?: { limit?: numbe
     // `date` alone is not a total order — several transactions a day is the
     // normal case, and a paged or re-rendered list must not shuffle. `createdAt`
     // breaks the tie by entry order, and `id` breaks a same-millisecond tie so
-    // the sort is fully deterministic.
+    // the sort is fully deterministic. `listTransactionLinks` below repeats
+    // this order in SQL — change both or neither.
     orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     take,
   })
+}
+
+/** The bounded page size `listTransactions` and `listTransactionLinks` share. */
+function listTake(options?: { limit?: number }): number {
+  const requested = options?.limit ?? DEFAULT_TRANSACTION_LIST_LIMIT
+  if (!Number.isInteger(requested) || requested <= 0) {
+    throw new RangeError(`listTransactions: limit must be a positive integer, got ${requested}`)
+  }
+  return Math.min(requested, MAX_TRANSACTION_LIST_LIMIT)
+}
+
+/**
+ * Which rows of `listTransactions(userId, options)` a debt or loan owns
+ * (money-source linking spec 2026-10-12 §6.5) — `findTransactionLinks` for
+ * exactly that page, without waiting for it.
+ *
+ * The ledger needs both, and every production round trip is about 100 ms, so
+ * the two run side by side. That needs the page's ids before the listing has
+ * returned them, so the link statement re-selects the same page itself: the
+ * same `userId` scope, the same `date`/`createdAt`/`id` order (ties included)
+ * and the same bound (`listTake`), as a subquery inside its one statement.
+ * Still bounded — never "every linked row the user has". Both reads see
+ * committed data at slightly different moments, exactly as two reads in
+ * sequence would; a row the listing returns that the link read missed (or
+ * vice versa) can only come from a write between them, and the next
+ * revalidation brings the two back in step.
+ */
+export async function listTransactionLinks(userId: string, options?: { limit?: number }) {
+  const take = listTake(options)
+  return findTransactionLinksAmong(
+    userId,
+    Prisma.sql`
+      SELECT "id" FROM "Transaction"
+       WHERE "userId" = ${userId}
+       ORDER BY "date" DESC, "createdAt" DESC, "id" DESC
+       LIMIT ${take}`,
+  )
 }
 
 /**
@@ -320,10 +360,11 @@ export async function createTransaction(
  * inserted. So if any of `accountId`, `type`, `amount` or `date` differs from
  * the stored row, all four FX fields are written anew (and `currency` is
  * re-derived from the possibly-new account); if only `note` and/or `categoryId`
- * change, the existing snapshot is preserved exactly. As with create, the FX
- * call happens before the write: an economic edit while FX is unavailable fails
- * and leaves the row untouched, so a corrected amount is never paired with a
- * borrowed or fabricated rate.
+ * change, the existing snapshot is preserved exactly. (`date` submitted as the
+ * stored instant's own minute counts as unchanged — the form edits to the
+ * minute.) As with create, the FX call happens before the write: an economic
+ * edit while FX is unavailable fails and leaves the row untouched, so a
+ * corrected amount is never paired with a borrowed or fabricated rate.
  *
  * An edit that keeps the row's existing category is allowed even when that
  * category has since been archived — archiving hides a category from new
@@ -352,13 +393,24 @@ export async function updateTransaction(
     where: { userId_id: { userId, id: transactionId } },
   })
 
+  // The edit form works to the minute, but a row another flow recorded at "now"
+  // (a reminder paid today, money-source linking Ruling P4) carries seconds.
+  // Submitted back as its own minute, that is the date the user left alone: the
+  // stored instant is kept, so a note-only edit is no economic change (R-6) —
+  // no FX call, no shortened instant, no refusal while FX is unavailable. The
+  // same rule `updateDebtPayment` applies to an unchanged payment date.
+  const date =
+    parsed.date.getTime() === Math.floor(existing.date.getTime() / MS_PER_MINUTE) * MS_PER_MINUTE
+      ? existing.date
+      : parsed.date
+
   const economicChange =
     parsed.accountId !== existing.accountId ||
     parsed.type !== existing.type ||
     // Compared as Decimal, never as a float: 1000 and the stored "1000.00" are
     // the same amount, and `Number(existing.amount)` would be a lossy detour.
     !new Prisma.Decimal(parsed.amount).equals(existing.amount) ||
-    parsed.date.getTime() !== existing.date.getTime()
+    date.getTime() !== existing.date.getTime()
 
   const fx = economicChange ? await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride) : null
 
@@ -405,7 +457,7 @@ export async function updateTransaction(
         type: parsed.type,
         amount: parsed.amount,
         currency: account.currency,
-        date: parsed.date,
+        date,
         note: parsed.note ?? null,
         ...(fx
           ? {

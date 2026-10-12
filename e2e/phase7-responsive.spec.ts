@@ -456,21 +456,44 @@ test.describe.serial('Phase 7 — responsive', () => {
       const item = page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ })
       await expect(item).toBeVisible()
 
-      const [topmost, covering] = await item.evaluate((element) => {
-        const rect = element.getBoundingClientRect()
-        const hit = document.elementFromPoint(
-          rect.left + rect.width / 2,
-          rect.top + rect.height / 2,
-        )
-        return [
-          hit === element || element.contains(hit),
-          hit ? `${hit.tagName}.${(hit.className || '').toString().slice(0, 80)}` : 'nothing',
-        ] as [boolean, string]
-      })
-      expect(topmost, `${width}px: the menu item is painted under ${covering}`).toBe(true)
+      // EVERY item of the open popup, not only the one clicked below: the item
+      // the sticky header lands on is the popup's FIRST (here Edit, with
+      // Delete below it, spec 2026-10-12 §6.5), so checking Delete alone would
+      // test a spot over a plain row and miss the regression entirely.
+      //
+      // Measured with the pointer OFF the ledger card, once its hover transform
+      // has finished transitioning out: the click above leaves the pointer
+      // resting on the card, whose `:hover` transform (`.card-hover-effect`,
+      // 0.22 s transition) makes it a stacking context that confines the
+      // header's z-10 — which hides the bug. Verified by removing the
+      // positioner's `isolate z-50`: measured on the hovered card this check
+      // still passed; measured on the settled card it fails, with Edit painted
+      // under the sticky header. A user's pointer leaves the card on its way
+      // to an item, so the settled card is the state that matters.
+      await page.mouse.move(0, 0)
+      await expect(
+        page.locator('main .card-hover-effect').filter({ has: page.locator('section') }),
+      ).toHaveCSS('transform', 'none')
+      const items = await page.getByRole('menu').getByRole('menuitem').all()
+      expect(items.length, `${width}px: Edit and Delete`).toBeGreaterThanOrEqual(2)
+      for (const menuItem of items) {
+        const [topmost, covering, label] = await menuItem.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2,
+          )
+          return [
+            hit === element || element.contains(hit),
+            hit ? `${hit.tagName}.${(hit.className || '').toString().slice(0, 80)}` : 'nothing',
+            element.textContent ?? '',
+          ] as [boolean, string, string]
+        })
+        expect(topmost, `${width}px: "${label}" is painted under ${covering}`).toBe(true)
+      }
 
-      // And it takes a real mouse click, not only a keyboard press: this is the
-      // assertion a user would have made.
+      // And Delete takes a real mouse click, not only a keyboard press: this
+      // is the assertion a user would have made.
       await item.click()
       await expect(
         page.getByRole('dialog', { name: /Xóa giao dịch này\?|Delete this transaction\?/ }),

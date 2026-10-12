@@ -924,6 +924,90 @@ describe('transaction service', () => {
       )
     })
 
+    /**
+     * The edit form works to the minute, so a row stamped with seconds — an
+     * entry another flow recorded at "now" (a reminder paid today, Ruling P4)
+     * — comes back from a note-only edit as its own minute. That is the same
+     * date, not a move: re-snapshotting would break R-6, shorten the stored
+     * instant, and fail outright while FX is unavailable.
+     */
+    describe('a stored instant with seconds, edited at minute precision', () => {
+      const STAMPED = new Date('2026-02-01T09:15:42.517Z')
+
+      async function createStamped(s: Awaited<ReturnType<typeof setup>>) {
+        return createTransaction(
+          s.userId,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: STAMPED,
+            note: 'original',
+          },
+          fakeProvider().provider,
+        )
+      }
+
+      it('treats the same minute as an unchanged date: keeps the instant and makes no FX call', async () => {
+        const s = await setup()
+        const tx = await createStamped(s)
+        // An empty cache and a provider that throws: any FX lookup at all would
+        // end in `FxUnavailableError`, so success proves there was none.
+        await clearFxCache()
+        const getLatestRate = vi.fn(async () => {
+          throw new Error('provider down')
+        })
+
+        const updated = await updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date('2026-02-01T09:15:00.000Z'),
+            note: 'corrected wording',
+          },
+          { getLatestRate, getHistoricalRate: async () => null },
+        )
+
+        expect(getLatestRate).not.toHaveBeenCalled()
+        expect(updated.note).toBe('corrected wording')
+        expect(updated.date.toISOString()).toBe(STAMPED.toISOString())
+        expect(updated.vndPerUsdAtEntry.toString()).toBe(tx.vndPerUsdAtEntry.toString())
+        expect(updated.fxRateSource).toBe(tx.fxRateSource)
+        expect(updated.fxRateFetchedAt.toISOString()).toBe(tx.fxRateFetchedAt.toISOString())
+      })
+
+      it('still re-snapshots when the minute itself changes', async () => {
+        const s = await setup()
+        const tx = await createStamped(s)
+        await clearFxCache()
+        const f2 = fakeProvider(25500, 'fake-2')
+
+        const updated = await updateTransaction(
+          s.userId,
+          tx.id,
+          {
+            accountId: s.accountId,
+            categoryId: s.expenseCategoryId,
+            type: 'EXPENSE',
+            amount: 1000,
+            date: new Date('2026-02-01T09:16:00.000Z'),
+            note: 'original',
+          },
+          f2.provider,
+        )
+
+        expect(updated.date.toISOString()).toBe('2026-02-01T09:16:00.000Z')
+        expect(updated.vndPerUsdAtEntry.toNumber()).toBe(25500)
+        expect(updated.fxRateSource).toBe('fake-2')
+        expect(updated.fxRateFetchedAt.toISOString()).toBe(f2.fetchedAt.toISOString())
+      })
+    })
+
     it('re-snapshots and re-derives the currency when the account changes within the same currency', async () => {
       const s = await setup()
       const tx = await createBase(s)

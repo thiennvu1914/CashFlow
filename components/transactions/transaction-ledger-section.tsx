@@ -3,8 +3,7 @@ import type { Currency } from '@prisma/client'
 import { getTranslations } from 'next-intl/server'
 import type { Locale } from '@/lib/i18n/locale'
 import { getActivitySummary } from '@/lib/server/services/activity'
-import { listTransactions } from '@/lib/server/services/transaction'
-import { findTransactionLinks } from '@/lib/server/services/transaction-links'
+import { listTransactionLinks, listTransactions } from '@/lib/server/services/transaction'
 import { formatMoney } from '@/lib/ui/format-money'
 import { Skeleton } from '@/components/common/skeleton'
 import { TransactionList } from './transaction-list'
@@ -19,11 +18,11 @@ import { TransactionList } from './transaction-list'
  * the section re-reads inside its Suspense boundary, so the ledger still
  * updates.
  *
- * Which rows a debt or loan owns (spec 2026-10-12 §6.5) is one more read, for
- * exactly the ids on the page: one statement over the four source tables
- * (`findTransactionLinks`), so one extra round trip whatever the page holds. It
- * cannot run beside the listing — it needs the listing's ids, and asking for
- * every linked row the user has instead would be an unbounded read.
+ * Which rows a debt or loan owns (spec 2026-10-12 §6.5) is read beside the
+ * listing, not after it: `listTransactionLinks` re-selects the same bounded page
+ * (same scope, order and limit) inside its one statement over the four source
+ * tables, so it needs no ids from the listing and the ledger still costs one
+ * round trip of wall time.
  */
 export async function TransactionLedgerSection({
   userId,
@@ -38,11 +37,10 @@ export async function TransactionLedgerSection({
   today: string
   yesterday: string
 }) {
-  const transactions = await listTransactions(userId)
-  const links = await findTransactionLinks(
-    userId,
-    transactions.map((tx) => tx.id),
-  )
+  const [transactions, links] = await Promise.all([
+    listTransactions(userId),
+    listTransactionLinks(userId),
+  ])
   return (
     <TransactionList
       transactions={transactions.map((tx) => ({

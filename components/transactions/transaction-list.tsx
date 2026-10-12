@@ -360,22 +360,29 @@ const TransactionListRow = memo(function TransactionListRow({
   return (
     <FinancialListRow
       title={
-        <>
-          {rowName}
-          {/* Which debt or loan owns the row, before the menu is opened — the
-              reason it offers no edit or delete. A muted pill: it labels the
-              row, it is not a status to act on. */}
-          {row.link && (
+        row.link ? (
+          // Which debt or loan owns the row, before the menu is opened — the
+          // reason it offers no edit or delete. A muted pill: it labels the
+          // row, it is not a status to act on. The title cell ellipsises on one
+          // line, so the name truncates on its own and the pill is a flex
+          // sibling that does not shrink: a long name can no longer push it
+          // out of a 375 px row. Capped, with its own ellipsis, so a long
+          // person or lender still leaves the name some room and the
+          // "Nợ:"/"Vay:" prefix always shows.
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{rowName}</span>
             <StatusBadge
-              className="ml-2"
+              className="block max-w-[60%] shrink-0 truncate"
               label={
                 row.link.kind === 'debt'
                   ? t('transactions.linkedDebtBadge', { person: row.link.person })
                   : t('transactions.linkedLoanBadge', { lender: row.link.lender })
               }
             />
-          )}
-        </>
+          </span>
+        ) : (
+          rowName
+        )
       }
       meta={
         <>

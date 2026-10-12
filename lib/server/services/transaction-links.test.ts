@@ -8,7 +8,13 @@ import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { getAccountBalance } from '@/lib/server/services/balance'
 import { createDebt, recordDebtPayment, type DebtLinkContext } from './debt'
 import { createLoan, recordLoanPayment, type LoanLinkContext } from './loan'
-import { createTransaction, deleteTransaction, updateTransaction } from './transaction'
+import {
+  createTransaction,
+  deleteTransaction,
+  listTransactionLinks,
+  listTransactions,
+  updateTransaction,
+} from './transaction'
 import { LinkedTransactionError, findTransactionLinks } from './transaction-links'
 
 /**
@@ -287,6 +293,62 @@ describe('findTransactionLinks', () => {
     const links = await findTransactionLinks(intruder.userId, Object.values(owner.linked))
 
     expect(links.size).toBe(0)
+  })
+})
+
+/**
+ * The ledger reads its rows and their links side by side, so the links cannot
+ * wait for the rows' ids: `listTransactionLinks` re-selects the same page
+ * inside its one statement. It is only correct if that page is exactly the
+ * one `listTransactions` returns — same scope, order (ties included) and
+ * limit — which is what every case below compares against.
+ *
+ * The fixture's six rows, newest first: the lunch (10 Mar), the repayment
+ * (5 Mar), the debt's opening (1 Mar), the instalment's principal and
+ * interest (both 1 Feb — a date tie only `createdAt`/`id` can order), and the
+ * loan's disbursement (1 Jan). Every limit cuts the page at a different place,
+ * including between the two tied rows.
+ */
+describe('listTransactionLinks', () => {
+  async function linksOfListedPage(userId: string, options?: { limit?: number }) {
+    const rows = await listTransactions(userId, options)
+    return findTransactionLinks(
+      userId,
+      rows.map((row) => row.id),
+    )
+  }
+
+  it.each([1, 2, 3, 4, 5, 6, 7])(
+    'names exactly the links of the rows listTransactions returns at limit %i',
+    async (limit) => {
+      const s = await setup()
+
+      const [listed, expected] = await Promise.all([
+        listTransactionLinks(s.userId, { limit }),
+        linksOfListedPage(s.userId, { limit }),
+      ])
+
+      expect(Object.fromEntries(listed)).toEqual(Object.fromEntries(expected))
+    },
+  )
+
+  it("matches the default page, and holds only the caller's own rows", async () => {
+    const owner = await setup()
+    const other = await setup()
+
+    const listed = await listTransactionLinks(owner.userId)
+
+    expect(Object.fromEntries(listed)).toEqual(
+      Object.fromEntries(await linksOfListedPage(owner.userId)),
+    )
+    expect(listed.size).toBe(5)
+    for (const id of Object.values(other.linked)) expect(listed.has(id)).toBe(false)
+  })
+
+  it('refuses a limit listTransactions refuses', async () => {
+    const s = await setup()
+
+    await expect(listTransactionLinks(s.userId, { limit: 0 })).rejects.toThrow(RangeError)
   })
 })
 

@@ -116,6 +116,25 @@ describe('TransactionList', () => {
     expect(html).toContain('Vay: Vietcombank')
   })
 
+  /**
+   * The title cell ellipsises on one line. With the badge inside that same
+   * truncating run, a long name pushed it out of view at 375 px — and the badge
+   * is the only cue why the menu has no Edit or Delete. So the name truncates
+   * on its own, and the badge is its non-shrinking flex sibling (capped, with
+   * its own ellipsis, so its "Nợ:" prefix always shows).
+   */
+  it('keeps the badge out of the truncating name: a flex sibling that does not shrink', () => {
+    const html = render([row('a', null, null, { kind: 'debt', debtId: 'debt_1', person: 'Minh' })])
+
+    const badge = html.match(/<span class="([^"]*)">Nợ: Minh<\/span>/)
+    expect(badge, 'the badge is its own span').not.toBeNull()
+    expect(badge![1].split(' ')).toEqual(expect.arrayContaining(['shrink-0', 'truncate']))
+    // The name's own truncating span comes right before it, in a flex row.
+    expect(html).toMatch(
+      /<span class="[^"]*\bflex\b[^"]*"><span class="truncate">Tiền ra \(khác\)<\/span><span class="[^"]*">Nợ: Minh<\/span><\/span>/,
+    )
+  })
+
   it('puts no badge on an ordinary row', () => {
     const html = render([row('a', 'lunch', 'Food & Dining')])
     expect(html).not.toMatch(/Nợ: |Vay: /)
