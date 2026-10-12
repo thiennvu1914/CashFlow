@@ -84,6 +84,8 @@ When both accounts share a currency the server derives `toAmount = fromAmount` a
 
 ### 4.7 RecurringReminder / ReminderOccurrence
 
+> **Amended 2026-10-12:** linking to accounts/transactions is now part of the product — see [`2026-10-12-money-source-linking-design.md`](2026-10-12-money-source-linking-design.md), which supersedes the "tracking only / no link" rules in this section.
+
 `RecurringReminder: id, userId, title, type(INCOME|EXPENSE), expectedAmount, currency, categoryId?, accountId?, recurrence{frequency: ONE_TIME|WEEKLY|MONTHLY|YEARLY, interval, dayOfWeek?/dayOfMonth?/month+dayOfMonth?}, startDate, note?, active`.
 
 **Design decision**: this unifies the product spec's "Recurring Financial Reminders" and "Bill Reminders" into one engine — read side by side, they describe the same mechanism (recurrence, category, optional account, note, status, never auto-creates a transaction) with Bills simply being the expense-focused view of it. "Bills" in the UI is a filter over `type = EXPENSE` reminders; a generic "Reminders" list shows the rest (e.g. salary). This is a considered call, not a literal transcription of two separate spec sections — easy to split later if it proves wrong in practice.
@@ -98,9 +100,13 @@ Occurrences are materialized lazily, with no background job: whenever the Dashbo
 
 ### 4.8 SavingsGoal
 
+> **Amended 2026-10-12:** linking to accounts/transactions is now part of the product — see [`2026-10-12-money-source-linking-design.md`](2026-10-12-money-source-linking-design.md), which supersedes the "tracking only / no link" rules in this section.
+
 `id, userId, name, targetAmount, currentProgress, currency, deadline?, note?, status(ACTIVE|ACHIEVED|ARCHIVED)`. `currentProgress` is entered/edited manually by the user — never derived from any account balance, per the product invariant that goals are tracking objects only.
 
 ### 4.9 Debt / DebtPayment
+
+> **Amended 2026-10-12:** linking to accounts/transactions is now part of the product — see [`2026-10-12-money-source-linking-design.md`](2026-10-12-money-source-linking-design.md), which supersedes the "tracking only / no link" rules in this section.
 
 `Debt: id, userId, direction(RECEIVABLE|PAYABLE), person, description?, originalAmount, currency, dueDate?, status(OPEN|PARTIALLY_PAID|PAID|WRITTEN_OFF), notes?, createdAt`. No stored outstanding amount:
 ```
@@ -109,6 +115,8 @@ outstanding(debt) = debt.originalAmount − Σ(DebtPayment.amount WHERE debtId =
 `DebtPayment: id, userId, debtId, amount, date, note?` — inherits the parent Debt's currency (no cross-currency debt payments in MVP; not a realistic near-term need). **No FK and no code path to `FinancialAccount` or `Transaction`, ever** — purely a tracking sub-ledger.
 
 ### 4.10 Loan / LoanPayment
+
+> **Amended 2026-10-12:** linking to accounts/transactions is now part of the product — see [`2026-10-12-money-source-linking-design.md`](2026-10-12-money-source-linking-design.md), which supersedes the "tracking only / no link" rules in this section.
 
 `Loan: id, userId, lender, principal, currency, interestRate, startDate, termMonths, paymentFrequency, scheduledPaymentAmount, nextDueDate, status, notes?, createdAt`. No stored outstanding principal:
 ```
@@ -354,6 +362,8 @@ The workbook builder is an extensible registry of per-sheet builder functions, p
 - Manual dev-server click-through for every UI milestone before it is called done.
 
 ## 16. MVP Acceptance Criteria
+
+> **Amended 2026-10-12:** linking to accounts/transactions is now part of the product — see [`2026-10-12-money-source-linking-design.md`](2026-10-12-money-source-linking-design.md), which supersedes the "tracking only / no link" rules in this section.
 
 - Auth (register/login/logout/reset/change password) works end-to-end; a reset email is actually observable (dev console / prod inbox) and the link completes a real password change.
 - Balances always match the derived formula (§5.1), including after edits/deletes.
