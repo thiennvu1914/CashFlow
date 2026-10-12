@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultLinkAccountId,
+  defaultLinkDate,
   defaultPaymentAccountId,
   type DebtAccountOption,
 } from './debt-accounts'
@@ -41,5 +42,30 @@ describe('defaultLinkAccountId', () => {
 
   it('is empty only when no account in the currency exists at all', () => {
     expect(defaultLinkAccountId([], 'wallet')).toBe('')
+  })
+})
+
+describe('defaultLinkDate (Ruling P7)', () => {
+  const unlinked = (date: string) => ({ date, accountId: null })
+  const linked = (date: string) => ({ date, accountId: 'wallet' })
+
+  it("is the agreement's own date when it comes before every payment still to record", () => {
+    expect(defaultLinkDate('2026-03-01', [unlinked('2026-03-05'), unlinked('2026-04-01')])).toBe(
+      '2026-03-01',
+    )
+    expect(defaultLinkDate('2026-03-01', [])).toBe('2026-03-01')
+  })
+
+  it('moves back to the oldest payment still to record, so the opening never lands after its own repayments', () => {
+    // Added to the app on 1 March, but repaid from 10 February.
+    expect(defaultLinkDate('2026-03-01', [unlinked('2026-03-05'), unlinked('2026-02-10')])).toBe(
+      '2026-02-10',
+    )
+  })
+
+  it('ignores a payment already recorded in an account — the link leaves it alone', () => {
+    expect(defaultLinkDate('2026-03-01', [linked('2026-01-15'), unlinked('2026-03-05')])).toBe(
+      '2026-03-01',
+    )
   })
 })

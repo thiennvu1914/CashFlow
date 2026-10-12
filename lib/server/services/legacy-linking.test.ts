@@ -12,9 +12,11 @@ import { getAccountBalance } from '@/lib/server/services/balance'
 import type { CreateDebtInput, LinkDebtToAccountInput } from '@/lib/validation/debt'
 import type { CreateLoanInput, LinkLoanToAccountInput } from '@/lib/validation/loan'
 import { ArchivedAccountError } from './account-lock'
-import { LinkedAccountCurrencyMismatchError } from './linked-transaction'
+import { LinkedAccountCurrencyMismatchError, linkTransactionOptions } from './linked-transaction'
+import { ConcurrentModificationError } from './transaction'
 import {
   createDebt as createDebtIn,
+  deleteDebtPayment,
   linkDebtToAccount as linkDebtToAccountIn,
   listDebts,
   recordDebtPayment as recordDebtPaymentIn,
@@ -28,6 +30,7 @@ import {
   linkLoanToAccount as linkLoanToAccountIn,
   listLoans,
   recordLoanPayment as recordLoanPaymentIn,
+  updateLoanPayment as updateLoanPaymentIn,
   LoanAlreadyLinkedError,
   type LoanLinkContext,
 } from './loan'
@@ -257,32 +260,95 @@ async function expectPrismaCode(promise: Promise<unknown>, code: string) {
 function failInsideTransaction(model: 'debt' | 'loan', method: 'update') {
   const original = prisma.$transaction.bind(prisma) as (
     callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
   ) => Promise<unknown>
   const failure = new Error(`injected ${model}.${method} failure`)
   vi.spyOn(prisma, '$transaction').mockImplementation(((
     callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
   ) =>
-    original((tx) =>
-      callback(
-        new Proxy(tx, {
-          get(target, property) {
-            const value = Reflect.get(target, property)
-            if (property !== model) return value
-            return new Proxy(value as object, {
-              get(delegate, name) {
-                if (name === method) {
-                  return async () => {
-                    throw failure
+    original(
+      (tx) =>
+        callback(
+          new Proxy(tx, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              if (property !== model) return value
+              return new Proxy(value as object, {
+                get(delegate, name) {
+                  if (name === method) {
+                    return async () => {
+                      throw failure
+                    }
                   }
-                }
-                return Reflect.get(delegate, name)
-              },
-            })
-          },
-        }),
-      ),
+                  return Reflect.get(delegate, name)
+                },
+              })
+            },
+          }),
+        ),
+      options,
     )) as never)
   return failure
+}
+
+/** How long a writer gets to show it is *not* waiting on a held lock. */
+const LOCK_WAIT_MS = 300
+/** Every lock a case took, so one that fails before its own `release()` still
+ *  frees the row instead of stalling the cleanup behind it. */
+const heldLocks: { release: () => Promise<void> }[] = []
+
+function hasSettledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  const settled = promise.then(
+    () => true,
+    () => true,
+  )
+  const timer = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))
+  return Promise.race([settled, timer])
+}
+
+/**
+ * Holds `SELECT … FOR UPDATE` on one row of `table` in a transaction of its own
+ * until `release()` — the same statement the services lock with, so a writer
+ * that needs the row queues behind it (and behind each other, in arrival
+ * order).
+ */
+async function holdRowLock(
+  table: 'FinancialAccount' | 'Debt' | 'Loan',
+  userId: string,
+  id: string,
+) {
+  let openGate: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    openGate = resolve
+  })
+  let signalAcquired: () => void = () => {}
+  const acquired = new Promise<void>((resolve) => {
+    signalAcquired = resolve
+  })
+  const held = prisma.$transaction(
+    async (tx) => {
+      // `table` is one of three literals, never input.
+      await tx.$queryRawUnsafe(
+        `SELECT 1 FROM "${table}" WHERE "userId" = $1 AND "id" = $2 FOR UPDATE`,
+        userId,
+        id,
+      )
+      signalAcquired()
+      await gate
+    },
+    { timeout: 30_000, maxWait: 30_000 },
+  )
+  // If the holder fails before taking the lock, surface that instead of hanging.
+  await Promise.race([acquired, held])
+  const lock = {
+    release: async () => {
+      openGate()
+      await held
+    },
+  }
+  heldLocks.push(lock)
+  return lock
 }
 
 beforeEach(async () => {
@@ -297,6 +363,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // Before the cleanup below, which would otherwise queue behind a held lock;
+  // releasing twice is harmless.
+  for (const lock of heldLocks.splice(0)) await lock.release()
   const fetchCalls = fetchSpy.mock.calls.length
   vi.restoreAllMocks()
   const userIds = createdUserIds.splice(0)
@@ -691,52 +760,7 @@ describe('linkDebtToAccount', () => {
     expect(await balanceOf(s, s.walletId)).toBe('5000000')
   })
 
-  describe('lock order', () => {
-    const LOCK_WAIT_MS = 300
-    const heldLocks: { release: () => Promise<void> }[] = []
-
-    afterEach(async () => {
-      // Runs before the suite's cleanup; releasing twice is harmless.
-      for (const lock of heldLocks.splice(0)) await lock.release()
-    })
-
-    function hasSettledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
-      const settled = promise.then(
-        () => true,
-        () => true,
-      )
-      const timer = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))
-      return Promise.race([settled, timer])
-    }
-
-    async function holdAccountLock(userId: string, accountId: string) {
-      let openGate: () => void = () => {}
-      const gate = new Promise<void>((resolve) => {
-        openGate = resolve
-      })
-      let signalAcquired: () => void = () => {}
-      const acquired = new Promise<void>((resolve) => {
-        signalAcquired = resolve
-      })
-      const held = prisma.$transaction(
-        async (tx) => {
-          await tx.$queryRaw`SELECT 1 FROM "FinancialAccount" WHERE "userId"=${userId} AND "id"=${accountId} FOR UPDATE`
-          signalAcquired()
-          await gate
-        },
-        { timeout: 30_000, maxWait: 30_000 },
-      )
-      await Promise.race([acquired, held])
-      const lock = {
-        release: async () => {
-          openGate()
-          await held
-        },
-      }
-      heldLocks.push(lock)
-      return lock
-    }
-
+  describe('lock order and concurrency', () => {
     it('waits on the account before it takes the debt lock, then records the payment that landed meanwhile', async () => {
       const s = await setup()
       const debt = await createDebt(s.userId, BASE_DEBT)
@@ -747,7 +771,7 @@ describe('linkDebtToAccount', () => {
         { ...BASE_DEBT, person: 'Warm-up', accountId: s.bankId, movedOn: '2026-03-01' },
         provider,
       )
-      const lock = await holdAccountLock(s.userId, s.walletId)
+      const lock = await holdRowLock('FinancialAccount', s.userId, s.walletId)
 
       const pending = linkDebtToAccount(
         s.userId,
@@ -769,6 +793,87 @@ describe('linkDebtToAccount', () => {
       expect(linked.payments.map((p) => p.transaction?.accountId)).toEqual([s.walletId])
       expect(await balanceOf(s, s.walletId)).toBe('4100000')
     }, 30_000)
+
+    it('refuses a payment delete that read the payment before the link recorded it, so no transaction is left without its payment', async () => {
+      const s = await setup()
+      const debt = await createDebt(s.userId, BASE_DEBT)
+      const payment = await recordDebtPayment(s.userId, debt.id, {
+        amount: 100_000,
+        date: '2026-03-05',
+      })
+      const { provider } = fakeProvider()
+      await createDebt(
+        s.userId,
+        { ...BASE_DEBT, person: 'Warm-up', accountId: s.bankId, movedOn: '2026-03-01' },
+        provider,
+      )
+      const debtLock = await holdRowLock('Debt', s.userId, debt.id)
+
+      // The link takes the account and queues on the debt…
+      const link = linkDebtToAccount(
+        s.userId,
+        debt.id,
+        { accountId: s.walletId, openedOn: '2026-03-01', includePayments: true },
+        provider,
+      )
+      expect(await hasSettledWithin(link, LOCK_WAIT_MS)).toBe(false)
+      // …and the delete, which has already read the payment as unlinked, queues
+      // behind it.
+      const removal = deleteDebtPayment(s.userId, payment.id)
+      expect(await hasSettledWithin(removal, LOCK_WAIT_MS)).toBe(false)
+
+      await debtLock.release()
+      await link
+      // Under the debt lock the payment is linked now, which is not what the
+      // delete read: CONFLICT, rather than deleting the payment and leaving its
+      // new transaction behind.
+      await expect(removal).rejects.toThrow(ConcurrentModificationError)
+      const [kept] = await paymentsOf(s, debt.id)
+      expect(kept.transactionId).not.toBeNull()
+      expect(await balanceOf(s, s.walletId)).toBe('4100000')
+    }, 30_000)
+  })
+
+  it('sizes its transaction for the payments it will record, and waits longer for a connection', async () => {
+    const s = await setup()
+    const debt = await createDebt(s.userId, BASE_DEBT)
+    const { provider } = fakeProvider()
+    // Already in an account: not part of the work, so not counted.
+    await recordDebtPayment(
+      s.userId,
+      debt.id,
+      { amount: 50_000, date: '2026-03-02', accountId: s.bankId },
+      provider,
+    )
+    await recordDebtPayment(s.userId, debt.id, { amount: 100_000, date: '2026-03-05' })
+    await recordDebtPayment(s.userId, debt.id, { amount: 100_000, date: '2026-03-06' })
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await linkDebtToAccount(
+      s.userId,
+      debt.id,
+      { accountId: s.walletId, openedOn: '2026-03-01', includePayments: true },
+      provider,
+    )
+
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(2))
+  })
+
+  it('sizes its transaction for the opening alone when the payments are left out', async () => {
+    const s = await setup()
+    const debt = await createDebt(s.userId, BASE_DEBT)
+    await recordDebtPayment(s.userId, debt.id, { amount: 100_000, date: '2026-03-05' })
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await linkDebtToAccount(
+      s.userId,
+      debt.id,
+      { accountId: s.walletId, openedOn: '2026-03-01', includePayments: false },
+      fakeProvider().provider,
+    )
+
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(0))
   })
 
   it('is what the Debts page reads afterwards: the debt and its payments carry the account', async () => {
@@ -1193,6 +1298,119 @@ describe('linkLoanToAccount', () => {
       interestTransactionId: null,
     })
     expect(await balanceOf(s, s.walletId)).toBe('5000000')
+  })
+
+  it('sizes its transaction for the instalments it will record, and waits longer for a connection', async () => {
+    const s = await setup()
+    const loan = await createLoan(s.userId, BASE_LOAN)
+    for (const paymentDate of ['2026-02-01', '2026-03-01', '2026-04-01']) {
+      await recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate,
+      })
+    }
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await linkLoanToAccount(
+      s.userId,
+      loan.id,
+      { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
+      fakeProvider().provider,
+    )
+
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(3))
+  })
+
+  describe('lock order and concurrency', () => {
+    it('waits on the account before it takes the loan lock, then records the instalment that landed meanwhile', async () => {
+      const s = await setup()
+      const loan = await createLoan(s.userId, BASE_LOAN)
+      const { provider } = fakeProvider()
+      // Warms the FX cache, so the link below waits on nothing but the row lock.
+      await createLoan(s.userId, { ...BASE_LOAN, lender: 'Warm-up', accountId: s.bankId }, provider)
+      const lock = await holdRowLock('FinancialAccount', s.userId, s.walletId)
+
+      const pending = linkLoanToAccount(
+        s.userId,
+        loan.id,
+        { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
+        provider,
+      )
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+
+      // Queued on the account, the link holds no loan lock yet: an instalment
+      // with no account — which takes only the loan lock — goes straight
+      // through.
+      const instalment = recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      expect(await hasSettledWithin(instalment, LOCK_WAIT_MS)).toBe(true)
+      await instalment
+
+      await lock.release()
+      await pending
+      // It read the instalments under the loan lock, after that one committed.
+      const [payment] = await paymentsOf(s, loan.id)
+      expect(payment.principalTransactionId).not.toBeNull()
+      expect(payment.interestTransactionId).not.toBeNull()
+      expect(await balanceOf(s, s.walletId)).toBe('5910000')
+    }, 30_000)
+
+    it('refuses an instalment edit that read the instalment before the link recorded it, so its transactions are not left behind', async () => {
+      const s = await setup()
+      const loan = await createLoan(s.userId, BASE_LOAN)
+      const { payment } = await recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      const { provider } = fakeProvider()
+      await createLoan(s.userId, { ...BASE_LOAN, lender: 'Warm-up', accountId: s.bankId }, provider)
+      const loanLock = await holdRowLock('Loan', s.userId, loan.id)
+
+      // The link takes the account and queues on the loan…
+      const link = linkLoanToAccount(
+        s.userId,
+        loan.id,
+        { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
+        provider,
+      )
+      expect(await hasSettledWithin(link, LOCK_WAIT_MS)).toBe(false)
+      // …and an edit of the instalment, which has already read it as unlinked,
+      // queues behind it.
+      const edit = updateLoanPaymentIn(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 95_000,
+          principalAmount: 80_000,
+          interestAmount: 15_000,
+          paymentDate: '2026-02-01',
+        },
+        LOAN_CONTEXT,
+        provider,
+      )
+      expect(await hasSettledWithin(edit, LOCK_WAIT_MS)).toBe(false)
+
+      await loanLock.release()
+      await link
+      // Under the loan lock the instalment is linked now, which is not what the
+      // edit read: CONFLICT, rather than clearing its links and orphaning the
+      // two transactions the link just wrote.
+      await expect(edit).rejects.toThrow(ConcurrentModificationError)
+      const [kept] = await paymentsOf(s, loan.id)
+      expect(kept.interestAmount.toString()).toBe('10000')
+      expect(kept.principalTransactionId).not.toBeNull()
+      expect(kept.interestTransactionId).not.toBeNull()
+      expect(await balanceOf(s, s.walletId)).toBe('5910000')
+    }, 30_000)
   })
 
   it('is what the Loans page reads afterwards: the loan and its instalments carry the account', async () => {

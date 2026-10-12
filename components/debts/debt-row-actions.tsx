@@ -5,31 +5,24 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import {
-  linkDebtToAccountSchema,
   recordDebtPaymentSchema,
   updateDebtSchema,
-  type LinkDebtToAccountInput,
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
 import {
   deleteDebtPaymentAction,
-  linkDebtToAccountAction,
   recordDebtPaymentAction,
   updateDebtAction,
   updateDebtPaymentAction,
   writeOffDebtAction,
 } from '@/lib/server/actions/debt-actions'
 import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
-import {
-  defaultLinkAccountId,
-  defaultPaymentAccountId,
-  type DebtAccountOption,
-} from '@/lib/ui/debt-accounts'
+import { defaultPaymentAccountId, type DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { DebtDto, DebtPaymentDto } from '@/lib/ui/debt-view-model'
 import { DebtAccountField } from '@/components/debts/debt-account-field'
-import { LinkPaymentsCheckbox } from '@/components/debts/link-payments-checkbox'
+import { DebtLinkForm } from '@/components/debts/debt-link-form'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
 import { FormField } from '@/components/common/form-field'
@@ -424,131 +417,6 @@ export function DebtPaymentForm({
           </Button>
           <Button type="submit">
             {submit.pending ? t('debts.paymentPending') : t('common.save')}
-          </Button>
-        </div>
-      </fieldset>
-    </form>
-  )
-}
-
-/**
- * "Record in an account" (spec 2026-10-12 §2 Q3, §6.4): a debt recorded
- * without an account — it predates the app, or "don't record" was chosen —
- * gets its opening transaction now, and, when the box is ticked, one for each
- * payment that has none yet, each on its own date. This is how an account's
- * balance is reconciled with debts that moved money before linking existed.
- *
- * The picker lists only active accounts in the debt's currency and has no
- * "don't record" option — recording is the whole point — and starts on the
- * most recently used account (else the first). The date starts on the day the
- * debt was added, in the user's zone. The box counts only the payments with no
- * transaction yet (a payment already recorded in an account is skipped by the
- * service), and is not shown at all when there are none. With no account in
- * the debt's currency there is nothing to choose, so the dialog says so
- * instead of offering an empty picker.
- *
- * On success the dialog closes, and the page re-renders with the debt linked,
- * so the menu item is gone and the balances on every page have moved.
- */
-export function DebtLinkForm({
-  debt,
-  accounts,
-  mostRecentAccountId,
-  onDone,
-}: {
-  debt: DebtDto
-  accounts: ReadonlyArray<DebtAccountOption>
-  mostRecentAccountId: string | null
-  onDone: () => void
-}) {
-  const t = useTranslations()
-  const [error, setError] = useState<string | null>(null)
-  const submit = useActionSubmit(t)
-  const uid = useId().replace(/:/g, '')
-  const fieldId = (name: string) => `debt-link-${name}-${uid}`
-  const options = accounts.filter((account) => account.currency === debt.currency)
-  const initialAccountId = defaultLinkAccountId(options, mostRecentAccountId)
-  const unlinkedPayments = debt.payments.filter((payment) => payment.accountId === null).length
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<LinkDebtToAccountInput>({
-    resolver: zodResolver(linkDebtToAccountSchema),
-    defaultValues: {
-      accountId: initialAccountId,
-      openedOn: debt.createdOn,
-      // With nothing to record the box is not rendered, and this is what is sent.
-      includePayments: unlinkedPayments > 0,
-    },
-  })
-
-  async function onSubmit(values: LinkDebtToAccountInput) {
-    await submit.run({
-      tag: 'DebtLinkForm: link failed',
-      action: () => linkDebtToAccountAction(debt.id, values),
-      errorKeys: DEBT_ERROR_KEYS,
-      onError: (failure) => setError(failure?.message ?? null),
-      onSuccess: () => {
-        onDone()
-      },
-    })
-  }
-
-  if (options.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
-          {t('debts.linkNoAccounts', { currency: debt.currency })}
-        </p>
-        <div className="flex justify-end pt-2">
-          <Button type="button" variant="outline" onClick={onDone}>
-            {t('common.close')}
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <form onSubmit={handleSubmit(onSubmit)}>
-      <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
-        <legend className="sr-only">{t('debts.linkAction')}</legend>
-
-        <DebtAccountField
-          id={fieldId('account')}
-          accounts={options}
-          defaultAccountId={initialAccountId}
-          registration={register('accountId')}
-          error={errors.accountId?.message}
-          allowNone={false}
-        />
-
-        <FormField id={fieldId('date')} label={t('debts.movedOn')} error={errors.openedOn?.message}>
-          {/* `defaultValue` as well as the form default, so the server-rendered
-              input already shows the day rather than filling in on mount. */}
-          {(aria) => (
-            <Input {...aria} type="date" defaultValue={debt.createdOn} {...register('openedOn')} />
-          )}
-        </FormField>
-
-        {unlinkedPayments > 0 && (
-          <LinkPaymentsCheckbox
-            id={fieldId('payments')}
-            label={t('debts.linkIncludePayments', { count: unlinkedPayments })}
-            helper={t('debts.linkIncludePaymentsHelper')}
-            registration={register('includePayments')}
-          />
-        )}
-
-        {error && <InlineAlert tone="negative">{error}</InlineAlert>}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={onDone}>
-            {t('common.cancel')}
-          </Button>
-          <Button type="submit">
-            {submit.pending ? t('debts.linkPending') : t('debts.linkSubmit')}
           </Button>
         </div>
       </fieldset>

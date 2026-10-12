@@ -3,6 +3,11 @@ import {
   calendarDateStringSchema,
   optionalCalendarDateSchema,
 } from '@/lib/validation/calendar-date'
+import {
+  includePaymentsSchema,
+  linkAccountIdSchema,
+  linkDateSchema,
+} from '@/lib/validation/link-to-account'
 import { moneyAmountSchema } from '@/lib/validation/money'
 
 /**
@@ -145,19 +150,15 @@ export const recordDebtPaymentSchema = z.object({
  * opening transaction after the fact, and optionally one for each payment that
  * has none yet.
  *
- * Both the account and the date are required here, unlike on create: there is
- * no "don't record" to choose, because recording is the whole point of the
- * request. `openedOn` is the day the lent or borrowed money moved (the form
- * defaults it to the day the debt was added); each payment keeps its own date.
+ * Both the account and the date are required here, unlike on create (the
+ * shared fields in `link-to-account.ts`). `openedOn` is the day the lent or
+ * borrowed money moved; each payment keeps its own date.
  */
 export const linkDebtToAccountSchema = z.object({
-  accountId: z.string({ error: 'Choose an account' }).min(1, 'Choose an account'),
-  openedOn: z
-    .string({ error: 'Enter the date the money moved' })
-    .min(1, 'Enter the date the money moved')
-    .pipe(calendarDateStringSchema),
+  accountId: linkAccountIdSchema,
+  openedOn: linkDateSchema,
   /** Also record every payment that has no transaction yet. */
-  includePayments: z.boolean({ error: 'Choose whether to record the existing payments' }),
+  includePayments: includePaymentsSchema,
 })
 
 export type CreateDebtInput = z.infer<typeof createDebtSchema>

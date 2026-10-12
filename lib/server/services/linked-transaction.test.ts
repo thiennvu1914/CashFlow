@@ -12,6 +12,7 @@ import {
   ensureLoanInterestCategoryId,
   getMostRecentlyUsedAccountId,
   insertTransactionInTx,
+  linkTransactionOptions,
   type LinkedTransactionInput,
 } from './linked-transaction'
 
@@ -446,5 +447,29 @@ describe('linked-transaction core', () => {
         }),
       ).rejects.toBe(rollback)
     })
+  })
+})
+
+/**
+ * The interactive-transaction options "Record in an account" opens its one
+ * transaction with. Prisma's defaults (5 s to finish, 2 s to get a connection)
+ * fit a single write; a link writes one or two transactions per existing
+ * payment, at ~100 ms a round trip in production, so a legacy agreement with a
+ * long history would expire (P2028) at the default.
+ */
+describe('linkTransactionOptions', () => {
+  it("gives a link with no payments a base far above Prisma's 5 s and 2 s defaults", () => {
+    expect(linkTransactionOptions(0)).toEqual({ timeout: 10_000, maxWait: 10_000 })
+  })
+
+  it('adds a second for every payment to record — several times what one costs in production', () => {
+    expect(linkTransactionOptions(1).timeout).toBe(11_000)
+    expect(linkTransactionOptions(60).timeout).toBe(70_000)
+  })
+
+  it('caps the timeout, so no link holds its locks open-endedly', () => {
+    expect(linkTransactionOptions(110).timeout).toBe(120_000)
+    expect(linkTransactionOptions(10_000).timeout).toBe(120_000)
+    expect(linkTransactionOptions(10_000).maxWait).toBe(10_000)
   })
 })

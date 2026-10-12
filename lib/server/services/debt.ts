@@ -28,6 +28,7 @@ import {
   LinkedAccountCurrencyMismatchError,
   SNAPSHOT_PAIR,
   insertTransactionInTx,
+  linkTransactionOptions,
 } from './linked-transaction'
 import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
 
@@ -1132,6 +1133,8 @@ export async function writeOffDebt(userId: string, debtId: string): Promise<Debt
  *
  * One FX snapshot, fetched before the transaction opens, is shared by every
  * transaction written: they are all entered now, whatever day they are dated.
+ * The transaction's timeout is sized for the number of payments to record
+ * (`linkTransactionOptions`), since one link may write dozens of rows.
  */
 export async function linkDebtToAccount(
   userId: string,
@@ -1144,12 +1147,21 @@ export async function linkDebtToAccount(
   const { accountId } = parsed
 
   // Ownership-scoped and first: another user's debt id is a P2025 here, and a
-  // debt that is already linked is refused, before any FX call or lock.
+  // debt that is already linked is refused, before any FX call or lock. The
+  // count of payments still to record sizes the transaction below.
   const existing = await prisma.debt.findUniqueOrThrow({
     where: { userId_id: { userId, id: debtId } },
-    select: { openingTransactionId: true },
+    select: {
+      openingTransactionId: true,
+      _count: { select: { payments: { where: { transactionId: null } } } },
+    },
   })
   if (existing.openingTransactionId !== null) throw new DebtAlreadyLinkedError()
+  // Sized for the payments to record: Prisma's 5 s default would expire on a long
+  // history in production (`linkTransactionOptions`).
+  const transactionOptions = linkTransactionOptions(
+    parsed.includePayments ? existing._count.payments : 0,
+  )
 
   // One "now" for the whole operation, so an opening and a payment both dated
   // today land on the same instant rather than a few milliseconds apart.
@@ -1222,5 +1234,5 @@ export async function linkDebtToAccount(
       data: { openingTransactionId: opening.id },
       include: WITH_PAYMENTS,
     })
-  })
+  }, transactionOptions)
 }

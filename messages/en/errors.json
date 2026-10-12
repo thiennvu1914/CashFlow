@@ -50,6 +50,7 @@
     "ACCOUNT_CURRENCY_MISMATCH": "Choose an account in the same currency as this debt.",
     "CONFLICT": "The payment or its linked transaction changed while you were editing. Reload and try again.",
     "ALREADY_LINKED": "This debt is already recorded in an account.",
+    "TIMEOUT": "That took too long, so nothing was recorded. Please try again in a moment.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That debt no longer exists."
   },
@@ -62,6 +63,7 @@
     "ACCOUNT_CURRENCY_MISMATCH": "Choose an account in the same currency as this loan.",
     "CONFLICT": "The instalment or its linked transactions changed while you were editing. Reload and try again.",
     "ALREADY_LINKED": "This loan is already recorded in an account.",
+    "TIMEOUT": "That took too long, so nothing was recorded. Please try again in a moment.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That loan no longer exists."
   },

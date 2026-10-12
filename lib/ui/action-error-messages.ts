@@ -76,6 +76,7 @@ export const DEBT_ERROR_KEYS: Record<DebtActionError, string> = {
   ACCOUNT_CURRENCY_MISMATCH: 'errors.debt.ACCOUNT_CURRENCY_MISMATCH',
   CONFLICT: 'errors.debt.CONFLICT',
   ALREADY_LINKED: 'errors.debt.ALREADY_LINKED',
+  TIMEOUT: 'errors.debt.TIMEOUT',
   INVALID_INPUT: 'errors.debt.INVALID_INPUT',
   NOT_FOUND: 'errors.debt.NOT_FOUND',
 }
@@ -89,6 +90,7 @@ export const LOAN_ERROR_KEYS: Record<LoanActionError, string> = {
   ACCOUNT_CURRENCY_MISMATCH: 'errors.loan.ACCOUNT_CURRENCY_MISMATCH',
   CONFLICT: 'errors.loan.CONFLICT',
   ALREADY_LINKED: 'errors.loan.ALREADY_LINKED',
+  TIMEOUT: 'errors.loan.TIMEOUT',
   INVALID_INPUT: 'errors.loan.INVALID_INPUT',
   NOT_FOUND: 'errors.loan.NOT_FOUND',
 }

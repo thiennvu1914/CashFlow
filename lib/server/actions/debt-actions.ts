@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { Prisma } from '@prisma/client'
 import { requireUser } from '@/lib/auth/require-user'
 import { mapCommonActionError } from './map-action-error'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
@@ -71,7 +72,9 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * `ARCHIVED_ACCOUNT`, `FX_UNAVAILABLE`, and `CONFLICT` for a payment or linked
  * transaction that changed while the user was editing it. "Record in an
  * account" (spec §6.4) adds `ALREADY_LINKED`, for a debt whose opening another
- * tab or a double-click recorded first.
+ * tab or a double-click recorded first, and `TIMEOUT` for Prisma's P2028 — an
+ * interactive transaction (a link writes one row per payment in one) that
+ * expired and rolled back.
  */
 export type DebtActionError =
   | 'OVERPAYMENT'
@@ -81,6 +84,7 @@ export type DebtActionError =
   | 'ACCOUNT_CURRENCY_MISMATCH'
   | 'CONFLICT'
   | 'ALREADY_LINKED'
+  | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -96,6 +100,11 @@ function mapError(e: unknown): DebtActionResult {
   }
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof DebtAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
+  // P2028: the interactive transaction expired (or could not start in time).
+  // Everything in it rolled back, so the user can be told nothing was written.
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {
+    return { ok: false, error: 'TIMEOUT' }
+  }
   return mapCommonActionError(e)
 }
 

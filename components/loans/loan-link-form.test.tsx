@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NextIntlClientProvider } from 'next-intl'
 import { loadMessages } from '@/lib/i18n/messages'
+import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import viDebts from '@/messages/vi/debts.json'
+import enLoans from '@/messages/en/loans.json'
 import viLoans from '@/messages/vi/loans.json'
 import type { LoanDto } from '@/lib/ui/loan-view-model'
 import { RowErrorProvider } from '@/components/common/row-error-context'
@@ -26,6 +28,7 @@ vi.mock('@/lib/server/actions/loan-actions', () => ({
 
 const { LoanLinkForm } = await import('./loan-link-form')
 const { LoanRowMenu } = await import('./loan-row-actions')
+const { linkFormErrorKeys } = await import('@/components/debts/link-to-account-form')
 
 const messages = await loadMessages('vi')
 
@@ -128,11 +131,26 @@ describe('LoanLinkForm ("Record in an account")', () => {
     )
   })
 
-  it("dates the disbursement on the loan's start date", () => {
-    const html = render()
+  it("dates the disbursement on the loan's start date when nothing to record is older", () => {
+    const html = render({ loan: loan({ payments: [{ ...PAYMENT, date: '2026-02-15' }] }) })
 
-    expect(html).toContain(viLoans.linkDisbursedOn)
+    expect(html).toContain(viLoans.linkDate)
     expect(html).toMatch(/type="date"[^>]*value="2026-01-15"|value="2026-01-15"[^>]*type="date"/)
+  })
+
+  it('dates the disbursement on the oldest instalment still to record when that is earlier (Ruling P7)', () => {
+    // A start date typed later than the instalments already paid; an older
+    // instalment already paid from an account does not count.
+    const html = render({
+      loan: loan({
+        payments: [
+          { ...PAYMENT, id: 'pay_linked', date: '2025-11-15', accountId: 'acc_bank' },
+          { ...PAYMENT, date: '2025-12-15' },
+        ],
+      }),
+    })
+
+    expect(html).toMatch(/type="date"[^>]*value="2025-12-15"|value="2025-12-15"[^>]*type="date"/)
   })
 
   it('offers to record the instalments that have no transaction yet, checked by default', () => {
@@ -156,6 +174,21 @@ describe('LoanLinkForm ("Record in an account")', () => {
     expect(html).toContain('Chưa có tài khoản USD nào đang hoạt động')
     expect(html).not.toContain('<select')
     expect(html).not.toContain('type="submit"')
+  })
+})
+
+describe('linkFormErrorKeys for a loan', () => {
+  it('answers ARCHIVED_ACCOUNT with the dialog\'s own copy — it offers no "don\'t record" to fall back on', () => {
+    const keys = linkFormErrorKeys('loans', LOAN_ERROR_KEYS)
+
+    expect(keys.ARCHIVED_ACCOUNT).toBe('loans.linkArchivedAccount')
+    expect(viLoans.linkArchivedAccount).toBe(
+      'Tài khoản này vừa được lưu trữ — hãy tải lại trang và chọn một tài khoản đang hoạt động.',
+    )
+    expect(enLoans.linkArchivedAccount).toBe(
+      'That account has just been archived. Reload the page and choose an active account.',
+    )
+    expect(keys.TIMEOUT).toBe(LOAN_ERROR_KEYS.TIMEOUT)
   })
 })
 

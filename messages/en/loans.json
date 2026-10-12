@@ -63,10 +63,11 @@
   "linkAction": "Record in an account",
   "linkTitle": "Record in an account · {name}",
   "linkDescription": "Records the loan money you received in the account you choose, so the account balance matches what really happened.",
-  "linkDisbursedOn": "Money received on",
+  "linkDate": "Money received on",
   "linkIncludePayments": "{count, plural, one {Also record the # existing payment} other {Also record the # existing payments}}",
   "linkIncludePaymentsHelper": "Each payment is recorded on its own date, principal and interest as two transactions. Payments already recorded in an account are left as they are.",
   "linkNoAccounts": "You have no active {currency} account yet — add one first.",
+  "linkArchivedAccount": "That account has just been archived. Reload the page and choose an active account.",
   "linkSubmit": "Record in an account",
   "linkPending": "Recording…",
   "linkedNote": {

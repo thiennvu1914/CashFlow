@@ -30,6 +30,7 @@ import {
   SNAPSHOT_PAIR,
   ensureLoanInterestCategoryId,
   insertTransactionInTx,
+  linkTransactionOptions,
 } from './linked-transaction'
 import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
 
@@ -1450,8 +1451,10 @@ export async function closeLoan(userId: string, loanId: string): Promise<Loan> {
  * locks, once, and only when an interest transaction is about to be written.
  *
  * One FX snapshot, fetched before the transaction opens, is shared by every
- * transaction written. Returns the committed `Loan` row as written — its
- * relations are the read path's to load (see `WITH_PAYMENTS`).
+ * transaction written, and the transaction's timeout is sized for the number of
+ * instalments to record (`linkTransactionOptions`). Returns the committed `Loan`
+ * row as written — its relations are the read path's to load (see
+ * `WITH_PAYMENTS`).
  */
 export async function linkLoanToAccount(
   userId: string,
@@ -1464,12 +1467,25 @@ export async function linkLoanToAccount(
   const { accountId } = parsed
 
   // Ownership-scoped and first: another user's loan id is a P2025 here, and a
-  // loan that is already linked is refused, before any FX call or lock.
+  // loan that is already linked is refused, before any FX call or lock. The
+  // count of instalments still to record sizes the transaction below.
   const existing = await prisma.loan.findUniqueOrThrow({
     where: { userId_id: { userId, id: loanId } },
-    select: { disbursementTransactionId: true },
+    select: {
+      disbursementTransactionId: true,
+      _count: {
+        select: {
+          payments: { where: { principalTransactionId: null, interestTransactionId: null } },
+        },
+      },
+    },
   })
   if (existing.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
+  // Sized for the instalments to record: Prisma's 5 s default would expire on a long
+  // history in production (`linkTransactionOptions`).
+  const transactionOptions = linkTransactionOptions(
+    parsed.includePayments ? existing._count.payments : 0,
+  )
 
   // One "now" for the whole operation, so a disbursement and an instalment
   // both dated today land on the same instant.
@@ -1553,5 +1569,5 @@ export async function linkLoanToAccount(
       where: { userId_id: { userId, id: loanId } },
       data: { disbursementTransactionId: disbursement.id },
     })
-  })
+  }, transactionOptions)
 }

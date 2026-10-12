@@ -44,3 +44,22 @@ export function defaultLinkAccountId(
 ): string {
   return defaultPaymentAccountId(options, null, mostRecentAccountId) || (options[0]?.id ?? '')
 }
+
+/**
+ * The date "Record in an account" (spec §6.4) starts on (Ruling P7): the
+ * agreement's own date — the day a debt was added, a loan's start date — or
+ * the oldest payment still to record, whichever is earlier, so the opening or
+ * disbursement never lands after its own repayments. A payment already
+ * recorded in an account is left alone by the link, so it does not count.
+ * Both are `yyyy-MM-dd`, which sorts the same as a string and as a date.
+ */
+export function defaultLinkDate(
+  agreementDate: string,
+  payments: ReadonlyArray<{ date: string; accountId: string | null }>,
+): string {
+  return payments.reduce(
+    (earliest, payment) =>
+      payment.accountId === null && payment.date < earliest ? payment.date : earliest,
+    agreementDate,
+  )
+}

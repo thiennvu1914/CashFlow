@@ -250,3 +250,47 @@ export async function ensureLoanInterestCategoryId(
   })
   return created.id
 }
+
+/**
+ * The interactive-transaction options "Record in an account" (spec §6.4) opens
+ * its one transaction with, sized for the payments it will record.
+ *
+ * Prisma's defaults — 5 s for the whole transaction, 2 s to get a pooled
+ * connection — fit one write. A link writes the opening plus one transaction
+ * per existing payment (two for a loan instalment with interest), all inside
+ * one transaction, and production pays ~90–100 ms a round trip (Render
+ * Singapore → Supabase Sydney): about ten round trips of fixed work, about
+ * three per debt payment and about six per loan instalment (each leg locks the
+ * account, checks its category and inserts; then the instalment is updated).
+ * At the default, a loan with seven instalments or a debt with fourteen
+ * payments would expire (P2028) — and long histories are exactly what this
+ * feature exists for.
+ *
+ * - `timeout`: a 10 s base (ten times the fixed work) plus 1 s per payment
+ *   (well over the ~0.6 s the costliest instalment takes), capped at 120 s so a
+ *   link cannot hold its account and agreement locks open-endedly. The cap
+ *   still covers ~110 payments at this allowance — a nine-year monthly loan —
+ *   and roughly twice that at the real per-payment cost. A longer history
+ *   would fail with nothing written (the actions map P2028 to `TIMEOUT`).
+ * - `maxWait`: 10 s. The user is waiting on a one-off reconciliation; failing
+ *   it after 2 s because the pool is momentarily busy would only make them
+ *   start it again.
+ *
+ * `paymentCount` comes from a read before the transaction, so it can be a
+ * payment or two short if some are recorded meanwhile; the allowance per
+ * payment and the base absorb that.
+ */
+const LINK_TX_BASE_MS = 10_000
+const LINK_TX_PER_PAYMENT_MS = 1_000
+const LINK_TX_MAX_MS = 120_000
+const LINK_TX_MAX_WAIT_MS = 10_000
+
+export function linkTransactionOptions(paymentCount: number): {
+  timeout: number
+  maxWait: number
+} {
+  return {
+    timeout: Math.min(LINK_TX_BASE_MS + paymentCount * LINK_TX_PER_PAYMENT_MS, LINK_TX_MAX_MS),
+    maxWait: LINK_TX_MAX_WAIT_MS,
+  }
+}

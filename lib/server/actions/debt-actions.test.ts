@@ -196,6 +196,16 @@ const LINKED_FAILURES: [string, () => Error, string][] = [
   ['ConcurrentModificationError', () => new MockConcurrentModificationError(), 'CONFLICT'],
 ]
 
+/** What Prisma raises when an interactive transaction outlives its timeout —
+ *  on the query that finds it expired, or on its commit (both observed: a
+ *  `PrismaClientKnownRequestError` with code P2028). */
+function transactionTimeoutError() {
+  return new Prisma.PrismaClientKnownRequestError(
+    'Transaction API error: A commit cannot be executed on an expired transaction.',
+    { code: 'P2028', clientVersion: '7.10.0' },
+  )
+}
+
 function notFoundError() {
   return new Prisma.PrismaClientKnownRequestError('Not found', {
     code: 'P2025',
@@ -648,6 +658,7 @@ describe('linkDebtToAccountAction', () => {
 
   it.each([
     ['DebtAlreadyLinkedError', () => new MockDebtAlreadyLinkedError(), 'ALREADY_LINKED'],
+    ['P2028 (transaction timed out)', transactionTimeoutError, 'TIMEOUT'],
     ['P2025', notFoundError, 'NOT_FOUND'],
     ['ZodError', () => new ZodError([]), 'INVALID_INPUT'],
     ...LINKED_FAILURES,
@@ -696,6 +707,7 @@ describe('DEBT_ERROR_KEYS', () => {
       ACCOUNT_CURRENCY_MISMATCH: 'errors.debt.ACCOUNT_CURRENCY_MISMATCH',
       CONFLICT: 'errors.debt.CONFLICT',
       ALREADY_LINKED: 'errors.debt.ALREADY_LINKED',
+      TIMEOUT: 'errors.debt.TIMEOUT',
       INVALID_INPUT: 'errors.debt.INVALID_INPUT',
       NOT_FOUND: 'errors.debt.NOT_FOUND',
     })
