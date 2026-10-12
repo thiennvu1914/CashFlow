@@ -30,10 +30,28 @@ const { DebtForm } = await import('./debt-form')
 
 const messages = await loadMessages('vi')
 
-function render(): string {
+const ACCOUNTS = [
+  { id: 'acc_wallet', name: 'Ví tiền mặt', currency: 'VND' as const },
+  { id: 'acc_usd', name: 'Savings USD', currency: 'USD' as const },
+]
+
+function render(
+  props: Partial<{
+    accounts: typeof ACCOUNTS
+    defaultAccountId: string | null
+    baseCurrency: 'VND' | 'USD'
+  }> = {},
+): string {
   return renderToStaticMarkup(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
-      <DebtForm />
+      <DebtForm
+        accounts={props.accounts ?? ACCOUNTS}
+        defaultAccountId={
+          props.defaultAccountId === undefined ? 'acc_wallet' : props.defaultAccountId
+        }
+        baseCurrency={props.baseCurrency ?? 'VND'}
+        today="2026-10-12"
+      />
     </NextIntlClientProvider>,
   )
 }
@@ -86,14 +104,17 @@ describe('DebtForm', () => {
 
   it('renders a visible <label for> naming every field, against the vi strings themselves', () => {
     const html = render()
-    // direction, person, original amount, currency, due date, description, notes.
+    // direction, person, original amount, account, money-moved-on, currency,
+    // due date, description, notes.
     const labelCount = (html.match(/<label for="/g) ?? []).length
-    expect(labelCount).toBe(7)
+    expect(labelCount).toBe(9)
 
     for (const label of [
       viDebts.direction,
       viDebts.person,
       viDebts.originalAmount,
+      viDebts.account,
+      viDebts.movedOn,
       viDebts.currency,
       viDebts.dueDate,
       viDebts.descriptionField,
@@ -135,16 +156,71 @@ describe('DebtForm', () => {
     expect(html.match(/id="debt-direction-[^"]*"/g)).toHaveLength(1)
   })
 
-  it('server-renders VND as the selected currency, from a single currency select', () => {
+  it("offers 'don't record in an account' first, then the active accounts, pre-selecting the default", () => {
     const html = render()
-    const currencySelect = selectMarkupById(html, 'debt-currency')
+    const accountSelect = selectMarkupById(html, 'debt-account')
 
-    // Same reasoning as the direction select: VND is the first option, and the
-    // marker is asserted so the server HTML states the form's own default.
-    expect(currencySelect).toMatch(selectedOption('VND'))
-    expect(currencySelect).not.toMatch(selectedOption('USD'))
-    expect(currencySelect).not.toMatch(/<select[^>]*\svalue=/)
-    expect(html.match(/id="debt-currency-[^"]*"/g)).toHaveLength(1)
+    expect(accountSelect).toMatch(/<option value=""[^>]*>Không ghi vào tài khoản<\/option>/)
+    expect(accountSelect.indexOf('Không ghi vào tài khoản')).toBeLessThan(
+      accountSelect.indexOf('Ví tiền mặt'),
+    )
+    expect(accountSelect).toContain('Ví tiền mặt · VND')
+    expect(accountSelect).toContain('Savings USD · USD')
+    expect(accountSelect).toMatch(selectedOption('acc_wallet'))
+    expect(accountSelect).not.toMatch(selectedOption('acc_usd'))
+    expect(accountSelect).not.toMatch(/<select[^>]*\svalue=/)
+  })
+
+  it("pre-selects 'don't record' when there is no default account, and shows no money-moved-on date", () => {
+    const html = render({ defaultAccountId: null, accounts: [] })
+    const accountSelect = selectMarkupById(html, 'debt-account')
+
+    expect(accountSelect).toMatch(selectedOption(''))
+    expect(accountSelect.match(/<option/g)).toHaveLength(1)
+    // No account: no money-moved-on date.
+    expect(html).not.toContain(`>${viDebts.movedOn}</label>`)
+    expect(html).not.toMatch(/id="debt-moved-on-/)
+  })
+
+  it('shows the money-moved-on date, defaulting to today, once an account is chosen', () => {
+    const html = render()
+    const movedOn = inputMarkupById(html, 'debt-moved-on')
+
+    expect(movedOn).toContain('type="date"')
+    expect(movedOn).toContain('value="2026-10-12"')
+  })
+
+  it('shows the account currency read-only while an account is chosen, never the VND/USD select', () => {
+    const html = render()
+
+    expect(html).not.toMatch(/<select[^>]*id="debt-currency-/)
+    const currency = inputMarkupById(html, 'debt-currency')
+    expect(currency).toContain('value="VND"')
+    expect(currency).toContain('readOnly=""')
+    expect(html).toContain(viDebts.currencyFromAccount)
+    // The field's own id, not its `-helper` paragraph's.
+    expect(html.match(/id="debt-currency-[^"]*(?<!-helper)"/g)).toHaveLength(1)
+  })
+
+  it("shows the currency select only when 'don't record' is chosen, defaulting to the base currency", () => {
+    const vnd = render({ defaultAccountId: null })
+    const vndSelect = selectMarkupById(vnd, 'debt-currency')
+    expect(vndSelect).toMatch(selectedOption('VND'))
+    expect(vndSelect).not.toMatch(selectedOption('USD'))
+    expect(vndSelect).not.toMatch(/<select[^>]*\svalue=/)
+    expect(vnd.match(/id="debt-currency-[^"]*"/g)).toHaveLength(1)
+
+    const usd = selectMarkupById(
+      render({ defaultAccountId: null, baseCurrency: 'USD' }),
+      'debt-currency',
+    )
+    expect(usd).toMatch(selectedOption('USD'))
+    expect(usd).not.toMatch(selectedOption('VND'))
+  })
+
+  it('takes the read-only currency from the pre-selected account, not the base currency', () => {
+    const html = render({ defaultAccountId: 'acc_usd', baseCurrency: 'VND' })
+    expect(inputMarkupById(html, 'debt-currency')).toContain('value="USD"')
   })
 
   it('starts the amount field empty rather than pre-filling a zero', () => {

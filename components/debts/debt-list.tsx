@@ -4,7 +4,7 @@ import { cn } from 'cn'
 import type { Locale } from '@/lib/i18n/locale'
 import { formatDate } from '@/lib/ui/format-date'
 import { debtDirectionLabelKey, debtStatusLabelKey } from '@/lib/ui/labels'
-import type { DebtDto } from '@/lib/ui/debt-view-model'
+import type { DebtDto, DebtPaymentDto } from '@/lib/ui/debt-view-model'
 import { MoneyText } from '@/components/common/money-text'
 import { PlanningRow } from '@/components/common/planning-row'
 import { Progress } from '@/components/common/progress'
@@ -77,6 +77,7 @@ export async function DebtList({
   timeZone,
   compact,
   renderActions,
+  renderPaymentActions,
 }: {
   debts: DebtDto[]
   locale: Locale
@@ -87,6 +88,11 @@ export async function DebtList({
    *  two separate pieces — they mount in two different `PlanningRow` slots
    *  and share no state. */
   renderActions?: (debt: DebtDto) => { actions: ReactNode; inlineAction?: ReactNode }
+  /** Edit/Delete for one line of the payment history. `dateLabel` is the date
+   *  exactly as the line prints it, for the buttons' accessible names. Only the
+   *  Debts page's live sections pass it: a written-off debt's history is
+   *  frozen. */
+  renderPaymentActions?: (debt: DebtDto, payment: DebtPaymentDto, dateLabel: string) => ReactNode
 }) {
   const t = await getTranslations()
 
@@ -170,15 +176,26 @@ export async function DebtList({
                             {t('debts.paymentsSection', { count: debt.payments.length })}
                           </summary>
                           <ul className="mt-1 flex flex-col gap-1">
-                            {debt.payments.map((payment) => (
-                              <li key={payment.id} className="text-xs/[1rem] text-muted-foreground">
-                                <span className="tabular-nums">
-                                  {formatDate(payment.date, { locale, timeZone, style: 'date' })}
-                                </span>{' '}
-                                · <span className="tabular-nums">{payment.amount}</span>
-                                {payment.note && ` · ${payment.note}`}
-                              </li>
-                            ))}
+                            {debt.payments.map((payment) => {
+                              const dateLabel = formatDate(payment.date, {
+                                locale,
+                                timeZone,
+                                style: 'date',
+                              })
+                              return (
+                                <li
+                                  key={payment.id}
+                                  className="flex flex-wrap items-center gap-x-1 text-xs/[1rem] text-muted-foreground"
+                                >
+                                  <span>
+                                    <span className="tabular-nums">{dateLabel}</span> ·{' '}
+                                    <span className="tabular-nums">{payment.amount}</span>
+                                    {payment.note && ` · ${payment.note}`}
+                                  </span>
+                                  {renderPaymentActions?.(debt, payment, dateLabel)}
+                                </li>
+                              )
+                            })}
                           </ul>
                         </details>
                       )}

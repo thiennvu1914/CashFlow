@@ -387,6 +387,11 @@ export async function createDebtViaUi(
   const personInput = sheet.getByLabel(/^Người$|^Person$/)
   await personInput.fill(opts.person)
   await sheet.getByLabel(/Số tiền ban đầu|Original amount/).fill(String(opts.amount))
+  // The account picker starts on the user's most recently used account, which
+  // would record the loan as a ledger transaction. Callers of this helper want a
+  // tracking-only debt (the account-linked flow has its own coverage in
+  // `phase7-debts-loans.spec.ts`), so "don't record" is chosen explicitly.
+  await sheet.getByLabel(/^Tài khoản$|^Account$/).selectOption('')
   await sheet.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
   // The sheet closes itself on success — the app's own confirmation that the
   // debt was created.

@@ -257,11 +257,42 @@ describe('toDebtDto', () => {
     )
 
     expect(dto.payments).toEqual([
-      { id: 'pay_1', date: '2026-03-02', amount: '100.000', note: 'First instalment' },
+      {
+        id: 'pay_1',
+        date: '2026-03-02',
+        amount: '100.000',
+        amountInput: '100000.00',
+        note: 'First instalment',
+        accountId: null,
+      },
       // Two decimals show on a VND amount that genuinely carries them rather
       // than being rounded away.
-      { id: 'pay_2', date: '2026-03-09', amount: '150.000,25', note: null },
+      {
+        id: 'pay_2',
+        date: '2026-03-09',
+        amount: '150.000,25',
+        amountInput: '150000.25',
+        note: null,
+        accountId: null,
+      },
     ])
+  })
+
+  it('carries the linked account ids that pre-select the pickers, null when nothing was recorded', () => {
+    const dto = toDebtDto(
+      row({
+        openingTransactionId: 'tx_open',
+        openingTransaction: { accountId: 'acc_wallet' },
+        payments: [
+          payment({ id: 'pay_1', transactionId: 'tx_1', transaction: { accountId: 'acc_bank' } }),
+          payment({ id: 'pay_2' }),
+        ],
+      }),
+    )
+
+    expect(dto.openingAccountId).toBe('acc_wallet')
+    expect(dto.payments.map((p) => p.accountId)).toEqual(['acc_bank', null])
+    expect(toDebtDto(row()).openingAccountId).toBeNull()
   })
 
   it('carries the edit form its own prefill, with no Decimal or Date crossing to the client', () => {

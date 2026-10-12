@@ -1,15 +1,18 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { createDebtSchema, type CreateDebtInput } from '@/lib/validation/debt'
+import type { Currency } from '@prisma/client'
 import { createDebtAction } from '@/lib/server/actions/debt-actions'
 import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { debtDirectionLabelKey } from '@/lib/ui/labels'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { DebtAccountField } from '@/components/debts/debt-account-field'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -18,9 +21,8 @@ import { Input } from '@/components/ui/input'
 /**
  * The create form for a debt.
  *
- * Takes no props but `onCreated`: a debt belongs to no month, no account and
- * no category, so there is nothing about the page's state it has to merge in
- * at submit (unlike `BudgetForm`, which carries the selected month).
+ * A debt belongs to no month and no category, so the only page state it needs
+ * is the account list for the picker below (and the user's `today`).
  *
  * `direction` and `currency` get a `defaultValue`; `person` a default at all.
  * The money field is left without one on purpose: react-hook-form overwrites
@@ -39,11 +41,47 @@ import { Input } from '@/components/ui/input'
  * me"/"I owe someone" while the row read "Owes you"/"You owe" — two sentences
  * for one fact).
  */
-function defaultValues(): Partial<CreateDebtInput> {
-  return { direction: 'RECEIVABLE', person: '', currency: 'VND' }
+function defaultValues(
+  baseCurrency: Currency,
+  defaultAccountId: string | null,
+  today: string,
+): Partial<CreateDebtInput> {
+  return {
+    direction: 'RECEIVABLE',
+    person: '',
+    currency: baseCurrency,
+    // `undefined`, not `''`, for "don't record": it is what `setValueAs` below
+    // turns the picker's empty option into.
+    accountId: defaultAccountId ?? undefined,
+    movedOn: today,
+  }
 }
 
-export function DebtForm({ onCreated }: { onCreated?: () => void } = {}) {
+/**
+ * Money-source linking (spec 2026-10-12 §2 Q2, §6.2): the form asks which
+ * account the money moved through. The picker starts on the user's most
+ * recently used account (`defaultAccountId`, null when there is none) and its
+ * first option, "don't record in an account", is for an agreement that
+ * predates the app. Choosing an account makes the date the money moved
+ * (`movedOn`, defaulting to the user's `today`) meaningful and fixes the
+ * currency to the account's; choosing none hides the date and offers the
+ * VND/USD choice, defaulting to `baseCurrency`. The server takes the currency
+ * from the account either way — the read-only field only shows it.
+ */
+export function DebtForm({
+  accounts,
+  defaultAccountId,
+  baseCurrency,
+  today,
+  onCreated,
+}: {
+  accounts: ReadonlyArray<DebtAccountOption>
+  defaultAccountId: string | null
+  baseCurrency: Currency
+  /** The user's own calendar day, from the page — never the browser's. */
+  today: string
+  onCreated?: () => void
+}) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -55,20 +93,29 @@ export function DebtForm({ onCreated }: { onCreated?: () => void } = {}) {
     register,
     handleSubmit,
     reset,
+    control,
     formState: { errors },
   } = useForm<CreateDebtInput>({
     resolver: zodResolver(createDebtSchema),
-    defaultValues: defaultValues(),
+    defaultValues: defaultValues(baseCurrency, defaultAccountId, today),
   })
+  const accountId = useWatch({ control, name: 'accountId' })
+  const account = accounts.find((option) => option.id === accountId)
 
   async function onSubmit(values: CreateDebtInput) {
+    // The two fields the picker makes meaningless are dropped rather than
+    // sent: a stale `movedOn` from a hidden input, or a currency the server
+    // would ignore in favour of the account's.
+    const input: CreateDebtInput = account
+      ? { ...values, currency: account.currency }
+      : { ...values, accountId: undefined, movedOn: undefined }
     await submit.run({
       tag: 'DebtForm: create failed',
-      action: () => createDebtAction(values),
+      action: () => createDebtAction(input),
       errorKeys: DEBT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        reset(defaultValues())
+        reset(defaultValues(baseCurrency, defaultAccountId, today))
         onCreated?.()
       },
     })
@@ -134,18 +181,58 @@ export function DebtForm({ onCreated }: { onCreated?: () => void } = {}) {
           )}
         </FormField>
 
-        <FormField
-          id={fieldId('currency')}
-          label={t('debts.currency')}
-          error={errors.currency?.message}
-        >
-          {(aria) => (
-            <select {...aria} {...register('currency')} defaultValue="VND" className={SELECT_CLASS}>
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
-          )}
-        </FormField>
+        <DebtAccountField
+          id={fieldId('account')}
+          accounts={accounts}
+          defaultAccountId={defaultAccountId ?? ''}
+          registration={register('accountId', {
+            setValueAs: (v: string) => (v === '' ? undefined : v),
+          })}
+          error={errors.accountId?.message}
+          helper={t('debts.accountHelper')}
+        />
+
+        {account && (
+          <FormField
+            id={fieldId('moved-on')}
+            label={t('debts.movedOn')}
+            error={errors.movedOn?.message}
+          >
+            {/* `defaultValue` too, so the server HTML already shows today —
+                RHF only writes its default into the DOM once hydrated. */}
+            {(aria) => (
+              <Input {...aria} type="date" defaultValue={today} {...register('movedOn')} />
+            )}
+          </FormField>
+        )}
+
+        {account ? (
+          <FormField
+            id={fieldId('currency')}
+            label={t('debts.currency')}
+            helper={t('debts.currencyFromAccount')}
+          >
+            {(aria) => <Input {...aria} readOnly value={account.currency} />}
+          </FormField>
+        ) : (
+          <FormField
+            id={fieldId('currency')}
+            label={t('debts.currency')}
+            error={errors.currency?.message}
+          >
+            {(aria) => (
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue={baseCurrency}
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+            )}
+          </FormField>
+        )}
 
         <FormField
           id={fieldId('due-date')}

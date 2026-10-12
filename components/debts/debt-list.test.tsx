@@ -25,7 +25,17 @@ function dto(overrides: Partial<DebtDto> = {}): DebtDto {
     dueDate: '2026-04-15',
     description: 'Lunch money',
     notes: 'Pay back after payday',
-    payments: [{ id: 'p1', date: '2026-03-02', amount: '400.000', note: null }],
+    openingAccountId: null,
+    payments: [
+      {
+        id: 'p1',
+        date: '2026-03-02',
+        amount: '400.000',
+        amountInput: '400000.00',
+        note: null,
+        accountId: null,
+      },
+    ],
     editable: { person: 'Minh', description: '', dueDate: '', notes: '' },
     ...overrides,
   }
@@ -101,6 +111,25 @@ describe('DebtList', () => {
       expect(html, direction).toContain('aria-valuenow="100"')
       expect(html, direction).toContain('aria-valuetext="120 %"')
     }
+  })
+
+  it('renders the per-payment actions inside each history line, and none without renderPaymentActions', async () => {
+    const withActions = renderToStaticMarkup(
+      await DebtList({
+        debts: [dto()],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+        renderPaymentActions: (_debt, payment, dateLabel) => (
+          <button type="button">{`actions:${payment.id}:${dateLabel}`}</button>
+        ),
+      }),
+    )
+    expect(withActions).toMatch(/<li[^>]*>.*actions:p1:.*<\/li>/)
+
+    const without = renderToStaticMarkup(
+      await DebtList({ debts: [dto()], locale: 'vi', timeZone: 'Asia/Ho_Chi_Minh' }),
+    )
+    expect(without).not.toContain('actions:')
   })
 
   it('compact renders the person, direction and outstanding figure, and no progress/badge/description/notes/history', async () => {

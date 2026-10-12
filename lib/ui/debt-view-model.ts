@@ -40,7 +40,13 @@ export interface DebtPaymentDto {
   /** `yyyy-MM-dd` — the carrier read back as the day the user picked. */
   date: string
   amount: string
+  /** The amount as a plain decimal (`'250000.00'`) — what an `<input
+   *  type="number">` needs to prefill the edit form; `amount` is formatted. */
+  amountInput: string
   note: string | null
+  /** The account this repayment moved money through, or null when nothing was
+   *  recorded in an account. Pre-selects the edit form's picker. */
+  accountId: string | null
 }
 
 export interface DebtDto {
@@ -66,6 +72,9 @@ export interface DebtDto {
   dueDate: string | null
   description: string | null
   notes: string | null
+  /** The account the opening transaction was recorded in, or null for a debt
+   *  that moved no money — the payment form's pre-selection. */
+  openingAccountId: string | null
   /** Oldest first, in the order the service returned them. */
   payments: DebtPaymentDto[]
   /** Prefill for the inline edit form — exactly `updateDebtSchema`'s four
@@ -140,11 +149,14 @@ export function toDebtDto(
     dueDate,
     description: debt.description,
     notes: debt.notes,
+    openingAccountId: debt.openingTransaction?.accountId ?? null,
     payments: debt.payments.map((p) => ({
       id: p.id,
       date: formatCalendarDate(p.date),
       amount: formatMoney(p.amount, currency, locale),
+      amountInput: p.amount.toFixed(2),
       note: p.note,
+      accountId: p.transaction?.accountId ?? null,
     })),
     editable: {
       person: debt.person,

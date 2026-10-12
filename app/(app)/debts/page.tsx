@@ -4,12 +4,18 @@ import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
 import { getDebtsWithOutstanding } from '@/lib/server/services/debt'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
+import { getMostRecentlyUsedAccountId } from '@/lib/server/services/linked-transaction'
 import { debtSubtotalsByCurrency, toDebtDto, type DebtDto } from '@/lib/ui/debt-view-model'
 import { formatMoney } from '@/lib/ui/format-money'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { DebtCreateButton } from '@/components/debts/debt-create-button'
 import { DebtList } from '@/components/debts/debt-list'
-import { DebtPaymentButton, DebtRowMenu } from '@/components/debts/debt-row-actions'
+import {
+  DebtPaymentActions,
+  DebtPaymentButton,
+  DebtRowMenu,
+} from '@/components/debts/debt-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { MoneyText } from '@/components/common/money-text'
 import { PageHeader } from '@/components/common/page-header'
@@ -20,13 +26,13 @@ import { SectionHeader } from '@/components/common/section-header'
  * someone else, each in its own currency and never converted to
  * `User.baseCurrency` (ledger ruling R5-3).
  *
- * Nothing on this page moves money. A debt is a note about an agreement between
- * two people, and recording a repayment writes a `DebtPayment` row and nothing
- * else — no Transaction, no Transfer, no account balance — which is why the
- * subtitle says so outright rather than leaving the reader to wonder whether
- * "Minh paid me 250.000" has landed in an account somewhere. Whether the cash
- * also passed through a tracked account is a separate fact the user records
- * separately, and no automatic rule can tell the two apart.
+ * Money-source linking (spec 2026-10-12 §6.2): creating a debt and recording a
+ * repayment each offer an account to record the money movement in, so the
+ * account's derived balance follows. "Don't record in an account" stays the
+ * first option for an agreement that predates the app or whose cash never
+ * touched a tracked account — nothing can tell those apart automatically, so
+ * the user says. The pickers start on the most recently used account and list
+ * only active accounts, both read here beside the debts.
  *
  * One query, not two: `getDebtsWithOutstanding` already returns every status
  * (the written-off section needs them anyway), so the split happens in memory.
@@ -50,7 +56,7 @@ export default async function DebtsPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own. `user.id` scopes the only query below.
   const user = await requireUserOrRedirect()
-  const { timezone } = resolveProfileDefaults(user)
+  const { timezone, baseCurrency } = resolveProfileDefaults(user)
   const t = await getTranslations()
   const locale = await resolveLocale()
   // The one place the user's zone enters: whether a debt is overdue is a
@@ -59,7 +65,13 @@ export default async function DebtsPage() {
   // page rather than one thing on the server and another in the browser.
   const today = todayCalendarDateInZone(timezone, new Date())
 
-  const rows = await getDebtsWithOutstanding(user.id, today)
+  const [rows, accountRows, mostRecentAccountId] = await Promise.all([
+    getDebtsWithOutstanding(user.id, today),
+    listActiveAccountPickerRows(user.id),
+    getMostRecentlyUsedAccountId(user.id),
+  ])
+  // Projected to what the pickers render, like the other pages do.
+  const accounts = accountRows.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))
 
   // Subtotals are taken from the service rows — `Prisma.Decimal` sums, one per
   // currency — before anything is formatted, so the strip can never be the
@@ -88,7 +100,14 @@ export default async function DebtsPage() {
       <PageHeader
         title={t('debts.title')}
         description={t('debts.description')}
-        actions={<DebtCreateButton />}
+        actions={
+          <DebtCreateButton
+            accounts={accounts}
+            defaultAccountId={mostRecentAccountId}
+            baseCurrency={baseCurrency}
+            today={today}
+          />
+        }
       />
 
       {active.length === 0 ? (
@@ -129,9 +148,26 @@ export default async function DebtsPage() {
                   locale={locale}
                   timeZone={timezone}
                   renderActions={(debt) => ({
-                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    inlineAction: (
+                      <DebtPaymentButton
+                        debt={debt}
+                        today={today}
+                        accounts={accounts}
+                        mostRecentAccountId={mostRecentAccountId}
+                      />
+                    ),
                     actions: <DebtRowMenu debt={debt} />,
                   })}
+                  renderPaymentActions={(debt, payment, dateLabel) => (
+                    <DebtPaymentActions
+                      debt={debt}
+                      payment={payment}
+                      today={today}
+                      accounts={accounts}
+                      mostRecentAccountId={mostRecentAccountId}
+                      dateLabel={dateLabel}
+                    />
+                  )}
                 />
               </div>
             </div>
@@ -162,9 +198,26 @@ export default async function DebtsPage() {
                   locale={locale}
                   timeZone={timezone}
                   renderActions={(debt) => ({
-                    inlineAction: <DebtPaymentButton debt={debt} today={today} />,
+                    inlineAction: (
+                      <DebtPaymentButton
+                        debt={debt}
+                        today={today}
+                        accounts={accounts}
+                        mostRecentAccountId={mostRecentAccountId}
+                      />
+                    ),
                     actions: <DebtRowMenu debt={debt} />,
                   })}
+                  renderPaymentActions={(debt, payment, dateLabel) => (
+                    <DebtPaymentActions
+                      debt={debt}
+                      payment={payment}
+                      today={today}
+                      accounts={accounts}
+                      mostRecentAccountId={mostRecentAccountId}
+                      dateLabel={dateLabel}
+                    />
+                  )}
                 />
               </div>
             </div>

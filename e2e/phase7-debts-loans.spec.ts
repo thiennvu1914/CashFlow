@@ -2,7 +2,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { formatDate } from '@/lib/ui/format-date'
-import { authenticatedSession, eitherLocale, todayInZone } from './helpers'
+import { authenticatedSession, createAccountViaUi, eitherLocale, todayInZone } from './helpers'
 
 /**
  * Phase 7 Task 8: owner requirement S — coverage the Debts/Loans rebuild adds
@@ -387,5 +387,146 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     // Comma grouping (en-US), never the Vietnamese dot grouping.
     await expect(englishTotal).toHaveValue(/3,800,000/)
     await expect(englishTotal).not.toHaveValue(/3\.800\.000/)
+  })
+})
+
+/**
+ * Money-source linking (spec 2026-10-12 §6.2, owner decision Q2): a debt and
+ * its repayments can be recorded in an account, and then the account's derived
+ * balance on `/accounts` follows — created, recorded, corrected and deleted —
+ * or not recorded at all, in which case nothing moves.
+ *
+ * Its own user (`authenticatedSession` label): the describe above ends with the
+ * profile switched to English and a handful of debts the figures below must not
+ * share. One account, "Cash" at 5.000.000, so the picker's pre-selection (the
+ * first active account, as the user has no transaction yet) is the account the
+ * balances are read from.
+ */
+const LINKING_SESSION = authenticatedSession('phase7-debts-linking')
+
+/**
+ * Yesterday, for every date the linked tests type. A debt or repayment recorded
+ * in an account lands at 12:00 in the user's zone on its date, and a balance
+ * counts only what has happened by now — so a movement dated today would not
+ * show before noon and these tests would pass or fail with the time of day.
+ */
+const YESTERDAY = todayInZone(TIMEZONE, new Date(Date.now() - 24 * 60 * 60 * 1000))
+
+/** Cash's balance as `/accounts` renders it on the account's own row. */
+async function expectCashBalance(page: Page, balance: string): Promise<void> {
+  await page.goto('/accounts')
+  await expect(namedRow(page, page, 'Cash')).toContainText(balance)
+}
+
+test.describe.serial('Money-source linking — debts', () => {
+  test.use({ storageState: LINKING_SESSION.path })
+  test.describe.configure({ timeout: 120_000 })
+
+  test.beforeAll(async ({ browser }) => {
+    await LINKING_SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    })
+  })
+
+  test('lending to someone from an account lowers its balance; the picker starts on that account with its currency read-only', async ({
+    page,
+  }) => {
+    await page.goto('/debts')
+    await page.getByRole('button', { name: 'Thêm công nợ' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm công nợ' })
+
+    const account = sheet.getByLabel('Tài khoản')
+    await expect(account.locator('option').first()).toHaveText('Không ghi vào tài khoản')
+    await expect(account).toHaveValue(/.+/)
+    await expect(account.locator('option:checked')).toHaveText('Cash · VND')
+    // An account chosen: the money-moved-on date shows, the currency is the
+    // account's and read-only (never the VND/USD choice).
+    await expect(sheet.getByLabel('Tiền đi ngày')).toHaveValue(TODAY)
+    await sheet.getByLabel('Tiền đi ngày').fill(YESTERDAY)
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveValue('VND')
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveJSProperty('readOnly', true)
+
+    await sheet.getByLabel('Chiều').selectOption('RECEIVABLE')
+    await sheet.getByLabel('Người', { exact: true }).fill('Minh')
+    await sheet.getByLabel('Số tiền ban đầu').fill('1000000')
+    await sheet.getByRole('button', { name: 'Thêm công nợ' }).click()
+    await expect(sheet).toBeHidden()
+
+    await expectCashBalance(page, '4.000.000')
+  })
+
+  test('recording a repayment starts on the opening account and raises the balance; editing and deleting it moves the balance back', async ({
+    page,
+  }) => {
+    await page.goto('/debts')
+    const row = namedRow(page, page, 'Minh')
+
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Minh' })
+    await expect(dialog.getByLabel('Tài khoản').locator('option:checked')).toHaveText('Cash · VND')
+    await dialog.getByLabel('Số tiền').fill('400000')
+    await dialog.getByLabel('Ngày thanh toán').fill(YESTERDAY)
+    await dialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(dialog).toBeHidden()
+    await expectCashBalance(page, '4.400.000')
+
+    // Edit: the same form, prefilled with what was recorded.
+    await page.goto('/debts')
+    await row.getByText('Lần thanh toán (1)', { exact: true }).click()
+    await row.getByRole('button', { name: /^Sửa thanh toán / }).click()
+    const editDialog = page.getByRole('dialog', { name: 'Sửa thanh toán · Minh' })
+    await expect(editDialog.getByLabel('Số tiền')).toHaveValue('400000')
+    await expect(editDialog.getByLabel('Tài khoản').locator('option:checked')).toHaveText(
+      'Cash · VND',
+    )
+    await editDialog.getByLabel('Số tiền').fill('300000')
+    await editDialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(editDialog).toBeHidden()
+    await expect(row).toContainText('700.000')
+    await expectCashBalance(page, '4.300.000')
+
+    // Delete: the confirmation says the transaction goes too.
+    await page.goto('/debts')
+    await row.getByText('Lần thanh toán (1)', { exact: true }).click()
+    await row.getByRole('button', { name: /^Xóa thanh toán / }).click()
+    const confirm = page.getByRole('dialog', { name: 'Xóa lần thanh toán này?' })
+    await expect(confirm).toContainText('Giao dịch đã ghi trong tài khoản cũng sẽ bị xóa')
+    await confirm.getByRole('button', { name: 'Xóa', exact: true }).click()
+    await expect(confirm).toBeHidden()
+    await expect(row.getByText('Lần thanh toán', { exact: false })).toHaveCount(0)
+    await expectCashBalance(page, '4.000.000')
+  })
+
+  test("choosing 'don't record in an account' creates the debt and a repayment without touching any balance, and offers the currency choice", async ({
+    page,
+  }) => {
+    await page.goto('/debts')
+    await page.getByRole('button', { name: 'Thêm công nợ' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm công nợ' })
+
+    await sheet.getByLabel('Tài khoản').selectOption('')
+    // No account: no money-moved-on date, and the currency is a real choice.
+    await expect(sheet.getByLabel('Tiền đi ngày')).toHaveCount(0)
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveValue('VND')
+    await sheet.getByLabel('Tiền tệ').selectOption('USD')
+    await sheet.getByLabel('Chiều').selectOption('PAYABLE')
+    await sheet.getByLabel('Người', { exact: true }).fill('Landlord')
+    await sheet.getByLabel('Số tiền ban đầu').fill('2000')
+    await sheet.getByRole('button', { name: 'Thêm công nợ' }).click()
+    await expect(sheet).toBeHidden()
+
+    const row = namedRow(page, page, 'Landlord')
+    await expect(row).toContainText('USD')
+    // The only account is in VND, so a USD debt's picker offers nothing but
+    // "don't record" — and a repayment with it moves no money either.
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Landlord' })
+    await expect(dialog.getByLabel('Tài khoản').locator('option')).toHaveCount(1)
+    await dialog.getByLabel('Số tiền').fill('500')
+    await dialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(dialog).toBeHidden()
+    await expect(row).toContainText('1.500')
+
+    await expectCashBalance(page, '4.000.000')
   })
 })

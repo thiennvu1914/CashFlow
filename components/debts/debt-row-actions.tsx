@@ -11,13 +11,17 @@ import {
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
 import {
+  deleteDebtPaymentAction,
   recordDebtPaymentAction,
   updateDebtAction,
+  updateDebtPaymentAction,
   writeOffDebtAction,
 } from '@/lib/server/actions/debt-actions'
 import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { defaultPaymentAccountId, type DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
-import type { DebtDto } from '@/lib/ui/debt-view-model'
+import type { DebtDto, DebtPaymentDto } from '@/lib/ui/debt-view-model'
+import { DebtAccountField } from '@/components/debts/debt-account-field'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
 import { FormField } from '@/components/common/form-field'
@@ -50,21 +54,36 @@ import { Input } from '@/components/ui/input'
  * there) or in the page's written-off section (a written-off debt refuses
  * every write; offering the actions would be a promise the service breaks).
  *
- * Nothing here moves money. Recording a repayment writes a `DebtPayment` row
- * and nothing else: no Transaction, no Transfer, no account balance. Whether
- * the cash also passed through a tracked account is a separate fact the user
- * records separately, which is why the page says so in its subtitle rather
- * than leaving the reader to wonder.
+ * Money-source linking (spec 2026-10-12 §6.2): a repayment can be recorded in
+ * an account, and then the server writes the `DebtPayment` and its linked
+ * Transaction together. The payment form's picker starts on the debt's opening
+ * account, else the user's most recently used one, and offers only accounts in
+ * the debt's currency; "don't record in an account" keeps the old
+ * tracking-only behaviour. `DebtPaymentActions` edits or deletes a recorded
+ * payment, which changes or removes the linked transaction with it.
  *
  * A payment and an edit are two forms, not one, because they are two user
  * intents — "Minh paid me 250.000 on the 2nd" and "the name was wrong" — and a
- * single form would make either an accidental submission of the other.
+ * single form would make either an accidental submission of the other. (A
+ * payment *correction* is the payment form again, prefilled: same fields, same
+ * rules.)
  *
  * Both forms mount only while their `Dialog` is open, so `useForm` snapshots
  * the *current* row as its defaults; there is no stale-default problem to gate
  * for, and no `useHydrated` here — a click cannot happen before hydration.
  */
-export function DebtPaymentButton({ debt, today }: { debt: DebtDto; today: string }) {
+export function DebtPaymentButton({
+  debt,
+  today,
+  accounts,
+  mostRecentAccountId,
+}: {
+  debt: DebtDto
+  today: string
+  /** Every active account; the form keeps the ones in the debt's currency. */
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+}) {
   const t = useTranslations()
   const [paymentOpen, setPaymentOpen] = useState(false)
 
@@ -96,13 +115,19 @@ export function DebtPaymentButton({ debt, today }: { debt: DebtDto; today: strin
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         title={t('debts.paymentTitle', { name: debt.person })}
-        // The same "nothing here moves money" copy the page's subtitle
-        // carries, repeated at the point of action.
+        // The page subtitle's copy about accounts, repeated at the point of
+        // action.
         description={t('debts.description')}
         closeLabel={t('common.close')}
       >
         {paymentOpen && (
-          <DebtPaymentForm debt={debt} today={today} onDone={() => setPaymentOpen(false)} />
+          <DebtPaymentForm
+            debt={debt}
+            today={today}
+            accounts={accounts}
+            mostRecentAccountId={mostRecentAccountId}
+            onDone={() => setPaymentOpen(false)}
+          />
         )}
       </Dialog>
     </>
@@ -186,15 +211,22 @@ export function DebtRowMenu({ debt }: { debt: DebtDto }) {
  * or simply a typo) and it is shown inline under the form's fields, with the
  * outstanding figure still visible on the row behind the dialog.
  */
-function DebtPaymentForm({
+export function DebtPaymentForm({
   debt,
   today,
+  accounts,
+  mostRecentAccountId,
+  payment,
   onDone,
 }: {
   debt: DebtDto
   /** The user's own calendar day, from `todayCalendarDateInZone` on the page —
    *  never `new Date()` in the browser, whose zone is not the profile's. */
   today: string
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+  /** Present when correcting a recorded payment: the same form, prefilled. */
+  payment?: DebtPaymentDto
   onDone: () => void
 }) {
   const t = useTranslations()
@@ -202,21 +234,43 @@ function DebtPaymentForm({
   const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-payment-${name}-${uid}`
+  // A debt moves money only in its own currency, so the picker lists no other.
+  const options = accounts.filter((account) => account.currency === debt.currency)
+  // A new payment starts on the debt's opening account, else the most recently
+  // used one. A correction starts on what the payment actually used — never a
+  // pre-selection of its own, or saving a note fix would silently link the
+  // payment (or, had its account since been archived, unlink it).
+  const initialAccountId = payment
+    ? options.some((option) => option.id === payment.accountId)
+      ? payment.accountId!
+      : ''
+    : defaultPaymentAccountId(options, debt.openingAccountId, mostRecentAccountId)
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<RecordDebtPaymentInput>({
     resolver: zodResolver(recordDebtPaymentSchema),
-    // No default for `amount`: a pre-filled `0` is the one value the schema
-    // always rejects, and react-hook-form would write it into the DOM.
-    defaultValues: { date: today },
+    // No default for a new payment's `amount`: a pre-filled `0` is the one
+    // value the schema always rejects, and react-hook-form would write it into
+    // the DOM.
+    defaultValues: payment
+      ? {
+          amount: Number(payment.amountInput),
+          date: payment.date,
+          note: payment.note ?? undefined,
+          accountId: initialAccountId === '' ? undefined : initialAccountId,
+        }
+      : { date: today, accountId: initialAccountId === '' ? undefined : initialAccountId },
   })
 
   async function onSubmit(values: RecordDebtPaymentInput) {
     await submit.run({
-      tag: 'DebtPaymentForm: record failed',
-      action: () => recordDebtPaymentAction(debt.id, values),
+      tag: payment ? 'DebtPaymentForm: edit failed' : 'DebtPaymentForm: record failed',
+      action: () =>
+        payment
+          ? updateDebtPaymentAction(payment.id, values)
+          : recordDebtPaymentAction(debt.id, values),
       errorKeys: DEBT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
@@ -228,11 +282,18 @@ function DebtPaymentForm({
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
       <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
-        <legend className="sr-only">{t('debts.paymentAction')}</legend>
+        <legend className="sr-only">
+          {payment ? t('debts.paymentEditAction') : t('debts.paymentAction')}
+        </legend>
 
-        <p className="text-sm text-muted-foreground">
-          {t('debts.paymentOutstanding', { amount: debt.outstanding, currency: debt.currency })}
-        </p>
+        {/* The outstanding figure is what a NEW payment is checked against; for
+            a correction the comparison is against what is owed without this
+            payment, a number this form does not have, so it is not stated. */}
+        {!payment && (
+          <p className="text-sm text-muted-foreground">
+            {t('debts.paymentOutstanding', { amount: debt.outstanding, currency: debt.currency })}
+          </p>
+        )}
 
         <FormField
           id={fieldId('amount')}
@@ -262,6 +323,17 @@ function DebtPaymentForm({
           {(aria) => <Input {...aria} type="date" {...register('date')} />}
         </FormField>
 
+        <DebtAccountField
+          id={fieldId('account')}
+          accounts={options}
+          defaultAccountId={initialAccountId}
+          registration={register('accountId', {
+            setValueAs: (v: string) => (v === '' ? undefined : v),
+          })}
+          error={errors.accountId?.message}
+          helper={payment?.accountId ? t('debts.paymentEditLinkedNote') : undefined}
+        />
+
         <FormField id={fieldId('note')} label={t('debts.paymentNote')} error={errors.note?.message}>
           {(aria) => (
             <Input
@@ -287,6 +359,111 @@ function DebtPaymentForm({
         </div>
       </fieldset>
     </form>
+  )
+}
+
+/**
+ * Edit and Delete for one recorded payment, in the history under the row.
+ *
+ * Two quiet ghost buttons rather than a `…` menu: the history is a compact list
+ * of lines and each line has exactly these two actions. Both labels carry the
+ * payment's date and amount, so a screen reader (and a test) can tell the lines
+ * apart. Delete asks first, in the one `ConfirmDialog` this product uses, and
+ * says whether a linked transaction goes with the payment; a failure closes the
+ * dialog and is explained on the row, like the write-off's.
+ */
+export function DebtPaymentActions({
+  debt,
+  payment,
+  today,
+  accounts,
+  mostRecentAccountId,
+  dateLabel,
+}: {
+  debt: DebtDto
+  payment: DebtPaymentDto
+  today: string
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+  /** The payment's date as the history prints it, for the accessible names. */
+  dateLabel: string
+}) {
+  const t = useTranslations()
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const { setError } = useRowError()
+  const deleteSubmit = useActionSubmit(t)
+  const labelArgs = { date: dateLabel, amount: payment.amount }
+
+  async function confirmDelete() {
+    await deleteSubmit.run({
+      tag: 'DebtPaymentActions: delete failed',
+      action: () => deleteDebtPaymentAction(payment.id),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      onSettled: () => setDeleting(false),
+    })
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        aria-label={t('debts.paymentEditLabel', labelArgs)}
+        onClick={() => setEditOpen(true)}
+      >
+        {t('debts.paymentEditAction')}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-negative"
+        aria-label={t('debts.paymentDeleteLabel', labelArgs)}
+        onClick={() => {
+          setError(null)
+          setDeleting(true)
+        }}
+      >
+        {t('debts.paymentDeleteAction')}
+      </Button>
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        title={t('debts.paymentEditTitle', { name: debt.person })}
+        closeLabel={t('common.close')}
+      >
+        {editOpen && (
+          <DebtPaymentForm
+            debt={debt}
+            today={today}
+            accounts={accounts}
+            mostRecentAccountId={mostRecentAccountId}
+            payment={payment}
+            onDone={() => setEditOpen(false)}
+          />
+        )}
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title={t('debts.paymentDeleteConfirmTitle')}
+        description={
+          payment.accountId
+            ? t('debts.paymentDeleteConfirmLinked')
+            : t('debts.paymentDeleteConfirmPlain')
+        }
+        confirmLabel={t('debts.paymentDeleteAction')}
+        cancelLabel={t('common.cancel')}
+        pendingLabel={t('debts.paymentDeletePending')}
+        onConfirm={confirmDelete}
+      />
+    </>
   )
 }
 
