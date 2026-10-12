@@ -9,7 +9,7 @@ import {
   compareCalendarDates,
   formatCalendarDate,
 } from '@/lib/datetime/calendar-date'
-import { localDateTimeToInstant } from '@/lib/datetime/local-date-time'
+import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/datetime/local-date-time'
 import type { Locale } from '@/lib/i18n/locale'
 import {
   createDebtSchema,
@@ -163,7 +163,7 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  */
 export interface DebtLinkContext {
   /** The user's IANA zone. A payment or money-moved *date* becomes the linked
-   *  transaction's instant at 12:00 that day in this zone, so it lands on the
+   *  transaction's instant (`calendarDateToEntryInstant`: now for today, else 12:00 that day) in this zone, so it lands on the
    *  same calendar day the user picked whichever zone later reads it. */
   timezone: string
   /** The language of the default transaction note, rendered once at write
@@ -285,10 +285,11 @@ function linkedNote(
   return t(`debts.linkedNote.${kind}`, { person })
 }
 
-/** A calendar date (`yyyy-MM-dd`) as a linked transaction's instant: 12:00 in
- *  the user's zone, so it never crosses a day boundary in any zone. */
+/** A calendar date (`yyyy-MM-dd`) as a linked transaction's instant: the
+ *  current instant for today in the user's zone (so it counts at once), else
+ *  12:00 in that zone (so it never crosses a day boundary). */
 function linkedInstant(calendarDate: string, timezone: string): Date {
-  return localDateTimeToInstant(`${calendarDate}T12:00`, timezone)
+  return calendarDateToEntryInstant(calendarDate, timezone)
 }
 
 /** The one status a debt row actually stores, plus the four states derived from
@@ -579,7 +580,7 @@ export async function getDebtOutstanding(userId: string, debtId: string): Promis
  * Without `accountId` ("don't record in an account") this is the single
  * insert it always was: no FX lookup, no transaction, the currency the user
  * chose. With one, the debt and its opening transaction (spec §4: CASH_OUT for
- * a RECEIVABLE, CASH_IN for a PAYABLE, `originalAmount`, dated 12:00 on
+ * a RECEIVABLE, CASH_IN for a PAYABLE, `originalAmount`, dated (see `linkedInstant`) on
  * `movedOn` in the user's zone) commit together or not at all, and the debt
  * takes the account's currency — the form's currency choice only applies when
  * no account is involved. The transaction's note is the user's notes when
@@ -758,7 +759,7 @@ async function outstandingUnderLock(
  *
  * With `accountId`, the linked transaction (spec §4: CASH_IN when a RECEIVABLE
  * is repaid to the user, CASH_OUT when the user repays a PAYABLE) is written in
- * the same transaction, dated 12:00 on the payment day in the user's zone, with
+ * the same transaction, dated (see `linkedInstant`) on the payment day in the user's zone, with
  * the user's note or the localized "Thu nợ – {person}" / "Trả nợ – {person}"
  * label. The account is locked *before* the debt (the module's lock order) and
  * must hold the debt's currency. Every check — account, debt status,
@@ -864,7 +865,7 @@ async function verifyPaymentUnderLock(
  *   so correcting 300,000 to 400,000 on a debt with 400,000 left before it is
  *   accepted; `DebtOverpaymentError.outstanding` is then what would have fit.
  * - **The linked transaction follows the payment.** Account → same or another
- *   account: the same transaction row is updated (amount, date at 12:00 local,
+ *   account: the same transaction row is updated (amount, date per `linkedInstant`,
  *   note, account). Account → none: the link is cleared and the transaction
  *   deleted (in that order — the link is `ON DELETE RESTRICT`). None → account:
  *   a transaction is created, exactly as `recordDebtPayment` would. The new
@@ -893,7 +894,6 @@ export async function updateDebtPayment(
   // amount CHECKs are unreachable from here.
   const amount = new Prisma.Decimal(String(parsed.amount))
   const date = calendarDateToUtcCarrier(parsed.date)
-  const instant = linkedInstant(parsed.date, context.timezone)
   const nextAccountId = parsed.accountId
 
   // Ownership-scoped and first: another user's payment id is a P2025 here,
@@ -902,6 +902,14 @@ export async function updateDebtPayment(
     where: { userId_id: { userId, id: paymentId } },
     include: { transaction: true },
   })
+  // An unchanged date keeps the instant the transaction already has. Without
+  // this, a note-only edit of a payment made today would restamp it with the
+  // current time, which reads as an economic change and needs a fresh FX rate.
+  const instant =
+    linked !== null &&
+    instantToLocalDateTime(linked.date, context.timezone).slice(0, 10) === parsed.date
+      ? linked.date
+      : linkedInstant(parsed.date, context.timezone)
 
   const economicChange =
     nextAccountId !== undefined &&

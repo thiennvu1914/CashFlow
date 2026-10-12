@@ -1,4 +1,5 @@
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 
 /**
  * The local date-and-time convention for Transaction and Transfer `date`.
@@ -105,4 +106,24 @@ export function instantToLocalDateTime(instant: Date, timezone: string): string 
  */
 export function nowInZone(timezone: string, now: Date = new Date()): string {
   return instantToLocalDateTime(now, timezone)
+}
+
+/**
+ * The instant a ledger entry gets when the user supplied only a calendar date
+ * (a debt's "money moved on", a repayment day).
+ *
+ * Today's date is stamped with `now`: balances are read as of the current
+ * instant, so pinning today to 12:00 would hide an entry made before noon until
+ * noon. Any other date is pinned to 12:00 local, which keeps it on that
+ * calendar day in every zone (a UTC midnight would slip into the previous day
+ * west of Greenwich). A future date therefore also gets 12:00 and stays out of
+ * the balance until it arrives, like any future-dated entry.
+ */
+export function calendarDateToEntryInstant(
+  calendarDate: string,
+  timezone: string,
+  now: Date = new Date(),
+): Date {
+  if (calendarDate === todayCalendarDateInZone(timezone, now)) return now
+  return localDateTimeToInstant(`${calendarDate}T12:00`, timezone)
 }

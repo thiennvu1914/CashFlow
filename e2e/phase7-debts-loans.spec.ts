@@ -405,12 +405,9 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
 const LINKING_SESSION = authenticatedSession('phase7-debts-linking')
 
 /**
- * Yesterday, for every date the linked tests type. A debt or repayment recorded
- * in an account lands at 12:00 in the user's zone on its date, and a balance
- * counts only what has happened by now — so a movement dated today would not
- * show before noon and these tests would pass or fail with the time of day.
+ * Every date here is left at its default, today: an entry dated today is stamped
+ * with the current instant, so the balance follows at once at any time of day.
  */
-const YESTERDAY = todayInZone(TIMEZONE, new Date(Date.now() - 24 * 60 * 60 * 1000))
 
 /** Cash's balance as `/accounts` renders it on the account's own row. */
 async function expectCashBalance(page: Page, balance: string): Promise<void> {
@@ -442,7 +439,6 @@ test.describe.serial('Money-source linking — debts', () => {
     // An account chosen: the money-moved-on date shows, the currency is the
     // account's and read-only (never the VND/USD choice).
     await expect(sheet.getByLabel('Tiền đi ngày')).toHaveValue(TODAY)
-    await sheet.getByLabel('Tiền đi ngày').fill(YESTERDAY)
     await expect(sheet.getByLabel('Tiền tệ')).toHaveValue('VND')
     await expect(sheet.getByLabel('Tiền tệ')).toHaveJSProperty('readOnly', true)
 
@@ -465,7 +461,6 @@ test.describe.serial('Money-source linking — debts', () => {
     const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Minh' })
     await expect(dialog.getByLabel('Tài khoản').locator('option:checked')).toHaveText('Cash · VND')
     await dialog.getByLabel('Số tiền').fill('400000')
-    await dialog.getByLabel('Ngày thanh toán').fill(YESTERDAY)
     await dialog.getByRole('button', { name: 'Lưu' }).click()
     await expect(dialog).toBeHidden()
     await expectCashBalance(page, '4.400.000')

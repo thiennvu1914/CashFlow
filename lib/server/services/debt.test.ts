@@ -6,7 +6,11 @@ import { prisma } from '@/lib/prisma'
 import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { resetFxMemoForTests } from '@/lib/currency/fx-service'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
-import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import {
+  calendarDateToUtcCarrier,
+  formatCalendarDate,
+  todayCalendarDateInZone,
+} from '@/lib/datetime/calendar-date'
 import { getAccountBalance } from '@/lib/server/services/balance'
 import type { CreateDebtInput, RecordDebtPaymentInput } from '@/lib/validation/debt'
 import { ArchivedAccountError } from './account-lock'
@@ -1485,6 +1489,27 @@ describe('money-source linking', () => {
         transactionId: linked.id,
         transaction: { accountId: s.bankId },
       })
+    })
+
+    it('dates a payment made today at the current instant, so the balance moves immediately', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const debt = await unlinkedDebt(s)
+      const today = todayCalendarDateInZone(TEST_TIMEZONE, new Date())
+
+      const before = Date.now()
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 250_000, date: today, accountId: s.bankId },
+        provider,
+      )
+      const linked = await transactionById(s, payment.transactionId)
+
+      // Not 12:00 of a day that may still be hours away.
+      expect(linked.date.getTime()).toBeGreaterThanOrEqual(before)
+      expect(linked.date.getTime()).toBeLessThanOrEqual(Date.now())
+      expect(await balanceOf(s, s.bankId)).toBe('2250000')
     })
 
     it('records a PAYABLE repayment as a CASH_OUT carrying the user note', async () => {

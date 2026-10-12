@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LOCAL_DATE_TIME_RE,
   instantToLocalDateTime,
+  calendarDateToEntryInstant,
   isRealLocalDateTime,
   localDateTimeToInstant,
   nowInZone,
@@ -184,5 +185,36 @@ describe('nowInZone', () => {
 
   it('defaults to the real current instant, in the shape a datetime-local input needs', () => {
     expect(nowInZone('UTC')).toMatch(LOCAL_DATE_TIME_RE)
+  })
+})
+
+describe('calendarDateToEntryInstant', () => {
+  // 2026-10-12 04:19 UTC is 11:19 in Ho Chi Minh City: before that day's noon.
+  const now = new Date('2026-10-12T04:19:00.000Z')
+
+  it("is the current instant for today's date in the zone, so it counts at once", () => {
+    expect(calendarDateToEntryInstant('2026-10-12', 'Asia/Ho_Chi_Minh', now)).toEqual(now)
+  })
+
+  it('is 12:00 local for a past date', () => {
+    expect(calendarDateToEntryInstant('2026-10-11', 'Asia/Ho_Chi_Minh', now).toISOString()).toBe(
+      '2026-10-11T05:00:00.000Z',
+    )
+  })
+
+  it('is 12:00 local for a future date', () => {
+    expect(calendarDateToEntryInstant('2026-10-13', 'Asia/Ho_Chi_Minh', now).toISOString()).toBe(
+      '2026-10-13T05:00:00.000Z',
+    )
+  })
+
+  it("decides 'today' in the user's zone, not UTC, and handles a zone where noon is the previous UTC day", () => {
+    // 2026-10-12 04:19 UTC is still 2026-10-11 in Los Angeles (21:19).
+    expect(calendarDateToEntryInstant('2026-10-11', 'America/Los_Angeles', now)).toEqual(now)
+    // Auckland (UTC+13) is already on 10-12 at 17:19, so 10-13 is tomorrow there,
+    // and its 12:00 is 23:00 UTC on 10-12 — a different UTC day from its date.
+    expect(calendarDateToEntryInstant('2026-10-13', 'Pacific/Auckland', now).toISOString()).toBe(
+      '2026-10-12T23:00:00.000Z',
+    )
   })
 })
