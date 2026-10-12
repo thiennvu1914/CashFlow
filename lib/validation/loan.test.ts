@@ -156,6 +156,22 @@ describe('createLoanSchema', () => {
     expect(typeof parsed.startDate).toBe('string')
     expect(typeof parsed.nextDueDate).toBe('string')
   })
+
+  describe('the account the loan was received into (money-source linking)', () => {
+    it('accepts an account id, and no account at all', () => {
+      expect(createLoanSchema.parse({ ...VALID_LOAN, accountId: 'acc_1' }).accountId).toBe('acc_1')
+      // "Don't record in an account": the agreement predates the app, or the
+      // money never touched a tracked account — nothing moves.
+      expect(createLoanSchema.parse(VALID_LOAN).accountId).toBeUndefined()
+    })
+
+    it.each([
+      [{ accountId: '' }, 'Choose an account'],
+      [{ accountId: 42 }, 'Choose an account'],
+    ])('rejects %o with product copy', (patch, message) => {
+      expect(messagesFor(createLoanSchema, { ...VALID_LOAN, ...patch })).toContain(message)
+    })
+  })
 })
 
 describe('updateLoanSchema', () => {
@@ -339,6 +355,21 @@ describe('recordLoanPaymentSchema', () => {
     expect(parsed.paymentDate).toBe('2026-03-15')
     expect(typeof parsed.paymentDate).toBe('string')
   })
+
+  it('accepts the account the instalment was paid from, and no account at all', () => {
+    expect(recordLoanPaymentSchema.parse({ ...VALID_PAYMENT, accountId: 'acc_1' })).toEqual({
+      ...VALID_PAYMENT,
+      accountId: 'acc_1',
+    })
+    expect(recordLoanPaymentSchema.parse(VALID_PAYMENT).accountId).toBeUndefined()
+  })
+
+  it.each([
+    [{ accountId: '' }, 'Choose an account'],
+    [{ accountId: 42 }, 'Choose an account'],
+  ])('rejects %o with product copy', (patch, message) => {
+    expect(messagesFor(recordLoanPaymentSchema, { ...VALID_PAYMENT, ...patch })).toContain(message)
+  })
 })
 
 describe('no raw Zod text reaches a form', () => {
@@ -377,6 +408,8 @@ describe('no raw Zod text reaches a form', () => {
       [createLoanSchema, { ...VALID_LOAN, nextDueDate: '2026-13-01' }],
       [createLoanSchema, { ...VALID_LOAN, notes: false }],
       [createLoanSchema, { ...VALID_LOAN, notes: 'x'.repeat(501) }],
+      [createLoanSchema, { ...VALID_LOAN, accountId: 7 }],
+      [createLoanSchema, { ...VALID_LOAN, accountId: '' }],
       [updateLoanSchema, {}],
       [updateLoanSchema, { lender: '   ', scheduledPaymentAmount: 1 }],
       [updateLoanSchema, { lender: 'A', scheduledPaymentAmount: '1' }],
@@ -395,6 +428,8 @@ describe('no raw Zod text reaches a form', () => {
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, paymentDate: ['2026-03-15'] }],
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, note: 12 }],
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, note: 'x'.repeat(501) }],
+      [recordLoanPaymentSchema, { ...VALID_PAYMENT, accountId: null }],
+      [recordLoanPaymentSchema, { ...VALID_PAYMENT, accountId: '' }],
     ]
 
     for (const [schema, input] of cases) {

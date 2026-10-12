@@ -82,6 +82,10 @@ export const LOAN_ERROR_KEYS: Record<LoanActionError, string> = {
   OVERPAYMENT: 'errors.loan.OVERPAYMENT',
   NOT_ACTIVE: 'errors.loan.NOT_ACTIVE',
   SPLIT_MISMATCH: 'errors.loan.SPLIT_MISMATCH',
+  FX_UNAVAILABLE: 'errors.loan.FX_UNAVAILABLE',
+  ARCHIVED_ACCOUNT: 'errors.loan.ARCHIVED_ACCOUNT',
+  ACCOUNT_CURRENCY_MISMATCH: 'errors.loan.ACCOUNT_CURRENCY_MISMATCH',
+  CONFLICT: 'errors.loan.CONFLICT',
   INVALID_INPUT: 'errors.loan.INVALID_INPUT',
   NOT_FOUND: 'errors.loan.NOT_FOUND',
 }

@@ -1,12 +1,17 @@
 import { Prisma } from '@prisma/client'
-import type { Loan, LoanPayment, LoanStoredStatus } from '@prisma/client'
+import type { Loan, LoanPayment, LoanStoredStatus, Transaction } from '@prisma/client'
+import { createTranslator } from 'next-intl'
 import { prisma } from '@/lib/prisma'
-import { advanceByFrequency } from '@/lib/datetime/add-months-clamped'
+import { getUsableCurrentRate, type UsableRateResult } from '@/lib/currency/current-rate-policy'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
+import { advanceByFrequency, retreatByFrequency } from '@/lib/datetime/add-months-clamped'
 import {
   calendarDateToUtcCarrier,
   compareCalendarDates,
   formatCalendarDate,
 } from '@/lib/datetime/calendar-date'
+import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/datetime/local-date-time'
+import type { Locale } from '@/lib/i18n/locale'
 import {
   createLoanSchema,
   recordLoanPaymentSchema,
@@ -15,6 +20,16 @@ import {
   type RecordLoanPaymentInput,
   type UpdateLoanInput,
 } from '@/lib/validation/loan'
+import enLoanMessages from '@/messages/en/loans.json'
+import viLoanMessages from '@/messages/vi/loans.json'
+import { lockAccountsForUpdate } from './account-lock'
+import {
+  LinkedAccountCurrencyMismatchError,
+  SNAPSHOT_PAIR,
+  ensureLoanInterestCategoryId,
+  insertTransactionInTx,
+} from './linked-transaction'
+import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
 
 /**
  * Loan service (spec §4.10) — money the user owes a lender, and the instalments
@@ -22,16 +37,19 @@ import {
  *
  * Six invariants live here and are never delegated to the UI:
  *
- * 1. **Tracking only.** Nothing in this file creates a Transaction or a
- *    Transfer, reads or writes a FinancialAccount, or changes a balance — it
- *    imports none of `transaction.ts`, `transfer.ts`, `balance.ts` or
- *    `financial-account.ts`, and `loan.test.ts` proves the absence twice over:
- *    structurally (no such import specifier appears in this source) and
- *    behaviourally (the account/transaction/transfer counts, the seeded rows and
- *    the derived balance are re-asserted after *every* case). Paying an
- *    instalment is bookkeeping about an agreement with a lender; whether the
- *    cash also moved through a tracked account is a separate fact the user
- *    records separately, and no automatic rule can tell the two apart.
+ * 1. **Money moves only through an account the user chose** (money-source
+ *    linking, spec 2026-10-12 §4 and §6.3, which supersedes §4.10's "tracking
+ *    only"). Creating a loan *received into* an account writes a CASH_IN of the
+ *    principal in the same database transaction; recording an instalment *paid
+ *    from* an account writes a CASH_OUT of its principal part and an EXPENSE of
+ *    its interest part, filed under "Loan Interest & Fees" — each through the
+ *    shared core `insertTransactionInTx`, and each linked with a composite,
+ *    `ON DELETE RESTRICT` foreign key. A part of zero writes no transaction (an
+ *    interest-only instalment has no CASH_OUT, a 0 % one no EXPENSE). *Without*
+ *    an account (a loan that predates the app, or money that never touched a
+ *    tracked account) the loan is bookkeeping about an agreement with a lender
+ *    and nothing else is written. Editing or deleting an instalment keeps all
+ *    three rows in step; closing a loan moves no money and creates nothing.
  * 2. **Outstanding principal is derived, never stored.** `principal − Σ
  *    principalAmount`, computed on read (spec §5, "never store what can drift").
  *    A stored copy would be a second source of truth that a rolled-back write, a
@@ -66,8 +84,10 @@ import {
  *    with `new Prisma.Decimal(String(...))` so a 2-decimal input is exact, and
  *    there is no `toNumber()` anywhere in this file. Each loan keeps its own
  *    currency and nothing here converts one (`User.baseCurrency` is display-only,
- *    ledger ruling R5-3), so there is no FX import at all — and therefore
- *    nothing slow that could run inside a held lock.
+ *    ledger ruling R5-3): a linked account must already hold the loan's
+ *    currency (`LinkedAccountCurrencyMismatchError` otherwise), and a loan
+ *    created with an account simply takes that account's currency. The only FX
+ *    involved is the USD/VND snapshot every Transaction carries.
  *
  * `interestRate` is stored and never used: it is percent per year, informational,
  * so the loan's terms are visible next to its history. Nothing here computes
@@ -78,7 +98,10 @@ import {
  * `userId` always arrives as an argument (server actions pass `requireUser().id`)
  * and scopes every query — including the raw locking `SELECT` below. Every
  * single-row lookup goes through the composite `userId_id` key, so another user's
- * loan id is a P2025, never a usable reference.
+ * loan, instalment or account id is a P2025, never a usable reference. The
+ * user's timezone and locale arrive the same way, as a `LoanLinkContext` the
+ * action layer builds from the session user — this module makes no assumption
+ * about whose request it is serving.
  *
  * ## Why a row lock, and not Serializable
  *
@@ -125,15 +148,69 @@ import {
  *   against a loan that was already closed, and the due date of a closed loan
  *   never moves.
  *
- * There is deliberately no FX call, no network access and no non-database work
- * of any kind inside either transaction: an interactive transaction holds a
- * pooled connection and its locks for its whole duration under Prisma's 5s
- * default timeout, so anything slow in there would stall every other writer on
- * the same loan (the reasoning `account-lock.ts` sets out at length). The Zod
- * parse and the calendar-date conversions are therefore hoisted out of the
- * transaction, and the only arithmetic inside it is `Prisma.Decimal` comparison
- * and the pure date advance.
+ * Every instalment writer — record, edit, delete — takes this lock, so under it
+ * the instalment rows of one loan, and its due date, cannot change.
+ *
+ * ## Lock order: accounts, then the loan row, then transaction rows
+ *
+ * A linked write takes up to three kinds of lock, and always in this order —
+ * the order `debt.ts` documents and uses:
+ *
+ * 1. the account(s) — `lockAccountsForUpdate`, one sorted statement, taken
+ *    *explicitly before* the loan lock even though `insertTransactionInTx`
+ *    locks its account again later (re-locking a row the same transaction
+ *    already holds returns at once);
+ * 2. the Loan row — `lockLoanRow`;
+ * 3. the linked Transaction rows — `lockAndVerifyTransactionRow`.
+ *
+ * It is the order `createTransaction` (account), `updateTransaction`
+ * (accounts, then the transaction row) and `deleteTransaction` already use,
+ * and the paths with no account keep today's single loan lock. No path anywhere
+ * holds a loan lock while waiting for an account, or a transaction-row lock
+ * while waiting for a loan, so no two of them can wait on each other in a
+ * cycle: a linked instalment racing an edit of another transaction in the same
+ * account queues on that account; an instalment moved from account A to B
+ * racing a transaction moved from B to A both lock {A, B} in the same sorted
+ * statement; a close (loan lock only) never waits on an account. The two
+ * transaction rows of one instalment are only ever locked together behind its
+ * loan's lock, so no other writer can hold one of them while wanting the other.
+ *
+ * "Loan Interest & Fees" is looked up (and, for a user who has none, created)
+ * by `ensureLoanInterestCategoryId` only *after* the account and loan locks,
+ * and only when an interest transaction will be written, so a refused
+ * instalment never leaves a category behind either.
+ *
+ * Which accounts to lock for an edit or a delete is read from a copy taken
+ * before the transaction opens, so under the locks the instalment and its
+ * linked transactions are re-verified against that copy; a row that changed in
+ * between is a `ConcurrentModificationError`, exactly as `updateTransaction`
+ * treats its own stale copy.
+ *
+ * FX is fetched *before* any transaction opens, and only when a linked
+ * transaction will be written with a new snapshot: an interactive transaction
+ * holds a pooled connection and its locks for its whole duration under
+ * Prisma's 5s default timeout, so a provider call in there would stall every
+ * other writer on the same account and loan (the reasoning `account-lock.ts`
+ * sets out at length). The Zod parse and the calendar-date conversions are
+ * hoisted out of the transaction too; inside it there is database work, the
+ * `Prisma.Decimal` checks and the pure date arithmetic, and nothing else.
  */
+
+/**
+ * What a write needs to know about the user that only the session has, passed
+ * by the action layer from `resolveProfileDefaults(user)` — the same shape as
+ * `debt.ts`'s `DebtLinkContext`.
+ */
+export interface LoanLinkContext {
+  /** The user's IANA zone. A start or payment *date* becomes the linked
+   *  transactions' instant here (`calendarDateToEntryInstant`: now for today,
+   *  else 12:00 that day), so it lands on the same calendar day the user
+   *  picked whichever zone later reads it. */
+  timezone: string
+  /** The language of the default transaction note, rendered once at write
+   *  time and stored — never re-rendered on read or on a later edit. */
+  locale: Locale
+}
 
 /**
  * Thrown when an instalment's principal part would take a loan past repaid.
@@ -199,11 +276,15 @@ export class LoanSplitMismatchError extends Error {
  * answer for a nonexistent id. Rebuilt here (rather than imported from
  * `debt.ts`, where the equivalent helper is private and speaks about debts) so
  * the tenant-isolation contract every action error map and test already pins
- * down — a foreign loan id is a P2025 — holds for the locking path too.
+ * down — a foreign loan id is a P2025 — holds for the locking path too, and for
+ * an instalment that vanished between its pre-read and the lock.
  */
-function prismaNotFound(loanId: string): Prisma.PrismaClientKnownRequestError {
+function prismaNotFound(
+  model: 'Loan' | 'Loan payment',
+  id: string,
+): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError(
-    `An operation failed because it depends on one or more records that were required but not found. Loan ${loanId} was not found for this user.`,
+    `An operation failed because it depends on one or more records that were required but not found. ${model} ${id} was not found for this user.`,
     { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
   )
 }
@@ -214,12 +295,13 @@ function prismaNotFound(loanId: string): Prisma.PrismaClientKnownRequestError {
  * Must be called inside `prisma.$transaction`: the lock is held until that
  * transaction commits or rolls back, and taking it on the bare client would
  * release it immediately and prove nothing (`account-lock.ts` makes the same
- * point about accounts). Shared by `recordLoanPayment` and `closeLoan` so that
- * "the same lock" is literally the same statement, which is what makes their
- * race resolve deterministically either way round.
+ * point about accounts). Shared by every instalment writer and `closeLoan` so
+ * that "the same lock" is literally the same statement, which is what makes
+ * their races resolve deterministically either way round.
  *
- * Exactly one row is ever locked here, so there is no lock-ordering deadlock to
- * avoid — the reason `lockAccountRows` has to sort its ids does not arise.
+ * Exactly one loan row is ever locked here, so there is no ordering among loan
+ * rows to get wrong; its place relative to accounts and transaction rows is the
+ * lock order in the module comment.
  */
 async function lockLoanRow(
   tx: Prisma.TransactionClient,
@@ -233,7 +315,39 @@ async function lockLoanRow(
     FOR UPDATE`
   // An empty result means the id is not this user's loan — or does not exist at
   // all, and the two must be indistinguishable.
-  if (locked.length === 0) throw prismaNotFound(loanId)
+  if (locked.length === 0) throw prismaNotFound('Loan', loanId)
+}
+
+/** Spec §4's note labels (`loans.linkedNote.*`), one per linked movement. */
+type LinkedNoteKind = 'disburse' | 'principal' | 'interest'
+
+const LINKED_NOTE_MESSAGES = {
+  vi: { loans: viLoanMessages },
+  en: { loans: enLoanMessages },
+} as const
+
+/**
+ * A linked transaction's note when the user gave none: "Vay – Vietcombank",
+ * "Trả gốc – Vietcombank", "Lãi vay – Vietcombank" (and their English
+ * equivalents) in the user's locale, rendered once here and stored.
+ *
+ * `createTranslator` is the same engine `getTranslations` runs, minus the
+ * request scope this service does not have; `lender` is substituted as a
+ * value, never parsed as ICU syntax, so a name with braces or quotes is safe.
+ */
+function linkedNote(locale: Locale, kind: LinkedNoteKind, lender: string): string {
+  const t = createTranslator({ locale, messages: LINKED_NOTE_MESSAGES[locale] })
+  return t(`loans.linkedNote.${kind}`, { lender })
+}
+
+/** The USD/VND snapshot columns a re-snapshotted transaction is written with. */
+function snapshotColumns(fx: UsableRateResult) {
+  return {
+    vndPerUsdAtEntry: fx.rateDecimal,
+    fxRateFetchedAt: fx.fetchedAt,
+    fxRateEffectiveAt: fx.effectiveDate,
+    fxRateSource: fx.source,
+  }
 }
 
 /** The one status a loan row actually stores, plus the two states derived from
@@ -249,8 +363,33 @@ export type LoanDisplayStatus = 'ACTIVE' | 'OVERDUE' | 'PAID_OFF' | 'CLOSED'
  * history right under the figure. Written as a `GetPayload` so a later phase
  * that widens the include widens every caller with it, rather than silently not
  * seeing the new relation.
+ *
+ * Money-source linking widened it: the loan carries `disbursementTransactionId`
+ * and each instalment its `principalTransactionId` and `interestTransactionId`
+ * (null when nothing was recorded in an account, or for a part of zero), and
+ * each brings the *account* of its linked transaction — the account an
+ * instalment form pre-selects (spec §6.3) and an edit form starts from. Only
+ * the account's id, name and status (`LINKED_ACCOUNT`, as on debts): the rest
+ * of the transaction is the Transactions page's to show, and the name and
+ * status let an edit form keep an account archived since the instalment rather
+ * than silently offering "don't record" in its place.
  */
-export type LoanRow = Prisma.LoanGetPayload<{ include: { payments: true } }>
+const LINKED_ACCOUNT = {
+  accountId: true,
+  account: { select: { name: true, status: true } },
+} satisfies Prisma.TransactionSelect
+
+export type LoanRow = Prisma.LoanGetPayload<{
+  include: {
+    payments: {
+      include: {
+        principalTransaction: { select: typeof LINKED_ACCOUNT }
+        interestTransaction: { select: typeof LINKED_ACCOUNT }
+      }
+    }
+    disbursementTransaction: { select: typeof LINKED_ACCOUNT }
+  }
+}>
 
 /**
  * The same derived figures over a loan read *without* its instalments — what
@@ -292,8 +431,46 @@ const PAYMENT_ORDER = [
 ] satisfies Prisma.LoanPaymentOrderByWithRelationInput[]
 
 /** The one include every read here uses, so no caller can accidentally fetch a
- *  loan without its instalments or with them in a different order. */
-const WITH_PAYMENTS = { payments: { orderBy: PAYMENT_ORDER } } satisfies Prisma.LoanInclude
+ *  loan without its instalments or with them in a different order — or without
+ *  the linked accounts `LoanRow` promises. */
+const WITH_PAYMENTS = {
+  payments: {
+    orderBy: PAYMENT_ORDER,
+    include: {
+      principalTransaction: { select: LINKED_ACCOUNT },
+      interestTransaction: { select: LINKED_ACCOUNT },
+    },
+  },
+  disbursementTransaction: { select: LINKED_ACCOUNT },
+} satisfies Prisma.LoanInclude
+
+/**
+ * A loan with everything `LoanRow` promises, read back after a write.
+ *
+ * Every write here returns its row through this read rather than through an
+ * `include` on the write itself, and always *after* its transaction: Prisma
+ * loads an include's sibling relations concurrently, and inside a transaction —
+ * an interactive one, or the implicit one a write with an `include` opens —
+ * those reads share a single pg connection, which pg 8 deprecates ("Calling
+ * client.query() when the client is already executing a query"). Read through
+ * the pool, each relation query gets a connection of its own. It reads the
+ * committed row, so it can only ever show the write that just succeeded, or a
+ * later one.
+ */
+function readLoanRow(userId: string, loanId: string): Promise<LoanRow> {
+  return prisma.loan.findUniqueOrThrow({
+    where: { userId_id: { userId, id: loanId } },
+    include: WITH_PAYMENTS,
+  })
+}
+
+/** Newest instalment first, with the same total tie-breaks as `PAYMENT_ORDER`
+ *  — which instalment is "the latest" when one is deleted. */
+const LATEST_PAYMENT_FIRST = [
+  { paymentDate: 'desc' },
+  { createdAt: 'desc' },
+  { id: 'desc' },
+] satisfies Prisma.LoanPaymentOrderByWithRelationInput[]
 
 /** Live loans before closed ones — the order the Loans page renders. */
 const STATUS_RANK: Record<LoanStoredStatus, number> = { ACTIVE: 0, CLOSED: 1 }
@@ -504,7 +681,8 @@ export async function getLoanOutstandingPrincipal(
 }
 
 /**
- * Records a new loan.
+ * Records a new loan — received into an account, together with the money that
+ * arrived.
  *
  * Fields are listed explicitly rather than spread, so the authenticated `userId`
  * can never be overridden regardless of Zod's stripping behaviour and a
@@ -517,38 +695,92 @@ export async function getLoanOutstandingPrincipal(
  * day the user never picked. Deriving it is also what makes the anchor
  * unambiguous — "the day my instalment falls on" is exactly the day the user
  * just entered.
+ *
+ * Without `accountId` ("don't record in an account") this is the single insert
+ * it always was: no FX lookup, no transaction, the currency the user chose.
+ * With one, the loan and its disbursement (spec §4: a CASH_IN of the principal,
+ * dated on `startDate` in the user's zone — `calendarDateToEntryInstant`) commit
+ * together or not at all, and the loan takes the account's currency — the
+ * form's currency choice only applies when no account is involved. The
+ * transaction's note is the loan's notes when given, else the localized
+ * "Vay – {lender}" label.
+ *
+ * Only the account is locked (by `insertTransactionInTx`): the loan row is
+ * being created inside this transaction, so no one else can see it, let alone
+ * lock it, before it commits.
  */
-export async function createLoan(userId: string, input: CreateLoanInput): Promise<LoanRow> {
+export async function createLoan(
+  userId: string,
+  input: CreateLoanInput,
+  context: LoanLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<LoanRow> {
   const parsed = createLoanSchema.parse(input)
   const nextDueDate = calendarDateToUtcCarrier(parsed.nextDueDate)
+  const data = {
+    userId,
+    lender: parsed.lender,
+    // `String()` first, for every amount in this file: that is the exact
+    // representation `lib/validation/money.ts` inspected when it accepted the
+    // value as having at most 2 decimal places (and the one the pg adapter
+    // serialises), so what is stored is precisely what was validated — rather
+    // than whatever the Decimal constructor makes of a raw double.
+    principal: new Prisma.Decimal(String(parsed.principal)),
+    // Same reasoning at 3 decimal places, which is what `Decimal(6, 3)` holds
+    // and what `createLoanSchema` checked.
+    interestRate: new Prisma.Decimal(String(parsed.interestRate)),
+    startDate: calendarDateToUtcCarrier(parsed.startDate),
+    termMonths: parsed.termMonths,
+    paymentFrequency: parsed.paymentFrequency,
+    scheduledPaymentAmount: new Prisma.Decimal(String(parsed.scheduledPaymentAmount)),
+    nextDueDate,
+    // Read in UTC, because a carrier has no other zone: for `2026-01-31` this
+    // is 31, and that is what keeps the schedule off the 28th from February
+    // onwards.
+    dueDayOfMonth: nextDueDate.getUTCDate(),
+    notes: parsed.notes ?? null,
+  }
 
-  return prisma.loan.create({
-    data: {
+  const { accountId } = parsed
+  if (accountId === undefined) {
+    const loan = await prisma.loan.create({
+      data: { ...data, currency: parsed.currency },
+      select: { id: true },
+    })
+    return readLoanRow(userId, loan.id)
+  }
+
+  // Before the transaction opens: never a provider call under a row lock, and
+  // an outage leaves no loan behind rather than one without its transaction.
+  const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
+  const date = calendarDateToEntryInstant(parsed.startDate, context.timezone)
+
+  const loanId = await prisma.$transaction(async (tx) => {
+    const disbursement = await insertTransactionInTx(
+      tx,
       userId,
-      lender: parsed.lender,
-      // `String()` first, for every amount in this file: that is the exact
-      // representation `lib/validation/money.ts` inspected when it accepted the
-      // value as having at most 2 decimal places (and the one the pg adapter
-      // serialises), so what is stored is precisely what was validated — rather
-      // than whatever the Decimal constructor makes of a raw double.
-      principal: new Prisma.Decimal(String(parsed.principal)),
-      currency: parsed.currency,
-      // Same reasoning at 3 decimal places, which is what `Decimal(6, 3)` holds
-      // and what `createLoanSchema` checked.
-      interestRate: new Prisma.Decimal(String(parsed.interestRate)),
-      startDate: calendarDateToUtcCarrier(parsed.startDate),
-      termMonths: parsed.termMonths,
-      paymentFrequency: parsed.paymentFrequency,
-      scheduledPaymentAmount: new Prisma.Decimal(String(parsed.scheduledPaymentAmount)),
-      nextDueDate,
-      // Read in UTC, because a carrier has no other zone: for `2026-01-31` this
-      // is 31, and that is what keeps the schedule off the 28th from February
-      // onwards.
-      dueDayOfMonth: nextDueDate.getUTCDate(),
-      notes: parsed.notes ?? null,
-    },
-    include: WITH_PAYMENTS,
+      {
+        accountId,
+        type: 'CASH_IN',
+        amount: data.principal,
+        date,
+        note: parsed.notes ?? linkedNote(context.locale, 'disburse', parsed.lender),
+      },
+      fx,
+    )
+    const loan = await tx.loan.create({
+      // `disbursement.currency` was copied from the locked account row, so the
+      // loan and the money it brought in cannot disagree about the currency.
+      data: {
+        ...data,
+        currency: disbursement.currency,
+        disbursementTransactionId: disbursement.id,
+      },
+      select: { id: true },
+    })
+    return loan.id
   })
+  return readLoanRow(userId, loanId)
 }
 
 /**
@@ -586,7 +818,7 @@ export async function updateLoan(
   })
   if (existing.status !== 'ACTIVE') throw new LoanNotActiveError()
 
-  return prisma.loan.update({
+  await prisma.loan.update({
     where: { userId_id: { userId, id: loanId } },
     data: {
       lender: parsed.lender,
@@ -596,35 +828,120 @@ export async function updateLoan(
       // never remove it.
       notes: parsed.notes ?? null,
     },
-    include: WITH_PAYMENTS,
   })
+  return readLoanRow(userId, loanId)
 }
 
 /**
- * Records an instalment against a loan, and advances the schedule.
+ * Locks the loan (after any accounts — see the lock order), re-reads it through
+ * the typed client and refuses a closed one.
+ *
+ * The raw SELECT in `lockLoanRow` is only the lock — `$queryRaw` gives no
+ * guarantee about how a DECIMAL column arrives in JS, and money must never
+ * travel through a float — so the row every decision is made on comes from
+ * Prisma's typed client. Under the lock, so a close that committed first is
+ * visible here and no instalment can be recorded, edited or removed on an
+ * already-closed loan, nor its due date moved.
+ */
+async function lockActiveLoan(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  loanId: string,
+): Promise<Loan> {
+  await lockLoanRow(tx, userId, loanId)
+  const loan = await tx.loan.findUniqueOrThrow({ where: { userId_id: { userId, id: loanId } } })
+  if (loan.status !== 'ACTIVE') throw new LoanNotActiveError()
+  return loan
+}
+
+/**
+ * The split re-checked in decimal arithmetic — layer two of three (Zod in exact
+ * cents is the first, the `LoanPayment_total_matches_split` CHECK the third).
+ */
+function assertSplit(
+  totalAmount: Prisma.Decimal,
+  principalAmount: Prisma.Decimal,
+  interestAmount: Prisma.Decimal,
+): void {
+  if (!totalAmount.equals(principalAmount.plus(interestAmount))) {
+    throw new LoanSplitMismatchError()
+  }
+}
+
+/**
+ * What principal a locked loan still has outstanding, leaving out
+ * `exceptPaymentId` — the instalment being edited, which must not count against
+ * its own new principal part.
+ *
+ * Summed under the loan lock: this is the authoritative figure, not the one a
+ * caller may have read a moment ago. Only the principal parts are summed —
+ * interest never pays a loan down.
+ */
+async function outstandingPrincipalUnderLock(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  loan: Loan,
+  exceptPaymentId?: string,
+): Promise<Prisma.Decimal> {
+  const principalPaid =
+    (
+      await tx.loanPayment.aggregate({
+        where: {
+          userId,
+          loanId: loan.id,
+          ...(exceptPaymentId === undefined ? {} : { id: { not: exceptPaymentId } }),
+        },
+        _sum: { principalAmount: true },
+      })
+    )._sum.principalAmount ?? new Prisma.Decimal(0)
+  return deriveLoanOutstandingPrincipal(loan.principal, principalPaid)
+}
+
+/**
+ * The two movements an instalment paid from an account makes (spec §4): its
+ * principal part leaves as a CASH_OUT with no category, its interest part as an
+ * EXPENSE filed under "Loan Interest & Fees".
+ */
+const LEG_TYPE = { principal: 'CASH_OUT', interest: 'EXPENSE' } as const
+type Leg = keyof typeof LEG_TYPE
+
+/**
+ * Records an instalment against a loan, and advances the schedule — paid from
+ * an account, together with the money that moved.
  *
  * The whole read-check-write-write happens inside one interactive transaction
- * that first takes an exclusive row lock on the Loan row, for the reasons set out
- * in the module comment: without it two concurrent instalments would either take
+ * that takes an exclusive row lock on the Loan row, for the reasons set out in
+ * the module comment: without it two concurrent instalments would either take
  * the loan past repaid, or both advance the due date from the same starting
  * value and so lose one interval.
  *
- * The two writes — the `LoanPayment` insert and the `nextDueDate` update — are in
- * the same transaction on purpose, and that is what the returned pair reports.
- * They commit or roll back together, so there is never an instalment with an
+ * The `LoanPayment` insert and the `nextDueDate` update are in the same
+ * transaction on purpose, and that is what the returned pair reports. They
+ * commit or roll back together, so there is never an instalment with an
  * unmoved schedule (the user would be asked to pay the same month twice) and
  * never a moved schedule with no instalment behind it (the month would silently
  * be skipped). `loan.test.ts` proves it from the outside: after a rejected
  * overpayment the due date is exactly where it was.
  *
- * Tracking only: the two writes above are the only writes. No account, no
- * transaction, no balance, and no FX — an instalment inherits the loan's
- * currency, so there is nothing to convert and nothing slow inside the lock.
+ * With `accountId`, the linked transactions (spec §4: a CASH_OUT of the
+ * principal part, and an EXPENSE of the interest part in "Loan Interest &
+ * Fees"; none for a part of zero — `insertTransactionInTx` refuses a zero
+ * amount, and an interest-only instalment is valid input, ruling R6-6) are
+ * written in the same transaction, both dated on the payment day in the user's
+ * zone (`calendarDateToEntryInstant`), with the user's note or the localized
+ * "Trả gốc – {lender}" / "Lãi vay – {lender}" labels. The account is locked
+ * *before* the loan (the module's lock order) and must hold the loan's
+ * currency. Every check — account, loan status, split, over-payment, currency —
+ * runs before anything is written, so a refusal leaves no orphan transaction
+ * (and no interest category) behind. Without an account it is the two writes
+ * it always was, with no FX lookup.
  */
 export async function recordLoanPayment(
   userId: string,
   loanId: string,
   input: RecordLoanPaymentInput,
+  context: LoanLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<{ payment: LoanPayment; nextDueDate: Date }> {
   // Hoisted out of the transaction: parsing and date conversion are pure CPU
   // work that must not happen while a row lock is held.
@@ -633,49 +950,69 @@ export async function recordLoanPayment(
   const principalAmount = new Prisma.Decimal(String(parsed.principalAmount))
   const interestAmount = new Prisma.Decimal(String(parsed.interestAmount))
   const paymentDate = calendarDateToUtcCarrier(parsed.paymentDate)
+  const { accountId } = parsed
+  const instant = calendarDateToEntryInstant(parsed.paymentDate, context.timezone)
+  // FX only when money moves, and before the transaction opens.
+  const fx =
+    accountId === undefined ? null : await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
 
   return prisma.$transaction(async (tx) => {
-    // 1. Exclusive row lock, tenant-scoped, or P2025 for an id that is not this
-    //    user's.
-    await lockLoanRow(tx, userId, loanId)
+    // 1. The account first, so this path holds nothing while it queues behind
+    //    another writer on the same account (P2025 for another user's,
+    //    `ArchivedAccountError` for an archived one).
+    const [account] =
+      accountId === undefined ? [] : await lockAccountsForUpdate(tx, userId, [accountId])
 
-    // 2. Typed re-read under the lock. The raw SELECT is only the lock —
-    //    `$queryRaw` gives no guarantee about how a DECIMAL column arrives in
-    //    JS, and money must never travel through a float, so the row the
-    //    decision is made on comes from Prisma's typed client.
-    const loan = await tx.loan.findUniqueOrThrow({
-      where: { userId_id: { userId, id: loanId } },
-    })
-    // Under the lock, so a close that committed first is visible here and no
-    // instalment can land against an already-closed loan.
-    if (loan.status !== 'ACTIVE') throw new LoanNotActiveError()
+    // 2. The loan: exclusive row lock, tenant-scoped (P2025 for an id that is
+    //    not this user's), then the status check under it.
+    const loan = await lockActiveLoan(tx, userId, loanId)
 
-    // 3. The split, re-checked in decimal arithmetic (layer two of three).
-    if (!totalAmount.equals(principalAmount.plus(interestAmount))) {
-      throw new LoanSplitMismatchError()
-    }
-
-    // 4. Sum under the same lock: this is the authoritative outstanding
-    //    principal, not the one a caller may have read a moment ago. Only the
-    //    principal parts are summed — interest never pays a loan down.
-    const principalPaid =
-      (
-        await tx.loanPayment.aggregate({
-          where: { userId, loanId },
-          _sum: { principalAmount: true },
-        })
-      )._sum.principalAmount ?? new Prisma.Decimal(0)
-    const outstandingPrincipal = deriveLoanOutstandingPrincipal(loan.principal, principalPaid)
-    // `gt`, so a principal payment of exactly what is left is accepted —
-    // settling a loan is the most common last payment there is. The interest
-    // part is not compared at all: a repaid loan can still owe a final charge.
+    // 3. The split, and the outstanding principal summed under the same lock.
+    //    `gt`, so a principal payment of exactly what is left is accepted —
+    //    settling a loan is the most common last payment there is. The interest
+    //    part is not compared at all: a repaid loan can still owe a final charge.
+    assertSplit(totalAmount, principalAmount, interestAmount)
+    const outstandingPrincipal = await outstandingPrincipalUnderLock(tx, userId, loan)
     if (principalAmount.gt(outstandingPrincipal)) {
       throw new LoanOverpaymentError(outstandingPrincipal)
     }
 
-    // 5. The two writes, together. `advanceByFrequency` is pure arithmetic on
-    //    the due date read under this lock, so the value written is one interval
-    //    on from the real, current schedule — never from a stale read.
+    // 4. The money, when it moved through an account. Checked here, before the
+    //    first write, rather than left to `insertTransactionInTx`'s own check,
+    //    so a refusal writes nothing at all. The account lock is already ours,
+    //    so the core's own lock returns at once.
+    if (account !== undefined && account.currency !== loan.currency) {
+      throw new LinkedAccountCurrencyMismatchError()
+    }
+    const linked = { principal: null as string | null, interest: null as string | null }
+    if (accountId !== undefined && fx !== null) {
+      const parts = { principal: principalAmount, interest: interestAmount }
+      for (const leg of ['principal', 'interest'] as const) {
+        if (!parts[leg].greaterThan(0)) continue
+        const created = await insertTransactionInTx(
+          tx,
+          userId,
+          {
+            accountId,
+            type: LEG_TYPE[leg],
+            amount: parts[leg],
+            date: instant,
+            note: parsed.note ?? linkedNote(context.locale, leg, loan.lender),
+            // After the account and loan locks, and only when an interest
+            // transaction is actually written.
+            categoryId: leg === 'interest' ? await ensureLoanInterestCategoryId(tx, userId) : null,
+            expectedCurrency: loan.currency,
+          },
+          fx,
+        )
+        linked[leg] = created.id
+      }
+    }
+
+    // 5. The instalment and the schedule, together. `advanceByFrequency` is pure
+    //    arithmetic on the due date read under this lock, so the value written is
+    //    one interval on from the real, current schedule — never from a stale
+    //    read.
     const payment = await tx.loanPayment.create({
       data: {
         userId,
@@ -685,6 +1022,8 @@ export async function recordLoanPayment(
         interestAmount,
         paymentDate,
         note: parsed.note ?? null,
+        principalTransactionId: linked.principal,
+        interestTransactionId: linked.interest,
       },
     })
     const advanced = advanceByFrequency(loan.nextDueDate, loan.paymentFrequency, loan.dueDayOfMonth)
@@ -698,6 +1037,331 @@ export async function recordLoanPayment(
 }
 
 /**
+ * Re-reads an instalment under its loan's lock and confirms it is still linked
+ * the way the pre-transaction copy said.
+ *
+ * Every instalment writer holds the loan lock, so from here the instalment row
+ * cannot change — but it may already have changed between the pre-read and the
+ * lock, and the accounts this request locked were chosen from that pre-read. An
+ * instalment that vanished is a P2025; one whose links changed (another edit
+ * added or removed its account, or a part) is a `ConcurrentModificationError`,
+ * as `updateTransaction` treats its own stale copy.
+ */
+async function verifyPaymentUnderLock(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  expected: LoanPayment,
+): Promise<void> {
+  const current = await tx.loanPayment.findUnique({
+    where: { userId_id: { userId, id: expected.id } },
+  })
+  if (!current) throw prismaNotFound('Loan payment', expected.id)
+  if (
+    current.principalTransactionId !== expected.principalTransactionId ||
+    current.interestTransactionId !== expected.interestTransactionId
+  ) {
+    throw new ConcurrentModificationError()
+  }
+}
+
+/** What an instalment edit does to one of its two linked transactions. */
+type LegPlan =
+  | { kind: 'none' }
+  | { kind: 'create' }
+  | { kind: 'update'; linked: Transaction; resnapshot: boolean }
+  | { kind: 'delete'; linked: Transaction }
+
+/**
+ * Decides, before any lock is taken, what happens to one linked transaction:
+ * the part is wanted when an account is chosen and the part is above zero.
+ *
+ * An update re-snapshots FX by ruling R-6 — exactly `updateTransaction`'s
+ * rule: only when the transaction's economic content changes (its account, its
+ * type, its amount or its instant), per transaction, so correcting only the
+ * interest part leaves the principal transaction's snapshot as it was.
+ */
+function planLeg(
+  linked: Transaction | null,
+  leg: Leg,
+  accountId: string | undefined,
+  amount: Prisma.Decimal,
+  instant: Date,
+): LegPlan {
+  const wanted = accountId !== undefined && amount.greaterThan(0)
+  if (!wanted) return linked ? { kind: 'delete', linked } : { kind: 'none' }
+  if (!linked) return { kind: 'create' }
+  return {
+    kind: 'update',
+    linked,
+    resnapshot:
+      linked.accountId !== accountId ||
+      linked.type !== LEG_TYPE[leg] ||
+      // Compared as Decimal: 80000 and the stored "80000.00" are one amount.
+      !amount.equals(linked.amount) ||
+      instant.getTime() !== linked.date.getTime(),
+  }
+}
+
+/**
+ * Corrects a recorded instalment — its split, its date, its note, and which
+ * account (if any) it was paid from — keeping both linked transactions in step
+ * (spec §6.3).
+ *
+ * The rules are the ones the other writers already follow:
+ *
+ * - **The split** is re-checked in decimal arithmetic, and **over-payment** is
+ *   measured against what is owed *without* this instalment, so correcting a
+ *   principal part of 300,000 to 400,000 on a loan with 400,000 left before it
+ *   is accepted; `LoanOverpaymentError.outstandingPrincipal` is then what would
+ *   have fit.
+ * - **Each linked transaction follows its part** (`planLeg`): part wanted and
+ *   linked — the same transaction row is updated (account, amount, date, note,
+ *   and its type and category re-asserted — CASH_OUT with none, EXPENSE in
+ *   "Loan Interest & Fees" — so a stray edit from elsewhere is healed); wanted
+ *   and not linked — a transaction is created, exactly as `recordLoanPayment`
+ *   would; linked and no longer wanted (no account, or the part became zero) —
+ *   the link is cleared and the transaction deleted (in that order — the link
+ *   is `ON DELETE RESTRICT`). Both parts always move to the same account, which
+ *   must hold the loan's currency.
+ * - **The instant** stays the one the transactions already have when the date
+ *   is unchanged (a note-only edit of an instalment paid today is not
+ *   restamped, which would read as an economic change and need a fresh rate);
+ *   a new date becomes an instant as on recording.
+ * - **Notes**: the user's note when given. Without one, a transaction whose
+ *   instalment had no note either keeps the label it was given when it was
+ *   created — rendered once, never re-rendered in the current locale — and
+ *   anything else (a new transaction, or an instalment whose own note was just
+ *   cleared) gets the label rendered now.
+ * - **FX follows ruling R-6** per transaction (`planLeg`), fetched before the
+ *   transaction opens and only when some transaction needs it; a note-only
+ *   edit keeps both snapshots exactly and needs no rate at all.
+ * - **The schedule does not move**: correcting an instalment is not paying
+ *   another one.
+ * - **Frozen history**: an instalment of a closed loan cannot be edited.
+ *
+ * Concurrency: the instalment and its linked transactions are read once outside
+ * the transaction (to choose the accounts to lock and to decide the FX
+ * question), then accounts → loan → transaction rows are locked in the module's
+ * order and every row re-verified against that copy.
+ */
+export async function updateLoanPayment(
+  userId: string,
+  paymentId: string,
+  input: RecordLoanPaymentInput,
+  context: LoanLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<LoanPayment> {
+  const parsed = recordLoanPaymentSchema.parse(input)
+  const totalAmount = new Prisma.Decimal(String(parsed.totalAmount))
+  const principalAmount = new Prisma.Decimal(String(parsed.principalAmount))
+  const interestAmount = new Prisma.Decimal(String(parsed.interestAmount))
+  const paymentDate = calendarDateToUtcCarrier(parsed.paymentDate)
+  const nextAccountId = parsed.accountId
+
+  // Ownership-scoped and first: another user's instalment id is a P2025 here,
+  // before any FX call or lock is taken for it.
+  const {
+    principalTransaction: principalLinked,
+    interestTransaction: interestLinked,
+    ...existing
+  } = await prisma.loanPayment.findUniqueOrThrow({
+    where: { userId_id: { userId, id: paymentId } },
+    include: { principalTransaction: true, interestTransaction: true },
+  })
+  const current = principalLinked ?? interestLinked
+  const instant =
+    current !== null &&
+    instantToLocalDateTime(current.date, context.timezone).slice(0, 10) === parsed.paymentDate
+      ? current.date
+      : calendarDateToEntryInstant(parsed.paymentDate, context.timezone)
+
+  const plans = {
+    principal: planLeg(principalLinked, 'principal', nextAccountId, principalAmount, instant),
+    interest: planLeg(interestLinked, 'interest', nextAccountId, interestAmount, instant),
+  }
+  const needsRate = Object.values(plans).some(
+    (plan) => plan.kind === 'create' || (plan.kind === 'update' && plan.resnapshot),
+  )
+  const fx = needsRate ? await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride) : null
+
+  return prisma.$transaction(async (tx) => {
+    // 1. Accounts: the one the linked transactions leave and the one they join,
+    //    in one sorted statement (`lockAccountsForUpdate` de-duplicates), so an
+    //    archived account can neither lose nor gain the movement.
+    const accountIds = [principalLinked?.accountId, interestLinked?.accountId, nextAccountId]
+    const accounts = await lockAccountsForUpdate(
+      tx,
+      userId,
+      accountIds.filter((id): id is string => id !== undefined),
+    )
+
+    // 2. The loan, then the instalment re-verified under its lock.
+    const loan = await lockActiveLoan(tx, userId, existing.loanId)
+    await verifyPaymentUnderLock(tx, userId, existing)
+
+    // 3. The linked transaction rows, last, against their pre-read copies: the
+    //    Transactions page may have moved or edited them since.
+    for (const linked of [principalLinked, interestLinked]) {
+      if (linked) await lockAndVerifyTransactionRow(tx, userId, linked.id, linked)
+    }
+
+    assertSplit(totalAmount, principalAmount, interestAmount)
+    const outstandingPrincipal = await outstandingPrincipalUnderLock(tx, userId, loan, paymentId)
+    if (principalAmount.gt(outstandingPrincipal)) {
+      throw new LoanOverpaymentError(outstandingPrincipal)
+    }
+    // The locked row of the account the money now moves through —
+    // `lockAccountsForUpdate` resolved every id it was given or threw.
+    const target = accounts.find((account) => account.id === nextAccountId)
+    if (target !== undefined && target.currency !== loan.currency) {
+      throw new LinkedAccountCurrencyMismatchError()
+    }
+
+    // `planLeg` decided which writes need a new snapshot, and `fx` was fetched
+    // for exactly those, so this only fails on a planning bug.
+    const snapshot = (): UsableRateResult => {
+      if (fx === null) throw new RangeError('updateLoanPayment: a planned snapshot was not fetched')
+      return fx
+    }
+    const parts = { principal: principalAmount, interest: interestAmount }
+    const linkedIds = { principal: null as string | null, interest: null as string | null }
+    for (const leg of ['principal', 'interest'] as const) {
+      const plan = plans[leg]
+      // A create or an update implies an account was chosen, so `target` is set.
+      if (plan.kind === 'none' || plan.kind === 'delete' || target === undefined) continue
+      // After the account and loan locks, and only for a transaction that is
+      // written — re-asserted on an update, so the sync heals itself.
+      const categoryId = leg === 'interest' ? await ensureLoanInterestCategoryId(tx, userId) : null
+      if (plan.kind === 'create') {
+        const created = await insertTransactionInTx(
+          tx,
+          userId,
+          {
+            accountId: target.id,
+            type: LEG_TYPE[leg],
+            amount: parts[leg],
+            date: instant,
+            note: parsed.note ?? linkedNote(context.locale, leg, loan.lender),
+            categoryId,
+            expectedCurrency: loan.currency,
+          },
+          snapshot(),
+        )
+        linkedIds[leg] = created.id
+        continue
+      }
+      await tx.transaction.update({
+        where: { userId_id: { userId, id: plan.linked.id } },
+        data: {
+          accountId: target.id,
+          type: LEG_TYPE[leg],
+          categoryId,
+          amount: parts[leg],
+          currency: target.currency,
+          date: instant,
+          note:
+            parsed.note ??
+            (existing.note === null && plan.linked.note !== null
+              ? plan.linked.note
+              : linkedNote(context.locale, leg, loan.lender)),
+          ...(plan.resnapshot ? snapshotColumns(snapshot()) : {}),
+        },
+      })
+      linkedIds[leg] = plan.linked.id
+    }
+
+    const updated = await tx.loanPayment.update({
+      where: { userId_id: { userId, id: paymentId } },
+      data: {
+        totalAmount,
+        principalAmount,
+        interestAmount,
+        paymentDate,
+        note: parsed.note ?? null,
+        principalTransactionId: linkedIds.principal,
+        interestTransactionId: linkedIds.interest,
+      },
+    })
+    // Only now that the instalment no longer references them can the
+    // transactions it dropped go (`ON DELETE RESTRICT`).
+    for (const plan of Object.values(plans)) {
+      if (plan.kind === 'delete') {
+        await tx.transaction.delete({ where: { userId_id: { userId, id: plan.linked.id } } })
+      }
+    }
+    return updated
+  })
+}
+
+/**
+ * Removes a recorded instalment and, when it was paid from an account, the
+ * transactions that moved its money (spec §6.3) — all or nothing.
+ *
+ * When it was the loan's latest instalment — by `paymentDate`, a tie broken by
+ * `createdAt` (`LATEST_PAYMENT_FIRST`), decided under the loan lock — the due
+ * date steps back by exactly the interval recording it advanced
+ * (`retreatByFrequency`, the inverse of `advanceByFrequency` on the same
+ * anchor), so the schedule asks for that instalment again. Deleting an older
+ * instalment leaves the due date alone.
+ *
+ * Same locks and re-verification as `updateLoanPayment` (the linked account,
+ * then the loan, then the transaction rows), so an archived account's frozen
+ * history is respected exactly as `deleteTransaction` respects it, and an
+ * instalment of a closed loan cannot be removed. The instalment row goes
+ * first: it references the transactions, and those links are
+ * `ON DELETE RESTRICT`.
+ */
+export async function deleteLoanPayment(userId: string, paymentId: string): Promise<void> {
+  const {
+    principalTransaction: principalLinked,
+    interestTransaction: interestLinked,
+    ...existing
+  } = await prisma.loanPayment.findUniqueOrThrow({
+    where: { userId_id: { userId, id: paymentId } },
+    include: { principalTransaction: true, interestTransaction: true },
+  })
+  const linkedRows = [principalLinked, interestLinked].filter(
+    (linked): linked is Transaction => linked !== null,
+  )
+
+  await prisma.$transaction(async (tx) => {
+    await lockAccountsForUpdate(
+      tx,
+      userId,
+      linkedRows.map((linked) => linked.accountId),
+    )
+    const loan = await lockActiveLoan(tx, userId, existing.loanId)
+    await verifyPaymentUnderLock(tx, userId, existing)
+    for (const linked of linkedRows) {
+      await lockAndVerifyTransactionRow(tx, userId, linked.id, linked)
+    }
+
+    const latest = await tx.loanPayment.findFirst({
+      where: { userId, loanId: loan.id },
+      orderBy: LATEST_PAYMENT_FIRST,
+      select: { id: true },
+    })
+
+    await tx.loanPayment.delete({ where: { userId_id: { userId, id: paymentId } } })
+    for (const linked of linkedRows) {
+      await tx.transaction.delete({ where: { userId_id: { userId, id: linked.id } } })
+    }
+    if (latest?.id === paymentId) {
+      await tx.loan.update({
+        where: { userId_id: { userId, id: loan.id } },
+        data: {
+          nextDueDate: retreatByFrequency(
+            loan.nextDueDate,
+            loan.paymentFrequency,
+            loan.dueDayOfMonth,
+          ),
+        },
+      })
+    }
+  })
+}
+
+/**
  * Records that a loan is finished — repaid, refinanced, forgiven, or settled
  * outside the app.
  *
@@ -705,7 +1369,9 @@ export async function recordLoanPayment(
  * *not* zeroed: what happened stays readable, and the page shows the loan as
  * closed from then on. Only its meaning changes — a closed loan is excluded from
  * Net Worth and the dashboard's totals and can receive no further instalments or
- * edits, so its `nextDueDate` never moves again either.
+ * edits, so its `nextDueDate` never moves again either. No money moves: nothing
+ * here touches a transaction, and those its disbursement or its instalments
+ * recorded in an account stay exactly where they are (spec 2026-10-12 §4).
  *
  * Runs in a transaction taking the same row lock as `recordLoanPayment`, which is
  * what makes the payment-vs-close race resolve cleanly in both directions
@@ -720,19 +1386,19 @@ export async function recordLoanPayment(
  * and edits still throw, because those ask for a change that will not happen.
  */
 export async function closeLoan(userId: string, loanId: string): Promise<LoanRow> {
-  return prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     await lockLoanRow(tx, userId, loanId)
 
     const loan = await tx.loan.findUniqueOrThrow({
       where: { userId_id: { userId, id: loanId } },
-      include: WITH_PAYMENTS,
+      select: { status: true },
     })
-    if (loan.status === 'CLOSED') return loan
+    if (loan.status === 'CLOSED') return
 
-    return tx.loan.update({
+    await tx.loan.update({
       where: { userId_id: { userId, id: loanId } },
       data: { status: 'CLOSED' },
-      include: WITH_PAYMENTS,
     })
   })
+  return readLoanRow(userId, loanId)
 }

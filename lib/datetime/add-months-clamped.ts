@@ -144,3 +144,33 @@ export function advanceByFrequency(
       return addMonthsUtcClamped(date, 12, anchorDay)
   }
 }
+
+/**
+ * One instalment back — the exact inverse of `advanceByFrequency` along an
+ * anchored schedule. WEEKLY: −7 days. MONTHLY: −1 month at `anchorDay`.
+ * YEARLY: −12 months at `anchorDay`.
+ *
+ * Used when the latest recorded instalment is deleted, to return the due date
+ * to where recording it found it. That is exact, not approximate, because a
+ * loan's `nextDueDate` always sits on its anchor day (clamped to the month):
+ * it starts there (`dueDayOfMonth` is derived from it) and every advance lands
+ * there. So 31 March steps back to 28 February — the day the advance from
+ * 31 January produced — and 28 February steps back to 31 January, not the
+ * 28th, because the step is taken from the anchor and not from the clamped
+ * day.
+ */
+export function retreatByFrequency(
+  date: Date,
+  frequency: PaymentFrequency,
+  anchorDay?: number,
+): Date {
+  switch (frequency) {
+    case 'WEEKLY':
+      if (Number.isNaN(date.getTime())) throw new RangeError('Expected a valid Date')
+      return new Date(date.getTime() - 7 * MS_PER_DAY)
+    case 'MONTHLY':
+      return addMonthsUtcClamped(date, -1, anchorDay)
+    case 'YEARLY':
+      return addMonthsUtcClamped(date, -12, anchorDay)
+  }
+}

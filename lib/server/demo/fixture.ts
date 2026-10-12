@@ -370,10 +370,10 @@ export async function seedDemoFixture(
   const savingsGoals = 2
 
   // --- Debt (receivable) with payments -------------------------------------
-  // Recorded without an account, as before money-source linking: the demo
-  // ledger's balances are built from the transactions above alone, so the
-  // context only has to be well-formed.
-  const debtContext = { timezone: DEMO_TIMEZONE, locale: DEFAULT_LOCALE }
+  // Debts and the loan below are recorded without an account, as before
+  // money-source linking: the demo ledger's balances are built from the
+  // transactions above alone, so the context only has to be well-formed.
+  const linkContext = { timezone: DEMO_TIMEZONE, locale: DEFAULT_LOCALE }
   const debt = await createDebt(
     userId,
     {
@@ -384,19 +384,19 @@ export async function seedDemoFixture(
       currency: 'VND',
       dueDate: shiftCalendarDate(today, 45),
     },
-    debtContext,
+    linkContext,
   )
   await recordDebtPayment(
     userId,
     debt.id,
     { amount: 2_000_000, date: shiftCalendarDate(today, -21), note: 'First instalment' },
-    debtContext,
+    linkContext,
   )
   await recordDebtPayment(
     userId,
     debt.id,
     { amount: 1_000_000, date: shiftCalendarDate(today, -7) },
-    debtContext,
+    linkContext,
   )
   const debts = 1
   const debtPayments = 2
@@ -407,25 +407,34 @@ export async function seedDemoFixture(
   // on the 1st of NEXT month — an upcoming due date, not an invented one.
   const loanStart = addCalendarMonths(currentMonth, -8)
   const firstUnpaidDue = addCalendarMonths(currentMonth, -2)
-  const loan = await createLoan(userId, {
-    lender: 'VPBank',
-    principal: 120_000_000,
-    currency: 'VND',
-    interestRate: 9.5,
-    startDate: calendarDate(loanStart, 1),
-    termMonths: 36,
-    paymentFrequency: 'MONTHLY',
-    scheduledPaymentAmount: 4_000_000,
-    nextDueDate: calendarDate(firstUnpaidDue, 1),
-  })
+  const loan = await createLoan(
+    userId,
+    {
+      lender: 'VPBank',
+      principal: 120_000_000,
+      currency: 'VND',
+      interestRate: 9.5,
+      startDate: calendarDate(loanStart, 1),
+      termMonths: 36,
+      paymentFrequency: 'MONTHLY',
+      scheduledPaymentAmount: 4_000_000,
+      nextDueDate: calendarDate(firstUnpaidDue, 1),
+    },
+    linkContext,
+  )
   for (let back = 2; back >= 0; back -= 1) {
     const month = addCalendarMonths(currentMonth, -back)
-    await recordLoanPayment(userId, loan.id, {
-      totalAmount: 4_000_000,
-      principalAmount: 3_050_000,
-      interestAmount: 950_000,
-      paymentDate: calendarDate(month, 1),
-    })
+    await recordLoanPayment(
+      userId,
+      loan.id,
+      {
+        totalAmount: 4_000_000,
+        principalAmount: 3_050_000,
+        interestAmount: 950_000,
+        paymentDate: calendarDate(month, 1),
+      },
+      linkContext,
+    )
   }
   const loans = 1
   const loanPayments = 3

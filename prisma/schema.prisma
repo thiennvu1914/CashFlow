@@ -282,11 +282,15 @@ model Transaction {
 
   /// Back-relations of the money-source links (spec 2026-10-12 §5): the debt
   /// whose opening money movement this row records, or the debt payment it
-  /// records. At most one of each, by the unique constraints on the linking
-  /// side; the links are `onDelete: Restrict`, so a linked row cannot be
-  /// deleted out from under its debt.
-  openedDebt  Debt?        @relation("DebtOpeningTransaction")
-  debtPayment DebtPayment? @relation("DebtPaymentTransaction")
+  /// records; the loan whose principal it received, or the principal or
+  /// interest part of the loan instalment it paid. At most one of each, by the
+  /// unique constraints on the linking side; the links are `onDelete:
+  /// Restrict`, so a linked row cannot be deleted out from under its source.
+  openedDebt           Debt?        @relation("DebtOpeningTransaction")
+  debtPayment          DebtPayment? @relation("DebtPaymentTransaction")
+  disbursedLoan        Loan?        @relation("LoanDisbursementTransaction")
+  loanPaymentPrincipal LoanPayment? @relation("LoanPaymentPrincipalTransaction")
+  loanPaymentInterest  LoanPayment? @relation("LoanPaymentInterestTransaction")
 
   @@unique([userId, id])
   @@index([userId, date])
@@ -561,11 +565,17 @@ enum PaymentFrequency {
   YEARLY
 }
 
-/// A loan the user owes (spec §4.10). Tracking only: there is no foreign key and
-/// no code path from here to FinancialAccount or Transaction, so recording an
-/// instalment changes no balance — `lib/server/services/loan.ts` imports nothing
-/// that could, and `loan.test.ts` re-asserts the account counts and a derived
-/// balance after every mutation.
+/// A loan the user owes (spec §4.10).
+///
+/// Money-source linking (spec 2026-10-12 §4–§6.3, superseding §4.10's
+/// "tracking only"): when the user records that the borrowed money was received
+/// into one of their accounts, it is an ordinary CASH_IN Transaction created in
+/// the same database transaction, and `disbursementTransactionId` points at it.
+/// Without an account ("don't record in an account", for loans that predate the
+/// app) it stays NULL and nothing moves. The link is a composite `(userId,
+/// disbursementTransactionId)` foreign key, so it can never name another user's
+/// transaction, and `onDelete: Restrict` (not SetNull, which would null
+/// `userId` too), so the transaction cannot be deleted out from under the loan.
 ///
 /// Outstanding principal is never stored: it is `principal` minus the sum of
 /// this loan's `LoanPayment.principalAmount` values, computed in `loan.ts`
@@ -604,31 +614,35 @@ enum PaymentFrequency {
 /// `Loan_termMonths_positive` (> 0), `Loan_scheduledPaymentAmount_positive`
 /// (> 0) and `Loan_dueDayOfMonth_range` (1–31).
 model Loan {
-  id                     String           @id @default(cuid())
-  userId                 String
-  lender                 String
-  principal              Decimal          @db.Decimal(18, 2)
-  currency               Currency
+  id                        String           @id @default(cuid())
+  userId                    String
+  lender                    String
+  principal                 Decimal          @db.Decimal(18, 2)
+  currency                  Currency
   /// Percent per year, informational only — no interest is ever computed here.
-  interestRate           Decimal          @db.Decimal(6, 3)
+  interestRate              Decimal          @db.Decimal(6, 3)
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
-  startDate              DateTime
-  termMonths             Int
-  paymentFrequency       PaymentFrequency
-  scheduledPaymentAmount Decimal          @db.Decimal(18, 2)
+  startDate                 DateTime
+  termMonths                Int
+  paymentFrequency          PaymentFrequency
+  scheduledPaymentAmount    Decimal          @db.Decimal(18, 2)
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7). Advanced
   /// by exactly one interval inside the same transaction as each payment.
-  nextDueDate            DateTime
+  nextDueDate               DateTime
   /// The schedule's anchor day, 1–31, captured from the first `nextDueDate`.
-  dueDayOfMonth          Int
-  status                 LoanStoredStatus @default(ACTIVE)
-  notes                  String?
-  createdAt              DateTime         @default(now())
-  updatedAt              DateTime         @updatedAt
+  dueDayOfMonth             Int
+  status                    LoanStoredStatus @default(ACTIVE)
+  notes                     String?
+  /// The principal received, when the loan was recorded into an account.
+  disbursementTransactionId String?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
 
-  payments LoanPayment[]
+  payments                LoanPayment[]
+  disbursementTransaction Transaction?  @relation("LoanDisbursementTransaction", fields: [userId, disbursementTransactionId], references: [userId, id], onDelete: Restrict)
 
   @@unique([userId, id])
+  @@unique([userId, disbursementTransactionId])
   @@index([userId, status])
 }
 
@@ -650,21 +664,35 @@ model Loan {
 /// reference impossible at the database level: a payment can never point at
 /// another user's loan (spec §4.12), and an attempt raises P2003 even when it
 /// bypasses the service.
+///
+/// `principalTransactionId` and `interestTransactionId` link the instalment to
+/// the two Transactions that paid it from an account, when the user chose one
+/// (spec 2026-10-12 §4): a CASH_OUT for the principal part and an EXPENSE in
+/// "Loan Interest & Fees" for the interest part, in the same account. A part of
+/// zero has no transaction, so either link can be NULL on a linked instalment —
+/// and both are NULL when it was not recorded in an account. Same composite,
+/// unique, `onDelete: Restrict` shape as `Loan.disbursementTransactionId`.
 model LoanPayment {
-  id              String   @id @default(cuid())
-  userId          String
-  loanId          String
-  totalAmount     Decimal  @db.Decimal(18, 2)
-  principalAmount Decimal  @db.Decimal(18, 2)
-  interestAmount  Decimal  @db.Decimal(18, 2)
+  id                     String   @id @default(cuid())
+  userId                 String
+  loanId                 String
+  totalAmount            Decimal  @db.Decimal(18, 2)
+  principalAmount        Decimal  @db.Decimal(18, 2)
+  interestAmount         Decimal  @db.Decimal(18, 2)
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7).
-  paymentDate     DateTime
-  note            String?
-  createdAt       DateTime @default(now())
+  paymentDate            DateTime
+  note                   String?
+  principalTransactionId String?
+  interestTransactionId  String?
+  createdAt              DateTime @default(now())
 
-  loan Loan @relation(fields: [userId, loanId], references: [userId, id])
+  loan                 Loan         @relation(fields: [userId, loanId], references: [userId, id])
+  principalTransaction Transaction? @relation("LoanPaymentPrincipalTransaction", fields: [userId, principalTransactionId], references: [userId, id], onDelete: Restrict)
+  interestTransaction  Transaction? @relation("LoanPaymentInterestTransaction", fields: [userId, interestTransactionId], references: [userId, id], onDelete: Restrict)
 
   @@unique([userId, id])
+  @@unique([userId, principalTransactionId])
+  @@unique([userId, interestTransactionId])
   @@index([userId, loanId, paymentDate])
 }
 

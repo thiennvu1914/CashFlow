@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { addMonthsUtcClamped, advanceByFrequency, daysInUtcMonth } from './add-months-clamped'
+import {
+  addMonthsUtcClamped,
+  advanceByFrequency,
+  daysInUtcMonth,
+  retreatByFrequency,
+} from './add-months-clamped'
 
 /**
  * What this suite exists to pin down is the *anchor*, not just the clamping.
@@ -167,5 +172,49 @@ describe('advanceByFrequency', () => {
       '2026-02-28T09:30:00.000Z',
     )
     expect(advanceByFrequency(instant, 'YEARLY', 31).toISOString()).toBe('2027-01-31T09:30:00.000Z')
+  })
+})
+
+describe('retreatByFrequency', () => {
+  it('subtracts exactly seven days for WEEKLY and ignores the anchor day', () => {
+    expect(day(retreatByFrequency(carrier('2026-02-07'), 'WEEKLY'))).toBe('2026-01-31')
+    expect(day(retreatByFrequency(carrier('2026-02-07'), 'WEEKLY', 31))).toBe('2026-01-31')
+    expect(day(retreatByFrequency(carrier('2028-03-03'), 'WEEKLY'))).toBe('2028-02-25')
+  })
+
+  it('steps a month-end MONTHLY schedule back across February onto its anchor', () => {
+    // The two cases a plain clamp or "−30 days" gets wrong: 31 March back is
+    // 28 February (the day the advance from 31 January produced), and 28
+    // February back is 31 January again, not the 28th.
+    expect(day(retreatByFrequency(carrier('2026-03-31'), 'MONTHLY', 31))).toBe('2026-02-28')
+    expect(day(retreatByFrequency(carrier('2026-02-28'), 'MONTHLY', 31))).toBe('2026-01-31')
+    expect(day(retreatByFrequency(carrier('2028-03-31'), 'MONTHLY', 31))).toBe('2028-02-29')
+    expect(day(retreatByFrequency(carrier('2027-01-31'), 'MONTHLY', 31))).toBe('2026-12-31')
+  })
+
+  it('steps a YEARLY schedule back twelve months, restoring a 29 February anchor', () => {
+    expect(day(retreatByFrequency(carrier('2029-02-28'), 'YEARLY', 29))).toBe('2028-02-29')
+    expect(day(retreatByFrequency(carrier('2030-02-28'), 'YEARLY', 29))).toBe('2029-02-28')
+  })
+
+  it('is the exact inverse of advanceByFrequency along an anchored schedule', () => {
+    // Every stored `nextDueDate` sits on its anchor day (clamped), because it
+    // started there and every advance lands there — so one step back always
+    // recovers the date the last advance started from.
+    for (const [start, frequency, anchor] of [
+      ['2026-01-31', 'MONTHLY', 31],
+      ['2026-01-30', 'MONTHLY', 30],
+      ['2028-01-29', 'MONTHLY', 29],
+      ['2026-03-15', 'MONTHLY', 15],
+      ['2028-02-29', 'YEARLY', 29],
+      ['2026-01-31', 'WEEKLY', 31],
+    ] as const) {
+      let date = carrier(start)
+      for (let step = 0; step < 14; step += 1) {
+        const next = advanceByFrequency(date, frequency, anchor)
+        expect(day(retreatByFrequency(next, frequency, anchor))).toBe(day(date))
+        date = next
+      }
+    }
   })
 })

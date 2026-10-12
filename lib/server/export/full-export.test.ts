@@ -113,6 +113,8 @@ const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
 /** The session context the debt service's writes take. Every debt here is
  *  recorded without an account, so only its shape matters. */
 const DEBT_CONTEXT = { timezone: TEST_TIMEZONE, locale: 'vi' } as const
+/** The same session context for the loan writes, which take it too. */
+const LOAN_CONTEXT = { timezone: TEST_TIMEZONE, locale: 'vi' } as const
 
 /**
  * The workbook this fixture produced BEFORE Task 4 changed what the Debts and
@@ -333,45 +335,63 @@ describe('full export workbook', () => {
   /** An ACTIVE VND loan with one instalment, and a CLOSED USD one that also has
    *  a payment behind it. */
   async function seedLoans(userId: string) {
-    const active = await createLoan(userId, {
-      lender: 'Sacombank',
-      principal: 1_000_000,
-      currency: 'VND',
-      // Three decimal places, which is exactly what `Decimal(6, 3)` holds — so
-      // a cell that lost a digit or scaled by 100 would show.
-      interestRate: 7.125,
-      startDate: '2026-01-01',
-      termMonths: 12,
-      paymentFrequency: 'MONTHLY',
-      scheduledPaymentAmount: 90_000,
-      nextDueDate: '2026-03-01',
-      notes: 'car loan',
-    })
-    await recordLoanPayment(userId, active.id, {
-      totalAmount: 90_000,
-      principalAmount: 80_000,
-      interestAmount: 10_000,
-      paymentDate: '2026-03-01',
-      note: 'March instalment',
-    })
+    const active = await createLoan(
+      userId,
+      {
+        lender: 'Sacombank',
+        principal: 1_000_000,
+        currency: 'VND',
+        // Three decimal places, which is exactly what `Decimal(6, 3)` holds — so
+        // a cell that lost a digit or scaled by 100 would show.
+        interestRate: 7.125,
+        startDate: '2026-01-01',
+        termMonths: 12,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: 90_000,
+        nextDueDate: '2026-03-01',
+        notes: 'car loan',
+      },
+      LOAN_CONTEXT,
+    )
+    await recordLoanPayment(
+      userId,
+      active.id,
+      {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-03-01',
+        note: 'March instalment',
+      },
+      LOAN_CONTEXT,
+    )
 
-    const closed = await createLoan(userId, {
-      lender: 'Family',
-      principal: 200,
-      currency: 'USD',
-      interestRate: 0,
-      startDate: '2026-02-01',
-      termMonths: 6,
-      paymentFrequency: 'MONTHLY',
-      scheduledPaymentAmount: 50,
-      nextDueDate: '2026-03-01',
-    })
-    await recordLoanPayment(userId, closed.id, {
-      totalAmount: 50,
-      principalAmount: 40,
-      interestAmount: 10,
-      paymentDate: '2026-03-02',
-    })
+    const closed = await createLoan(
+      userId,
+      {
+        lender: 'Family',
+        principal: 200,
+        currency: 'USD',
+        interestRate: 0,
+        startDate: '2026-02-01',
+        termMonths: 6,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: 50,
+        nextDueDate: '2026-03-01',
+      },
+      LOAN_CONTEXT,
+    )
+    await recordLoanPayment(
+      userId,
+      closed.id,
+      {
+        totalAmount: 50,
+        principalAmount: 40,
+        interestAmount: 10,
+        paymentDate: '2026-03-02',
+      },
+      LOAN_CONTEXT,
+    )
     await closeLoan(userId, closed.id)
     return { active, closed }
   }
@@ -1467,31 +1487,45 @@ describe('full export workbook', () => {
     // And a repayment with no note of its own.
     await recordDebtPayment(s.userId, debt.id, { amount: 50_000, date: '2026-03-06' }, DEBT_CONTEXT)
     // No notes.
-    const loan = await createLoan(s.userId, {
-      lender: 'Agribank',
-      principal: 1_000_000,
-      currency: 'VND',
-      interestRate: 6.5,
-      startDate: '2026-01-01',
-      termMonths: 12,
-      paymentFrequency: 'MONTHLY',
-      scheduledPaymentAmount: 90_000,
-      nextDueDate: '2026-03-01',
-    })
+    const loan = await createLoan(
+      s.userId,
+      {
+        lender: 'Agribank',
+        principal: 1_000_000,
+        currency: 'VND',
+        interestRate: 6.5,
+        startDate: '2026-01-01',
+        termMonths: 12,
+        paymentFrequency: 'MONTHLY',
+        scheduledPaymentAmount: 90_000,
+        nextDueDate: '2026-03-01',
+      },
+      LOAN_CONTEXT,
+    )
     // An interest-only instalment and a principal-only one, both note-free:
     // a zero here is a fact about the split and must stay a numeric 0.
-    await recordLoanPayment(s.userId, loan.id, {
-      totalAmount: 5_000,
-      principalAmount: 0,
-      interestAmount: 5_000,
-      paymentDate: '2026-03-01',
-    })
-    await recordLoanPayment(s.userId, loan.id, {
-      totalAmount: 80_000,
-      principalAmount: 80_000,
-      interestAmount: 0,
-      paymentDate: '2026-03-02',
-    })
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      {
+        totalAmount: 5_000,
+        principalAmount: 0,
+        interestAmount: 5_000,
+        paymentDate: '2026-03-01',
+      },
+      LOAN_CONTEXT,
+    )
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      {
+        totalAmount: 80_000,
+        principalAmount: 80_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-02',
+      },
+      LOAN_CONTEXT,
+    )
     // No category, no account, no note.
     const reminder = await createReminder(s.userId, TEST_TIMEZONE, {
       title: 'Water bill',

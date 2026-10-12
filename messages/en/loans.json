@@ -45,5 +45,10 @@
   "closePending": "Closing…",
   "closedSection": "Closed loans ({count})",
   "emptyTitle": "No loans yet",
-  "emptyBody": "Add your first loan to track its outstanding principal."
+  "emptyBody": "Add your first loan to track its outstanding principal.",
+  "linkedNote": {
+    "disburse": "Loan from {lender}",
+    "principal": "Principal repaid to {lender}",
+    "interest": "Interest paid to {lender}"
+  }
 }

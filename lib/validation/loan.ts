@@ -24,7 +24,21 @@ import { moneyAmountSchema } from '@/lib/validation/money'
  * R6-6a), and letting a client post one would allow a loan whose stored anchor
  * and stored due date disagree. The derived states (PAID_OFF, OVERDUE) are not
  * stored at all.
+ *
+ * `accountId` (money-source linking, spec 2026-10-12 §6.3) is the account the
+ * borrowed money was received into on create, and the account an instalment
+ * was paid from. Absent means "don't record in an account" — the loan predates
+ * the app, or the money never touched a tracked account — and nothing moves.
+ * Only an id is checked here; whether it is the user's own, active account in
+ * the right currency is decided by the service under the account's row lock.
  */
+
+/** Same field and copy as the debt and reminder forms' account: an id or
+ *  nothing. */
+const linkedAccountIdSchema = z
+  .string({ error: 'Choose an account' })
+  .min(1, 'Choose an account')
+  .optional()
 
 /**
  * `interestRate` is `Decimal(6, 3)` — exactly 3 fractional digits — so a fourth
@@ -90,6 +104,8 @@ export const createLoanSchema = z.object({
   /** Strictly positive, matching `Loan_principal_positive`: a loan of zero is
    *  nothing to track. */
   principal: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
+  /** With an account, ignored by the service: the loan takes the account's
+   *  currency (spec §4 — cross-currency linking is out of scope). */
   currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
   /**
    * Percent per year, informational only — nothing in this app computes
@@ -134,6 +150,9 @@ export const createLoanSchema = z.object({
    * differently in the two fields.
    */
   nextDueDate: calendarDateStringSchema,
+  /** The account the principal was received into — its CASH_IN is dated on
+   *  `startDate`, so no separate "money moved on" date is asked for. */
+  accountId: linkedAccountIdSchema,
 })
 
 /**
@@ -194,6 +213,8 @@ export const recordLoanPaymentSchema = z
       .string({ error: 'Enter the note as text' })
       .max(500, 'Keep the note under 500 characters')
       .optional(),
+    /** The account the instalment was paid from; absent records no money. */
+    accountId: linkedAccountIdSchema,
   })
   /**
    * The split invariant, first of three layers (the service re-checks it in

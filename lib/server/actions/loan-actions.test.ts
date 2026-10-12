@@ -16,11 +16,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * session and never from the caller, that each domain failure becomes its own
  * code, that an unmapped error still escapes, and that a *failed* write
  * revalidates nothing.
+ *
+ * Money-source linking (spec 2026-10-12 §6.3) adds the session context the
+ * money-capable writes need — the user's timezone and locale — two payment
+ * actions (edit and delete), and four codes for the linked-transaction
+ * failures. The modules those errors live in (`linked-transaction`,
+ * `transaction`, `current-rate-policy`) import the Prisma client instance, so
+ * they are mocked with mirrors here exactly as `debt-actions.test.ts` mocks
+ * them; `account-lock` imports no client and is used as is.
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
 const createLoanMock = vi.hoisted(() => vi.fn())
 const updateLoanMock = vi.hoisted(() => vi.fn())
 const recordLoanPaymentMock = vi.hoisted(() => vi.fn())
+const updateLoanPaymentMock = vi.hoisted(() => vi.fn())
+const deleteLoanPaymentMock = vi.hoisted(() => vi.fn())
 const closeLoanMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
@@ -54,6 +64,27 @@ class MockLoanSplitMismatchError extends Error {
   }
 }
 
+class MockLinkedAccountCurrencyMismatchError extends Error {
+  constructor() {
+    super('Choose an account in the same currency as this record.')
+    this.name = 'LinkedAccountCurrencyMismatchError'
+  }
+}
+
+class MockConcurrentModificationError extends Error {
+  constructor() {
+    super('This transaction changed after it was read.')
+    this.name = 'ConcurrentModificationError'
+  }
+}
+
+class MockFxUnavailableError extends Error {
+  constructor() {
+    super('Unable to retrieve an exchange rate.')
+    this.name = 'FxUnavailableError'
+  }
+}
+
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
 }))
@@ -62,19 +93,40 @@ vi.mock('@/lib/server/services/loan', () => ({
   createLoan: createLoanMock,
   updateLoan: updateLoanMock,
   recordLoanPayment: recordLoanPaymentMock,
+  updateLoanPayment: updateLoanPaymentMock,
+  deleteLoanPayment: deleteLoanPaymentMock,
   closeLoan: closeLoanMock,
   LoanOverpaymentError: MockLoanOverpaymentError,
   LoanNotActiveError: MockLoanNotActiveError,
   LoanSplitMismatchError: MockLoanSplitMismatchError,
 }))
 
+vi.mock('@/lib/server/services/linked-transaction', () => ({
+  LinkedAccountCurrencyMismatchError: MockLinkedAccountCurrencyMismatchError,
+}))
+
+vi.mock('@/lib/server/services/transaction', () => ({
+  ConcurrentModificationError: MockConcurrentModificationError,
+}))
+
+vi.mock('@/lib/currency/current-rate-policy', () => ({
+  isFxUnavailableError: (e: unknown) => e instanceof MockFxUnavailableError,
+}))
+
 vi.mock('next/cache', () => ({
   revalidatePath: revalidatePathMock,
 }))
 
-const { createLoanAction, updateLoanAction, recordLoanPaymentAction, closeLoanAction } =
-  await import('./loan-actions')
+const {
+  createLoanAction,
+  updateLoanAction,
+  recordLoanPaymentAction,
+  updateLoanPaymentAction,
+  deleteLoanPaymentAction,
+  closeLoanAction,
+} = await import('./loan-actions')
 const { LOAN_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
+const { ArchivedAccountError } = await import('@/lib/server/services/account-lock')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -87,6 +139,13 @@ const FIXED_USER = {
   theme: 'light',
   timezone: 'Asia/Ho_Chi_Minh',
 }
+
+/** What every money-capable write receives from the session user, through
+ *  `resolveProfileDefaults` — never from the request. */
+const CONTEXT = { timezone: 'Asia/Ho_Chi_Minh', locale: 'vi' }
+
+/** Every page a write that can move money re-renders, in the order revalidated. */
+const MONEY_PAGES = ['/loans', '/accounts', '/transactions', '/dashboard']
 
 /** Every optional field populated, so the schema's output is deep-equal to the
  *  input and the `toHaveBeenCalledWith` assertions below can name it directly. */
@@ -117,6 +176,25 @@ const validPaymentInput = {
   note: 'April instalment',
 }
 
+const linkedCreateInput = { ...validCreateInput, accountId: 'account_1' }
+
+const linkedPaymentInput = { ...validPaymentInput, accountId: 'account_1' }
+
+/**
+ * The four linked-transaction failures and the codes they must become — the
+ * same table for every action that can write a linked transaction.
+ */
+const LINKED_FAILURES: [string, () => Error, string][] = [
+  ['FxUnavailableError', () => new MockFxUnavailableError(), 'FX_UNAVAILABLE'],
+  ['ArchivedAccountError', () => new ArchivedAccountError(), 'ARCHIVED_ACCOUNT'],
+  [
+    'LinkedAccountCurrencyMismatchError',
+    () => new MockLinkedAccountCurrencyMismatchError(),
+    'ACCOUNT_CURRENCY_MISMATCH',
+  ],
+  ['ConcurrentModificationError', () => new MockConcurrentModificationError(), 'CONFLICT'],
+]
+
 function notFoundError() {
   return new Prisma.PrismaClientKnownRequestError('Not found', {
     code: 'P2025',
@@ -129,34 +207,31 @@ beforeEach(() => {
   createLoanMock.mockReset()
   updateLoanMock.mockReset()
   recordLoanPaymentMock.mockReset()
+  updateLoanPaymentMock.mockReset()
+  deleteLoanPaymentMock.mockReset()
   closeLoanMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
 
 describe('createLoanAction', () => {
-  it('calls the service with the session user id and the parsed input only, then revalidates', async () => {
+  it('calls the service with the session user id, the parsed input and the session context', async () => {
     createLoanMock.mockResolvedValue(undefined)
 
     const result = await createLoanAction(validCreateInput)
 
     expect(result).toEqual({ ok: true })
     expect(createLoanMock).toHaveBeenCalledTimes(1)
-    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput)
-    expect(revalidatePathMock).toHaveBeenCalledWith('/loans')
-    expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard')
+    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput, CONTEXT)
   })
 
-  it('revalidates only the two pages a loan appears on — no ledger page', async () => {
+  it('revalidates the ledger pages too, because a loan received into an account moves money', async () => {
     createLoanMock.mockResolvedValue(undefined)
 
-    await createLoanAction(validCreateInput)
+    await createLoanAction(linkedCreateInput)
 
-    // A loan is tracking only: recording an instalment writes a `LoanPayment`
-    // and moves the schedule, and nothing else, so `/accounts` and
-    // `/transactions` have nothing to re-render and revalidating them would
-    // claim otherwise.
-    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(['/loans', '/dashboard'])
+    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, linkedCreateInput, CONTEXT)
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
   })
 
   it('passes the id from the session, never a userId the caller smuggled in', async () => {
@@ -166,7 +241,20 @@ describe('createLoanAction', () => {
 
     // Zod strips the unknown key, so the service is handed the authenticated
     // user's id and an input that cannot carry a second one.
-    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput)
+    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput, CONTEXT)
+  })
+
+  it("takes the timezone and locale from the session user, falling back to CashFlow's defaults", async () => {
+    createLoanMock.mockResolvedValue(undefined)
+    requireUserMock.mockResolvedValueOnce({ ...FIXED_USER, timezone: 'Not/AZone', locale: 'xx' })
+
+    await createLoanAction(validCreateInput)
+
+    // `resolveProfileDefaults` never lets an out-of-enum stored value through.
+    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput, {
+      timezone: 'Asia/Ho_Chi_Minh',
+      locale: 'vi',
+    })
   })
 
   it('strips a client-supplied status rather than obeying it', async () => {
@@ -176,8 +264,20 @@ describe('createLoanAction', () => {
 
     // A new loan is ACTIVE and only `closeLoan` changes that; `status` is in no
     // schema at all, so a crafted request cannot create a pre-closed loan.
-    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput)
+    expect(createLoanMock).toHaveBeenCalledWith(FIXED_USER.id, validCreateInput, CONTEXT)
   })
+
+  it.each(LINKED_FAILURES)(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      createLoanMock.mockRejectedValue(error())
+
+      const result = await createLoanAction(linkedCreateInput)
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
 
   it('maps an invalid input to INVALID_INPUT without ever calling the service', async () => {
     const result = await createLoanAction({ ...validCreateInput, lender: '' })
@@ -240,6 +340,7 @@ describe('updateLoanAction', () => {
     expect(result).toEqual({ ok: true })
     expect(updateLoanMock).toHaveBeenCalledTimes(1)
     expect(updateLoanMock).toHaveBeenCalledWith(FIXED_USER.id, 'loan_1', validUpdateInput)
+    // Editing a loan's terms moves no money, so no ledger page is revalidated.
     expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(['/loans', '/dashboard'])
   })
 
@@ -308,16 +409,33 @@ describe('updateLoanAction', () => {
 })
 
 describe('recordLoanPaymentAction', () => {
-  it('calls the service with the session user id, the loan id and the parsed input, then revalidates', async () => {
+  it('calls the service with the session user id, the loan id, the parsed input and the context, then revalidates', async () => {
     recordLoanPaymentMock.mockResolvedValue(undefined)
 
-    const result = await recordLoanPaymentAction('loan_1', validPaymentInput)
+    const result = await recordLoanPaymentAction('loan_1', linkedPaymentInput)
 
     expect(result).toEqual({ ok: true })
     expect(recordLoanPaymentMock).toHaveBeenCalledTimes(1)
-    expect(recordLoanPaymentMock).toHaveBeenCalledWith(FIXED_USER.id, 'loan_1', validPaymentInput)
-    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(['/loans', '/dashboard'])
+    expect(recordLoanPaymentMock).toHaveBeenCalledWith(
+      FIXED_USER.id,
+      'loan_1',
+      linkedPaymentInput,
+      CONTEXT,
+    )
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
   })
+
+  it.each(LINKED_FAILURES)(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      recordLoanPaymentMock.mockRejectedValue(error())
+
+      const result = await recordLoanPaymentAction('loan_1', linkedPaymentInput)
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
 
   it('maps LoanOverpaymentError to OVERPAYMENT and does not revalidate', async () => {
     recordLoanPaymentMock.mockRejectedValue(new MockLoanOverpaymentError('1500000'))
@@ -382,7 +500,12 @@ describe('recordLoanPaymentAction', () => {
     // Every grace period and the early months of many loans are interest only;
     // refusing a 0 principal would make those instalments unrecordable.
     expect(result).toEqual({ ok: true })
-    expect(recordLoanPaymentMock).toHaveBeenCalledWith(FIXED_USER.id, 'loan_1', interestOnly)
+    expect(recordLoanPaymentMock).toHaveBeenCalledWith(
+      FIXED_USER.id,
+      'loan_1',
+      interestOnly,
+      CONTEXT,
+    )
   })
 
   it('maps an empty payment date to INVALID_INPUT without ever calling the service', async () => {
@@ -422,6 +545,113 @@ describe('recordLoanPaymentAction', () => {
   })
 })
 
+describe('updateLoanPaymentAction', () => {
+  it('calls the service with the session user id, the payment id, the parsed input and the context, then revalidates', async () => {
+    updateLoanPaymentMock.mockResolvedValue(undefined)
+
+    const result = await updateLoanPaymentAction('payment_1', linkedPaymentInput)
+
+    expect(result).toEqual({ ok: true })
+    expect(updateLoanPaymentMock).toHaveBeenCalledTimes(1)
+    expect(updateLoanPaymentMock).toHaveBeenCalledWith(
+      FIXED_USER.id,
+      'payment_1',
+      linkedPaymentInput,
+      CONTEXT,
+    )
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
+  })
+
+  it('maps an invalid input to INVALID_INPUT without ever calling the service', async () => {
+    // A mismatched split: rejected at the schema, before any lock is taken.
+    const result = await updateLoanPaymentAction('payment_1', {
+      ...validPaymentInput,
+      totalAmount: 4_000_000,
+    })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(updateLoanPaymentMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['LoanOverpaymentError', () => new MockLoanOverpaymentError('1'), 'OVERPAYMENT'],
+    ['LoanNotActiveError', () => new MockLoanNotActiveError(), 'NOT_ACTIVE'],
+    ['LoanSplitMismatchError', () => new MockLoanSplitMismatchError(), 'SPLIT_MISMATCH'],
+    ['P2025', notFoundError, 'NOT_FOUND'],
+    ...LINKED_FAILURES,
+  ] as [string, () => Error, string][])(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      updateLoanPaymentMock.mockRejectedValue(error())
+
+      const result = await updateLoanPaymentAction('payment_1', linkedPaymentInput)
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rethrows an unmapped error', async () => {
+    updateLoanPaymentMock.mockRejectedValue(new Error('boom'))
+
+    await expect(updateLoanPaymentAction('payment_1', validPaymentInput)).rejects.toThrow('boom')
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(updateLoanPaymentAction('payment_1', validPaymentInput)).rejects.toThrow(
+      'Not authenticated',
+    )
+    expect(updateLoanPaymentMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteLoanPaymentAction', () => {
+  it('calls the service with the session user id and the payment id only, then revalidates', async () => {
+    deleteLoanPaymentMock.mockResolvedValue(undefined)
+
+    const result = await deleteLoanPaymentAction('payment_1')
+
+    expect(result).toEqual({ ok: true })
+    expect(deleteLoanPaymentMock).toHaveBeenCalledTimes(1)
+    expect(deleteLoanPaymentMock).toHaveBeenCalledWith(FIXED_USER.id, 'payment_1')
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
+  })
+
+  it.each([
+    ['LoanNotActiveError', () => new MockLoanNotActiveError(), 'NOT_ACTIVE'],
+    ['P2025', notFoundError, 'NOT_FOUND'],
+    ['ArchivedAccountError', () => new ArchivedAccountError(), 'ARCHIVED_ACCOUNT'],
+    ['ConcurrentModificationError', () => new MockConcurrentModificationError(), 'CONFLICT'],
+  ] as [string, () => Error, string][])(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      deleteLoanPaymentMock.mockRejectedValue(error())
+
+      const result = await deleteLoanPaymentAction('payment_1')
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    deleteLoanPaymentMock.mockRejectedValue(new Error('boom'))
+
+    await expect(deleteLoanPaymentAction('payment_1')).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(deleteLoanPaymentAction('payment_1')).rejects.toThrow('Not authenticated')
+    expect(deleteLoanPaymentMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('closeLoanAction', () => {
   it('calls the service with the session user id and the loan id only, then revalidates', async () => {
     closeLoanMock.mockResolvedValue(undefined)
@@ -431,6 +661,7 @@ describe('closeLoanAction', () => {
     expect(result).toEqual({ ok: true })
     expect(closeLoanMock).toHaveBeenCalledTimes(1)
     expect(closeLoanMock).toHaveBeenCalledWith(FIXED_USER.id, 'loan_1')
+    // Closing a loan moves no money, so no ledger page is revalidated.
     expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(['/loans', '/dashboard'])
   })
 
@@ -483,6 +714,10 @@ describe('LOAN_ERROR_KEYS', () => {
       OVERPAYMENT: 'errors.loan.OVERPAYMENT',
       NOT_ACTIVE: 'errors.loan.NOT_ACTIVE',
       SPLIT_MISMATCH: 'errors.loan.SPLIT_MISMATCH',
+      FX_UNAVAILABLE: 'errors.loan.FX_UNAVAILABLE',
+      ARCHIVED_ACCOUNT: 'errors.loan.ARCHIVED_ACCOUNT',
+      ACCOUNT_CURRENCY_MISMATCH: 'errors.loan.ACCOUNT_CURRENCY_MISMATCH',
+      CONFLICT: 'errors.loan.CONFLICT',
       INVALID_INPUT: 'errors.loan.INVALID_INPUT',
       NOT_FOUND: 'errors.loan.NOT_FOUND',
     })

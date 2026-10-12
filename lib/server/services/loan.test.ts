@@ -1,39 +1,55 @@
-import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
-import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import { FxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { resetFxMemoForTests } from '@/lib/currency/fx-service'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
+import {
+  calendarDateToUtcCarrier,
+  formatCalendarDate,
+  todayCalendarDateInZone,
+} from '@/lib/datetime/calendar-date'
+import { LOAN_INTEREST_CATEGORY_NAME } from '@/lib/server/defaults'
 import { getAccountBalance } from '@/lib/server/services/balance'
+import type { CreateLoanInput, RecordLoanPaymentInput } from '@/lib/validation/loan'
+import { ArchivedAccountError } from './account-lock'
+import { LinkedAccountCurrencyMismatchError } from './linked-transaction'
+import { ConcurrentModificationError, createTransaction, updateTransaction } from './transaction'
 import {
   closeLoan,
-  createLoan,
+  createLoan as createLoanIn,
+  deleteLoanPayment,
   deriveLoanDisplayStatus,
   deriveLoanOutstandingPrincipal,
   getLoanOutstandingPrincipal,
   getLoansWithOutstanding,
   listLoans,
-  recordLoanPayment,
+  recordLoanPayment as recordLoanPaymentIn,
   updateLoan,
+  updateLoanPayment as updateLoanPaymentIn,
   LoanNotActiveError,
   LoanOverpaymentError,
   LoanSplitMismatchError,
+  type LoanLinkContext,
   type LoanTotals,
   type LoanWithOutstanding,
 } from './loan'
 
 /**
- * Group 4's data-layer acceptance check (spec §4.10).
+ * Group 4's data-layer acceptance check (spec §4.10), extended by money-source
+ * linking (spec 2026-10-12 §4, §6.3).
  *
- * Seven properties are what this suite exists to hold:
+ * Seven properties are what the `loan service` block exists to hold:
  *
- * 1. **Nothing here moves money.** The fixture seeds an account and an EXPENSE
- *    transaction, and `afterEach` re-asserts the account / transaction /
- *    transfer counts, the two seeded rows field for field, and the account's
- *    derived balance — after *every* case, not just a dedicated one. A stray
- *    write to any of them fails the test that made it.
+ * 1. **Without an account, nothing moves.** The fixture seeds an account and
+ *    an EXPENSE transaction, and `afterEach` re-asserts the account /
+ *    transaction / transfer counts, the two seeded rows field for field, and
+ *    the account's derived balance — after *every* case, not just a dedicated
+ *    one. Every case in that block records its loans and instalments with no
+ *    account (the "don't record in an account" choice), so a stray write to
+ *    the ledger fails the test that made it.
  * 2. **Outstanding principal is derived, never stored.** Every assertion goes
  *    through `principal − Σ principalAmount`; there is no column to check, and
  *    the `groupBy` sums and the included payment rows are asserted to agree.
@@ -62,6 +78,15 @@ import {
  * called: a loan keeps its own currency and nothing here converts one, so any
  * network access — inside a held row lock, no less — would be a bug rather than
  * a slow test.
+ *
+ * The `money-source linking` block below covers the other choice — a loan
+ * received into an account, or an instalment paid from one — where the
+ * matching Transactions are written in the same database transaction (spec
+ * §4's mapping: CASH_IN for the principal received, CASH_OUT for each
+ * instalment's principal and EXPENSE in "Loan Interest & Fees" for its
+ * interest; an injected FX provider for the snapshot, balances moving,
+ * refusals and injected failures writing nothing, instalment edits and deletes
+ * keeping all three rows consistent, and the lock order).
  */
 
 /** UTC+7, no DST — so no assertion below depends on a DST date. */
@@ -75,6 +100,37 @@ const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
  * passed.
  */
 const TODAY = '2026-03-15'
+
+/**
+ * What the action layer passes from the session (`resolveProfileDefaults(user)`):
+ * the zone a calendar date becomes an instant in, and the language a default
+ * transaction note is written in.
+ */
+const CONTEXT: LoanLinkContext = { timezone: TEST_TIMEZONE, locale: 'vi' }
+
+/** The three writes that take a context, with the test default applied — the
+ *  `…In` originals are called directly where a case needs another context. */
+function createLoan(userId: string, input: CreateLoanInput, provider?: ExchangeRateProvider) {
+  return createLoanIn(userId, input, CONTEXT, provider)
+}
+
+function recordLoanPayment(
+  userId: string,
+  loanId: string,
+  input: RecordLoanPaymentInput,
+  provider?: ExchangeRateProvider,
+) {
+  return recordLoanPaymentIn(userId, loanId, input, CONTEXT, provider)
+}
+
+function updateLoanPayment(
+  userId: string,
+  paymentId: string,
+  input: RecordLoanPaymentInput,
+  provider?: ExchangeRateProvider,
+) {
+  return updateLoanPaymentIn(userId, paymentId, input, CONTEXT, provider)
+}
 
 interface LoanFixture {
   userId: string
@@ -288,10 +344,10 @@ describe('loan service', () => {
     const fetchCalls = fetchSpy.mock.calls.length
     vi.restoreAllMocks()
     try {
-      // Tracking only, asserted after *every* case rather than in one dedicated
-      // test: whichever mutation a case ran, the ledger it did not ask about is
-      // still exactly as it was — counts, the two seeded rows field for field,
-      // and the derived balance.
+      // Without an account nothing moves, asserted after *every* case rather
+      // than in one dedicated test: whichever mutation a case ran, the ledger it
+      // did not ask about is still exactly as it was — counts, the two seeded
+      // rows field for field, and the derived balance.
       expect(await snapshotLedger(fx)).toEqual(ledger)
     } finally {
       // In `finally`, so a ledger assertion that fails still leaves the database
@@ -299,8 +355,9 @@ describe('loan service', () => {
       // cascade of unrelated ones.
       await cleanupUsers([fx.userId, ...extraUserIds])
     }
-    // A loan keeps its own currency and is never converted, so no code path here
-    // has any reason to reach an FX provider.
+    // A loan keeps its own currency and is never converted, and without an
+    // account no transaction (so no FX snapshot) is written, so no code path
+    // here has any reason to reach an FX provider.
     expect(fetchCalls).toBe(0)
   })
 
@@ -1165,6 +1222,271 @@ describe('loan service', () => {
     })
   })
 
+  describe('instalment edit and delete', () => {
+    function paymentRow(paymentId: string) {
+      return prisma.loanPayment.findUniqueOrThrow({
+        where: { userId_id: { userId: fx.userId, id: paymentId } },
+      })
+    }
+
+    it('edits the split, the date and the note of an instalment, leaving the schedule alone', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+
+      const updated = await updateLoanPayment(fx.userId, payment.id, {
+        totalAmount: 95_000.5,
+        principalAmount: 70_000.25,
+        interestAmount: 25_000.25,
+        paymentDate: '2026-02-03',
+        note: 'Corrected from the statement',
+      })
+
+      expect(updated.id).toBe(payment.id)
+      expect(updated.totalAmount.toString()).toBe('95000.5')
+      expect(updated.principalAmount.toString()).toBe('70000.25')
+      expect(updated.interestAmount.toString()).toBe('25000.25')
+      expect(formatCalendarDate(updated.paymentDate)).toBe('2026-02-03')
+      expect(updated.note).toBe('Corrected from the statement')
+      expect(updated.principalTransactionId).toBeNull()
+      expect(updated.interestTransactionId).toBeNull()
+      const entry = await entryFor(loan.id)
+      expect(entry.outstandingPrincipal.toString()).toBe('929999.75')
+      expect(entry.interestPaid.toString()).toBe('25000.25')
+      // Correcting an instalment is not paying another one: the schedule moved
+      // once, when it was recorded, and stays there.
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
+    })
+
+    it('clears the note when it comes back empty', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+        note: 'Typo',
+      })
+
+      const updated = await updateLoanPayment(fx.userId, payment.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+
+      expect(updated.note).toBeNull()
+    })
+
+    it('measures an edited principal against what is owed without the instalment being edited', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 300_000,
+        principalAmount: 300_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-01',
+      })
+      await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 600_000,
+        principalAmount: 600_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-01',
+      })
+
+      // 1,000,000 − 600,000 = 400,000 is owed without this instalment, so its
+      // principal may grow from 300,000 to exactly 400,000…
+      await updateLoanPayment(fx.userId, payment.id, {
+        totalAmount: 400_000,
+        principalAmount: 400_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-01',
+      })
+      // …and not a cent further.
+      const caught = await captureRejection(
+        updateLoanPayment(fx.userId, payment.id, {
+          totalAmount: 400_000.01,
+          principalAmount: 400_000.01,
+          interestAmount: 0,
+          paymentDate: '2026-02-01',
+        }),
+      )
+
+      expect(caught).toBeInstanceOf(LoanOverpaymentError)
+      expect((caught as LoanOverpaymentError).outstandingPrincipal.toString()).toBe('400000')
+      expect((await paymentRow(payment.id)).principalAmount.toString()).toBe('400000')
+      expect((await entryFor(loan.id)).outstandingPrincipal.toString()).toBe('0')
+    })
+
+    it('deletes the latest instalment, stepping the due date back by the period it advanced', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      const { payment: latest } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-03-01',
+      })
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+
+      await deleteLoanPayment(fx.userId, latest.id)
+
+      expect(await paymentCount(loan.id)).toBe(1)
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
+      const entry = await entryFor(loan.id)
+      expect(entry.outstandingPrincipal.toString()).toBe('920000')
+      expect(entry.interestPaid.toString()).toBe('10000')
+    })
+
+    it('deletes an older instalment without moving the due date', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      const { payment: older } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-03-01',
+      })
+
+      await deleteLoanPayment(fx.userId, older.id)
+
+      expect(await paymentCount(loan.id)).toBe(1)
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+      expect((await entryFor(loan.id)).outstandingPrincipal.toString()).toBe('920000')
+    })
+
+    it('decides "latest" by payment date, not by entry order, and breaks a same-day tie by creation', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      // Entered last, but paid first: not the latest instalment.
+      const { payment: march } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 1_000,
+        principalAmount: 1_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-01',
+      })
+      const { payment: backdated } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 1_000,
+        principalAmount: 1_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-01',
+      })
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+
+      await deleteLoanPayment(fx.userId, backdated.id)
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+
+      // Two on the same day: the one created later is the latest.
+      const { payment: sameDay } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 1_000,
+        principalAmount: 1_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-01',
+      })
+      expect(sameDay.createdAt.getTime()).toBeGreaterThanOrEqual(march.createdAt.getTime())
+      expect(await dueDate(loan.id)).toBe('2026-05-01')
+
+      await deleteLoanPayment(fx.userId, march.id)
+      expect(await dueDate(loan.id)).toBe('2026-05-01')
+      await deleteLoanPayment(fx.userId, sameDay.id)
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+      expect(await paymentCount(loan.id)).toBe(0)
+    })
+
+    it('steps a month-end schedule back across February onto its anchor day', async () => {
+      // Due on the 31st: recording walks Jan 31 → Feb 28 → Mar 31, so deleting
+      // must walk Mar 31 → Feb 28 → Jan 31 — not Mar 31 → Feb 28 → Jan 28.
+      const loan = await createLoan(fx.userId, { ...BASE_LOAN, nextDueDate: '2026-01-31' })
+      const { payment: first } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-01-31',
+      })
+      const { payment: second } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-28',
+      })
+      expect(await dueDate(loan.id)).toBe('2026-03-31')
+
+      await deleteLoanPayment(fx.userId, second.id)
+      expect(await dueDate(loan.id)).toBe('2026-02-28')
+
+      await deleteLoanPayment(fx.userId, first.id)
+      expect(await dueDate(loan.id)).toBe('2026-01-31')
+    })
+
+    it('steps a WEEKLY schedule back by exactly seven days', async () => {
+      const loan = await createLoan(fx.userId, {
+        ...BASE_LOAN,
+        paymentFrequency: 'WEEKLY',
+        nextDueDate: '2026-02-26',
+      })
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 20_000,
+        principalAmount: 18_000,
+        interestAmount: 2_000,
+        paymentDate: '2026-02-26',
+      })
+      expect(await dueDate(loan.id)).toBe('2026-03-05')
+
+      await deleteLoanPayment(fx.userId, payment.id)
+
+      expect(await dueDate(loan.id)).toBe('2026-02-26')
+    })
+
+    it('refuses to edit or delete an instalment of a closed loan — its history is frozen', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+      })
+      await closeLoan(fx.userId, loan.id)
+
+      await expect(
+        updateLoanPayment(fx.userId, payment.id, {
+          totalAmount: 1_000,
+          principalAmount: 1_000,
+          interestAmount: 0,
+          paymentDate: '2026-02-01',
+        }),
+      ).rejects.toThrow(LoanNotActiveError)
+      await expect(deleteLoanPayment(fx.userId, payment.id)).rejects.toThrow(LoanNotActiveError)
+
+      expect(await paymentRow(payment.id)).toEqual(payment)
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
+    })
+
+    it('answers an instalment id that does not exist with P2025', async () => {
+      await expectPrismaCode(
+        updateLoanPayment(fx.userId, 'no-such-payment', {
+          totalAmount: 1,
+          principalAmount: 1,
+          interestAmount: 0,
+          paymentDate: TODAY,
+        }),
+        'P2025',
+      )
+      await expectPrismaCode(deleteLoanPayment(fx.userId, 'no-such-payment'), 'P2025')
+    })
+  })
+
   describe('concurrency', () => {
     it('lets only one of two concurrent payments through when both would fit alone', async () => {
       // Three runs, because a race that passes once may simply have been
@@ -1314,13 +1636,23 @@ describe('loan service', () => {
       )
       await expectPrismaCode(closeLoan(fx.userId, theirs.id), 'P2025')
       await expectPrismaCode(getLoanOutstandingPrincipal(fx.userId, theirs.id), 'P2025')
+      await expectPrismaCode(
+        updateLoanPayment(fx.userId, before.payments[0].id, {
+          totalAmount: 1,
+          principalAmount: 1,
+          interestAmount: 0,
+          paymentDate: TODAY,
+        }),
+        'P2025',
+      )
+      await expectPrismaCode(deleteLoanPayment(fx.userId, before.payments[0].id), 'P2025')
 
       const after = await prisma.loan.findUniqueOrThrow({
         where: { userId_id: { userId: other.userId, id: theirs.id } },
         include: { payments: true },
       })
       // Byte-identical, `updatedAt`, `nextDueDate` and the payment row included:
-      // not one of the four attempts reached a write.
+      // not one of the six attempts reached a write.
       expect(after).toEqual(before)
       // And the loan is invisible to the other user's reads, not merely
       // unwritable.
@@ -1449,14 +1781,14 @@ describe('loan service', () => {
     })
   })
 
-  describe('tracking only — no money moves', () => {
+  describe('without an account — no money moves', () => {
     it('leaves accounts, transactions, transfers and the balance untouched by every mutation', async () => {
       // Every mutation the service has, in the sequence a real user would
       // produce, ending in a close. `afterEach` checks the ledger after every
       // case; this one exists so the check has run against the whole surface at
       // least once, in one place a reviewer can read.
       const loan = await createLoan(fx.userId, { ...BASE_LOAN, notes: 'Tracking only' })
-      await recordLoanPayment(fx.userId, loan.id, {
+      const { payment } = await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 410_000,
         principalAmount: 400_000,
         interestAmount: 10_000,
@@ -1467,6 +1799,19 @@ describe('loan service', () => {
         scheduledPaymentAmount: 95_000,
         notes: 'Edited',
       })
+      await updateLoanPayment(fx.userId, payment.id, {
+        totalAmount: 420_000,
+        principalAmount: 400_000,
+        interestAmount: 20_000,
+        paymentDate: '2026-02-02',
+      })
+      const { payment: extra } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 1_000,
+        principalAmount: 0,
+        interestAmount: 1_000,
+        paymentDate: '2026-02-03',
+      })
+      await deleteLoanPayment(fx.userId, extra.id)
       await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 600_000,
         principalAmount: 600_000,
@@ -1508,34 +1853,1635 @@ describe('loan service', () => {
         }),
       ).toEqual(ledger.transaction)
     })
+  })
+})
 
-    /**
-     * The structural half of "no money moves": the service cannot touch the
-     * ledger because it does not import anything that writes to it.
-     *
-     * Reading the source is deliberate rather than fragile. The behavioural
-     * checks can only catch a write they happen to provoke, whereas a later
-     * phase adding "record the instalment as a transaction too" would
-     * reintroduce exactly the coupling spec §4.10 exists to avoid — and
-     * importing the module is the first step of doing so. Only import
-     * specifiers are matched, so the doc comment may keep naming these modules
-     * to say why they are absent.
-     */
-    it('imports nothing that could move money or reach a live rate', () => {
-      const source = readFileSync(fileURLToPath(new URL('./loan.ts', import.meta.url)), 'utf8')
+/**
+ * Money-source linking for loans (spec 2026-10-12 §4, §6.3, §6.8) against the
+ * real database.
+ *
+ * Every FX lookup goes through an injected fake provider whose snapshot values
+ * are asserted exactly, and `fetch` is a throwing spy, so nothing here can reach
+ * the network. The USD/VND `ExchangeRate` cache rows are global, so
+ * `beforeEach` and `afterEach` delete them and reset the in-process FX memo
+ * (`resetFxMemoForTests`, the rule `transaction.test.ts` follows).
+ *
+ * "No FX lookup happened" is proved with `failingProvider` over an empty cache
+ * (`beforeEach` empties it; a case that has already cached a rate empties it
+ * again): a lookup there could only end in `FxUnavailableError`, so a write
+ * that succeeds never asked.
+ */
+describe('money-source linking', () => {
+  const LINK_FX_SOURCE = 'loan-link-fake'
+  const createdUserIds: string[] = []
+  let fetchSpy: MockInstance
 
-      for (const forbidden of [
-        'services/transaction',
-        'services/transfer',
-        'services/balance',
-        'services/financial-account',
-        'current-rate-policy',
-        'fx-service',
-        'current-amount',
-        'historical-amount',
-      ]) {
-        expect(source).not.toMatch(new RegExp(`from '[^']*${forbidden}`))
+  function fakeProvider(rate = 25000, source = LINK_FX_SOURCE) {
+    // In the past, so a service that stamped "now" instead of the provider's
+    // own fetch instant could not pass an equality check.
+    const fetchedAt = new Date(Date.now() - 5 * 60 * 1000)
+    const effectiveDate = new Date()
+    const provider: ExchangeRateProvider = {
+      getLatestRate: async () => ({ rate, effectiveDate, fetchedAt, source }),
+      getHistoricalRate: async () => null,
+    }
+    return { provider, fetchedAt, effectiveDate }
+  }
+
+  const failingProvider: ExchangeRateProvider = {
+    getLatestRate: async () => {
+      throw new Error('provider down')
+    },
+    getHistoricalRate: async () => null,
+  }
+
+  /** The `ExchangeRate` cache key — the `fxRateEffectiveAt` a live lookup stores. */
+  function utcDayStart(date: Date): Date {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+  }
+
+  async function clearFxCache() {
+    await prisma.exchangeRate.deleteMany({ where: { base: 'USD', quote: 'VND' } })
+    // The in-process memo would otherwise outlive the rows just deleted.
+    resetFxMemoForTests()
+  }
+
+  /**
+   * A user with three active accounts — two in VND, one in USD — and an archived
+   * VND one, and no categories at all (so the first interest payment has to
+   * create "Loan Interest & Fees"). Each funded account starts at a distinct
+   * round figure, so every balance assertion below is a delta anyone can check
+   * by eye.
+   */
+  async function setup() {
+    const user = await prisma.user.create({
+      data: {
+        id: randomUUID(),
+        email: `loan-link-${randomUUID()}@example.com`,
+        name: 'Loan Link Test',
+        emailVerified: false,
+        timezone: TEST_TIMEZONE,
+      },
+    })
+    createdUserIds.push(user.id)
+    const accountType = await prisma.accountType.create({ data: { userId: user.id, name: 'Cash' } })
+    const account = (name: string, currency: 'VND' | 'USD', initialBalance: string) =>
+      prisma.financialAccount.create({
+        data: {
+          userId: user.id,
+          name,
+          accountTypeId: accountType.id,
+          initialBalance: new Prisma.Decimal(initialBalance),
+          currency,
+        },
+      })
+    const wallet = await account('Wallet', 'VND', '5000000')
+    const bank = await account('Bank', 'VND', '2000000')
+    const dollars = await account('Dollars', 'USD', '1000')
+    const archived = await account('Old', 'VND', '0')
+    await prisma.financialAccount.update({
+      where: { userId_id: { userId: user.id, id: archived.id } },
+      data: { status: 'ARCHIVED' },
+    })
+    return {
+      userId: user.id,
+      walletId: wallet.id,
+      bankId: bank.id,
+      dollarsId: dollars.id,
+      archivedId: archived.id,
+    }
+  }
+
+  type Setup = Awaited<ReturnType<typeof setup>>
+
+  async function balanceOf(s: Setup, accountId: string): Promise<string> {
+    return (await getAccountBalance(s.userId, accountId)).toString()
+  }
+
+  async function transactionCount(s: Setup): Promise<number> {
+    return prisma.transaction.count({ where: { userId: s.userId } })
+  }
+
+  async function transactionById(s: Setup, id: string | null) {
+    if (id === null) throw new Error('expected a linked transaction')
+    return prisma.transaction.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  async function transactionExists(s: Setup, id: string): Promise<boolean> {
+    return (await prisma.transaction.count({ where: { userId: s.userId, id } })) === 1
+  }
+
+  async function paymentById(s: Setup, id: string) {
+    return prisma.loanPayment.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  async function loanById(s: Setup, id: string) {
+    return prisma.loan.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  /** The user's "Loan Interest & Fees" categories — normally exactly one. */
+  function interestCategories(s: Setup) {
+    return prisma.category.findMany({
+      where: { userId: s.userId, name: LOAN_INTEREST_CATEGORY_NAME, type: 'EXPENSE' },
+    })
+  }
+
+  /** A loan of 1,000,000 VND recorded with no account, so the cases about
+   *  instalments start from an untouched ledger. Next due 2026-04-01. */
+  function unlinkedLoan(s: Setup, overrides: Partial<CreateLoanInput> = {}) {
+    return createLoan(s.userId, { ...BASE_LOAN, nextDueDate: '2026-04-01', ...overrides })
+  }
+
+  /** 90,000 = 80,000 principal + 10,000 interest, on a day that is not today. */
+  const INSTALMENT = {
+    totalAmount: 90_000,
+    principalAmount: 80_000,
+    interestAmount: 10_000,
+    paymentDate: '2026-03-05',
+  }
+
+  /**
+   * Makes the next interactive transaction fail at one write *after* the linked
+   * transactions have been written inside it — the only way to watch the
+   * rollback itself, since every refusal the service makes on its own happens
+   * before its first write. `prisma.$transaction` is wrapped so the callback
+   * receives a transaction client whose `model.method` throws; everything else
+   * is the real client on the real transaction.
+   */
+  function failInsideTransaction(
+    model: 'loan' | 'loanPayment',
+    method: 'create' | 'update' | 'delete',
+  ) {
+    const original = prisma.$transaction.bind(prisma) as (
+      callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    ) => Promise<unknown>
+    const failure = new Error(`injected ${model}.${method} failure`)
+    vi.spyOn(prisma, '$transaction').mockImplementation(((
+      callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    ) =>
+      original((tx) =>
+        callback(
+          new Proxy(tx, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              if (property !== model) return value
+              return new Proxy(value as object, {
+                get(delegate, name) {
+                  if (name === method) {
+                    return async () => {
+                      throw failure
+                    }
+                  }
+                  return Reflect.get(delegate, name)
+                },
+              })
+            },
+          }),
+        ),
+      )) as never)
+    return failure
+  }
+
+  beforeEach(async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('network access in test')
+    })
+    // The FX fallback path warns by design; silenced to keep the output pristine.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Today's USD/VND row is shared by every suite, so a rate another file left
+    // behind would otherwise be served instead of this file's fake provider.
+    await clearFxCache()
+  })
+
+  afterEach(async () => {
+    const fetchCalls = fetchSpy.mock.calls.length
+    vi.restoreAllMocks()
+    const userIds = createdUserIds.splice(0)
+    try {
+      await clearFxCache()
+      if (userIds.length > 0) {
+        // Instalments and loans first: they reference the transactions now.
+        await prisma.loanPayment.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.loan.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.financialAccount.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.accountType.deleteMany({ where: { userId: { in: userIds } } })
+        await prisma.category.deleteMany({ where: { userId: { in: userIds } } })
+      }
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+    }
+    expect(fetchCalls).toBe(0)
+  })
+
+  describe('createLoan with an account', () => {
+    it('records the principal received as a CASH_IN on the start date, in the account currency', async () => {
+      const s = await setup()
+      const { provider, fetchedAt, effectiveDate } = fakeProvider()
+
+      const loan = await createLoan(
+        s.userId,
+        // `currency: 'USD'` is the form's leftover choice: with an account, the
+        // loan is in the account's currency, whatever the form said.
+        { ...BASE_LOAN, currency: 'USD', startDate: '2026-03-10', accountId: s.walletId },
+        provider,
+      )
+
+      expect(loan.currency).toBe('VND')
+      expect(loan.disbursementTransactionId).not.toBeNull()
+      // What the instalment picker pre-selects (spec §6.3) travels with the row.
+      expect(loan.disbursementTransaction).toMatchObject({
+        accountId: s.walletId,
+        account: { name: 'Wallet', status: 'ACTIVE' },
+      })
+
+      const disbursement = await transactionById(s, loan.disbursementTransactionId)
+      expect(disbursement).toMatchObject({
+        accountId: s.walletId,
+        type: 'CASH_IN',
+        currency: 'VND',
+        categoryId: null,
+        // No notes given: the label, rendered once in the user's locale.
+        note: 'Vay – Vietcombank',
+        fxRateSource: LINK_FX_SOURCE,
+      })
+      expect(disbursement.amount.toString()).toBe('1000000')
+      // 12:00 on 2026-03-10 in Asia/Ho_Chi_Minh (UTC+7): the same calendar day
+      // in every zone the user could later read it in.
+      expect(disbursement.date.toISOString()).toBe('2026-03-10T05:00:00.000Z')
+      expect(disbursement.vndPerUsdAtEntry.toString()).toBe('25000')
+      expect(disbursement.fxRateFetchedAt.toISOString()).toBe(fetchedAt.toISOString())
+      expect(disbursement.fxRateEffectiveAt.toISOString()).toBe(
+        utcDayStart(effectiveDate).toISOString(),
+      )
+
+      expect(await balanceOf(s, s.walletId)).toBe('6000000')
+      expect(await transactionCount(s)).toBe(1)
+      // The loan's own figures are unchanged by where the money went.
+      expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('1000000')
+    })
+
+    it('carries the loan notes as the transaction note', async () => {
+      const s = await setup()
+
+      const loan = await createLoan(
+        s.userId,
+        { ...BASE_LOAN, notes: 'For the roof', accountId: s.bankId },
+        fakeProvider().provider,
+      )
+
+      const disbursement = await transactionById(s, loan.disbursementTransactionId)
+      expect(disbursement).toMatchObject({ accountId: s.bankId, note: 'For the roof' })
+      expect(await balanceOf(s, s.bankId)).toBe('3000000')
+    })
+
+    it('dates a loan that starts today at the current instant, so the balance moves immediately', async () => {
+      const s = await setup()
+      const today = todayCalendarDateInZone(TEST_TIMEZONE, new Date())
+
+      const before = Date.now()
+      const loan = await createLoan(
+        s.userId,
+        { ...BASE_LOAN, startDate: today, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      const disbursement = await transactionById(s, loan.disbursementTransactionId)
+
+      // Not 12:00 of a day that may still be hours away.
+      expect(disbursement.date.getTime()).toBeGreaterThanOrEqual(before)
+      expect(disbursement.date.getTime()).toBeLessThanOrEqual(Date.now())
+      expect(await balanceOf(s, s.walletId)).toBe('6000000')
+    })
+
+    it('records nothing and asks for no rate without an account, keeping the chosen currency', async () => {
+      const s = await setup()
+
+      const loan = await createLoan(s.userId, { ...BASE_LOAN, currency: 'USD' }, failingProvider)
+
+      expect(loan.currency).toBe('USD')
+      expect(loan.disbursementTransactionId).toBeNull()
+      expect(loan.disbursementTransaction).toBeNull()
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+
+    it("refuses another user's account with P2025 and writes nothing for either user", async () => {
+      const s = await setup()
+      const other = await setup()
+
+      await expectPrismaCode(
+        createLoan(s.userId, { ...BASE_LOAN, accountId: other.walletId }, fakeProvider().provider),
+        'P2025',
+      )
+
+      expect(await prisma.loan.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await transactionCount(other)).toBe(0)
+      expect(await balanceOf(other, other.walletId)).toBe('5000000')
+    })
+
+    it('refuses an archived account and writes nothing', async () => {
+      const s = await setup()
+
+      await expect(
+        createLoan(s.userId, { ...BASE_LOAN, accountId: s.archivedId }, fakeProvider().provider),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await prisma.loan.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('writes nothing when no usable rate exists — no loan without its transaction', async () => {
+      const s = await setup()
+
+      await expect(
+        createLoan(s.userId, { ...BASE_LOAN, accountId: s.walletId }, failingProvider),
+      ).rejects.toThrow(FxUnavailableError)
+
+      expect(await prisma.loan.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('rolls the disbursement back when the loan row itself fails to write', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const failure = failInsideTransaction('loan', 'create')
+
+      await expect(
+        createLoan(s.userId, { ...BASE_LOAN, accountId: s.walletId }, provider),
+      ).rejects.toBe(failure)
+
+      expect(await prisma.loan.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+  })
+
+  describe('recordLoanPayment with an account', () => {
+    it('records the principal as a CASH_OUT and the interest as an EXPENSE in "Loan Interest & Fees"', async () => {
+      const s = await setup()
+      const { provider, fetchedAt } = fakeProvider()
+      const loan = await unlinkedLoan(s)
+
+      const { payment, nextDueDate } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        provider,
+      )
+
+      const [category] = await interestCategories(s)
+      expect(category).toMatchObject({ type: 'EXPENSE', status: 'ACTIVE' })
+
+      const principal = await transactionById(s, payment.principalTransactionId)
+      expect(principal).toMatchObject({
+        accountId: s.walletId,
+        type: 'CASH_OUT',
+        currency: 'VND',
+        categoryId: null,
+        note: 'Trả gốc – Vietcombank',
+        fxRateSource: LINK_FX_SOURCE,
+      })
+      expect(principal.amount.toString()).toBe('80000')
+      expect(principal.date.toISOString()).toBe('2026-03-05T05:00:00.000Z')
+      expect(principal.fxRateFetchedAt.toISOString()).toBe(fetchedAt.toISOString())
+
+      const interest = await transactionById(s, payment.interestTransactionId)
+      expect(interest).toMatchObject({
+        accountId: s.walletId,
+        type: 'EXPENSE',
+        currency: 'VND',
+        categoryId: category.id,
+        note: 'Lãi vay – Vietcombank',
+        fxRateSource: LINK_FX_SOURCE,
+      })
+      expect(interest.amount.toString()).toBe('10000')
+      expect(interest.date.toISOString()).toBe('2026-03-05T05:00:00.000Z')
+
+      // The account pays the whole instalment; only the principal pays the
+      // loan down; the schedule moves on exactly as without an account.
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+      expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('920000')
+      expect(formatCalendarDate(nextDueDate)).toBe('2026-05-01')
+      // The payment row keeps its calendar-date carrier.
+      expect(formatCalendarDate(payment.paymentDate)).toBe('2026-03-05')
+
+      // And the read the Loans page uses carries both links and their account.
+      const [listed] = await listLoans(s.userId)
+      expect(listed.payments[0]).toMatchObject({
+        principalTransactionId: principal.id,
+        interestTransactionId: interest.id,
+        principalTransaction: { accountId: s.walletId, account: { name: 'Wallet' } },
+        interestTransaction: { accountId: s.walletId },
+      })
+    })
+
+    it('files the interest under the existing "Loan Interest & Fees" category rather than a new one', async () => {
+      const s = await setup()
+      const existing = await prisma.category.create({
+        data: { userId: s.userId, name: LOAN_INTEREST_CATEGORY_NAME, type: 'EXPENSE' },
+      })
+      const loan = await unlinkedLoan(s)
+
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, payment.interestTransactionId)).categoryId).toBe(existing.id)
+      expect(await interestCategories(s)).toHaveLength(1)
+    })
+
+    it('writes no interest transaction when the interest is zero', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        {
+          totalAmount: 80_000,
+          principalAmount: 80_000,
+          interestAmount: 0,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+
+      expect(payment.interestTransactionId).toBeNull()
+      expect((await transactionById(s, payment.principalTransactionId)).amount.toString()).toBe(
+        '80000',
+      )
+      expect(await transactionCount(s)).toBe(1)
+      // Nothing needed the interest category, so none was made.
+      expect(await interestCategories(s)).toHaveLength(0)
+      expect(await balanceOf(s, s.walletId)).toBe('4920000')
+    })
+
+    it('writes no principal transaction for an interest-only instalment', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        {
+          totalAmount: 5_000,
+          principalAmount: 0,
+          interestAmount: 5_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+
+      expect(payment.principalTransactionId).toBeNull()
+      const interest = await transactionById(s, payment.interestTransactionId)
+      expect(interest).toMatchObject({ type: 'EXPENSE' })
+      expect(interest.amount.toString()).toBe('5000')
+      expect(await transactionCount(s)).toBe(1)
+      expect(await balanceOf(s, s.walletId)).toBe('4995000')
+      expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('1000000')
+    })
+
+    it('carries the user note on both transactions', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, note: 'March instalment', accountId: s.bankId },
+        fakeProvider().provider,
+      )
+
+      expect(payment.note).toBe('March instalment')
+      expect((await transactionById(s, payment.principalTransactionId)).note).toBe(
+        'March instalment',
+      )
+      expect((await transactionById(s, payment.interestTransactionId)).note).toBe(
+        'March instalment',
+      )
+      expect(await balanceOf(s, s.bankId)).toBe('1910000')
+    })
+
+    it('dates an instalment paid today at the current instant, so the balance moves immediately', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const today = todayCalendarDateInZone(TEST_TIMEZONE, new Date())
+
+      const before = Date.now()
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, paymentDate: today, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      for (const id of [payment.principalTransactionId, payment.interestTransactionId]) {
+        const linked = await transactionById(s, id)
+        expect(linked.date.getTime()).toBeGreaterThanOrEqual(before)
+        expect(linked.date.getTime()).toBeLessThanOrEqual(Date.now())
+      }
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+    })
+
+    it('records nothing and asks for no rate without an account', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      const { payment } = await recordLoanPayment(s.userId, loan.id, INSTALMENT, failingProvider)
+
+      expect(payment.principalTransactionId).toBeNull()
+      expect(payment.interestTransactionId).toBeNull()
+      expect(await transactionCount(s)).toBe(0)
+      expect(await interestCategories(s)).toHaveLength(0)
+    })
+
+    it('refuses a principal overpayment and leaves no orphan transaction or category behind', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      await recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 600_000,
+        principalAmount: 600_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-01',
+      })
+
+      const caught = await captureRejection(
+        recordLoanPayment(
+          s.userId,
+          loan.id,
+          {
+            totalAmount: 410_000.01,
+            principalAmount: 400_000.01,
+            interestAmount: 10_000,
+            paymentDate: '2026-03-02',
+            accountId: s.walletId,
+          },
+          fakeProvider().provider,
+        ),
+      )
+
+      expect(caught).toBeInstanceOf(LoanOverpaymentError)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await interestCategories(s)).toHaveLength(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(1)
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-05-01')
+    })
+
+    it('refuses an account in another currency than the loan, writing nothing', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      await expect(
+        recordLoanPayment(
+          s.userId,
+          loan.id,
+          { ...INSTALMENT, accountId: s.dollarsId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(LinkedAccountCurrencyMismatchError)
+
+      expect(await transactionCount(s)).toBe(0)
+      expect(await interestCategories(s)).toHaveLength(0)
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-04-01')
+    })
+
+    it('refuses an archived account', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      await expect(
+        recordLoanPayment(
+          s.userId,
+          loan.id,
+          { ...INSTALMENT, accountId: s.archivedId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it("refuses another user's account, and another user's loan, with P2025", async () => {
+      const s = await setup()
+      const other = await setup()
+      const mine = await unlinkedLoan(s)
+      const theirs = await unlinkedLoan(other)
+      const { provider } = fakeProvider()
+
+      await expectPrismaCode(
+        recordLoanPayment(
+          s.userId,
+          mine.id,
+          { ...INSTALMENT, accountId: other.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+      await expectPrismaCode(
+        recordLoanPayment(s.userId, theirs.id, { ...INSTALMENT, accountId: s.walletId }, provider),
+        'P2025',
+      )
+
+      expect(
+        await prisma.loanPayment.count({ where: { userId: { in: [s.userId, other.userId] } } }),
+      ).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await transactionCount(other)).toBe(0)
+      expect(formatCalendarDate((await loanById(other, theirs.id)).nextDueDate)).toBe('2026-04-01')
+    })
+
+    it('refuses a closed loan, writing nothing', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      await closeLoan(s.userId, loan.id)
+
+      await expect(
+        recordLoanPayment(
+          s.userId,
+          loan.id,
+          { ...INSTALMENT, accountId: s.walletId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(LoanNotActiveError)
+
+      expect(await transactionCount(s)).toBe(0)
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    it('writes nothing when no usable rate exists', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+
+      await expect(
+        recordLoanPayment(
+          s.userId,
+          loan.id,
+          { ...INSTALMENT, accountId: s.walletId },
+          failingProvider,
+        ),
+      ).rejects.toThrow(FxUnavailableError)
+
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('rolls both transactions back when the instalment row fails to write', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { provider } = fakeProvider()
+      const failure = failInsideTransaction('loanPayment', 'create')
+
+      await expect(
+        recordLoanPayment(s.userId, loan.id, { ...INSTALMENT, accountId: s.walletId }, provider),
+      ).rejects.toBe(failure)
+
+      // Both transactions had been inserted when the failure struck; neither
+      // survived it, and neither did the interest category made for them.
+      expect(await transactionCount(s)).toBe(0)
+      expect(await interestCategories(s)).toHaveLength(0)
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-04-01')
+    })
+  })
+
+  describe('default notes', () => {
+    it.each([
+      ['vi', ['Vay – Agribank', 'Trả gốc – Agribank', 'Lãi vay – Agribank']],
+      ['en', ['Loan from Agribank', 'Principal repaid to Agribank', 'Interest paid to Agribank']],
+    ] as const)('writes the label in the user locale (%s)', async (locale, expected) => {
+      const s = await setup()
+      const context: LoanLinkContext = { timezone: TEST_TIMEZONE, locale }
+      const { provider } = fakeProvider()
+
+      const loan = await createLoanIn(
+        s.userId,
+        { ...BASE_LOAN, lender: 'Agribank', accountId: s.walletId },
+        context,
+        provider,
+      )
+      const { payment } = await recordLoanPaymentIn(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        context,
+        provider,
+      )
+
+      const notes = await Promise.all(
+        [
+          loan.disbursementTransactionId,
+          payment.principalTransactionId,
+          payment.interestTransactionId,
+        ].map(async (id) => (await transactionById(s, id)).note),
+      )
+      expect(notes).toEqual(expected)
+    })
+  })
+
+  describe('updateLoanPayment', () => {
+    /** A loan of 1,000,000 with no account and one instalment of 90,000
+     *  (80,000 + 10,000) paid from the wallet on 2026-03-05 — wallet balance
+     *  4,910,000, next due 2026-05-01. */
+    async function linkedPayment(s: Setup, provider = fakeProvider().provider) {
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        provider,
+      )
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+      return {
+        loan,
+        payment,
+        principal: await transactionById(s, payment.principalTransactionId),
+        interest: await transactionById(s, payment.interestTransactionId),
+      }
+    }
+
+    it('updates both linked amounts and re-snapshots FX for an economic change', async () => {
+      const s = await setup()
+      const { loan, payment, principal, interest } = await linkedPayment(s)
+      // A different rate is only observable once today's cached one is gone.
+      await clearFxCache()
+      const second = fakeProvider(26000, 'loan-link-fake-2')
+
+      const updated = await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 120_000,
+          principalAmount: 100_000,
+          interestAmount: 20_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        second.provider,
+      )
+
+      expect(updated.principalTransactionId).toBe(principal.id)
+      expect(updated.interestTransactionId).toBe(interest.id)
+      const principalAfter = await transactionById(s, principal.id)
+      const interestAfter = await transactionById(s, interest.id)
+      expect(principalAfter.amount.toString()).toBe('100000')
+      expect(interestAfter.amount.toString()).toBe('20000')
+      for (const after of [principalAfter, interestAfter]) {
+        expect(after.vndPerUsdAtEntry.toString()).toBe('26000')
+        expect(after.fxRateSource).toBe('loan-link-fake-2')
+        expect(after.fxRateFetchedAt.toISOString()).toBe(second.fetchedAt.toISOString())
+      }
+      expect(await balanceOf(s, s.walletId)).toBe('4880000')
+      expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('900000')
+      // An edit is not another instalment: the schedule stays where it was.
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-05-01')
+    })
+
+    it('re-snapshots only the transaction whose economic content changed (ruling R-6)', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      await clearFxCache()
+      const second = fakeProvider(26000, 'loan-link-fake-2')
+
+      // Only the interest part changes.
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 95_000,
+          principalAmount: 80_000,
+          interestAmount: 15_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        second.provider,
+      )
+
+      const principalAfter = await transactionById(s, principal.id)
+      expect(principalAfter.vndPerUsdAtEntry.toString()).toBe(principal.vndPerUsdAtEntry.toString())
+      expect(principalAfter.fxRateSource).toBe(principal.fxRateSource)
+      expect(principalAfter.fxRateFetchedAt).toEqual(principal.fxRateFetchedAt)
+      const interestAfter = await transactionById(s, interest.id)
+      expect(interestAfter.amount.toString()).toBe('15000')
+      expect(interestAfter.fxRateSource).toBe('loan-link-fake-2')
+    })
+
+    it('moves both transactions to the new payment day', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, paymentDate: '2026-03-07', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, principal.id)).date.toISOString()).toBe(
+        '2026-03-07T05:00:00.000Z',
+      )
+      expect((await transactionById(s, interest.id)).date.toISOString()).toBe(
+        '2026-03-07T05:00:00.000Z',
+      )
+      expect(formatCalendarDate((await paymentById(s, payment.id)).paymentDate)).toBe('2026-03-07')
+    })
+
+    it('keeps both FX snapshots exactly, and asks for no rate, when only the note changes', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      await clearFxCache()
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, note: 'Corrected', accountId: s.walletId },
+        failingProvider,
+      )
+
+      for (const before of [principal, interest]) {
+        const after = await transactionById(s, before.id)
+        expect(after.note).toBe('Corrected')
+        expect(after.date).toEqual(before.date)
+        expect(after.vndPerUsdAtEntry.toString()).toBe(before.vndPerUsdAtEntry.toString())
+        expect(after.fxRateFetchedAt).toEqual(before.fxRateFetchedAt)
+        expect(after.fxRateEffectiveAt).toEqual(before.fxRateEffectiveAt)
+        expect(after.fxRateSource).toBe(before.fxRateSource)
+      }
+      expect((await paymentById(s, payment.id)).note).toBe('Corrected')
+    })
+
+    it('keeps the instant of an instalment paid today when its date is unchanged', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const today = todayCalendarDateInZone(TEST_TIMEZONE, new Date())
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, paymentDate: today, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      const principal = await transactionById(s, payment.principalTransactionId)
+      await clearFxCache()
+
+      // Not restamped with a later "now", which would read as an economic
+      // change and ask for a rate.
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, paymentDate: today, note: 'Same day', accountId: s.walletId },
+        failingProvider,
+      )
+
+      expect((await transactionById(s, principal.id)).date).toEqual(principal.date)
+    })
+
+    it('keeps the default note written at creation rather than re-rendering it in the current locale', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPaymentIn(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        { timezone: TEST_TIMEZONE, locale: 'en' },
+        fakeProvider().provider,
+      )
+
+      // Edited later from a Vietnamese session, still with no note of its own.
+      await updateLoanPaymentIn(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, totalAmount: 95_000, interestAmount: 15_000, accountId: s.walletId },
+        { timezone: TEST_TIMEZONE, locale: 'vi' },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, payment.principalTransactionId)).note).toBe(
+        'Principal repaid to Vietcombank',
+      )
+      expect((await transactionById(s, payment.interestTransactionId)).note).toBe(
+        'Interest paid to Vietcombank',
+      )
+    })
+
+    it('brings the default note back when the user clears their own', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, note: 'Typo', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, payment.principalTransactionId)).note).toBe(
+        'Trả gốc – Vietcombank',
+      )
+      expect((await transactionById(s, payment.interestTransactionId)).note).toBe(
+        'Lãi vay – Vietcombank',
+      )
+      expect((await paymentById(s, payment.id)).note).toBeNull()
+    })
+
+    it('moves both transactions to another account, re-snapshotting for the move', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      await clearFxCache()
+      const second = fakeProvider(26000, 'loan-link-fake-2')
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, accountId: s.bankId },
+        second.provider,
+      )
+
+      for (const id of [principal.id, interest.id]) {
+        const after = await transactionById(s, id)
+        expect(after.accountId).toBe(s.bankId)
+        expect(after.fxRateSource).toBe('loan-link-fake-2')
+      }
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect(await balanceOf(s, s.bankId)).toBe('1910000')
+      expect(await transactionCount(s)).toBe(2)
+    })
+
+    it('deletes both linked transactions when the account is removed, asking for no rate', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      await clearFxCache()
+
+      const updated = await updateLoanPayment(s.userId, payment.id, INSTALMENT, failingProvider)
+
+      expect(updated.principalTransactionId).toBeNull()
+      expect(updated.interestTransactionId).toBeNull()
+      expect(await transactionExists(s, principal.id)).toBe(false)
+      expect(await transactionExists(s, interest.id)).toBe(false)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+
+    it('creates both linked transactions when an account is added', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(s.userId, loan.id, {
+        ...INSTALMENT,
+        note: 'Late note',
+      })
+
+      const updated = await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, note: 'Late note', accountId: s.bankId },
+        fakeProvider().provider,
+      )
+
+      const principal = await transactionById(s, updated.principalTransactionId)
+      expect(principal).toMatchObject({ accountId: s.bankId, type: 'CASH_OUT', note: 'Late note' })
+      expect(principal.date.toISOString()).toBe('2026-03-05T05:00:00.000Z')
+      const interest = await transactionById(s, updated.interestTransactionId)
+      expect(interest).toMatchObject({ accountId: s.bankId, type: 'EXPENSE', note: 'Late note' })
+      expect(await balanceOf(s, s.bankId)).toBe('1910000')
+    })
+
+    it('removes the interest transaction when the interest drops to zero, and creates it again when it returns', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+
+      const withoutInterest = await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 80_000,
+          principalAmount: 80_000,
+          interestAmount: 0,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+      expect(withoutInterest.principalTransactionId).toBe(principal.id)
+      expect(withoutInterest.interestTransactionId).toBeNull()
+      expect(await transactionExists(s, interest.id)).toBe(false)
+      expect(await balanceOf(s, s.walletId)).toBe('4920000')
+
+      const withInterest = await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 92_000,
+          principalAmount: 80_000,
+          interestAmount: 12_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+      const recreated = await transactionById(s, withInterest.interestTransactionId)
+      expect(recreated).toMatchObject({ type: 'EXPENSE', categoryId: interest.categoryId })
+      expect(recreated.amount.toString()).toBe('12000')
+      expect(await balanceOf(s, s.walletId)).toBe('4908000')
+    })
+
+    it('removes the principal transaction when an instalment becomes interest only', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+
+      const updated = await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 10_000,
+          principalAmount: 0,
+          interestAmount: 10_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+
+      expect(updated.principalTransactionId).toBeNull()
+      expect(updated.interestTransactionId).toBe(interest.id)
+      expect(await transactionExists(s, principal.id)).toBe(false)
+      expect(await balanceOf(s, s.walletId)).toBe('4990000')
+    })
+
+    it('re-asserts the type and category of both linked transactions, healing a stray edit', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      const elsewhere = await prisma.category.create({
+        data: { userId: s.userId, name: 'Groceries', type: 'EXPENSE' },
+      })
+      // As the Transactions page could still do to a linked row before it is
+      // locked there (spec §6.5).
+      await prisma.transaction.update({
+        where: { userId_id: { userId: s.userId, id: principal.id } },
+        data: { type: 'CASH_IN' },
+      })
+      await prisma.transaction.update({
+        where: { userId_id: { userId: s.userId, id: interest.id } },
+        data: { categoryId: elsewhere.id },
+      })
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, note: 'Healed', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect(await transactionById(s, principal.id)).toMatchObject({
+        type: 'CASH_OUT',
+        categoryId: null,
+      })
+      expect(await transactionById(s, interest.id)).toMatchObject({
+        type: 'EXPENSE',
+        categoryId: interest.categoryId,
+      })
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+    })
+
+    it('keeps the over-payment rule and changes nothing when it refuses', async () => {
+      const s = await setup()
+      const { loan, payment, principal, interest } = await linkedPayment(s)
+      await recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 900_000,
+        principalAmount: 900_000,
+        interestAmount: 0,
+        paymentDate: '2026-03-06',
+      })
+
+      const caught = await captureRejection(
+        updateLoanPayment(
+          s.userId,
+          payment.id,
+          {
+            totalAmount: 110_000.01,
+            principalAmount: 100_000.01,
+            interestAmount: 10_000,
+            paymentDate: '2026-03-05',
+            accountId: s.walletId,
+          },
+          fakeProvider().provider,
+        ),
+      )
+
+      expect(caught).toBeInstanceOf(LoanOverpaymentError)
+      expect((caught as LoanOverpaymentError).outstandingPrincipal.toString()).toBe('100000')
+      expect(await transactionById(s, principal.id)).toEqual(principal)
+      expect(await transactionById(s, interest.id)).toEqual(interest)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it('refuses an account in another currency, and an archived account, changing nothing', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      const { provider } = fakeProvider()
+
+      await expect(
+        updateLoanPayment(
+          s.userId,
+          payment.id,
+          { ...INSTALMENT, accountId: s.dollarsId },
+          provider,
+        ),
+      ).rejects.toThrow(LinkedAccountCurrencyMismatchError)
+      await expect(
+        updateLoanPayment(
+          s.userId,
+          payment.id,
+          { ...INSTALMENT, accountId: s.archivedId },
+          provider,
+        ),
+      ).rejects.toThrow(ArchivedAccountError)
+
+      expect(await transactionById(s, principal.id)).toEqual(principal)
+      expect(await transactionById(s, interest.id)).toEqual(interest)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it("refuses another user's instalment, and moving mine into another user's account", async () => {
+      const s = await setup()
+      const other = await setup()
+      const mine = await linkedPayment(s)
+      const theirs = await linkedPayment(other)
+      const { provider } = fakeProvider()
+
+      await expectPrismaCode(
+        updateLoanPayment(
+          s.userId,
+          theirs.payment.id,
+          { ...INSTALMENT, accountId: s.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+      await expectPrismaCode(
+        updateLoanPayment(
+          s.userId,
+          mine.payment.id,
+          { ...INSTALMENT, accountId: other.walletId },
+          provider,
+        ),
+        'P2025',
+      )
+
+      expect(await paymentById(other, theirs.payment.id)).toEqual(theirs.payment)
+      expect(await transactionById(other, theirs.principal.id)).toEqual(theirs.principal)
+      expect(await transactionById(other, theirs.interest.id)).toEqual(theirs.interest)
+      expect(await transactionById(s, mine.principal.id)).toEqual(mine.principal)
+    })
+
+    it('refuses an instalment of a closed loan', async () => {
+      const s = await setup()
+      const { loan, payment, principal } = await linkedPayment(s)
+      await closeLoan(s.userId, loan.id)
+
+      await expect(
+        updateLoanPayment(
+          s.userId,
+          payment.id,
+          { ...INSTALMENT, totalAmount: 91_000, interestAmount: 11_000, accountId: s.walletId },
+          fakeProvider().provider,
+        ),
+      ).rejects.toThrow(LoanNotActiveError)
+
+      expect(await transactionById(s, principal.id)).toEqual(principal)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it('rolls every linked change back when the instalment row fails to write', async () => {
+      const s = await setup()
+      const { payment, principal, interest } = await linkedPayment(s)
+      const { provider } = fakeProvider()
+      const failure = failInsideTransaction('loanPayment', 'update')
+
+      // Moves both to the bank and drops the interest — every kind of linked
+      // write happens before the failing payment update.
+      await expect(
+        updateLoanPayment(
+          s.userId,
+          payment.id,
+          {
+            totalAmount: 80_000,
+            principalAmount: 80_000,
+            interestAmount: 0,
+            paymentDate: '2026-03-05',
+            accountId: s.bankId,
+          },
+          provider,
+        ),
+      ).rejects.toBe(failure)
+
+      expect(await transactionById(s, principal.id)).toEqual(principal)
+      expect(await transactionById(s, interest.id)).toEqual(interest)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+      expect(await balanceOf(s, s.bankId)).toBe('2000000')
+    })
+  })
+
+  describe('deleteLoanPayment', () => {
+    it('removes the instalment and both transactions; the balance and the schedule come back', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+
+      await deleteLoanPayment(s.userId, payment.id)
+
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(0)
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+      expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('1000000')
+      // It was the latest instalment, so the due date steps back to where
+      // recording it found it.
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-04-01')
+    })
+
+    it('removes an interest-only instalment and its one transaction', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        {
+          totalAmount: 5_000,
+          principalAmount: 0,
+          interestAmount: 5_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+
+      await deleteLoanPayment(s.userId, payment.id)
+
+      expect(await transactionCount(s)).toBe(0)
+      expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    })
+
+    it("refuses another user's instalment and leaves its rows in place", async () => {
+      const s = await setup()
+      const other = await setup()
+      const loan = await unlinkedLoan(other)
+      const { payment: theirs } = await recordLoanPayment(
+        other.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: other.walletId },
+        fakeProvider().provider,
+      )
+
+      await expectPrismaCode(deleteLoanPayment(s.userId, theirs.id), 'P2025')
+
+      expect(await paymentById(other, theirs.id)).toEqual(theirs)
+      expect(await transactionCount(other)).toBe(2)
+      expect(formatCalendarDate((await loanById(other, loan.id)).nextDueDate)).toBe('2026-05-01')
+    })
+
+    it('refuses an instalment of a closed loan', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      await closeLoan(s.userId, loan.id)
+
+      await expect(deleteLoanPayment(s.userId, payment.id)).rejects.toThrow(LoanNotActiveError)
+
+      expect(await transactionCount(s)).toBe(2)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it('refuses while the account is archived — its history is frozen', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.bankId },
+        fakeProvider().provider,
+      )
+      await prisma.financialAccount.update({
+        where: { userId_id: { userId: s.userId, id: s.bankId } },
+        data: { status: 'ARCHIVED' },
+      })
+
+      await expect(deleteLoanPayment(s.userId, payment.id)).rejects.toThrow(ArchivedAccountError)
+
+      expect(await transactionCount(s)).toBe(2)
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+    })
+
+    it('rolls the deletions back when stepping the schedule back fails', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      const failure = failInsideTransaction('loan', 'update')
+
+      await expect(deleteLoanPayment(s.userId, payment.id)).rejects.toBe(failure)
+
+      expect(await paymentById(s, payment.id)).toEqual(payment)
+      expect(await transactionCount(s)).toBe(2)
+      expect(await balanceOf(s, s.walletId)).toBe('4910000')
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-05-01')
+    })
+  })
+
+  describe('closeLoan', () => {
+    it('creates no transaction and keeps the linked ones — no money moves', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const loan = await createLoan(s.userId, { ...BASE_LOAN, accountId: s.walletId }, provider)
+      await recordLoanPayment(s.userId, loan.id, { ...INSTALMENT, accountId: s.walletId }, provider)
+
+      await closeLoan(s.userId, loan.id)
+
+      expect(await transactionCount(s)).toBe(3)
+      expect(await balanceOf(s, s.walletId)).toBe('5910000')
+    })
+  })
+
+  describe('database constraints', () => {
+    it("rejects a link to another user's transaction even bypassing the service", async () => {
+      const s = await setup()
+      const other = await setup()
+      const loan = await unlinkedLoan(s)
+      const { payment } = await recordLoanPayment(s.userId, loan.id, INSTALMENT)
+      const theirLoan = await createLoan(
+        other.userId,
+        { ...BASE_LOAN, accountId: other.walletId },
+        fakeProvider().provider,
+      )
+
+      // The composite (userId, …TransactionId) foreign keys, not the service: a
+      // loan or an instalment cannot name a transaction that is not its user's.
+      await expectPrismaCode(
+        prisma.loan.update({
+          where: { userId_id: { userId: s.userId, id: loan.id } },
+          data: { disbursementTransactionId: theirLoan.disbursementTransactionId },
+        }),
+        'P2003',
+      )
+      for (const field of ['principalTransactionId', 'interestTransactionId'] as const) {
+        await expectPrismaCode(
+          prisma.loanPayment.update({
+            where: { userId_id: { userId: s.userId, id: payment.id } },
+            data: { [field]: theirLoan.disbursementTransactionId },
+          }),
+          'P2003',
+        )
       }
     })
+
+    it('refuses to delete a linked transaction out from under its loan or instalment (Restrict)', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const loan = await createLoan(s.userId, { ...BASE_LOAN, accountId: s.walletId }, provider)
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        provider,
+      )
+
+      for (const id of [
+        loan.disbursementTransactionId,
+        payment.principalTransactionId,
+        payment.interestTransactionId,
+      ]) {
+        await expectPrismaCode(
+          prisma.transaction.delete({
+            where: { userId_id: { userId: s.userId, id: id as string } },
+          }),
+          'P2003',
+        )
+      }
+
+      expect(await transactionCount(s)).toBe(3)
+    })
+  })
+
+  /**
+   * Lock order: accounts first, then the loan row, then transaction rows — the
+   * order `createTransaction`/`updateTransaction`/`deleteTransaction` and the
+   * debt paths already use, so the new linked paths can run beside them without
+   * a deadlock. `holdAccountLock` parks an interactive transaction on an account
+   * row lock until the test releases it (the pattern in `concurrency.test.ts`),
+   * so these cases decide the interleaving rather than hoping the scheduler
+   * does.
+   */
+  describe('lock order and concurrency', () => {
+    const LOCK_WAIT_MS = 300
+    /** Every lock a case took, so one that fails before its own `release()`
+     *  still frees the row instead of stalling the cleanup behind it. */
+    const heldLocks: { release: () => Promise<void> }[] = []
+
+    afterEach(async () => {
+      // Runs before the suite's cleanup; releasing twice is harmless.
+      for (const lock of heldLocks.splice(0)) await lock.release()
+    })
+
+    function hasSettledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+      const settled = promise.then(
+        () => true,
+        () => true,
+      )
+      const timer = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))
+      return Promise.race([settled, timer])
+    }
+
+    async function holdAccountLock(
+      userId: string,
+      accountId: string,
+      mutate: (tx: Prisma.TransactionClient) => Promise<void> = async () => {},
+    ) {
+      let openGate: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        openGate = resolve
+      })
+      let signalAcquired: () => void = () => {}
+      const acquired = new Promise<void>((resolve) => {
+        signalAcquired = resolve
+      })
+      const held = prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM "FinancialAccount" WHERE "userId"=${userId} AND "id"=${accountId} FOR UPDATE`
+          await mutate(tx)
+          signalAcquired()
+          await gate
+        },
+        { timeout: 30_000, maxWait: 30_000 },
+      )
+      // If the holder fails before taking the lock, surface that instead of hanging.
+      await Promise.race([acquired, held])
+      const lock = {
+        release: async () => {
+          openGate()
+          await held
+        },
+      }
+      heldLocks.push(lock)
+      return lock
+    }
+
+    it('a linked instalment waits on the account before it takes the loan lock', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { provider } = fakeProvider()
+      // Warms the FX cache and makes the interest category, so the instalment
+      // below waits on nothing but the row lock.
+      await recordLoanPayment(s.userId, loan.id, { ...INSTALMENT, accountId: s.bankId }, provider)
+      const lock = await holdAccountLock(s.userId, s.walletId)
+
+      const pending = recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, paymentDate: '2026-03-06', accountId: s.walletId },
+        provider,
+      )
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+
+      // The instalment is queued on the account, so it holds no loan lock yet:
+      // a close — which takes only the loan lock — goes straight through. Had
+      // the instalment locked the loan first, this would wait behind it.
+      const close = closeLoan(s.userId, loan.id)
+      expect(await hasSettledWithin(close, LOCK_WAIT_MS)).toBe(true)
+      await expect(close).resolves.toMatchObject({ status: 'CLOSED' })
+
+      await lock.release()
+      // It then sees the committed close under the loan lock and writes
+      // nothing — neither transaction, nor the instalment, nor a due date move.
+      await expect(pending).rejects.toThrow(LoanNotActiveError)
+      expect(await prisma.loanPayment.count({ where: { userId: s.userId } })).toBe(1)
+      expect(await transactionCount(s)).toBe(2)
+      expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-05-01')
+    }, 30_000)
+
+    it('a linked instalment and a transaction edit on the same account both complete', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      for (const run of [1, 2, 3]) {
+        const loan = await unlinkedLoan(s, { lender: `Race ${run}` })
+        const ordinary = await createTransaction(
+          s.userId,
+          { accountId: s.walletId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+          provider,
+        )
+
+        const results = await Promise.allSettled([
+          recordLoanPayment(s.userId, loan.id, { ...INSTALMENT, accountId: s.walletId }, provider),
+          updateTransaction(
+            s.userId,
+            ordinary.id,
+            { accountId: s.walletId, type: 'CASH_IN', amount: 2000, date: new Date('2026-03-01') },
+            provider,
+          ),
+        ])
+
+        // Serialised on the wallet's row lock, never deadlocked against each other.
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      }
+    }, 30_000)
+
+    it('an instalment moved between two accounts races a transaction moved the other way without deadlock', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      for (const run of [1, 2, 3]) {
+        const loan = await unlinkedLoan(s, { lender: `Swap ${run}` })
+        const { payment } = await recordLoanPayment(
+          s.userId,
+          loan.id,
+          { ...INSTALMENT, accountId: s.walletId },
+          provider,
+        )
+        const ordinary = await createTransaction(
+          s.userId,
+          { accountId: s.bankId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+          provider,
+        )
+
+        // wallet → bank for the instalment, bank → wallet for the transaction:
+        // the opposite-order pair, safe only because both lock the two accounts
+        // in one sorted statement before anything else.
+        const results = await Promise.allSettled([
+          updateLoanPayment(s.userId, payment.id, { ...INSTALMENT, accountId: s.bankId }, provider),
+          updateTransaction(
+            s.userId,
+            ordinary.id,
+            { accountId: s.walletId, type: 'CASH_IN', amount: 1000, date: new Date('2026-03-01') },
+            provider,
+          ),
+        ])
+
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      }
+    }, 30_000)
+
+    it('refuses an instalment edit whose linked transaction changed after it was read', async () => {
+      const s = await setup()
+      const loan = await unlinkedLoan(s)
+      const { provider } = fakeProvider()
+      const { payment } = await recordLoanPayment(
+        s.userId,
+        loan.id,
+        { ...INSTALMENT, accountId: s.walletId },
+        provider,
+      )
+      const interestId = payment.interestTransactionId as string
+      // Another session edits the linked interest transaction (as the
+      // Transactions page still can until linked rows are locked there) while
+      // holding the wallet.
+      const lock = await holdAccountLock(s.userId, s.walletId, async (tx) => {
+        await tx.transaction.update({
+          where: { userId_id: { userId: s.userId, id: interestId } },
+          data: { note: 'Edited elsewhere' },
+        })
+      })
+
+      const pending = updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, totalAmount: 95_000, interestAmount: 15_000, accountId: s.walletId },
+        provider,
+      )
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+      await lock.release()
+
+      // The edit decided its FX and its writes against a copy that no longer
+      // exists, so it is refused rather than overwriting the other change.
+      await expect(pending).rejects.toThrow(ConcurrentModificationError)
+      const stored = await transactionById(s, interestId)
+      expect(stored.note).toBe('Edited elsewhere')
+      expect(stored.amount.toString()).toBe('10000')
+      expect((await paymentById(s, payment.id)).interestAmount.toString()).toBe('10000')
+    }, 30_000)
   })
 })

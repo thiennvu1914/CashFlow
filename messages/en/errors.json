@@ -55,6 +55,10 @@
     "OVERPAYMENT": "That principal payment is more than the principal still outstanding.",
     "NOT_ACTIVE": "This loan is closed and can no longer be changed.",
     "SPLIT_MISMATCH": "Total must equal principal plus interest.",
+    "FX_UNAVAILABLE": "Exchange rates are temporarily unavailable, so the account transactions could not be recorded. Please try again shortly.",
+    "ARCHIVED_ACCOUNT": "That account is archived. Choose an active account, or \"Don't record in an account\".",
+    "ACCOUNT_CURRENCY_MISMATCH": "Choose an account in the same currency as this loan.",
+    "CONFLICT": "The instalment or its linked transactions changed while you were editing. Reload and try again.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That loan no longer exists."
   },

@@ -45,5 +45,10 @@
   "closePending": "Đang đóng…",
   "closedSection": "Khoản vay đã đóng ({count})",
   "emptyTitle": "Chưa có khoản vay",
-  "emptyBody": "Thêm khoản vay đầu tiên để theo dõi dư nợ gốc."
+  "emptyBody": "Thêm khoản vay đầu tiên để theo dõi dư nợ gốc.",
+  "linkedNote": {
+    "disburse": "Vay – {lender}",
+    "principal": "Trả gốc – {lender}",
+    "interest": "Lãi vay – {lender}"
+  }
 }
