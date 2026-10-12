@@ -32,7 +32,9 @@ import { SectionHeader } from '@/components/common/section-header'
  * predates the app or whose cash never touched a tracked account — nothing can
  * tell those apart automatically, so the user says. The pickers start on the
  * most recently used account (an instalment's on the loan's own account first)
- * and list only active accounts, both read here beside the loans.
+ * and list only active accounts, both read here beside the loans. A loan that
+ * moved no money yet — active or closed — can be recorded in an account later
+ * from its row menu (spec §6.4), which is how old loans are reconciled.
  *
  * One query, not two: `getLoansWithOutstanding` already returns every status
  * (the closed section needs them anyway), so the split happens in memory. The
@@ -155,7 +157,13 @@ export default async function LoansPage() {
                     mostRecentAccountId={mostRecentAccountId}
                   />
                 ),
-                actions: <LoanRowMenu loan={loan} />,
+                actions: (
+                  <LoanRowMenu
+                    loan={loan}
+                    accounts={accounts}
+                    mostRecentAccountId={mostRecentAccountId}
+                  />
+                ),
               })}
               renderPaymentActions={(loan, payment, dateLabel) => (
                 <LoanPaymentActions
@@ -189,11 +197,26 @@ export default async function LoansPage() {
             </h2>
           </summary>
           {/* Read-only, like the written-off debts on `/debts`: a closed loan
-              refuses every write (`LoanNotActiveError`), so no actions are
-              offered here. The instalment history stays — the money really was
-              paid, and closing the loan does not undo that. */}
+              refuses every write (`LoanNotActiveError`) — except "Record in an
+              account" (spec 2026-10-12 §6.4), which `LoanRowMenu` alone offers
+              here, and only while the loan moved no money yet. The instalment
+              history stays — the money really was paid, and closing the loan
+              does not undo that. */}
           <div className="border-t border-border opacity-70">
-            <LoanList loans={closed} locale={locale} timeZone={timezone} />
+            <LoanList
+              loans={closed}
+              locale={locale}
+              timeZone={timezone}
+              renderActions={(loan) => ({
+                actions: (
+                  <LoanRowMenu
+                    loan={loan}
+                    accounts={accounts}
+                    mostRecentAccountId={mostRecentAccountId}
+                  />
+                ),
+              })}
+            />
           </div>
         </details>
       )}

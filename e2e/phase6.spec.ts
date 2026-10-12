@@ -617,8 +617,14 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(
       writtenOffRow.getByText(eitherLocale('Đã xóa nợ', 'Written off'), { exact: true }),
     ).toBeVisible()
-    // A written-off debt refuses every write, so it carries no actions at all.
-    await expect(writtenOffRow.getByRole('button')).toHaveCount(0)
+    // A written-off debt refuses every write but one: it moved no money yet, so
+    // its only action is "Record in an account" (spec 2026-10-12 §6.4).
+    await expect(writtenOffRow.getByRole('button')).toHaveCount(1)
+    await openRowMenu(page, writtenOffRow, 'Landlord')
+    await expect(page.getByRole('menuitem')).toHaveText([
+      eitherLocale('Ghi vào tài khoản', 'Record in an account'),
+    ])
+    await page.keyboard.press('Escape')
 
     // Nothing is outstanding in any currency any more, so both subtotal strips
     // are gone entirely rather than left behind as rows of zeroes.
@@ -746,7 +752,14 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(
       closedRow.getByText(eitherLocale('Lần trả (1)', 'Payments (1)'), { exact: true }),
     ).toBeVisible()
-    await expect(closedRow.getByRole('button')).toHaveCount(0)
+    // A closed loan refuses every write but one: it moved no money yet, so its
+    // only action is "Record in an account" (spec 2026-10-12 §6.4).
+    await expect(closedRow.getByRole('button')).toHaveCount(1)
+    await openRowMenu(page, closedRow, 'Bank')
+    await expect(page.getByRole('menuitem')).toHaveText([
+      eitherLocale('Ghi vào tài khoản', 'Record in an account'),
+    ])
+    await page.keyboard.press('Escape')
   })
 
   test('6. reminders: due list, tabs, acknowledge, dismiss, pause', async ({ page }) => {

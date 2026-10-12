@@ -26,6 +26,7 @@ function dto(overrides: Partial<DebtDto> = {}): DebtDto {
     description: 'Lunch money',
     notes: 'Pay back after payday',
     openingAccountId: null,
+    createdOn: '2026-03-01',
     payments: [
       {
         id: 'p1',

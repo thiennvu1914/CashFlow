@@ -309,6 +309,16 @@ describe('toDebtDto', () => {
     expect(toDebtDto(row()).openingAccountId).toBeNull()
   })
 
+  it("dates the debt's creation as the reader's own calendar day — the default for recording it in an account later", () => {
+    // 20:00 UTC on 1 March is already 03:00 on 2 March in Ho Chi Minh City.
+    const late = row({ createdAt: new Date('2026-03-01T20:00:00.000Z') })
+
+    expect(toDebtDto(late, 'vi', 'Asia/Ho_Chi_Minh').createdOn).toBe('2026-03-02')
+    expect(toDebtDto(late, 'vi', 'America/Los_Angeles').createdOn).toBe('2026-03-01')
+    // The profile default zone when none is passed.
+    expect(toDebtDto(late).createdOn).toBe('2026-03-02')
+  })
+
   it('carries the edit form its own prefill, with no Decimal or Date crossing to the client', () => {
     const dto = toDebtDto(
       row({

@@ -32,7 +32,9 @@ import { SectionHeader } from '@/components/common/section-header'
  * first option for an agreement that predates the app or whose cash never
  * touched a tracked account — nothing can tell those apart automatically, so
  * the user says. The pickers start on the most recently used account and list
- * only active accounts, both read here beside the debts.
+ * only active accounts, both read here beside the debts. A debt that moved no
+ * money yet — live or written off — can be recorded in an account later from
+ * its row menu (spec §6.4), which is how old agreements are reconciled.
  *
  * One query, not two: `getDebtsWithOutstanding` already returns every status
  * (the written-off section needs them anyway), so the split happens in memory.
@@ -87,7 +89,7 @@ export default async function DebtsPage() {
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders `DebtDto`s.
-  const dtos = rows.map((row) => toDebtDto(row, locale))
+  const dtos = rows.map((row) => toDebtDto(row, locale, timezone))
   const active = dtos
     .filter((dto) => dto.active)
     .sort((a, b) => displayRank(a.status) - displayRank(b.status))
@@ -156,7 +158,13 @@ export default async function DebtsPage() {
                         mostRecentAccountId={mostRecentAccountId}
                       />
                     ),
-                    actions: <DebtRowMenu debt={debt} />,
+                    actions: (
+                      <DebtRowMenu
+                        debt={debt}
+                        accounts={accounts}
+                        mostRecentAccountId={mostRecentAccountId}
+                      />
+                    ),
                   })}
                   renderPaymentActions={(debt, payment, dateLabel) => (
                     <DebtPaymentActions
@@ -206,7 +214,13 @@ export default async function DebtsPage() {
                         mostRecentAccountId={mostRecentAccountId}
                       />
                     ),
-                    actions: <DebtRowMenu debt={debt} />,
+                    actions: (
+                      <DebtRowMenu
+                        debt={debt}
+                        accounts={accounts}
+                        mostRecentAccountId={mostRecentAccountId}
+                      />
+                    ),
                   })}
                   renderPaymentActions={(debt, payment, dateLabel) => (
                     <DebtPaymentActions
@@ -241,11 +255,26 @@ export default async function DebtsPage() {
             </h2>
           </summary>
           {/* Read-only, like the archived accounts on `/accounts`: a written-off
-              debt refuses every write (`DebtNotActiveError`), so no actions are
-              offered here. The payment history stays — the money really did
-              arrive, and writing the rest off does not undo that. */}
+              debt refuses every write (`DebtNotActiveError`) — except "Record
+              in an account" (spec 2026-10-12 §6.4), which `DebtRowMenu` alone
+              offers here, and only while the debt moved no money yet. The
+              payment history stays — the money really did arrive, and writing
+              the rest off does not undo that. */}
           <div className="border-t border-border opacity-70">
-            <DebtList debts={writtenOff} locale={locale} timeZone={timezone} />
+            <DebtList
+              debts={writtenOff}
+              locale={locale}
+              timeZone={timezone}
+              renderActions={(debt) => ({
+                actions: (
+                  <DebtRowMenu
+                    debt={debt}
+                    accounts={accounts}
+                    mostRecentAccountId={mostRecentAccountId}
+                  />
+                ),
+              })}
+            />
           </div>
         </details>
       )}

@@ -8,10 +8,12 @@ import { ArchivedAccountError } from '@/lib/server/services/account-lock'
 import {
   createDebt,
   deleteDebtPayment,
+  linkDebtToAccount,
   recordDebtPayment,
   updateDebt,
   updateDebtPayment,
   writeOffDebt,
+  DebtAlreadyLinkedError,
   DebtNotActiveError,
   DebtOverpaymentError,
   type DebtLinkContext,
@@ -20,9 +22,11 @@ import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked
 import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
   createDebtSchema,
+  linkDebtToAccountSchema,
   recordDebtPaymentSchema,
   updateDebtSchema,
   type CreateDebtInput,
+  type LinkDebtToAccountInput,
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
@@ -65,7 +69,9 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * debt's currency — deliberately not `transaction-actions`' `CURRENCY_MISMATCH`,
  * whose copy tells the user to delete and re-enter a transaction),
  * `ARCHIVED_ACCOUNT`, `FX_UNAVAILABLE`, and `CONFLICT` for a payment or linked
- * transaction that changed while the user was editing it.
+ * transaction that changed while the user was editing it. "Record in an
+ * account" (spec §6.4) adds `ALREADY_LINKED`, for a debt whose opening another
+ * tab or a double-click recorded first.
  */
 export type DebtActionError =
   | 'OVERPAYMENT'
@@ -74,6 +80,7 @@ export type DebtActionError =
   | 'ARCHIVED_ACCOUNT'
   | 'ACCOUNT_CURRENCY_MISMATCH'
   | 'CONFLICT'
+  | 'ALREADY_LINKED'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -88,6 +95,7 @@ function mapError(e: unknown): DebtActionResult {
     return { ok: false, error: 'ACCOUNT_CURRENCY_MISMATCH' }
   }
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
+  if (e instanceof DebtAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   return mapCommonActionError(e)
 }
 
@@ -190,6 +198,27 @@ export async function deleteDebtPaymentAction(paymentId: string): Promise<DebtAc
   const user = await requireUser()
   try {
     await deleteDebtPayment(user.id, paymentId)
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** "Record in an account" (spec §6.4): records a debt that moved no money yet
+ *  — its opening and, when asked, its existing payments — in an account. */
+export async function linkDebtToAccountAction(
+  debtId: string,
+  input: LinkDebtToAccountInput,
+): Promise<DebtActionResult> {
+  const user = await requireUser()
+  try {
+    await linkDebtToAccount(
+      user.id,
+      debtId,
+      linkDebtToAccountSchema.parse(input),
+      linkContext(user),
+    )
   } catch (e) {
     return mapError(e)
   }

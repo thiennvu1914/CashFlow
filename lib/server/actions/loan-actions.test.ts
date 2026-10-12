@@ -32,6 +32,7 @@ const recordLoanPaymentMock = vi.hoisted(() => vi.fn())
 const updateLoanPaymentMock = vi.hoisted(() => vi.fn())
 const deleteLoanPaymentMock = vi.hoisted(() => vi.fn())
 const closeLoanMock = vi.hoisted(() => vi.fn())
+const linkLoanToAccountMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
 /**
@@ -54,6 +55,13 @@ class MockLoanNotActiveError extends Error {
   constructor() {
     super('This loan is closed and cannot receive payments.')
     this.name = 'LoanNotActiveError'
+  }
+}
+
+class MockLoanAlreadyLinkedError extends Error {
+  constructor() {
+    super('This loan is already recorded in an account.')
+    this.name = 'LoanAlreadyLinkedError'
   }
 }
 
@@ -96,9 +104,11 @@ vi.mock('@/lib/server/services/loan', () => ({
   updateLoanPayment: updateLoanPaymentMock,
   deleteLoanPayment: deleteLoanPaymentMock,
   closeLoan: closeLoanMock,
+  linkLoanToAccount: linkLoanToAccountMock,
   LoanOverpaymentError: MockLoanOverpaymentError,
   LoanNotActiveError: MockLoanNotActiveError,
   LoanSplitMismatchError: MockLoanSplitMismatchError,
+  LoanAlreadyLinkedError: MockLoanAlreadyLinkedError,
 }))
 
 vi.mock('@/lib/server/services/linked-transaction', () => ({
@@ -124,6 +134,7 @@ const {
   updateLoanPaymentAction,
   deleteLoanPaymentAction,
   closeLoanAction,
+  linkLoanToAccountAction,
 } = await import('./loan-actions')
 const { LOAN_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ArchivedAccountError } = await import('@/lib/server/services/account-lock')
@@ -180,6 +191,8 @@ const linkedCreateInput = { ...validCreateInput, accountId: 'account_1' }
 
 const linkedPaymentInput = { ...validPaymentInput, accountId: 'account_1' }
 
+const linkInput = { accountId: 'account_1', disbursedOn: '2026-01-15', includePayments: true }
+
 /**
  * The four linked-transaction failures and the codes they must become — the
  * same table for every action that can write a linked transaction.
@@ -210,6 +223,7 @@ beforeEach(() => {
   updateLoanPaymentMock.mockReset()
   deleteLoanPaymentMock.mockReset()
   closeLoanMock.mockReset()
+  linkLoanToAccountMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
@@ -700,6 +714,65 @@ describe('closeLoanAction', () => {
   })
 })
 
+describe('linkLoanToAccountAction', () => {
+  it('calls the service with the session user id, the loan id, the parsed input and the context, then revalidates every money page', async () => {
+    linkLoanToAccountMock.mockResolvedValue(undefined)
+
+    const result = await linkLoanToAccountAction('loan_1', linkInput)
+
+    expect(result).toEqual({ ok: true })
+    expect(linkLoanToAccountMock).toHaveBeenCalledTimes(1)
+    expect(linkLoanToAccountMock).toHaveBeenCalledWith(FIXED_USER.id, 'loan_1', linkInput, CONTEXT)
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
+  })
+
+  it.each([
+    [{ ...linkInput, accountId: '' }],
+    [{ ...linkInput, disbursedOn: '2026-02-30' }],
+    [{ accountId: 'account_1', disbursedOn: '2026-01-15' }],
+  ])(
+    'maps an invalid input %o to INVALID_INPUT without ever calling the service',
+    async (input) => {
+      const result = await linkLoanToAccountAction('loan_1', input as typeof linkInput)
+
+      expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+      expect(linkLoanToAccountMock).not.toHaveBeenCalled()
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    ['LoanAlreadyLinkedError', () => new MockLoanAlreadyLinkedError(), 'ALREADY_LINKED'],
+    ['P2025', notFoundError, 'NOT_FOUND'],
+    ['ZodError', () => new ZodError([]), 'INVALID_INPUT'],
+    ...LINKED_FAILURES,
+  ] as [string, () => Error, string][])(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      linkLoanToAccountMock.mockRejectedValue(error())
+
+      const result = await linkLoanToAccountAction('loan_1', linkInput)
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    linkLoanToAccountMock.mockRejectedValue(new Error('boom'))
+
+    await expect(linkLoanToAccountAction('loan_1', linkInput)).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(linkLoanToAccountAction('loan_1', linkInput)).rejects.toThrow('Not authenticated')
+    expect(linkLoanToAccountMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('LOAN_ERROR_KEYS', () => {
   // The temporary English `LOAN_ERROR_MESSAGES` alias this test used to pin
   // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
@@ -718,6 +791,7 @@ describe('LOAN_ERROR_KEYS', () => {
       ARCHIVED_ACCOUNT: 'errors.loan.ARCHIVED_ACCOUNT',
       ACCOUNT_CURRENCY_MISMATCH: 'errors.loan.ACCOUNT_CURRENCY_MISMATCH',
       CONFLICT: 'errors.loan.CONFLICT',
+      ALREADY_LINKED: 'errors.loan.ALREADY_LINKED',
       INVALID_INPUT: 'errors.loan.INVALID_INPUT',
       NOT_FOUND: 'errors.loan.NOT_FOUND',
     })

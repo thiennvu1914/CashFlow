@@ -4,6 +4,7 @@ import { NextIntlClientProvider } from 'next-intl'
 import { loadMessages } from '@/lib/i18n/messages'
 import viDebts from '@/messages/vi/debts.json'
 import type { DebtDto } from '@/lib/ui/debt-view-model'
+import { RowErrorProvider } from '@/components/common/row-error-context'
 
 /**
  * Markup tests for the payment form's account picker, in the style of
@@ -20,9 +21,10 @@ vi.mock('@/lib/server/actions/debt-actions', () => ({
   deleteDebtPaymentAction: vi.fn(),
   updateDebtAction: vi.fn(),
   writeOffDebtAction: vi.fn(),
+  linkDebtToAccountAction: vi.fn(),
 }))
 
-const { DebtPaymentForm } = await import('./debt-row-actions')
+const { DebtLinkForm, DebtPaymentForm, DebtRowMenu } = await import('./debt-row-actions')
 
 const messages = await loadMessages('vi')
 
@@ -60,6 +62,7 @@ function debt(overrides: Partial<DebtDto> = {}): DebtDto {
     description: null,
     notes: null,
     openingAccountId: null,
+    createdOn: '2026-09-20',
     payments: [PAYMENT],
     editable: { person: 'Minh', description: '', dueDate: '', notes: '' },
     ...overrides,
@@ -178,5 +181,108 @@ describe('DebtPaymentForm correcting a recorded payment', () => {
     // Not "don't record": saving that would unlink the payment and delete its
     // transaction.
     expect(select).not.toMatch(selectedOption(''))
+  })
+})
+
+function renderLink(
+  props: { debt?: DebtDto; mostRecentAccountId?: string | null; accounts?: typeof ACCOUNTS } = {},
+): string {
+  return renderToStaticMarkup(
+    <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+      <DebtLinkForm
+        debt={props.debt ?? debt({ payments: [] })}
+        accounts={props.accounts ?? ACCOUNTS}
+        mostRecentAccountId={
+          props.mostRecentAccountId === undefined ? null : props.mostRecentAccountId
+        }
+        onDone={() => {}}
+      />
+    </NextIntlClientProvider>,
+  )
+}
+
+function linkAccountSelect(html: string): string {
+  const start = html.lastIndexOf('<select', html.indexOf('id="debt-link-account-'))
+  return html.slice(start, html.indexOf('</select>', start) + '</select>'.length)
+}
+
+const UNLINKED_PAYMENT = { ...PAYMENT, id: 'pay_2', accountId: null, accountName: null }
+
+describe('DebtLinkForm ("Record in an account")', () => {
+  it("lists only the accounts in the debt's currency, with no 'don't record' choice", () => {
+    const select = linkAccountSelect(renderLink())
+
+    expect(select).toContain('Ví tiền mặt · VND')
+    expect(select).toContain('Ngân hàng · VND')
+    expect(select).not.toContain('Savings USD')
+    // Recording in an account is the whole point of this dialog.
+    expect(select).not.toContain(viDebts.accountNone)
+    expect(select).not.toMatch(selectedOption(''))
+  })
+
+  it('starts on the most recently used account, else on the first listed one', () => {
+    expect(linkAccountSelect(renderLink({ mostRecentAccountId: 'acc_bank' }))).toMatch(
+      selectedOption('acc_bank'),
+    )
+    expect(linkAccountSelect(renderLink({ mostRecentAccountId: 'acc_usd' }))).toMatch(
+      selectedOption('acc_wallet'),
+    )
+  })
+
+  it('dates the opening on the day the debt was added', () => {
+    const html = renderLink()
+
+    expect(html).toContain(viDebts.movedOn)
+    expect(html).toMatch(/type="date"[^>]*value="2026-09-20"|value="2026-09-20"[^>]*type="date"/)
+  })
+
+  it('offers to record the payments that have no transaction yet, checked by default', () => {
+    // One payment already moved money through an account; only the other two count.
+    const html = renderLink({
+      debt: debt({ payments: [PAYMENT, UNLINKED_PAYMENT, { ...UNLINKED_PAYMENT, id: 'pay_3' }] }),
+    })
+
+    expect(html).toContain('Ghi bù 2 lần trả đã có')
+    expect(html).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
+  })
+
+  it('asks nothing about payments when none is left to record', () => {
+    const html = renderLink({ debt: debt({ payments: [PAYMENT] }) })
+
+    expect(html).not.toContain('Ghi bù')
+    expect(html).not.toContain('type="checkbox"')
+  })
+
+  it("says so, and offers no picker, when no account holds the debt's currency", () => {
+    const html = renderLink({
+      debt: debt({ currency: 'USD', payments: [] }),
+      accounts: ACCOUNTS.slice(0, 2),
+    })
+
+    expect(html).toContain('Chưa có tài khoản USD nào đang hoạt động')
+    expect(html).not.toContain('<select')
+    expect(html).not.toContain('type="submit"')
+  })
+})
+
+describe('DebtRowMenu', () => {
+  function renderMenu(dto: DebtDto): string {
+    return renderToStaticMarkup(
+      <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
+        <RowErrorProvider>
+          <DebtRowMenu debt={dto} accounts={ACCOUNTS} mostRecentAccountId={null} />
+        </RowErrorProvider>
+      </NextIntlClientProvider>,
+    )
+  }
+
+  it('stays on a written-off debt that moved no money, so it can still be recorded in an account', () => {
+    expect(renderMenu(debt({ active: false, status: 'WRITTEN_OFF' }))).toContain('Tác vụ cho Minh')
+  })
+
+  it('offers nothing on a written-off debt that is already recorded in an account', () => {
+    expect(
+      renderMenu(debt({ active: false, status: 'WRITTEN_OFF', openingAccountId: 'acc_bank' })),
+    ).toBe('')
   })
 })

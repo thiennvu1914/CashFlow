@@ -264,6 +264,29 @@ export const recordLoanPaymentSchema = z
     { message: 'Total must equal principal plus interest', path: ['totalAmount'] },
   )
 
+/**
+ * "Record in an account" (spec 2026-10-12 §6.4): a loan recorded without an
+ * account — it predates the app, or "don't record" was chosen — gets its
+ * disbursement (the CASH_IN of the principal) after the fact, and optionally
+ * the transactions of every instalment that has none yet.
+ *
+ * Both the account and the date are required here, unlike on create: there is
+ * no "don't record" to choose, because recording is the whole point of the
+ * request. `disbursedOn` is the day the borrowed money arrived (the form
+ * defaults it to the loan's start date); each instalment keeps its own date.
+ * Same field rules and copy as `linkDebtToAccountSchema`.
+ */
+export const linkLoanToAccountSchema = z.object({
+  accountId: z.string({ error: 'Choose an account' }).min(1, 'Choose an account'),
+  disbursedOn: z
+    .string({ error: 'Enter the date the money moved' })
+    .min(1, 'Enter the date the money moved')
+    .pipe(calendarDateStringSchema),
+  /** Also record every instalment that has no transaction yet. */
+  includePayments: z.boolean({ error: 'Choose whether to record the existing payments' }),
+})
+
 export type CreateLoanInput = z.infer<typeof createLoanSchema>
 export type UpdateLoanInput = z.infer<typeof updateLoanSchema>
 export type RecordLoanPaymentInput = z.infer<typeof recordLoanPaymentSchema>
+export type LinkLoanToAccountInput = z.infer<typeof linkLoanToAccountSchema>

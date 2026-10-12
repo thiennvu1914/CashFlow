@@ -10,9 +10,11 @@ import {
   closeLoan,
   createLoan,
   deleteLoanPayment,
+  linkLoanToAccount,
   recordLoanPayment,
   updateLoan,
   updateLoanPayment,
+  LoanAlreadyLinkedError,
   LoanNotActiveError,
   LoanOverpaymentError,
   LoanSplitMismatchError,
@@ -21,9 +23,11 @@ import {
 import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
   createLoanSchema,
+  linkLoanToAccountSchema,
   recordLoanPaymentSchema,
   updateLoanSchema,
   type CreateLoanInput,
+  type LinkLoanToAccountInput,
   type RecordLoanPaymentInput,
   type UpdateLoanInput,
 } from '@/lib/validation/loan'
@@ -66,7 +70,9 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * `transaction-actions`' `CURRENCY_MISMATCH`, whose copy tells the user to
  * delete and re-enter a transaction), `ARCHIVED_ACCOUNT`, `FX_UNAVAILABLE`, and
  * `CONFLICT` for an instalment or linked transaction that changed while the
- * user was editing it.
+ * user was editing it. "Record in an account" (spec §6.4) adds
+ * `ALREADY_LINKED`, for a loan whose disbursement another tab or a
+ * double-click recorded first.
  */
 export type LoanActionError =
   | 'OVERPAYMENT'
@@ -76,6 +82,7 @@ export type LoanActionError =
   | 'ARCHIVED_ACCOUNT'
   | 'ACCOUNT_CURRENCY_MISMATCH'
   | 'CONFLICT'
+  | 'ALREADY_LINKED'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -95,6 +102,7 @@ function mapError(e: unknown): LoanActionResult {
     return { ok: false, error: 'ACCOUNT_CURRENCY_MISMATCH' }
   }
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
+  if (e instanceof LoanAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   return mapCommonActionError(e)
 }
 
@@ -199,6 +207,28 @@ export async function deleteLoanPaymentAction(paymentId: string): Promise<LoanAc
   const user = await requireUser()
   try {
     await deleteLoanPayment(user.id, paymentId)
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** "Record in an account" (spec §6.4): records a loan that moved no money yet
+ *  — its disbursement and, when asked, its existing instalments — in an
+ *  account. */
+export async function linkLoanToAccountAction(
+  loanId: string,
+  input: LinkLoanToAccountInput,
+): Promise<LoanActionResult> {
+  const user = await requireUser()
+  try {
+    await linkLoanToAccount(
+      user.id,
+      loanId,
+      linkLoanToAccountSchema.parse(input),
+      linkContext(user),
+    )
   } catch (e) {
     return mapError(e)
   }

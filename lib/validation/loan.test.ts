@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ZodType } from 'zod'
-import { createLoanSchema, recordLoanPaymentSchema, updateLoanSchema } from './loan'
+import {
+  createLoanSchema,
+  linkLoanToAccountSchema,
+  recordLoanPaymentSchema,
+  updateLoanSchema,
+} from './loan'
 
 /**
  * What this suite is for is the *copy* and the *split*, in that order.
@@ -431,6 +436,38 @@ describe('recordLoanPaymentSchema', () => {
   })
 })
 
+/** "Record in an account" (spec 2026-10-12 §6.4) for a loan recorded without
+ *  one: the account and the day the money arrived are both required. */
+const VALID_LINK = {
+  accountId: 'acc_1',
+  disbursedOn: '2026-01-01',
+  includePayments: true,
+}
+
+describe('linkLoanToAccountSchema', () => {
+  it('accepts an account, the day the money arrived and the payments choice', () => {
+    expect(linkLoanToAccountSchema.parse(VALID_LINK)).toEqual(VALID_LINK)
+    expect(linkLoanToAccountSchema.parse({ ...VALID_LINK, includePayments: false })).toEqual({
+      ...VALID_LINK,
+      includePayments: false,
+    })
+  })
+
+  it.each([
+    [{ accountId: undefined }, 'Choose an account'],
+    [{ accountId: '' }, 'Choose an account'],
+    [{ accountId: 42 }, 'Choose an account'],
+    [{ disbursedOn: undefined }, 'Enter the date the money moved'],
+    [{ disbursedOn: '' }, 'Enter the date the money moved'],
+    [{ disbursedOn: '01/01/2026' }, 'Enter a date as yyyy-MM-dd'],
+    [{ disbursedOn: '2026-02-30' }, 'Enter a real date'],
+    [{ includePayments: undefined }, 'Choose whether to record the existing payments'],
+    [{ includePayments: 'yes' }, 'Choose whether to record the existing payments'],
+  ])('rejects %o with product copy', (patch, message) => {
+    expect(messagesFor(linkLoanToAccountSchema, { ...VALID_LINK, ...patch })).toContain(message)
+  })
+})
+
 describe('no raw Zod text reaches a form', () => {
   it('answers every reachable rejection with product copy', () => {
     const cases: [ZodType, unknown][] = [
@@ -489,6 +526,11 @@ describe('no raw Zod text reaches a form', () => {
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, note: 'x'.repeat(501) }],
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, accountId: null }],
       [recordLoanPaymentSchema, { ...VALID_PAYMENT, accountId: '' }],
+      [linkLoanToAccountSchema, {}],
+      [linkLoanToAccountSchema, { ...VALID_LINK, accountId: null }],
+      [linkLoanToAccountSchema, { ...VALID_LINK, disbursedOn: null }],
+      [linkLoanToAccountSchema, { ...VALID_LINK, disbursedOn: 20260101 }],
+      [linkLoanToAccountSchema, { ...VALID_LINK, includePayments: 1 }],
     ]
 
     for (const [schema, input] of cases) {

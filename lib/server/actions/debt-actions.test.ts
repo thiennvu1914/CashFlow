@@ -32,6 +32,7 @@ const recordDebtPaymentMock = vi.hoisted(() => vi.fn())
 const writeOffDebtMock = vi.hoisted(() => vi.fn())
 const updateDebtPaymentMock = vi.hoisted(() => vi.fn())
 const deleteDebtPaymentMock = vi.hoisted(() => vi.fn())
+const linkDebtToAccountMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
 /**
@@ -54,6 +55,13 @@ class MockDebtNotActiveError extends Error {
   constructor() {
     super('This debt has been written off and cannot receive payments.')
     this.name = 'DebtNotActiveError'
+  }
+}
+
+class MockDebtAlreadyLinkedError extends Error {
+  constructor() {
+    super('This debt is already recorded in an account.')
+    this.name = 'DebtAlreadyLinkedError'
   }
 }
 
@@ -89,8 +97,10 @@ vi.mock('@/lib/server/services/debt', () => ({
   writeOffDebt: writeOffDebtMock,
   updateDebtPayment: updateDebtPaymentMock,
   deleteDebtPayment: deleteDebtPaymentMock,
+  linkDebtToAccount: linkDebtToAccountMock,
   DebtOverpaymentError: MockDebtOverpaymentError,
   DebtNotActiveError: MockDebtNotActiveError,
+  DebtAlreadyLinkedError: MockDebtAlreadyLinkedError,
 }))
 
 vi.mock('@/lib/server/services/linked-transaction', () => ({
@@ -116,6 +126,7 @@ const {
   writeOffDebtAction,
   updateDebtPaymentAction,
   deleteDebtPaymentAction,
+  linkDebtToAccountAction,
 } = await import('./debt-actions')
 const { DEBT_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ArchivedAccountError } = await import('@/lib/server/services/account-lock')
@@ -168,6 +179,8 @@ const linkedCreateInput = { ...validCreateInput, accountId: 'account_1', movedOn
 
 const linkedPaymentInput = { ...validPaymentInput, accountId: 'account_1' }
 
+const linkInput = { accountId: 'account_1', openedOn: '2026-03-01', includePayments: true }
+
 /**
  * The four linked-transaction failures and the codes they must become — the
  * same table for every action that can write a linked transaction.
@@ -198,6 +211,7 @@ beforeEach(() => {
   writeOffDebtMock.mockReset()
   updateDebtPaymentMock.mockReset()
   deleteDebtPaymentMock.mockReset()
+  linkDebtToAccountMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
@@ -605,6 +619,65 @@ describe('deleteDebtPaymentAction', () => {
   })
 })
 
+describe('linkDebtToAccountAction', () => {
+  it('calls the service with the session user id, the debt id, the parsed input and the context, then revalidates every money page', async () => {
+    linkDebtToAccountMock.mockResolvedValue(undefined)
+
+    const result = await linkDebtToAccountAction('debt_1', linkInput)
+
+    expect(result).toEqual({ ok: true })
+    expect(linkDebtToAccountMock).toHaveBeenCalledTimes(1)
+    expect(linkDebtToAccountMock).toHaveBeenCalledWith(FIXED_USER.id, 'debt_1', linkInput, CONTEXT)
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
+  })
+
+  it.each([
+    [{ ...linkInput, accountId: '' }],
+    [{ ...linkInput, openedOn: '' }],
+    [{ accountId: 'account_1', openedOn: '2026-03-01' }],
+  ])(
+    'maps an invalid input %o to INVALID_INPUT without ever calling the service',
+    async (input) => {
+      const result = await linkDebtToAccountAction('debt_1', input as typeof linkInput)
+
+      expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+      expect(linkDebtToAccountMock).not.toHaveBeenCalled()
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    ['DebtAlreadyLinkedError', () => new MockDebtAlreadyLinkedError(), 'ALREADY_LINKED'],
+    ['P2025', notFoundError, 'NOT_FOUND'],
+    ['ZodError', () => new ZodError([]), 'INVALID_INPUT'],
+    ...LINKED_FAILURES,
+  ] as [string, () => Error, string][])(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      linkDebtToAccountMock.mockRejectedValue(error())
+
+      const result = await linkDebtToAccountAction('debt_1', linkInput)
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    linkDebtToAccountMock.mockRejectedValue(new Error('boom'))
+
+    await expect(linkDebtToAccountAction('debt_1', linkInput)).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(linkDebtToAccountAction('debt_1', linkInput)).rejects.toThrow('Not authenticated')
+    expect(linkDebtToAccountMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('DEBT_ERROR_KEYS', () => {
   // The temporary English `DEBT_ERROR_MESSAGES` alias this test used to pin
   // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
@@ -622,6 +695,7 @@ describe('DEBT_ERROR_KEYS', () => {
       ARCHIVED_ACCOUNT: 'errors.debt.ARCHIVED_ACCOUNT',
       ACCOUNT_CURRENCY_MISMATCH: 'errors.debt.ACCOUNT_CURRENCY_MISMATCH',
       CONFLICT: 'errors.debt.CONFLICT',
+      ALREADY_LINKED: 'errors.debt.ALREADY_LINKED',
       INVALID_INPUT: 'errors.debt.INVALID_INPUT',
       NOT_FOUND: 'errors.debt.NOT_FOUND',
     })

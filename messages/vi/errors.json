@@ -48,6 +48,7 @@
     "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ — chọn tài khoản khác hoặc \"Không ghi vào tài khoản\".",
     "ACCOUNT_CURRENCY_MISMATCH": "Hãy chọn tài khoản cùng loại tiền với khoản nợ này.",
     "CONFLICT": "Khoản thanh toán hoặc giao dịch liên kết đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
+    "ALREADY_LINKED": "Khoản nợ này đã được ghi vào tài khoản.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Khoản nợ này không còn tồn tại."
   },
@@ -59,6 +60,7 @@
     "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ — chọn tài khoản khác hoặc \"Không ghi vào tài khoản\".",
     "ACCOUNT_CURRENCY_MISMATCH": "Hãy chọn tài khoản cùng loại tiền với khoản vay này.",
     "CONFLICT": "Kỳ trả hoặc giao dịch liên kết đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
+    "ALREADY_LINKED": "Khoản vay này đã được ghi vào tài khoản.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Khoản vay này không còn tồn tại."
   },

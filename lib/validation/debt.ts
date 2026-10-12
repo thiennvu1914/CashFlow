@@ -139,6 +139,28 @@ export const recordDebtPaymentSchema = z.object({
   accountId: linkedAccountIdSchema,
 })
 
+/**
+ * "Record in an account" (spec 2026-10-12 §6.4): a debt recorded without an
+ * account — it predates the app, or "don't record" was chosen — gets its
+ * opening transaction after the fact, and optionally one for each payment that
+ * has none yet.
+ *
+ * Both the account and the date are required here, unlike on create: there is
+ * no "don't record" to choose, because recording is the whole point of the
+ * request. `openedOn` is the day the lent or borrowed money moved (the form
+ * defaults it to the day the debt was added); each payment keeps its own date.
+ */
+export const linkDebtToAccountSchema = z.object({
+  accountId: z.string({ error: 'Choose an account' }).min(1, 'Choose an account'),
+  openedOn: z
+    .string({ error: 'Enter the date the money moved' })
+    .min(1, 'Enter the date the money moved')
+    .pipe(calendarDateStringSchema),
+  /** Also record every payment that has no transaction yet. */
+  includePayments: z.boolean({ error: 'Choose whether to record the existing payments' }),
+})
+
 export type CreateDebtInput = z.infer<typeof createDebtSchema>
 export type UpdateDebtInput = z.infer<typeof updateDebtSchema>
 export type RecordDebtPaymentInput = z.infer<typeof recordDebtPaymentSchema>
+export type LinkDebtToAccountInput = z.infer<typeof linkDebtToAccountSchema>

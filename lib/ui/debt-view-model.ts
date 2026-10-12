@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client'
 import type { DebtDirection } from '@prisma/client'
+import { USER_FIELD_DEFAULTS } from '@/lib/auth/user-defaults'
 import type { Currency } from '@/lib/currency/provider'
-import { formatCalendarDate } from '@/lib/datetime/calendar-date'
+import { formatCalendarDate, todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { DEFAULT_LOCALE, type Locale } from '@/lib/i18n/locale'
 import type { DebtDisplayStatus, DebtWithOutstanding } from '@/lib/server/services/debt'
 import { formatMoney, formatPercent } from './format-money'
@@ -78,8 +79,12 @@ export interface DebtDto {
   description: string | null
   notes: string | null
   /** The account the opening transaction was recorded in, or null for a debt
-   *  that moved no money — the payment form's pre-selection. */
+   *  that moved no money — the payment form's pre-selection, and what offers
+   *  "Record in an account" (spec 2026-10-12 §6.4) while it is null. */
   openingAccountId: string | null
+  /** `yyyy-MM-dd`: the day the debt was added, in the reader's zone — the
+   *  default "money moved on" date when it is recorded in an account later. */
+  createdOn: string
   /** Oldest first, in the order the service returned them. */
   payments: DebtPaymentDto[]
   /** Prefill for the inline edit form — exactly `updateDebtSchema`'s four
@@ -120,6 +125,8 @@ const MIN_PERCENT = 0
 export function toDebtDto(
   { debt, paid, outstanding, displayStatus }: DebtWithOutstanding,
   locale: Locale = DEFAULT_LOCALE,
+  /** The reader's IANA zone, which decides what calendar day `createdAt` was. */
+  timeZone: string = USER_FIELD_DEFAULTS.timezone,
 ): DebtDto {
   const currency = debt.currency
   // Safe without a zero guard: `Debt_originalAmount_positive` (the CHECK in
@@ -155,6 +162,7 @@ export function toDebtDto(
     description: debt.description,
     notes: debt.notes,
     openingAccountId: debt.openingTransaction?.accountId ?? null,
+    createdOn: todayCalendarDateInZone(timeZone, debt.createdAt),
     payments: debt.payments.map((p) => ({
       id: p.id,
       date: formatCalendarDate(p.date),

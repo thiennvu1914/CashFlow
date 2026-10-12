@@ -241,7 +241,12 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     await openDetails(writtenOff)
     const writtenOffRow = namedRow(page, writtenOff, 'Landlord')
     await expect(writtenOffRow.getByText('Đã xóa nợ', { exact: true })).toBeVisible()
-    await expect(writtenOffRow.getByRole('button')).toHaveCount(0)
+    // Written off, every write is refused but one: the debt moved no money yet,
+    // so its only action is "Record in an account" (spec 2026-10-12 §6.4).
+    await expect(writtenOffRow.getByRole('button')).toHaveCount(1)
+    await openRowMenu(page, writtenOffRow, 'Landlord')
+    await expect(page.getByRole('menuitem')).toHaveText(['Ghi vào tài khoản'])
+    await page.keyboard.press('Escape')
   })
 
   test('the loan instalment Dialog shows Tổng computed live and never as a dash, including two blank/zero parts; a principal above outstanding shows the friendly error', async ({
@@ -328,7 +333,12 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     await openDetails(closed)
     const closedRow = namedRow(page, closed, 'Bank')
     await expect(closedRow.getByText('Đã đóng', { exact: true })).toBeVisible()
-    await expect(closedRow.getByRole('button')).toHaveCount(0)
+    // Closed, every write is refused but one: the loan moved no money yet, so
+    // its only action is "Record in an account" (spec 2026-10-12 §6.4).
+    await expect(closedRow.getByRole('button')).toHaveCount(1)
+    await openRowMenu(page, closedRow, 'Bank')
+    await expect(page.getByRole('menuitem')).toHaveText(['Ghi vào tài khoản'])
+    await page.keyboard.press('Escape')
   })
 
   test('375: no horizontal overflow on /debts or /loans', async ({ page }) => {
@@ -540,6 +550,62 @@ test.describe.serial('Money-source linking — debts', () => {
 
     await expectCashBalance(page, '4.000.000')
   })
+
+  test("'Record in an account' books a debt created without one — and its existing repayment — into the account, then disappears", async ({
+    page,
+  }) => {
+    // An agreement from before linking: the debt and a repayment, both with
+    // "don't record in an account", so Cash does not move.
+    await page.goto('/debts')
+    await page.getByRole('button', { name: 'Thêm công nợ' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm công nợ' })
+    await sheet.getByLabel('Tài khoản').selectOption('')
+    await sheet.getByLabel('Chiều').selectOption('RECEIVABLE')
+    await sheet.getByLabel('Người', { exact: true }).fill('Hoa')
+    await sheet.getByLabel('Số tiền ban đầu').fill('600000')
+    await sheet.getByRole('button', { name: 'Thêm công nợ' }).click()
+    await expect(sheet).toBeHidden()
+
+    const row = namedRow(page, page, 'Hoa')
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const payment = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Hoa' })
+    await payment.getByLabel('Tài khoản').selectOption('')
+    await payment.getByLabel('Số tiền').fill('200000')
+    await payment.getByRole('button', { name: 'Lưu' }).click()
+    await expect(payment).toBeHidden()
+    await expectCashBalance(page, '4.000.000')
+
+    // Linked debts do not offer it: Minh's opening is already in Cash.
+    await page.goto('/debts')
+    await openRowMenu(page, namedRow(page, page, 'Minh'), 'Minh')
+    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+
+    await openRowMenu(page, row, 'Hoa')
+    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản' }).click()
+    const link = page.getByRole('dialog', { name: 'Ghi vào tài khoản · Hoa' })
+    // Only accounts in the debt's currency, and no "don't record" here.
+    const account = link.getByLabel('Tài khoản')
+    await expect(account.locator('option')).toHaveCount(1)
+    await expect(account.locator('option:checked')).toHaveText('Cash · VND')
+    // The debt was added today, which is the default day the money moved.
+    await expect(link.getByLabel('Tiền đi ngày')).toHaveValue(TODAY)
+    await expect(link.getByLabel('Ghi bù 1 lần trả đã có')).toBeChecked()
+    await link.getByRole('button', { name: 'Ghi vào tài khoản' }).click()
+    await expect(link).toBeHidden()
+
+    // Recorded: the action is gone from the row's menu.
+    await openRowMenu(page, row, 'Hoa')
+    await expect(page.getByRole('menuitem', { name: 'Sửa' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+
+    // 4.000.000 − 600.000 lent + 200.000 repaid.
+    await expectCashBalance(page, '3.600.000')
+    await page.goto('/transactions')
+    await expect(page.getByText('Cho mượn – Hoa', { exact: true })).toBeVisible()
+    await expect(page.getByText('Thu nợ – Hoa', { exact: true })).toBeVisible()
+  })
 })
 
 /**
@@ -699,5 +765,58 @@ test.describe.serial('Money-source linking — loans', () => {
     await expect(dialog).toBeHidden()
     await expect(row).toContainText('Lần trả (1)')
     await expectCashBalance(page, '7.000.000')
+  })
+
+  test("'Record in an account' books a loan created without one — and its existing instalment — into the account, then disappears", async ({
+    page,
+  }) => {
+    // A loan from before linking, and an instalment with interest, both with
+    // "don't record in an account", so Cash does not move.
+    await page.goto('/loans')
+    await page.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm khoản vay' })
+    await sheet.getByLabel('Nhận tiền vào tài khoản').selectOption('')
+    await sheet.getByLabel('Bên cho vay').fill('Family')
+    await sheet.getByLabel('Số tiền vay', { exact: true }).fill('3000000')
+    await sheet.getByLabel(/Lãi suất/).fill('0')
+    await sheet.getByLabel(/Kỳ hạn/).fill('6')
+    await sheet.getByLabel('Số tiền mỗi kỳ').fill('500000')
+    await sheet.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    await expect(sheet).toBeHidden()
+
+    const row = namedRow(page, page, 'Family')
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const payment = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Family' })
+    await payment.getByLabel('Trả từ tài khoản').selectOption('')
+    await payment.getByLabel('Lãi').fill('20000')
+    await payment.getByRole('button', { name: 'Lưu' }).click()
+    await expect(payment).toBeHidden()
+    await expectCashBalance(page, '7.000.000')
+
+    await page.goto('/loans')
+    await openRowMenu(page, row, 'Family')
+    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản' }).click()
+    const link = page.getByRole('dialog', { name: 'Ghi vào tài khoản · Family' })
+    const account = link.getByLabel('Nhận tiền vào tài khoản')
+    await expect(account.locator('option')).toHaveCount(1)
+    await expect(account.locator('option:checked')).toHaveText('Cash · VND')
+    // The loan started today, which is the default day the money arrived.
+    await expect(link.getByLabel('Ngày nhận tiền vay')).toHaveValue(TODAY)
+    await expect(link.getByLabel('Ghi bù 1 lần trả đã có')).toBeChecked()
+    await link.getByRole('button', { name: 'Ghi vào tài khoản' }).click()
+    await expect(link).toBeHidden()
+
+    // Recorded: the action is gone from the row's menu.
+    await openRowMenu(page, row, 'Family')
+    await expect(page.getByRole('menuitem', { name: 'Sửa' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+
+    // 7.000.000 + 3.000.000 received − 480.000 principal − 20.000 interest.
+    await expectCashBalance(page, '9.500.000')
+    await page.goto('/transactions')
+    await expect(page.getByText('Vay – Family', { exact: true })).toBeVisible()
+    await expect(page.getByText('Trả gốc – Family', { exact: true })).toBeVisible()
+    await expect(page.getByText('Lãi vay – Family', { exact: true })).toBeVisible()
   })
 })

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ZodType } from 'zod'
-import { createDebtSchema, recordDebtPaymentSchema, updateDebtSchema } from './debt'
+import {
+  createDebtSchema,
+  linkDebtToAccountSchema,
+  recordDebtPaymentSchema,
+  updateDebtSchema,
+} from './debt'
 
 /**
  * What this suite is for is the *copy*, as much as the rules.
@@ -20,7 +25,9 @@ import { createDebtSchema, recordDebtPaymentSchema, updateDebtSchema } from './d
  *
  * Money-source linking (spec 2026-10-12 §6.2) adds the optional account a debt
  * or a payment is recorded in, and — on create — the day the money moved,
- * which is required exactly when an account is chosen.
+ * which is required exactly when an account is chosen. "Record in an account"
+ * (spec §6.4) links a debt recorded without one after the fact: an account and
+ * a date are both required there, since recording is the whole point.
  */
 
 /** The shapes Zod's own messages take, none of which may reach a form. */
@@ -253,6 +260,42 @@ describe('recordDebtPaymentSchema', () => {
   })
 })
 
+const VALID_LINK = {
+  accountId: 'acc_1',
+  openedOn: '2026-03-01',
+  includePayments: true,
+}
+
+describe('linkDebtToAccountSchema', () => {
+  it('accepts an account, the day the money moved and the payments choice', () => {
+    expect(linkDebtToAccountSchema.parse(VALID_LINK)).toEqual(VALID_LINK)
+    expect(linkDebtToAccountSchema.parse({ ...VALID_LINK, includePayments: false })).toEqual({
+      ...VALID_LINK,
+      includePayments: false,
+    })
+  })
+
+  it('keeps the date as a calendar string', () => {
+    expect(linkDebtToAccountSchema.parse(VALID_LINK).openedOn).toBe('2026-03-01')
+  })
+
+  it.each([
+    // Unlike create and payments, there is no "don't record" here: an account
+    // is the whole point of the request.
+    [{ accountId: undefined }, 'Choose an account'],
+    [{ accountId: '' }, 'Choose an account'],
+    [{ accountId: 42 }, 'Choose an account'],
+    [{ openedOn: undefined }, 'Enter the date the money moved'],
+    [{ openedOn: '' }, 'Enter the date the money moved'],
+    [{ openedOn: '01/03/2026' }, 'Enter a date as yyyy-MM-dd'],
+    [{ openedOn: '2026-02-30' }, 'Enter a real date'],
+    [{ includePayments: undefined }, 'Choose whether to record the existing payments'],
+    [{ includePayments: 'yes' }, 'Choose whether to record the existing payments'],
+  ])('rejects %o with product copy', (patch, message) => {
+    expect(messagesFor(linkDebtToAccountSchema, { ...VALID_LINK, ...patch })).toContain(message)
+  })
+})
+
 describe('no raw Zod text reaches a form', () => {
   it('answers every reachable rejection with product copy', () => {
     const cases: [ZodType, unknown][] = [
@@ -297,6 +340,11 @@ describe('no raw Zod text reaches a form', () => {
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, note: 12 }],
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, note: 'x'.repeat(501) }],
       [recordDebtPaymentSchema, { ...VALID_PAYMENT, accountId: 7 }],
+      [linkDebtToAccountSchema, {}],
+      [linkDebtToAccountSchema, { ...VALID_LINK, accountId: null }],
+      [linkDebtToAccountSchema, { ...VALID_LINK, openedOn: null }],
+      [linkDebtToAccountSchema, { ...VALID_LINK, openedOn: 20260301 }],
+      [linkDebtToAccountSchema, { ...VALID_LINK, includePayments: 1 }],
     ]
 
     for (const [schema, input] of cases) {

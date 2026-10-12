@@ -29,3 +29,18 @@ export function defaultPaymentAccountId(
   }
   return ''
 }
+
+/**
+ * The account "Record in an account" (spec 2026-10-12 §6.4) starts on, for a
+ * debt or a loan that moved no money yet: the user's most recently used
+ * account when the picker lists it, else the first one it lists. Unlike a
+ * payment's picker there is no "don't record" to fall back to — recording is
+ * the whole point — so `''` means only that no account in the agreement's
+ * currency exists.
+ */
+export function defaultLinkAccountId(
+  options: ReadonlyArray<DebtAccountOption>,
+  mostRecentAccountId: string | null,
+): string {
+  return defaultPaymentAccountId(options, null, mostRecentAccountId) || (options[0]?.id ?? '')
+}

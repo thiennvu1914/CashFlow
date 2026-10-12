@@ -13,9 +13,11 @@ import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/dateti
 import type { Locale } from '@/lib/i18n/locale'
 import {
   createDebtSchema,
+  linkDebtToAccountSchema,
   recordDebtPaymentSchema,
   updateDebtSchema,
   type CreateDebtInput,
+  type LinkDebtToAccountInput,
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
@@ -44,9 +46,11 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  *    CASH_OUT when they repaid (PAYABLE) — and links it with a composite,
  *    `ON DELETE RESTRICT` foreign key. *Without* an account (an agreement that
  *    predates the app, or cash that never touched a tracked account) the debt
- *    is bookkeeping between two people and nothing else is written. Editing or
- *    deleting a payment keeps both sides in step; writing a debt off moves no
- *    money and creates nothing.
+ *    is bookkeeping between two people and nothing else is written — until the
+ *    user records it in an account after all (`linkDebtToAccount`, spec §6.4),
+ *    which writes the same transactions after the fact. Editing or deleting a
+ *    payment keeps both sides in step; writing a debt off moves no money and
+ *    creates nothing.
  * 2. **Outstanding is derived, never stored.** `originalAmount − Σ payments`,
  *    computed on read (spec §5, "never store what can drift"). A stored copy
  *    would be a second source of truth that a rolled-back write, a deleted
@@ -202,6 +206,22 @@ export class DebtNotActiveError extends Error {
   constructor() {
     super('This debt has been written off and cannot receive payments.')
     this.name = 'DebtNotActiveError'
+  }
+}
+
+/**
+ * Thrown when "Record in an account" (`linkDebtToAccount`) is asked of a debt
+ * whose opening is already recorded in one.
+ *
+ * Its own error rather than a quiet no-op: a second opening transaction would
+ * count the same lent or borrowed money twice, and answering "done" would hide
+ * that the request did nothing — the user (a stale tab, a double-click) is told
+ * the debt is already in an account, which is the true state.
+ */
+export class DebtAlreadyLinkedError extends Error {
+  constructor() {
+    super('This debt is already recorded in an account.')
+    this.name = 'DebtAlreadyLinkedError'
   }
 }
 
@@ -1071,6 +1091,135 @@ export async function writeOffDebt(userId: string, debtId: string): Promise<Debt
     return tx.debt.update({
       where: { userId_id: { userId, id: debtId } },
       data: { status: 'WRITTEN_OFF' },
+      include: WITH_PAYMENTS,
+    })
+  })
+}
+
+/**
+ * "Record in an account" (spec 2026-10-12 §2 Q3, §6.4): a debt recorded without
+ * an account — it predates the app, or "don't record" was chosen — gets the
+ * transactions recording it with an account would have written, after the
+ * fact, so the account's derived balance stops disagreeing with the agreement.
+ * Nothing is ever linked automatically; this runs only when the user asks.
+ *
+ * What it writes, through the shared core and in one database transaction:
+ *
+ * - **the opening** (spec §4: CASH_OUT for a RECEIVABLE, CASH_IN for a
+ *   PAYABLE, `originalAmount`), dated on `openedOn` in the user's zone
+ *   (`calendarDateToEntryInstant`: now for today, else 12:00 that day), with the
+ *   debt's notes or the "Cho mượn – {person}" / "Mượn – {person}" label;
+ * - with `includePayments`, **one transaction per payment that has none yet**
+ *   (CASH_IN when a RECEIVABLE was repaid, CASH_OUT when a PAYABLE was), each
+ *   dated on its own payment day, with its own note or the "Thu nợ – {person}" /
+ *   "Trả nợ – {person}" label. A payment already recorded in an account keeps
+ *   its transaction untouched — linking never moves money twice.
+ *
+ * Refusals, all before the first write: a debt already linked
+ * (`DebtAlreadyLinkedError` — checked once before the FX lookup, so a stale
+ * tab costs no rate request, and again under the lock, where a concurrent link
+ * that committed first is visible), an account in another currency
+ * (`LinkedAccountCurrencyMismatchError`), an archived account, another user's
+ * debt or account (P2025), and no usable rate. Any later failure rolls the whole
+ * operation back.
+ *
+ * A written-off debt can be linked too — writing it off records that the rest
+ * will not come back, not that no money ever moved — so the debt row is locked
+ * with `lockDebtRow` itself, without `lockActiveDebt`'s status check, and its
+ * status is left as it is. Lock order is the module's: the account, then the
+ * debt; the payments are read under the debt lock, which every payment writer
+ * takes, so the set linked here is exactly the set that exists at commit.
+ *
+ * One FX snapshot, fetched before the transaction opens, is shared by every
+ * transaction written: they are all entered now, whatever day they are dated.
+ */
+export async function linkDebtToAccount(
+  userId: string,
+  debtId: string,
+  input: LinkDebtToAccountInput,
+  context: DebtLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<DebtRow> {
+  const parsed = linkDebtToAccountSchema.parse(input)
+  const { accountId } = parsed
+
+  // Ownership-scoped and first: another user's debt id is a P2025 here, and a
+  // debt that is already linked is refused, before any FX call or lock.
+  const existing = await prisma.debt.findUniqueOrThrow({
+    where: { userId_id: { userId, id: debtId } },
+    select: { openingTransactionId: true },
+  })
+  if (existing.openingTransactionId !== null) throw new DebtAlreadyLinkedError()
+
+  // One "now" for the whole operation, so an opening and a payment both dated
+  // today land on the same instant rather than a few milliseconds apart.
+  const now = new Date()
+  const instantOf = (calendarDate: string) =>
+    calendarDateToEntryInstant(calendarDate, context.timezone, now)
+  const openedAt = instantOf(parsed.openedOn)
+  const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
+
+  return prisma.$transaction(async (tx) => {
+    // 1. The account first (P2025 for another user's, `ArchivedAccountError`
+    //    for an archived one), so nothing is held while it queues.
+    const [account] = await lockAccountsForUpdate(tx, userId, [accountId])
+
+    // 2. The debt, whatever its status, re-read under the lock.
+    await lockDebtRow(tx, userId, debtId)
+    const debt = await tx.debt.findUniqueOrThrow({ where: { userId_id: { userId, id: debtId } } })
+    if (debt.openingTransactionId !== null) throw new DebtAlreadyLinkedError()
+    if (account.currency !== debt.currency) throw new LinkedAccountCurrencyMismatchError()
+
+    const linkedInput = (
+      type: 'CASH_IN' | 'CASH_OUT',
+      amount: Prisma.Decimal,
+      date: Date,
+      note: string,
+    ) => ({ accountId, type, amount, date, note, expectedCurrency: debt.currency })
+
+    // 3. The opening. `originalAmount` is > 0 (`Debt_originalAmount_positive`),
+    //    so the core's zero-amount refusal is unreachable.
+    const opening = await insertTransactionInTx(
+      tx,
+      userId,
+      linkedInput(
+        OPENING_TYPE[debt.direction],
+        debt.originalAmount,
+        openedAt,
+        debt.notes ?? linkedNote(context.locale, OPENING_NOTE[debt.direction], debt.person),
+      ),
+      fx,
+    )
+
+    // 4. The payments with no transaction yet, oldest first, each on its own
+    //    day (`DebtPayment_amount_positive`: never zero either).
+    if (parsed.includePayments) {
+      const unlinked = await tx.debtPayment.findMany({
+        where: { userId, debtId, transactionId: null },
+        orderBy: PAYMENT_ORDER,
+      })
+      for (const payment of unlinked) {
+        const created = await insertTransactionInTx(
+          tx,
+          userId,
+          linkedInput(
+            PAYMENT_TYPE[debt.direction],
+            payment.amount,
+            instantOf(formatCalendarDate(payment.date)),
+            payment.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person),
+          ),
+          fx,
+        )
+        await tx.debtPayment.update({
+          where: { userId_id: { userId, id: payment.id } },
+          data: { transactionId: created.id },
+        })
+      }
+    }
+
+    return tx.debt.update({
+      where: { userId_id: { userId, id: debtId } },
+      data: { openingTransactionId: opening.id },
       include: WITH_PAYMENTS,
     })
   })

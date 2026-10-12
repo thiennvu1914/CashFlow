@@ -13,9 +13,10 @@ import { StatusBadge, type StatusTone } from '@/components/common/status-badge'
 
 /**
  * The shared debt row, used by both the Debts page (full rows, with
- * payment/edit/write-off via `renderActions`, and the written-off section
- * without it) and — from a later group — the Dashboard's debts widget
- * (`compact`: person, direction and what is still outstanding, nothing else).
+ * payment/edit/write-off via `renderActions`, and the written-off section with
+ * only its "Record in an account" menu) and — from a later group — the
+ * Dashboard's debts widget (`compact`: person, direction and what is still
+ * outstanding, nothing else).
  *
  * An async server component with no state of its own: every figure it renders
  * is already a formatted string or plain number from `toDebtDto`

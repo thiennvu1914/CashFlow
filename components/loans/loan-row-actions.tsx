@@ -10,10 +10,11 @@ import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { LoanDto, LoanPaymentDto } from '@/lib/ui/loan-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
-import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { RowActionsMenu, type RowAction } from '@/components/common/row-actions-menu'
 import { useRowError } from '@/components/common/row-error-context'
 import { Button } from '@/components/ui/button'
 import { LoanEditForm } from './loan-edit-form'
+import { LoanLinkForm } from './loan-link-form'
 import { LoanPaymentForm } from './loan-payment-form'
 
 /**
@@ -32,18 +33,19 @@ import { LoanPaymentForm } from './loan-payment-form'
  *    Vietnamese, but its DIGIT GROUPING is a locale, and `formatMoney`'s
  *    locale parameter defaults to `vi` when omitted, which is what silently
  *    produced Vietnamese grouping inside an otherwise-English dialog.
- *  - `LoanRowMenu` — Edit/Close loan, passed as `actions`. Its close failure
- *    is reported through `useRowError` rather than a local `useState`:
- *    `LoanList` renders this into `actions` and a `RowErrorAlert` into
- *    `extra` (under the row), and only a shared Context can connect a menu
- *    click to an alert that renders elsewhere in the tree.
+ *  - `LoanRowMenu` — Edit / Record in an account / Close loan, passed as
+ *    `actions`. Its close failure is reported through `useRowError` rather
+ *    than a local `useState`: `LoanList` renders this into `actions` and a
+ *    `RowErrorAlert` into `extra` (under the row), and only a shared Context
+ *    can connect a menu click to an alert that renders elsewhere in the tree.
  *
  * Neither ever mounts on the Dashboard's compact list (no `renderActions`
- * there) or in the page's closed section (a closed loan refuses every write;
- * offering the actions would be a promise the service breaks). A PAID_OFF
- * loan is *not* closed and keeps both: a final interest charge can still be
- * recorded (ruling R6-6), and closing it is how the user says they are
- * finished with it.
+ * there). In the page's closed section only the menu mounts, and only for a
+ * loan whose disbursement moved no money yet: a closed loan refuses every
+ * write except "Record in an account" (spec 2026-10-12 §6.4) — closing it did
+ * not undo the money that moved. A PAID_OFF loan is *not* closed and keeps
+ * both: a final interest charge can still be recorded (ruling R6-6), and
+ * closing it is how the user says they are finished with it.
  *
  * Recording an instalment writes a `LoanPayment` row, advances the loan's
  * `nextDueDate` and, when an account is chosen, books the principal and the
@@ -227,14 +229,54 @@ export function LoanPaymentActions({
   )
 }
 
-export function LoanRowMenu({ loan }: { loan: LoanDto }) {
+export function LoanRowMenu({
+  loan,
+  accounts,
+  mostRecentAccountId,
+}: {
+  loan: LoanDto
+  /** Every active account; "Record in an account" keeps the ones in the
+   *  loan's currency. */
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+}) {
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
   const [closing, setClosing] = useState(false)
   const { setError } = useRowError()
   const closeSubmit = useActionSubmit(t)
 
-  if (!loan.active) return null
+  // Offered while the disbursement moved no money (spec §6.4), and gone once
+  // it has: the page re-renders with `disbursementAccountId` set.
+  const canLink = loan.disbursementAccountId === null
+  if (!loan.active && !canLink) return null
+
+  const actions: RowAction[] = []
+  if (loan.active) {
+    actions.push({ id: 'edit', label: t('loans.editAction'), onSelect: () => setEditOpen(true) })
+  }
+  if (canLink) {
+    actions.push({
+      id: 'link',
+      label: t('loans.linkAction'),
+      onSelect: () => {
+        setError(null)
+        setLinkOpen(true)
+      },
+    })
+  }
+  if (loan.active) {
+    actions.push({
+      id: 'close',
+      label: t('loans.closeAction'),
+      tone: 'negative',
+      onSelect: () => {
+        setError(null)
+        setClosing(true)
+      },
+    })
+  }
 
   async function confirmClose() {
     await closeSubmit.run({
@@ -250,21 +292,7 @@ export function LoanRowMenu({ loan }: { loan: LoanDto }) {
 
   return (
     <>
-      <RowActionsMenu
-        label={t('common.rowActions', { name: loan.lender })}
-        actions={[
-          { id: 'edit', label: t('loans.editAction'), onSelect: () => setEditOpen(true) },
-          {
-            id: 'close',
-            label: t('loans.closeAction'),
-            tone: 'negative',
-            onSelect: () => {
-              setError(null)
-              setClosing(true)
-            },
-          },
-        ]}
-      />
+      <RowActionsMenu label={t('common.rowActions', { name: loan.lender })} actions={actions} />
 
       <Dialog
         open={editOpen}
@@ -273,6 +301,23 @@ export function LoanRowMenu({ loan }: { loan: LoanDto }) {
         closeLabel={t('common.close')}
       >
         {editOpen && <LoanEditForm loan={loan} onDone={() => setEditOpen(false)} />}
+      </Dialog>
+
+      <Dialog
+        open={linkOpen}
+        onOpenChange={setLinkOpen}
+        title={t('loans.linkTitle', { name: loan.lender })}
+        description={t('loans.linkDescription')}
+        closeLabel={t('common.close')}
+      >
+        {linkOpen && (
+          <LoanLinkForm
+            loan={loan}
+            accounts={accounts}
+            mostRecentAccountId={mostRecentAccountId}
+            onDone={() => setLinkOpen(false)}
+          />
+        )}
       </Dialog>
 
       <ConfirmDialog

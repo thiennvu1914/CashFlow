@@ -13,9 +13,10 @@ import { StatusBadge, type StatusTone } from '@/components/common/status-badge'
 
 /**
  * The shared loan row, used by both the Loans page (full rows, with
- * payment/edit/close via `renderActions`, and the closed section without it)
- * and — from a later group — the Dashboard's loans widget (`compact`: lender
- * and what principal is still outstanding, nothing else).
+ * payment/edit/close via `renderActions`, and the closed section with only its
+ * "Record in an account" menu) and — from a later group — the Dashboard's
+ * loans widget (`compact`: lender and what principal is still outstanding,
+ * nothing else).
  *
  * An async server component with no state of its own: every figure it renders
  * is already a formatted string or plain number from `toLoanDto`

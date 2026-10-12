@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { defaultPaymentAccountId, type DebtAccountOption } from './debt-accounts'
+import {
+  defaultLinkAccountId,
+  defaultPaymentAccountId,
+  type DebtAccountOption,
+} from './debt-accounts'
 
 const wallet: DebtAccountOption = { id: 'wallet', name: 'Wallet', currency: 'VND' }
 const bank: DebtAccountOption = { id: 'bank', name: 'Bank', currency: 'VND' }
@@ -22,5 +26,20 @@ describe('defaultPaymentAccountId', () => {
 
   it('uses the most recent account when the opening account is no longer listed', () => {
     expect(defaultPaymentAccountId([wallet], 'archived', 'wallet')).toBe('wallet')
+  })
+})
+
+describe('defaultLinkAccountId', () => {
+  it('starts on the most recently used account when the picker lists it', () => {
+    expect(defaultLinkAccountId([wallet, bank], 'bank')).toBe('bank')
+  })
+
+  it('falls back to the first listed account — there is no "don\'t record" to fall back to', () => {
+    expect(defaultLinkAccountId([wallet, bank], 'usd-account')).toBe('wallet')
+    expect(defaultLinkAccountId([wallet, bank], null)).toBe('wallet')
+  })
+
+  it('is empty only when no account in the currency exists at all', () => {
+    expect(defaultLinkAccountId([], 'wallet')).toBe('')
   })
 })

@@ -19,6 +19,9 @@ import { FormField, SELECT_CLASS } from '@/components/common/form-field'
  * The loan forms use it too — the options and their wording are the same; only
  * the label differs ("received into" a loan's account, "paid from" an
  * instalment's), so `label` overrides the debts' plain "Account".
+ *
+ * "Record in an account" (spec 2026-10-12 §6.4) passes `allowNone={false}`:
+ * recording is the whole point of that dialog, so it lists the accounts alone.
  */
 export function DebtAccountField({
   id,
@@ -28,6 +31,7 @@ export function DebtAccountField({
   error,
   helper,
   label,
+  allowNone = true,
 }: {
   id: string
   accounts: ReadonlyArray<DebtAccountOption>
@@ -36,6 +40,8 @@ export function DebtAccountField({
   error?: string
   helper?: string
   label?: string
+  /** Offer "don't record in an account" as the first option (the default). */
+  allowNone?: boolean
 }) {
   const t = useTranslations()
 
@@ -48,7 +54,7 @@ export function DebtAccountField({
           defaultValue={defaultAccountId}
           className={SELECT_CLASS}
         >
-          <option value="">{t('debts.accountNone')}</option>
+          {allowNone && <option value="">{t('debts.accountNone')}</option>}
           {accounts.map((account) => (
             <option key={account.id} value={account.id}>
               {t(account.archived ? 'debts.accountOptionArchived' : 'debts.accountOption', {

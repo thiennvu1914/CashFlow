@@ -14,9 +14,11 @@ import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/dateti
 import type { Locale } from '@/lib/i18n/locale'
 import {
   createLoanSchema,
+  linkLoanToAccountSchema,
   recordLoanPaymentSchema,
   updateLoanSchema,
   type CreateLoanInput,
+  type LinkLoanToAccountInput,
   type RecordLoanPaymentInput,
   type UpdateLoanInput,
 } from '@/lib/validation/loan'
@@ -48,7 +50,9 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  *    interest-only instalment has no CASH_OUT, a 0 % one no EXPENSE). *Without*
  *    an account (a loan that predates the app, or money that never touched a
  *    tracked account) the loan is bookkeeping about an agreement with a lender
- *    and nothing else is written. Editing or deleting an instalment keeps all
+ *    and nothing else is written — until the user records it in an account
+ *    after all (`linkLoanToAccount`, spec §6.4), which writes the same
+ *    transactions after the fact. Editing or deleting an instalment keeps all
  *    three rows in step; closing a loan moves no money and creates nothing.
  * 2. **Outstanding principal is derived, never stored.** `principal − Σ
  *    principalAmount`, computed on read (spec §5, "never store what can drift").
@@ -267,6 +271,21 @@ export class LoanSplitMismatchError extends Error {
   constructor() {
     super('Total must equal principal plus interest.')
     this.name = 'LoanSplitMismatchError'
+  }
+}
+
+/**
+ * Thrown when "Record in an account" (`linkLoanToAccount`) is asked of a loan
+ * whose disbursement is already recorded in one.
+ *
+ * Its own error rather than a quiet no-op, as on debts: a second disbursement
+ * would count the same borrowed money twice, and the user (a stale tab, a
+ * double-click) is told the loan is already in an account — the true state.
+ */
+export class LoanAlreadyLinkedError extends Error {
+  constructor() {
+    super('This loan is already recorded in an account.')
+    this.name = 'LoanAlreadyLinkedError'
   }
 }
 
@@ -1386,6 +1405,153 @@ export async function closeLoan(userId: string, loanId: string): Promise<Loan> {
     return tx.loan.update({
       where: { userId_id: { userId, id: loanId } },
       data: { status: 'CLOSED' },
+    })
+  })
+}
+
+/**
+ * "Record in an account" (spec 2026-10-12 §2 Q3, §6.4): a loan recorded without
+ * an account — it predates the app, or "don't record" was chosen — gets the
+ * transactions recording it with an account would have written, after the
+ * fact, so the account's derived balance stops disagreeing with the loan.
+ * Nothing is ever linked automatically; this runs only when the user asks.
+ *
+ * What it writes, through the shared core and in one database transaction:
+ *
+ * - **the disbursement** (spec §4: a CASH_IN of the principal), dated on
+ *   `disbursedOn` in the user's zone (`calendarDateToEntryInstant`: now for
+ *   today, else 12:00 that day), with the loan's notes or the "Vay – {lender}"
+ *   label;
+ * - with `includePayments`, for **every instalment that has no transaction
+ *   yet**, exactly what `recordLoanPayment` would have written: a CASH_OUT of
+ *   its principal part and an EXPENSE of its interest part in "Loan Interest &
+ *   Fees" — none for a part of zero — dated on its own payment day, with its
+ *   own note or the "Trả gốc – {lender}" / "Lãi vay – {lender}" labels. An
+ *   instalment already recorded in an account (either leg linked) keeps its
+ *   transactions untouched — linking never moves money twice.
+ *
+ * The schedule does not move: these instalments were already counted when
+ * they were recorded, and linking only says which account they were paid from.
+ *
+ * Refusals, all before the first write: a loan already linked
+ * (`LoanAlreadyLinkedError` — checked once before the FX lookup and again under
+ * the lock, where a concurrent link that committed first is visible), an
+ * account in another currency (`LinkedAccountCurrencyMismatchError`), an
+ * archived account, another user's loan or account (P2025), and no usable
+ * rate. Any later failure rolls the whole operation back, the interest
+ * category included.
+ *
+ * A closed loan can be linked too — closing it records that the user is
+ * finished with it, not that no money ever moved — so the loan row is locked
+ * with `lockLoanRow` itself, without `lockActiveLoan`'s status check, and its
+ * status is left as it is. Lock order is the module's: the account, then the
+ * loan; the instalments are read under the loan lock, which every instalment
+ * writer takes. "Loan Interest & Fees" is looked up (or created) after both
+ * locks, once, and only when an interest transaction is about to be written.
+ *
+ * One FX snapshot, fetched before the transaction opens, is shared by every
+ * transaction written. Returns the committed `Loan` row as written — its
+ * relations are the read path's to load (see `WITH_PAYMENTS`).
+ */
+export async function linkLoanToAccount(
+  userId: string,
+  loanId: string,
+  input: LinkLoanToAccountInput,
+  context: LoanLinkContext,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+): Promise<Loan> {
+  const parsed = linkLoanToAccountSchema.parse(input)
+  const { accountId } = parsed
+
+  // Ownership-scoped and first: another user's loan id is a P2025 here, and a
+  // loan that is already linked is refused, before any FX call or lock.
+  const existing = await prisma.loan.findUniqueOrThrow({
+    where: { userId_id: { userId, id: loanId } },
+    select: { disbursementTransactionId: true },
+  })
+  if (existing.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
+
+  // One "now" for the whole operation, so a disbursement and an instalment
+  // both dated today land on the same instant.
+  const now = new Date()
+  const instantOf = (calendarDate: string) =>
+    calendarDateToEntryInstant(calendarDate, context.timezone, now)
+  const disbursedAt = instantOf(parsed.disbursedOn)
+  const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
+
+  return prisma.$transaction(async (tx) => {
+    // 1. The account first (P2025 for another user's, `ArchivedAccountError`
+    //    for an archived one), so nothing is held while it queues.
+    const [account] = await lockAccountsForUpdate(tx, userId, [accountId])
+
+    // 2. The loan, whatever its status, re-read under the lock.
+    await lockLoanRow(tx, userId, loanId)
+    const loan = await tx.loan.findUniqueOrThrow({ where: { userId_id: { userId, id: loanId } } })
+    if (loan.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
+    if (account.currency !== loan.currency) throw new LinkedAccountCurrencyMismatchError()
+
+    // 3. The disbursement. `principal` is > 0 (`Loan_principal_positive`), so
+    //    the core's zero-amount refusal is unreachable.
+    const disbursement = await insertTransactionInTx(
+      tx,
+      userId,
+      {
+        accountId,
+        type: 'CASH_IN',
+        amount: loan.principal,
+        date: disbursedAt,
+        note: loan.notes ?? linkedNote(context.locale, 'disburse', loan.lender),
+        expectedCurrency: loan.currency,
+      },
+      fx,
+    )
+
+    // 4. The instalments with neither leg linked, oldest first, each on its own
+    //    day. A part of zero writes nothing (the core refuses a zero amount).
+    if (parsed.includePayments) {
+      const unlinked = await tx.loanPayment.findMany({
+        where: { userId, loanId, principalTransactionId: null, interestTransactionId: null },
+        orderBy: PAYMENT_ORDER,
+      })
+      let interestCategoryId: string | null = null
+      for (const payment of unlinked) {
+        const date = instantOf(formatCalendarDate(payment.paymentDate))
+        const parts = { principal: payment.principalAmount, interest: payment.interestAmount }
+        const linked = { principal: null as string | null, interest: null as string | null }
+        for (const leg of ['principal', 'interest'] as const) {
+          if (!parts[leg].greaterThan(0)) continue
+          if (leg === 'interest') {
+            interestCategoryId ??= await ensureLoanInterestCategoryId(tx, userId)
+          }
+          const created = await insertTransactionInTx(
+            tx,
+            userId,
+            {
+              accountId,
+              type: LEG_TYPE[leg],
+              amount: parts[leg],
+              date,
+              note: payment.note ?? linkedNote(context.locale, leg, loan.lender),
+              categoryId: leg === 'interest' ? interestCategoryId : null,
+              expectedCurrency: loan.currency,
+            },
+            fx,
+          )
+          linked[leg] = created.id
+        }
+        await tx.loanPayment.update({
+          where: { userId_id: { userId, id: payment.id } },
+          data: {
+            principalTransactionId: linked.principal,
+            interestTransactionId: linked.interest,
+          },
+        })
+      }
+    }
+
+    return tx.loan.update({
+      where: { userId_id: { userId, id: loanId } },
+      data: { disbursementTransactionId: disbursement.id },
     })
   })
 }
