@@ -21,6 +21,7 @@
     "CURRENCY_MISMATCH": "Move the transaction to an account in the same currency, or delete and re-enter it.",
     "INVALID_CATEGORY": "Choose a valid category for this type.",
     "CONFLICT": "This record changed while you were editing it. Reload and try again.",
+    "LINKED_TRANSACTION": "This transaction belongs to a debt or loan. Open that debt or loan to change or delete it.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That record no longer exists."
   },

@@ -1,12 +1,25 @@
 'use client'
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useState,
+  type Ref,
+} from 'react'
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
 import { Sheet } from '@/components/common/sheet'
 import { Button } from '@/components/ui/button'
-import { TransactionForm, type AccountOption, type CategoryOption } from './transaction-form'
+import {
+  TransactionForm,
+  type AccountOption,
+  type CategoryOption,
+  type EditableTransaction,
+} from './transaction-form'
 
 /**
  * The create form's homes (spec §6.2, §14 decision 2; breakpoints revised at
@@ -55,6 +68,10 @@ import { TransactionForm, type AccountOption, type CategoryOption } from './tran
  * mis-binding is `useId()`: every field id is unique per mounted instance, so
  * a `<label for>` can never resolve to the OTHER one's control regardless of
  * how many instances happen to share the page at once.
+ *
+ * The same Provider also serves the edit form's home, `TransactionEditSheet`
+ * (money-source linking spec 2026-10-12 §6.5), which the ledger renders and
+ * opens with a row: one set of picker options for both forms.
  */
 
 /**
@@ -156,10 +173,75 @@ export function TransactionCreatePanelProvider({
           categories={categories}
           timezone={timezone}
           locale={locale}
-          onCreated={() => setSheetOpen(false)}
+          onSaved={() => setSheetOpen(false)}
         />
       </Sheet>
     </TransactionCreateContext.Provider>
+  )
+}
+
+export interface TransactionEditSheetHandle {
+  open: (transaction: EditableTransaction) => void
+}
+
+/**
+ * The edit form's home (money-source linking spec 2026-10-12 §6.5): the same
+ * `TransactionForm`, in a `Sheet` at every width, pre-filled from the row.
+ *
+ * Rendered by the ledger (which owns the rows) inside this file's Provider
+ * (which owns the pickers' options), and opened through `handleRef` with the
+ * row — so its open state lives here and opening it re-renders this sheet
+ * alone, never the memoised ledger rows (the same shape as the ledger's delete
+ * confirmation). Outside the Provider there are no options to edit with, and
+ * it renders nothing.
+ *
+ * `target` outlives `open` on purpose: the sheet keeps its content painted
+ * through the close animation instead of collapsing mid-slide. Each opening
+ * mounts a fresh form (`key`), so it always starts from the row as the server
+ * last sent it — never from a previous, abandoned edit.
+ */
+export function TransactionEditSheet({
+  handleRef,
+}: {
+  handleRef: Ref<TransactionEditSheetHandle>
+}) {
+  const t = useTranslations()
+  const ctx = useContext(TransactionCreateContext)
+  const [target, setTarget] = useState<{ transaction: EditableTransaction; key: number } | null>(
+    null,
+  )
+  const [open, setOpen] = useState(false)
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      open: (transaction) => {
+        setTarget((prev) => ({ transaction, key: (prev?.key ?? 0) + 1 }))
+        setOpen(true)
+      },
+    }),
+    [],
+  )
+
+  if (!ctx) return null
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={setOpen}
+      title={t('transactions.editTitle')}
+      closeLabel={t('common.close')}
+    >
+      {target && (
+        <TransactionForm
+          key={target.key}
+          accounts={ctx.accounts}
+          categories={ctx.categories}
+          timezone={ctx.timezone}
+          locale={ctx.locale}
+          transaction={target.transaction}
+          onSaved={() => setOpen(false)}
+        />
+      )}
+    </Sheet>
   )
 }
 

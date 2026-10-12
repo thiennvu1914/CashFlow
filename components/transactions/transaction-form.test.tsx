@@ -30,6 +30,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/lib/server/actions/transaction-actions', () => ({
   createTransactionAction: vi.fn(),
+  updateTransactionAction: vi.fn(),
 }))
 
 const { TransactionForm } = await import('./transaction-form')
@@ -233,5 +234,93 @@ describe('TransactionForm with active accounts', () => {
       const labelEnd = html.indexOf('</label>', labelIndex)
       expect(html.slice(labelIndex, labelEnd)).toContain(label)
     }
+  })
+})
+
+/**
+ * Edit mode (money-source linking spec 2026-10-12 §6.5): the same form,
+ * pre-filled from the ledger row and submitting `updateTransactionAction`.
+ *
+ * In the app the edit sheet only ever mounts after hydration, so the controls
+ * are live from the first render; here, rendered to static markup, they are the
+ * pre-hydration stand-ins — which carry the form's initial values, and so are
+ * exactly what this block pins.
+ */
+describe('TransactionForm editing an existing transaction', () => {
+  const ACCOUNTS: Account[] = [
+    { id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' },
+    { id: 'acc_bank', name: 'Bank', currency: 'VND', balance: '2000000.00' },
+  ]
+
+  /** 00:30 on 9 September in Ho Chi Minh City (UTC+7) — a different calendar
+   *  day from the stored UTC instant, so a UTC prefill would show the 8th. */
+  const ROW = {
+    id: 'tx_1',
+    type: 'INCOME' as const,
+    amount: '1500000.00',
+    currency: 'VND' as const,
+    date: new Date('2026-09-08T17:30:00.000Z'),
+    note: 'September salary',
+    accountId: 'acc_bank',
+    categoryId: 'cat_salary',
+    account: { name: 'Bank' },
+    category: { name: 'Salary' },
+  }
+
+  function renderEdit(transaction: typeof ROW): string {
+    return renderToStaticMarkup(
+      <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
+        <TransactionForm
+          accounts={ACCOUNTS}
+          categories={CATEGORIES}
+          timezone={TIMEZONE}
+          locale="vi"
+          transaction={transaction}
+        />
+      </NextIntlClientProvider>,
+    )
+  }
+
+  it('says what it does: an edit legend and a Save button, never "Add transaction"', () => {
+    const html = renderEdit(ROW)
+
+    expect(html).toContain('<legend class="sr-only">Sửa giao dịch</legend>')
+    expect(html).toMatch(/<button type="submit"[^>]*>Lưu<\/button>/)
+    expect(html).not.toContain('Thêm giao dịch')
+  })
+
+  it("pre-fills the date and time from the row's instant in the user's zone", () => {
+    const html = renderEdit(ROW)
+
+    expect(html).toMatch(/id="transaction-date-[^"]*"[^>]*value="2026-09-09"/)
+    expect(html).toMatch(/id="transaction-time-[^"]*"[^>]*value="00:30"/)
+  })
+
+  it("pre-selects the row's own type, account and category", () => {
+    const html = renderEdit(ROW)
+
+    expect(radiogroupMarkup(html)).toMatch(/aria-checked="true"[^>]*>Thu nhập/)
+    expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Bank · 2.000.000 VND'])
+    expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Salary'])
+  })
+
+  /**
+   * A row can still point at a category that has since been archived (the
+   * service lets an edit keep it, ruling R-6's sibling in `resolveCategoryId`),
+   * or at an archived account (whose balance is zero by construction). The
+   * pickers list only active ones, so without these options the trigger would
+   * show a raw id.
+   */
+  it('keeps an archived category and an archived account selectable by name', () => {
+    const html = renderEdit({
+      ...ROW,
+      accountId: 'acc_old',
+      account: { name: 'Old wallet' },
+      categoryId: 'cat_bonus',
+      category: { name: 'Bonus' },
+    })
+
+    expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Old wallet · 0 VND'])
+    expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Bonus'])
   })
 })

@@ -10,6 +10,7 @@ import {
   insertTransactionInTx,
   resolveCategoryId,
 } from './linked-transaction'
+import { LinkedTransactionError, findTransactionLinks } from './transaction-links'
 
 /**
  * Transaction service (spec §4.4, §6.3).
@@ -46,6 +47,11 @@ export { ArchivedAccountError }
 // linking core (`linked-transaction.ts`), which every transaction write goes
 // through; re-exported so the action error map and existing tests are unchanged.
 export { InvalidCategoryError }
+
+// `LinkedTransactionError` lives with `findTransactionLinks`, which decides
+// when it applies; re-exported so the action error map reaches every domain
+// error of this service through one import.
+export { LinkedTransactionError }
 
 /**
  * Thrown when a transaction changed underneath a write between the read that
@@ -120,6 +126,28 @@ export async function lockAndVerifyTransactionRow(
 }
 
 /**
+ * Refuses a transaction a debt or loan owns (money-source linking spec
+ * 2026-10-12 §2 Q4, §6.5): such a row is changed from its source record, which
+ * keeps both sides in step in one database transaction.
+ *
+ * Called inside the caller's transaction, after `lockAndVerifyTransactionRow`:
+ * the answer is read under the same locks as the write it guards, and the lock
+ * order stays accounts → transaction row (the link tables are only read, never
+ * locked, so no new lock is taken and no new ordering is introduced). After the
+ * ownership check, deliberately — another user's linked id is a `P2025` from
+ * the scoped read before this runs, never a refusal that would confirm it is
+ * linked.
+ */
+async function refuseLinkedTransaction(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  transactionId: string,
+): Promise<void> {
+  const link = (await findTransactionLinks(userId, [transactionId], tx)).get(transactionId)
+  if (link) throw new LinkedTransactionError(link)
+}
+
+/**
  * Thrown when an edit tries to move a transaction to an account in a
  * different currency.
  *
@@ -178,6 +206,10 @@ export async function listTransactions(userId: string, options?: { limit?: numbe
       date: true,
       note: true,
       fxRateSource: true,
+      // The edit sheet pre-selects its account and category pickers with these
+      // (spec 2026-10-12 §6.5); the names below are what the row renders.
+      accountId: true,
+      categoryId: true,
       account: { select: { name: true } },
       category: { select: { name: true } },
     },
@@ -298,7 +330,8 @@ export async function createTransaction(
  * entries, it does not freeze the history already filed under it.
  *
  * The one account change that is *not* allowed is a move across currencies:
- * see `CurrencyMismatchError`.
+ * see `CurrencyMismatchError`. A transaction a debt or loan owns is not
+ * editable here at all: see `refuseLinkedTransaction`.
  *
  * Concurrency: the row is read once outside the transaction (to decide
  * `economicChange`, and so the FX call can happen with no lock held), then
@@ -348,6 +381,7 @@ export async function updateTransaction(
     // nothing about this row, and `economicChange` above was computed from a
     // copy taken before the transaction opened.
     await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
+    await refuseLinkedTransaction(tx, userId, transactionId)
 
     // `amount` carries no currency of its own, so moving a row to an account in
     // another currency would re-label the same number as a different amount of
@@ -402,6 +436,9 @@ export async function updateTransaction(
  * on the account the row has just left while removing money from the one it has
  * just joined, which is precisely how a delete slips past an archived account.
  * A moved (or otherwise changed) row is a `ConcurrentModificationError`.
+ *
+ * A transaction a debt or loan owns is deleted from that record, never from
+ * here: see `refuseLinkedTransaction`.
  */
 export async function deleteTransaction(userId: string, transactionId: string) {
   const existing = await prisma.transaction.findUniqueOrThrow({
@@ -412,6 +449,9 @@ export async function deleteTransaction(userId: string, transactionId: string) {
     // `updateTransaction`, so the two can never deadlock against each other.
     await lockAccountsForUpdate(tx, userId, [existing.accountId])
     await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
+    // Refused before the delete rather than left to the `ON DELETE RESTRICT`
+    // foreign key, which would surface as an unmapped database error.
+    await refuseLinkedTransaction(tx, userId, transactionId)
     await tx.transaction.delete({ where: { userId_id: { userId, id: transactionId } } })
   })
 }

@@ -28,6 +28,11 @@ import {
  * submits the plain `yyyy-MM-ddTHH:mm` the user entered, and only here is the
  * session user's IANA timezone known, so only here can that wall-clock moment
  * be pinned to the right instant. See `lib/datetime/local-date-time.ts`.
+ *
+ * `LINKED_TRANSACTION` (money-source linking spec 2026-10-12 §6.5): the row
+ * belongs to a debt or loan and is changed from there. The UI never offers
+ * edit or delete on such a row, so this is the answer to a stale page or a
+ * crafted request, and its copy sends the user to the debt or loan.
  */
 export type TransactionActionError =
   | 'FX_UNAVAILABLE'
@@ -35,6 +40,7 @@ export type TransactionActionError =
   | 'CURRENCY_MISMATCH'
   | 'INVALID_CATEGORY'
   | 'CONFLICT'
+  | 'LINKED_TRANSACTION'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -53,6 +59,9 @@ function mapError(e: unknown): TransactionActionResult {
   }
   if (e instanceof transactionService.ConcurrentModificationError) {
     return { ok: false, error: 'CONFLICT' }
+  }
+  if (e instanceof transactionService.LinkedTransactionError) {
+    return { ok: false, error: 'LINKED_TRANSACTION' }
   }
   return mapCommonActionError(e)
 }
@@ -82,6 +91,30 @@ export async function createTransactionAction(
   }
   revalidatePath('/transactions')
   revalidatePath('/accounts')
+  return { ok: true }
+}
+
+/**
+ * The edit sheet's submit (spec 2026-10-12 §6.5): the same form shape and the
+ * same zone conversion as create, applied to an existing row. The service
+ * re-snapshots FX only for an economic change (ruling R-6) and refuses a row a
+ * debt or loan owns. An edit can move the amount, the account or the date, so
+ * the balances and the dashboard re-render with the ledger.
+ */
+export async function updateTransactionAction(
+  id: string,
+  input: CreateTransactionFormInput,
+): Promise<TransactionActionResult> {
+  const user = await requireUser()
+  const { timezone } = resolveProfileDefaults(user)
+  try {
+    await transactionService.updateTransaction(user.id, id, toServiceInput(input, timezone))
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidatePath('/transactions')
+  revalidatePath('/accounts')
+  revalidatePath('/dashboard')
   return { ok: true }
 }
 

@@ -4,6 +4,7 @@ import {
   memo,
   startTransition,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useOptimistic,
@@ -12,6 +13,7 @@ import {
   type Ref,
 } from 'react'
 import { formatInTimeZone } from 'date-fns-tz'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Receipt } from 'lucide-react'
 import { cn } from 'cn'
@@ -19,6 +21,7 @@ import type { Currency, TransactionType } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import { deleteTransactionAction } from '@/lib/server/actions/transaction-actions'
+import type { TransactionLink } from '@/lib/server/services/transaction-links'
 import { TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatDate } from '@/lib/ui/format-date'
 import { formatMoney } from '@/lib/ui/format-money'
@@ -30,8 +33,11 @@ import { FinancialListRow } from '@/components/common/financial-list-row'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { MoneyText } from '@/components/common/money-text'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
+import { StatusBadge } from '@/components/common/status-badge'
+import { TransactionEditSheet, type TransactionEditSheetHandle } from './transaction-create-panel'
 import { groupByDay } from './transaction-day-group'
 import { hideDeletedRow, settledLedger } from './transaction-delete-visibility'
+import { transactionRowActions } from './transaction-row-actions'
 
 /**
  * The ledger (spec §6.2).
@@ -58,7 +64,13 @@ import { hideDeletedRow, settledLedger } from './transaction-delete-visibility'
  * client-rendered and each owns a Base UI menu, so when the dialog's open state
  * and the delete's pending state lived here, every change re-rendered every
  * row and the press on "Delete" felt laggy. Now the dialog owns its own state,
- * the row is `memo`ised, and the deleted row is hidden optimistically.
+ * the row is `memo`ised, and the deleted row is hidden optimistically. The edit
+ * sheet follows the same shape: it owns its open state and is opened with the
+ * row through a handle.
+ *
+ * Money-source linking (spec 2026-10-12 §2 Q4, §6.5): a row a debt or loan
+ * owns (`link`) carries a badge naming it, and its menu offers only "open the
+ * debt/loan" — see `transaction-row-actions.ts`.
  */
 export interface TransactionRow {
   id: string
@@ -68,8 +80,13 @@ export interface TransactionRow {
   date: Date
   note: string | null
   fxRateSource: string
+  /** The edit sheet pre-selects its pickers with these two. */
+  accountId: string
+  categoryId: string | null
   account: { name: string }
   category: { name: string } | null
+  /** The debt or loan that owns this row, or `null` for an ordinary one. */
+  link: TransactionLink | null
 }
 
 export function TransactionList({
@@ -122,7 +139,30 @@ export function TransactionList({
    */
   const [ledger, hideRow] = useOptimistic(settled, hideDeletedRow<TransactionRow>)
   const dialogRef = useRef<DeleteDialogHandle>(null)
+  const editRef = useRef<TransactionEditSheetHandle>(null)
   const submit = useActionSubmit(t)
+  const router = useRouter()
+
+  /**
+   * `?edit=<id>` opens that row's edit sheet — a link another page can send
+   * the user to right after recording a transaction for them (a reminder's
+   * "Transaction recorded — Edit"). Only an ordinary row on this page opens; a
+   * row a debt or loan owns is not editable here, and one outside the newest
+   * 200 is not on the page. Either way the parameter is consumed, so a reload
+   * or the revalidation after a save does not reopen the sheet.
+   *
+   * After commit, when the sheet's handle is attached; `useSearchParams` so a
+   * second link to this same, already-mounted page is seen too.
+   */
+  const editId = useSearchParams().get('edit')
+  useEffect(() => {
+    if (!editId) return
+    const row = transactions.find((candidate) => candidate.id === editId)
+    if (row && !row.link) editRef.current?.open(row)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('edit')
+    history.replaceState(null, '', url.pathname + url.search + url.hash)
+  }, [editId, transactions])
 
   /** Drops any stale message for one row — a fresh attempt starts clean. */
   const clearError = useCallback((rowId: string) => {
@@ -146,6 +186,15 @@ export function TransactionList({
       dialogRef.current?.open(row)
     },
     [clearError],
+  )
+
+  /** Stable, like `requestDelete`: opens the edit sheet with the row. */
+  const requestEdit = useCallback((row: TransactionRow) => editRef.current?.open(row), [])
+
+  /** A linked row's only action: its debt or loan, where it is edited. */
+  const openSource = useCallback(
+    (link: TransactionLink) => router.push(link.kind === 'debt' ? '/debts' : '/loans'),
+    [router],
   )
 
   /**
@@ -248,7 +297,9 @@ export function TransactionList({
                   hasError={row.id in errors}
                   isLastRow={groupIndex === groups.length - 1 && rowIndex === group.rows.length - 1}
                   deleteDisabled={ledger.deleteInFlight}
+                  onRequestEdit={requestEdit}
                   onRequestDelete={requestDelete}
+                  onOpenSource={openSource}
                 />
               ))}
             </ul>
@@ -265,18 +316,19 @@ export function TransactionList({
       ))}
 
       <DeleteTransactionDialog handleRef={dialogRef} onConfirm={confirmDelete} />
+      <TransactionEditSheet handleRef={editRef} />
     </>
   )
 }
 
 /**
  * One ledger row. `memo`ised, and every prop is a primitive, a row object that
- * keeps its identity while the server data is unchanged, or the stable
- * `onRequestDelete` — so opening the dialog or a sibling's error never
- * re-renders the other rows. A delete going in flight does, once each way,
- * because every row's delete item has to disable (`deleteDisabled`). It reads
- * its own translations from context instead of taking `t`, whose identity is
- * not guaranteed stable.
+ * keeps its identity while the server data is unchanged, or one of the stable
+ * `onRequest…`/`onOpenSource` callbacks — so opening the dialog or the edit
+ * sheet, or a sibling's error, never re-renders the other rows. A delete going
+ * in flight does, once each way, because every row's delete item has to
+ * disable (`deleteDisabled`). It reads its own translations from context
+ * instead of taking `t`, whose identity is not guaranteed stable.
  */
 const TransactionListRow = memo(function TransactionListRow({
   row,
@@ -285,7 +337,9 @@ const TransactionListRow = memo(function TransactionListRow({
   hasError,
   isLastRow,
   deleteDisabled,
+  onRequestEdit,
   onRequestDelete,
+  onOpenSource,
 }: {
   row: TransactionRow
   locale: Locale
@@ -294,7 +348,9 @@ const TransactionListRow = memo(function TransactionListRow({
   isLastRow: boolean
   /** Another delete is in flight (`LedgerView.deleteInFlight`). */
   deleteDisabled: boolean
+  onRequestEdit: (row: TransactionRow) => void
   onRequestDelete: (row: TransactionRow) => void
+  onOpenSource: (link: TransactionLink) => void
 }) {
   const t = useTranslations()
   const positive = isBalanceIncreasing(row.type)
@@ -303,7 +359,24 @@ const TransactionListRow = memo(function TransactionListRow({
   const rowName = row.category?.name ?? t(transactionTypeLabelKey(row.type))
   return (
     <FinancialListRow
-      title={rowName}
+      title={
+        <>
+          {rowName}
+          {/* Which debt or loan owns the row, before the menu is opened — the
+              reason it offers no edit or delete. A muted pill: it labels the
+              row, it is not a status to act on. */}
+          {row.link && (
+            <StatusBadge
+              className="ml-2"
+              label={
+                row.link.kind === 'debt'
+                  ? t('transactions.linkedDebtBadge', { person: row.link.person })
+                  : t('transactions.linkedLoanBadge', { lender: row.link.lender })
+              }
+            />
+          )}
+        </>
+      }
       meta={
         <>
           {/* Time only, not the full date (spec §14 fix round 1, finding 5): the
@@ -336,15 +409,18 @@ const TransactionListRow = memo(function TransactionListRow({
       actions={
         <RowActionsMenu
           label={t('common.rowActions', { name: rowName })}
-          actions={[
-            {
-              id: 'delete',
-              label: t('transactions.deleteAction'),
-              tone: 'negative',
-              onSelect: () => onRequestDelete(row),
-              disabled: deleteDisabled,
+          actions={transactionRowActions(row, {
+            labels: {
+              edit: t('transactions.editAction'),
+              delete: t('transactions.deleteAction'),
+              openDebt: t('transactions.openDebtAction'),
+              openLoan: t('transactions.openLoanAction'),
             },
-          ]}
+            deleteDisabled,
+            onEdit: onRequestEdit,
+            onDelete: onRequestDelete,
+            onOpenSource,
+          })}
         />
       }
       className={cn(hasError && 'bg-negative/5', isLastRow && 'rounded-b-lg')}

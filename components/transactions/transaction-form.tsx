@@ -1,14 +1,17 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Controller, useForm, useWatch, type FieldErrors, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { Wallet } from 'lucide-react'
 import type { Currency, TransactionType } from '@prisma/client'
 import type { Locale } from '@/lib/i18n/locale'
-import { nowInZone } from '@/lib/datetime/local-date-time'
-import { createTransactionAction } from '@/lib/server/actions/transaction-actions'
+import { instantToLocalDateTime, nowInZone } from '@/lib/datetime/local-date-time'
+import {
+  createTransactionAction,
+  updateTransactionAction,
+} from '@/lib/server/actions/transaction-actions'
 import { TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
 import { transactionTypeLabelKey } from '@/lib/ui/labels'
@@ -125,6 +128,25 @@ export type AccountOption = { id: string; name: string; currency: Currency; bala
 export type CategoryOption = { id: string; name: string; type: 'INCOME' | 'EXPENSE' }
 
 /**
+ * The ledger row an edit opens the form for (money-source linking spec
+ * 2026-10-12 §6.5) — a structural subset of `TransactionRow`, so the list can
+ * hand its row over as it is. `amount` is the ledger's fixed-2-decimal string;
+ * the names are what an archived account or category is shown as (below).
+ */
+export interface EditableTransaction {
+  id: string
+  type: TransactionType
+  amount: string
+  currency: Currency
+  date: Date
+  note: string | null
+  accountId: string
+  categoryId: string | null
+  account: { name: string }
+  category: { name: string } | null
+}
+
+/**
  * The two types that hit the P&L and therefore need a matching category
  * (mirrors `CATEGORY_REQUIRED_TYPES` in `lib/validation/transaction.ts`).
  *
@@ -154,12 +176,85 @@ function defaultValues(accounts: AccountOption[], timezone: string): FormInput {
   }
 }
 
+/**
+ * The form's values for an existing row: its own type, account, category and
+ * note, and its instant read back as the wall-clock date and time in the
+ * user's zone — the same zone the action converts the submitted pair in, so an
+ * untouched date round-trips to the same instant and an edit of the note alone
+ * is not mistaken for an economic change (ruling R-6).
+ */
+function editValues(transaction: EditableTransaction, timezone: string): FormInput {
+  const [datePart, timePart] = instantToLocalDateTime(transaction.date, timezone).split('T')
+  return {
+    accountId: transaction.accountId,
+    categoryId: transaction.categoryId ?? undefined,
+    type: transaction.type,
+    datePart,
+    timePart,
+    // The number input's own value type. The string came out of
+    // `Decimal#toFixed(2)`, and `Number` of it is its shortest round-trip
+    // form, which the service turns back into the same `Decimal`.
+    amount: Number(transaction.amount),
+    note: transaction.note ?? undefined,
+  }
+}
+
+/**
+ * The account picker's options for an edit. The page lists only ACTIVE
+ * accounts, but a row can sit in one archived since; without its own option
+ * the picker would show a raw id. Appended under its own name with a zero
+ * balance — an account can only be archived at zero and is frozen afterwards —
+ * and the server still refuses to save into it (`ARCHIVED_ACCOUNT`).
+ */
+function withEditedAccount(
+  accounts: AccountOption[],
+  transaction: EditableTransaction | undefined,
+): AccountOption[] {
+  if (!transaction || accounts.some((account) => account.id === transaction.accountId)) {
+    return accounts
+  }
+  return [
+    ...accounts,
+    {
+      id: transaction.accountId,
+      name: transaction.account.name,
+      currency: transaction.currency,
+      balance: '0.00',
+    },
+  ]
+}
+
+/**
+ * The category picker's options for an edit. A row can keep a category
+ * archived since it was filed — the service allows exactly that
+ * (`resolveCategoryId`'s `keptCategoryId`), so a note can still be corrected on
+ * an old expense — and the page lists only ACTIVE ones, so the row's own is
+ * appended under its own name.
+ */
+function withEditedCategory(
+  categories: CategoryOption[],
+  transaction: EditableTransaction | undefined,
+): CategoryOption[] {
+  const keptId = transaction?.categoryId
+  const type = transaction?.type
+  if (
+    !keptId ||
+    !transaction.category ||
+    (type !== 'INCOME' && type !== 'EXPENSE') ||
+    categories.some((category) => category.id === keptId)
+  ) {
+    return categories
+  }
+  return [...categories, { id: keptId, name: transaction.category.name, type }]
+}
+
 export function TransactionForm({
   accounts,
   categories,
   timezone,
   locale,
-  onCreated,
+  transaction,
+  onSaved,
 }: {
   accounts: AccountOption[]
   categories: CategoryOption[]
@@ -170,8 +265,14 @@ export function TransactionForm({
    */
   timezone: string
   locale: Locale
-  /** The sheet closes itself on success; the sticky panel passes nothing. */
-  onCreated?: () => void
+  /**
+   * The row to edit (spec 2026-10-12 §6.5). Absent, the form creates a new
+   * transaction; present, it starts from the row and saves through
+   * `updateTransactionAction`.
+   */
+  transaction?: EditableTransaction
+  /** A sheet closes itself on success; the sticky panel passes nothing. */
+  onSaved?: () => void
 }) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
@@ -201,7 +302,17 @@ export function TransactionForm({
   // default value state of an uncontrolled FieldControl after being
   // initialized" the moment it does. The lazy `useState` initializer is what
   // keeps it the one instant the form actually started from.
-  const [initial] = useState(() => defaultValues(accounts, timezone))
+  const [initial] = useState(() =>
+    transaction ? editValues(transaction, timezone) : defaultValues(accounts, timezone),
+  )
+  const accountOptions = useMemo(
+    () => withEditedAccount(accounts, transaction),
+    [accounts, transaction],
+  )
+  const categoryOptions = useMemo(
+    () => withEditedCategory(categories, transaction),
+    [categories, transaction],
+  )
   const {
     register,
     control,
@@ -217,7 +328,7 @@ export function TransactionForm({
   const type = useWatch({ control, name: 'type' })
   const accountId = useWatch({ control, name: 'accountId' })
   const needsCategory = CATEGORY_REQUIRED_TYPES.has(type)
-  const selectedAccount = accounts.find((account) => account.id === accountId)
+  const selectedAccount = accountOptions.find((account) => account.id === accountId)
 
   /**
    * The form's own default, which the pre-hydration `<select>` stand-in renders
@@ -255,12 +366,12 @@ export function TransactionForm({
     {
       labelKey: 'transactions.categoryGroupExpense',
       label: t('transactions.categoryGroupExpense'),
-      items: categories.filter((category) => category.type === 'EXPENSE'),
+      items: categoryOptions.filter((category) => category.type === 'EXPENSE'),
     },
     {
       labelKey: 'transactions.categoryGroupIncome',
       label: t('transactions.categoryGroupIncome'),
-      items: categories.filter((category) => category.type === 'INCOME'),
+      items: categoryOptions.filter((category) => category.type === 'INCOME'),
     },
     // Only the group matching the chosen type is offered — the schema refuses
     // the other one anyway, and offering it would be a trap.
@@ -272,17 +383,22 @@ export function TransactionForm({
 
   async function onSubmit(values: CreateTransactionFormInput) {
     await submit.run({
-      tag: 'TransactionForm: create failed',
+      tag: transaction ? 'TransactionForm: update failed' : 'TransactionForm: create failed',
       // `values` is the RESOLVER's transformed output (the three-generic
       // `Resolver`'s `TTransformedValues`), already merged — not the raw form
       // fields — so this is the exact object the resolver validated, with no
       // second `mergeDateTime` call that could drift from it.
-      action: () => createTransactionAction(values),
+      action: () =>
+        transaction
+          ? updateTransactionAction(transaction.id, values)
+          : createTransactionAction(values),
       errorKeys: TRANSACTION_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        reset(defaultValues(accounts, timezone))
-        onCreated?.()
+        // A new entry starts the next one from "now"; an edit's sheet closes,
+        // and the form goes with it.
+        if (!transaction) reset(defaultValues(accounts, timezone))
+        onSaved?.()
       },
     })
   }
@@ -303,7 +419,7 @@ export function TransactionForm({
    * Placed after every hook above, deliberately: an early return before them
    * would call a different number of hooks depending on the prop.
    */
-  if (accounts.length === 0) {
+  if (accountOptions.length === 0) {
     return (
       <EmptyState
         icon={Wallet}
@@ -338,7 +454,9 @@ export function TransactionForm({
         aria-busy={!hydrated || submit.busy ? true : undefined}
         className="flex min-w-0 flex-col gap-4"
       >
-        <legend className="sr-only">{t('transactions.createTitle')}</legend>
+        <legend className="sr-only">
+          {transaction ? t('transactions.editTitle') : t('transactions.createTitle')}
+        </legend>
 
         {/* `Controller`, not `register`, because `TransactionTypeField` is a
             button group with no form value of its own. The `onChange` clears
@@ -409,7 +527,7 @@ export function TransactionForm({
                 render={({ field }) => (
                   <AccountSelect
                     id={aria.id}
-                    accounts={accounts}
+                    accounts={accountOptions}
                     value={field.value}
                     onChange={field.onChange}
                     placeholder={t('transactions.accountPlaceholder')}
@@ -445,7 +563,8 @@ export function TransactionForm({
               >
                 <option value={defaultAccountId}>
                   {accountOptionLabel(
-                    accounts.find((account) => account.id === defaultAccountId) ?? accounts[0],
+                    accountOptions.find((account) => account.id === defaultAccountId) ??
+                      accountOptions[0],
                   )}
                 </option>
               </select>
@@ -482,13 +601,21 @@ export function TransactionForm({
                   )}
                 />
               ) : (
-                // Same stand-in, same reasoning as the account field above. The
-                // category has no default (`categoryId` starts `undefined`), so
-                // the single option is the placeholder — and `value=""` keeps
-                // it consistent with the hydrated Select's own placeholder
-                // value.
-                <select id={aria.id} disabled defaultValue="" className={SELECT_CLASS}>
-                  <option value="">{t('transactions.categoryPlaceholder')}</option>
+                // Same stand-in, same reasoning as the account field above. A
+                // new entry has no default category (`categoryId` starts
+                // `undefined`), so its single option is the placeholder — and
+                // `value=""` keeps it consistent with the hydrated Select's own
+                // placeholder value. An edit starts on the row's category.
+                <select
+                  id={aria.id}
+                  disabled
+                  defaultValue={initial.categoryId ?? ''}
+                  className={SELECT_CLASS}
+                >
+                  <option value={initial.categoryId ?? ''}>
+                    {categoryOptions.find((category) => category.id === initial.categoryId)?.name ??
+                      t('transactions.categoryPlaceholder')}
+                  </option>
                 </select>
               )
             }
@@ -556,7 +683,13 @@ export function TransactionForm({
 
         {/* One primary per view region, never full width at ≥ 768 (spec §2). */}
         <Button type="submit" className="self-start">
-          {submit.pending ? t('transactions.createPending') : t('transactions.createAction')}
+          {transaction
+            ? submit.pending
+              ? t('common.saving')
+              : t('common.save')
+            : submit.pending
+              ? t('transactions.createPending')
+              : t('transactions.createAction')}
         </Button>
 
         {error && <InlineAlert tone="negative">{error}</InlineAlert>}

@@ -446,12 +446,13 @@ test.describe.serial('Phase 7 — responsive', () => {
     ]) {
       await page.setViewportSize({ width, height })
       await page.goto('/transactions')
-      const rows = page.locator('main').getByRole('listitem')
-      await expect(rows.first()).toBeVisible()
-      await rows
-        .first()
-        .getByRole('button', { name: /Tác vụ cho|Actions for/ })
-        .click()
+      // The last row of the first day group, by structure rather than by
+      // position in the whole ledger: the group's newer row is the seed
+      // debt's own CASH_OUT, which the debt owns and whose menu offers only
+      // "open the debt" (spec 2026-10-12 §6.5) — no delete to click.
+      const row = page.locator('main section').first().getByRole('listitem').last()
+      await expect(row).toBeVisible()
+      await row.getByRole('button', { name: /Tác vụ cho|Actions for/ }).click()
       const item = page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ })
       await expect(item).toBeVisible()
 

@@ -43,6 +43,7 @@ export const TRANSACTION_ERROR_KEYS: Record<TransactionActionError, string> = {
   CURRENCY_MISMATCH: 'errors.transaction.CURRENCY_MISMATCH',
   INVALID_CATEGORY: 'errors.transaction.INVALID_CATEGORY',
   CONFLICT: 'errors.transaction.CONFLICT',
+  LINKED_TRANSACTION: 'errors.transaction.LINKED_TRANSACTION',
   INVALID_INPUT: 'errors.transaction.INVALID_INPUT',
   NOT_FOUND: 'errors.transaction.NOT_FOUND',
 }

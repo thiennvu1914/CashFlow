@@ -13,6 +13,7 @@ import type { CreateTransactionFormInput } from '@/lib/validation/transaction'
  */
 const requireUserMock = vi.hoisted(() => vi.fn())
 const createTransactionMock = vi.hoisted(() => vi.fn())
+const updateTransactionMock = vi.hoisted(() => vi.fn())
 const deleteTransactionMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
@@ -51,17 +52,26 @@ class MockFxUnavailableError extends Error {
   }
 }
 
+class MockLinkedTransactionError extends Error {
+  constructor() {
+    super('This transaction belongs to a debt or loan. Change it from there.')
+    this.name = 'LinkedTransactionError'
+  }
+}
+
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
 }))
 
 vi.mock('@/lib/server/services/transaction', () => ({
   createTransaction: createTransactionMock,
+  updateTransaction: updateTransactionMock,
   deleteTransaction: deleteTransactionMock,
   ArchivedAccountError: MockArchivedAccountError,
   CurrencyMismatchError: MockCurrencyMismatchError,
   InvalidCategoryError: MockInvalidCategoryError,
   ConcurrentModificationError: MockConcurrentModificationError,
+  LinkedTransactionError: MockLinkedTransactionError,
 }))
 
 vi.mock('@/lib/currency/current-rate-policy', () => ({
@@ -72,7 +82,10 @@ vi.mock('next/cache', () => ({
   revalidatePath: revalidatePathMock,
 }))
 
-const { createTransactionAction, deleteTransactionAction } = await import('./transaction-actions')
+const { createTransactionAction, updateTransactionAction, deleteTransactionAction } =
+  await import('./transaction-actions')
+const { TRANSACTION_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
+const { loadMessages } = await import('@/lib/i18n/messages')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
 
@@ -121,6 +134,7 @@ function notFoundError() {
 beforeEach(() => {
   requireUserMock.mockReset()
   createTransactionMock.mockReset()
+  updateTransactionMock.mockReset()
   deleteTransactionMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
@@ -316,4 +330,115 @@ describe('deleteTransactionAction', () => {
     await expect(deleteTransactionAction('tx_1')).rejects.toThrow('boom')
     expect(revalidatePathMock).not.toHaveBeenCalled()
   })
+})
+
+describe('updateTransactionAction', () => {
+  it("calls the service with the session user id, the row id and the input in the user's zone — no provider override", async () => {
+    updateTransactionMock.mockResolvedValue(undefined)
+
+    const result = await updateTransactionAction('tx_1', validInput)
+
+    expect(result).toEqual({ ok: true })
+    expect(updateTransactionMock).toHaveBeenCalledTimes(1)
+    expect(updateTransactionMock).toHaveBeenCalledWith(FIXED_USER.id, 'tx_1', expectedServiceInput)
+  })
+
+  it('revalidates the ledger, the account balances and the dashboard', async () => {
+    updateTransactionMock.mockResolvedValue(undefined)
+
+    await updateTransactionAction('tx_1', validInput)
+
+    expect(revalidatePathMock).toHaveBeenCalledWith('/transactions')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
+    expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('maps a malformed date-time to INVALID_INPUT and never calls the service', async () => {
+    const result = await updateTransactionAction('tx_1', { ...validInput, date: '2026-02-01' })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(updateTransactionMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps LinkedTransactionError to LINKED_TRANSACTION and does not revalidate', async () => {
+    updateTransactionMock.mockRejectedValue(new MockLinkedTransactionError())
+
+    const result = await updateTransactionAction('tx_1', validInput)
+
+    expect(result).toEqual({ ok: false, error: 'LINKED_TRANSACTION' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['FxUnavailableError', 'FX_UNAVAILABLE', () => new MockFxUnavailableError()],
+    ['ArchivedAccountError', 'ARCHIVED_ACCOUNT', () => new MockArchivedAccountError()],
+    ['CurrencyMismatchError', 'CURRENCY_MISMATCH', () => new MockCurrencyMismatchError()],
+    ['InvalidCategoryError', 'INVALID_CATEGORY', () => new MockInvalidCategoryError('archived')],
+    ['ConcurrentModificationError', 'CONFLICT', () => new MockConcurrentModificationError()],
+    ["Prisma's P2025", 'NOT_FOUND', notFoundError],
+  ] as const)('maps %s to %s', async (_label, code, makeError) => {
+    updateTransactionMock.mockRejectedValue(makeError())
+
+    const result = await updateTransactionAction('tx_1', validInput)
+
+    expect(result).toEqual({ ok: false, error: code })
+  })
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    updateTransactionMock.mockRejectedValue(new Error('boom'))
+
+    await expect(updateTransactionAction('tx_1', validInput)).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(updateTransactionAction('tx_1', validInput)).rejects.toThrow('Not authenticated')
+    expect(updateTransactionMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteTransactionAction — linked transactions', () => {
+  it('maps LinkedTransactionError to LINKED_TRANSACTION and does not revalidate', async () => {
+    deleteTransactionMock.mockRejectedValue(new MockLinkedTransactionError())
+
+    const result = await deleteTransactionAction('tx_1')
+
+    expect(result).toEqual({ ok: false, error: 'LINKED_TRANSACTION' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('TRANSACTION_ERROR_KEYS', () => {
+  it('has a message key for every code an action can return', () => {
+    expect(TRANSACTION_ERROR_KEYS).toEqual({
+      FX_UNAVAILABLE: 'errors.transaction.FX_UNAVAILABLE',
+      ARCHIVED_ACCOUNT: 'errors.transaction.ARCHIVED_ACCOUNT',
+      CURRENCY_MISMATCH: 'errors.transaction.CURRENCY_MISMATCH',
+      INVALID_CATEGORY: 'errors.transaction.INVALID_CATEGORY',
+      CONFLICT: 'errors.transaction.CONFLICT',
+      LINKED_TRANSACTION: 'errors.transaction.LINKED_TRANSACTION',
+      INVALID_INPUT: 'errors.transaction.INVALID_INPUT',
+      NOT_FOUND: 'errors.transaction.NOT_FOUND',
+    })
+  })
+
+  it.each(['vi', 'en'] as const)(
+    'resolves every key to real %s copy, and LINKED_TRANSACTION sends the user to the debt or loan',
+    async (locale) => {
+      const messages = await loadMessages(locale)
+      const at = (key: string) =>
+        key
+          .split('.')
+          .reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], messages)
+      for (const key of Object.values(TRANSACTION_ERROR_KEYS)) {
+        expect(typeof at(key), key).toBe('string')
+      }
+      expect(at(TRANSACTION_ERROR_KEYS.LINKED_TRANSACTION)).toMatch(
+        locale === 'vi' ? /khoản nợ.*khoản vay/ : /debt or loan/,
+      )
+    },
+  )
 })

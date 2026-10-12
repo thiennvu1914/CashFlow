@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { authenticatedSession, createAccountViaUi, createTransactionViaUi } from './helpers'
 
 /**
@@ -189,6 +189,12 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
     await page.keyboard.press('Enter')
     const deleteItem = page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ })
     await expect(deleteItem).toBeVisible()
+    // Delete is the LAST item, after Edit (spec 2026-10-12 §6.5). Which item is
+    // highlighted the instant a menu opens differs between the keyboard and
+    // pointer paths (see `phase7-a11y.spec.ts`), so `End` — not a count of
+    // arrow presses — is what reliably lands on it.
+    await page.keyboard.press('End')
+    await expect(deleteItem).toBeFocused()
     await page.keyboard.press('Enter')
 
     const dialog = page.getByRole('dialog', {
@@ -299,5 +305,127 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
 
     await expect(dialog).toBeHidden()
     await expect(page.getByRole('listitem').filter({ hasText: '88.888' })).toHaveCount(1)
+  })
+})
+
+/**
+ * Money-source linking (spec 2026-10-12 §2 Q4, §6.5): an ordinary transaction
+ * is edited in a sheet pre-filled from its row, and the account balance
+ * follows; a transaction a debt owns names it in a badge and its menu offers
+ * only "open the debt" — never edit or delete.
+ *
+ * Its own user: the describe above deletes and adds rows its own assertions
+ * depend on. One account, "Cash" at 1.000.000, and one 100.000 expense, so
+ * every balance below is checkable by eye.
+ */
+const EDIT_SESSION = authenticatedSession('phase7-transactions-edit')
+
+/** Cash's balance as `/accounts` renders it on the account's own row. */
+async function expectCashBalance(page: Page, balance: string): Promise<void> {
+  await page.goto('/accounts')
+  await expect(
+    page
+      .locator('main')
+      .getByRole('listitem')
+      .filter({ has: page.getByText('Cash', { exact: true }) }),
+  ).toContainText(balance)
+}
+
+test.describe.serial('Money-source linking — editing transactions and locked rows', () => {
+  test.use({ storageState: EDIT_SESSION.path })
+  test.describe.configure({ timeout: 120_000 })
+
+  /** The edited row's id, as the edit's own server-action call carried it. */
+  let editedId = ''
+
+  test.beforeAll(async ({ browser }) => {
+    await EDIT_SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 1_000_000 })
+      await createTransactionViaUi(page, {
+        type: 'EXPENSE',
+        accountName: 'Cash',
+        categoryName: 'Food & Dining',
+        amount: 100_000,
+        note: 'Lunch',
+      })
+    })
+  })
+
+  test("editing a transaction's amount in its sheet moves the account balance", async ({
+    page,
+  }) => {
+    await expectCashBalance(page, '900.000')
+
+    await page.goto('/transactions')
+    const row = page.locator('main').getByRole('listitem').filter({ hasText: 'Lunch' })
+    await row.getByRole('button', { name: /Tác vụ cho|Actions for/ }).click()
+    await page.getByRole('menuitem', { name: /Sửa giao dịch|Edit transaction/ }).click()
+
+    const sheet = page.getByRole('dialog', { name: /Sửa giao dịch|Edit transaction/ })
+    await expect(sheet).toBeVisible()
+    // Pre-filled from the row, not from the create form's defaults.
+    const amount = sheet.getByLabel(/Số tiền|^Amount$/)
+    await expect(amount).toHaveValue('100000')
+    await expect(sheet.getByLabel(/Ghi chú|^Note/)).toHaveValue('Lunch')
+    await expect(sheet.getByRole('radio', { name: /Chi tiêu|^Expense$/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+
+    await amount.fill('250000')
+    const save = page.waitForRequest(
+      (request) =>
+        request.method() === 'POST' && new URL(request.url()).pathname === '/transactions',
+    )
+    await sheet.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
+    // `updateTransactionAction(id, input)`: the id travels as the first argument.
+    editedId = (JSON.parse((await save).postData() ?? '[]') as [string])[0]
+    expect(editedId).toMatch(/^\w+$/)
+
+    await expect(sheet).toBeHidden()
+    await expect(row).toContainText('250.000')
+    await expectCashBalance(page, '750.000')
+  })
+
+  test("/transactions?edit=<id> opens that row's sheet pre-filled, and consumes the parameter", async ({
+    page,
+  }) => {
+    await page.goto(`/transactions?edit=${editedId}`)
+
+    const sheet = page.getByRole('dialog', { name: /Sửa giao dịch|Edit transaction/ })
+    await expect(sheet).toBeVisible()
+    await expect(sheet.getByLabel(/Số tiền|^Amount$/)).toHaveValue('250000')
+    // Consumed: a reload must not reopen the sheet the user has moved on from.
+    await expect(page).toHaveURL(/\/transactions$/)
+  })
+
+  test('a transaction a debt owns shows its badge, and its menu offers only "Open debt"', async ({
+    page,
+  }) => {
+    // Lend 300.000 to Minh from Cash — the debt sheet pre-selects the account
+    // of the latest transaction.
+    await page.goto('/debts')
+    await page.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+    const sheet = page.getByRole('dialog', { name: /Thêm công nợ|Add debt/ })
+    await expect(sheet.getByLabel(/^Tài khoản$|^Account$/).locator('option:checked')).toHaveText(
+      /Cash/,
+    )
+    await sheet.getByLabel(/^Chiều$|^Direction$/).selectOption('RECEIVABLE')
+    await sheet.getByLabel(/^Người$|^Person$/).fill('Minh')
+    await sheet.getByLabel(/Số tiền ban đầu|Original amount/).fill('300000')
+    await sheet.getByRole('button', { name: /Thêm công nợ|Add debt/ }).click()
+    await expect(sheet).toBeHidden()
+
+    await page.goto('/transactions')
+    const row = page
+      .locator('main')
+      .getByRole('listitem')
+      .filter({ hasText: /Nợ: Minh|Debt: Minh/ })
+    await expect(row).toHaveCount(1)
+    await row.getByRole('button', { name: /Tác vụ cho|Actions for/ }).click()
+    // Exactly one item: no edit, no delete — the debt is where it changes.
+    await expect(page.getByRole('menuitem')).toHaveText([/Mở khoản nợ|Open debt/])
+    await page.getByRole('menuitem', { name: /Mở khoản nợ|Open debt/ }).click()
+    await expect(page).toHaveURL(/\/debts$/)
   })
 })

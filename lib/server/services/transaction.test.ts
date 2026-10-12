@@ -661,8 +661,12 @@ describe('transaction service', () => {
       expect(Object.keys(row).sort()).toEqual(
         [
           'account',
+          // The two ids the edit sheet pre-selects its pickers with (spec
+          // 2026-10-12 §6.5) — references the user already owns, not data.
+          'accountId',
           'amount',
           'category',
+          'categoryId',
           'currency',
           'date',
           'fxRateSource',

@@ -21,6 +21,7 @@
     "CURRENCY_MISMATCH": "Hãy chuyển giao dịch sang tài khoản cùng loại tiền, hoặc xóa và nhập lại.",
     "INVALID_CATEGORY": "Hãy chọn danh mục hợp lệ cho loại giao dịch này.",
     "CONFLICT": "Bản ghi đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
+    "LINKED_TRANSACTION": "Giao dịch này thuộc một khoản nợ hoặc khoản vay. Hãy mở khoản nợ hoặc khoản vay đó để sửa hoặc xóa.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Bản ghi này không còn tồn tại."
   },
