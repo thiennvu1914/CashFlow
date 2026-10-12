@@ -60,7 +60,21 @@ export interface LoanPaymentDto {
   total: string
   principal: string
   interest: string
+  /** Total and interest as plain two-decimal numbers (`'5000000.00'`) — what
+   *  the correction form's number inputs start on. The principal is not here:
+   *  it is derived (total − interest) in the form, never entered. */
+  totalInput: string
+  interestInput: string
   note: string | null
+  /** The account the instalment's money moved through, or null when it
+   *  recorded none. Read off whichever leg exists — an interest-only
+   *  instalment has no principal transaction, a principal-only one no interest
+   *  transaction — and both legs always share one account. */
+  accountId: string | null
+  accountName: string | null
+  /** Archived since the instalment was recorded: the correction form keeps it
+   *  selected and labelled rather than silently switching to "don't record". */
+  accountArchived: boolean
 }
 
 export interface LoanDto {
@@ -87,6 +101,13 @@ export interface LoanDto {
   /** The service's OVERDUE, relabelled as a boolean the row can style on. */
   overdue: boolean
   scheduledPayment: string
+  /** The scheduled instalment as a plain two-decimal number — what a new
+   *  payment's total is pre-filled with. */
+  scheduledPaymentInput: string
+  /** The account the principal was received into (the disbursement's), or null
+   *  for an agreement that records none. A new instalment's account picker
+   *  starts on it. */
+  disbursementAccountId: string | null
   paymentFrequency: PaymentFrequency
   /** e.g. "8,5 %" — the informational rate, not money. */
   interestRateLabel: string
@@ -231,6 +252,8 @@ export function toLoanDto(
       compareCalendarDates(nextDueDate, addCalendarDays(today, DUE_SOON_DAYS)) <= 0,
     overdue: displayStatus === 'OVERDUE',
     scheduledPayment: formatMoney(loan.scheduledPaymentAmount, currency, locale),
+    scheduledPaymentInput: loan.scheduledPaymentAmount.toFixed(2),
+    disbursementAccountId: loan.disbursementTransaction?.accountId ?? null,
     paymentFrequency: loan.paymentFrequency,
     // The one `toNumber()` on an interest rate in the codebase — see the
     // module comment for why a percentage is not money.
@@ -240,14 +263,22 @@ export function toLoanDto(
     status: displayStatus,
     active: loan.status === 'ACTIVE',
     notes: loan.notes,
-    payments: loan.payments.map((p) => ({
-      id: p.id,
-      date: formatCalendarDate(p.paymentDate),
-      total: formatMoney(p.totalAmount, currency, locale),
-      principal: formatMoney(p.principalAmount, currency, locale),
-      interest: formatMoney(p.interestAmount, currency, locale),
-      note: p.note,
-    })),
+    payments: loan.payments.map((p) => {
+      const leg = p.principalTransaction ?? p.interestTransaction
+      return {
+        id: p.id,
+        date: formatCalendarDate(p.paymentDate),
+        total: formatMoney(p.totalAmount, currency, locale),
+        principal: formatMoney(p.principalAmount, currency, locale),
+        interest: formatMoney(p.interestAmount, currency, locale),
+        totalInput: p.totalAmount.toFixed(2),
+        interestInput: p.interestAmount.toFixed(2),
+        note: p.note,
+        accountId: leg?.accountId ?? null,
+        accountName: leg?.account.name ?? null,
+        accountArchived: leg?.account.status === 'ARCHIVED',
+      }
+    }),
     editable: {
       lender: loan.lender,
       scheduledPaymentAmount: loan.scheduledPaymentAmount.toFixed(2),

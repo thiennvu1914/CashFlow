@@ -4,7 +4,7 @@ import { cn } from 'cn'
 import type { Locale } from '@/lib/i18n/locale'
 import { formatDate } from '@/lib/ui/format-date'
 import { loanStatusLabelKey, paymentFrequencyLabelKey } from '@/lib/ui/labels'
-import type { LoanDto } from '@/lib/ui/loan-view-model'
+import type { LoanDto, LoanPaymentDto } from '@/lib/ui/loan-view-model'
 import { MoneyText } from '@/components/common/money-text'
 import { PlanningRow } from '@/components/common/planning-row'
 import { Progress } from '@/components/common/progress'
@@ -84,6 +84,7 @@ export async function LoanList({
   timeZone,
   compact,
   renderActions,
+  renderPaymentActions,
 }: {
   loans: LoanDto[]
   locale: Locale
@@ -94,6 +95,11 @@ export async function LoanList({
    *  two separate pieces — they mount in two different `PlanningRow` slots
    *  and share no state. */
   renderActions?: (loan: LoanDto) => { actions: ReactNode; inlineAction?: ReactNode }
+  /** Edit/Delete for one line of the instalment history. `dateLabel` is the
+   *  date exactly as the line prints it, for the buttons' accessible names.
+   *  Only the Loans page's live section passes it: a closed loan refuses every
+   *  write, so its history is frozen. */
+  renderPaymentActions?: (loan: LoanDto, payment: LoanPaymentDto, dateLabel: string) => ReactNode
 }) {
   const t = await getTranslations()
 
@@ -229,25 +235,35 @@ export async function LoanList({
                             {t('loans.paymentsSection', { count: loan.payments.length })}
                           </summary>
                           <ul className="mt-1 flex flex-col gap-1">
-                            {loan.payments.map((payment) => (
-                              <li key={payment.id} className="text-xs/[1rem] text-muted-foreground">
-                                <span className="tabular-nums">
-                                  {formatDate(payment.date, { locale, timeZone, style: 'date' })}
-                                </span>{' '}
-                                ·{' '}
-                                {/* The split, spelled out: what was paid, and
-                                    how much of it actually came off the loan.
-                                    Both parts are listed because the total
-                                    alone cannot be undone into them, and only
-                                    the principal moved the loan. */}
-                                {t('loans.paymentRowLine', {
-                                  total: payment.total,
-                                  principal: payment.principal,
-                                  interest: payment.interest,
-                                })}
-                                {payment.note && ` · ${payment.note}`}
-                              </li>
-                            ))}
+                            {loan.payments.map((payment) => {
+                              const dateLabel = formatDate(payment.date, {
+                                locale,
+                                timeZone,
+                                style: 'date',
+                              })
+                              return (
+                                <li
+                                  key={payment.id}
+                                  className="flex flex-wrap items-center gap-x-1 text-xs/[1rem] text-muted-foreground"
+                                >
+                                  <span>
+                                    <span className="tabular-nums">{dateLabel}</span> ·{' '}
+                                    {/* The split, spelled out: what was paid, and
+                                        how much of it actually came off the loan.
+                                        Both parts are listed because the total
+                                        alone cannot be undone into them, and only
+                                        the principal moved the loan. */}
+                                    {t('loans.paymentRowLine', {
+                                      total: payment.total,
+                                      principal: payment.principal,
+                                      interest: payment.interest,
+                                    })}
+                                    {payment.note && ` · ${payment.note}`}
+                                  </span>
+                                  {renderPaymentActions?.(loan, payment, dateLabel)}
+                                </li>
+                              )
+                            })}
                           </ul>
                         </details>
                       )}

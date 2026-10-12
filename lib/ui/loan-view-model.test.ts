@@ -279,6 +279,79 @@ describe('toLoanDto', () => {
     expect(dto.nextDueDate).toBe('2026-05-31')
   })
 
+  describe('money-source links', () => {
+    const linked = (accountId: string, name = 'Ví', status: 'ACTIVE' | 'ARCHIVED' = 'ACTIVE') => ({
+      accountId,
+      account: { name, status },
+    })
+
+    it('exposes the disbursement account and the raw scheduled amount for the form defaults', () => {
+      const dto = toLoanDto(
+        row({
+          disbursementTransactionId: 't0',
+          disbursementTransaction: linked('acc_bank'),
+        }),
+        TODAY,
+      )
+      expect(dto.disbursementAccountId).toBe('acc_bank')
+      expect(dto.scheduledPaymentInput).toBe('5000000.00')
+      expect(toLoanDto(row(), TODAY).disbursementAccountId).toBeNull()
+    })
+
+    it('gives an instalment its raw total and interest and the account it was paid from', () => {
+      const dto = toLoanDto(
+        row({
+          payments: [
+            payment({
+              principalTransactionId: 't1',
+              interestTransactionId: 't2',
+              principalTransaction: linked('acc_bank', 'Bank'),
+              interestTransaction: linked('acc_bank', 'Bank'),
+            }),
+          ],
+        }),
+        TODAY,
+      )
+      expect(dto.payments[0]).toMatchObject({
+        totalInput: '5000000.00',
+        interestInput: '1500000.00',
+        accountId: 'acc_bank',
+        accountName: 'Bank',
+        accountArchived: false,
+      })
+    })
+
+    it('reads the account off the interest leg when an interest-only instalment has no principal leg', () => {
+      const dto = toLoanDto(
+        row({
+          payments: [
+            payment({
+              totalAmount: new Prisma.Decimal('1500000'),
+              principalAmount: new Prisma.Decimal('0'),
+              interestTransactionId: 't2',
+              interestTransaction: linked('acc_old', 'Old', 'ARCHIVED'),
+            }),
+          ],
+        }),
+        TODAY,
+      )
+      expect(dto.payments[0]).toMatchObject({
+        accountId: 'acc_old',
+        accountName: 'Old',
+        accountArchived: true,
+      })
+    })
+
+    it('leaves an unlinked instalment without an account', () => {
+      const dto = toLoanDto(row({ payments: [payment()] }), TODAY)
+      expect(dto.payments[0]).toMatchObject({
+        accountId: null,
+        accountName: null,
+        accountArchived: false,
+      })
+    })
+  })
+
   describe('dueSoon', () => {
     it('is true for an instalment due today', () => {
       const dto = toLoanDto(row({ nextDueDate: carrier(TODAY) }), TODAY)
@@ -444,7 +517,12 @@ describe('toLoanDto', () => {
         total: '5.000.000',
         principal: '3.500.000',
         interest: '1.500.000',
+        totalInput: '5000000.00',
+        interestInput: '1500000.00',
         note: 'First instalment',
+        accountId: null,
+        accountName: null,
+        accountArchived: false,
       },
       // Two decimals show on a VND amount that genuinely carries them rather
       // than being rounded away.
@@ -454,7 +532,12 @@ describe('toLoanDto', () => {
         total: '5.000.000,5',
         principal: '3.600.000,25',
         interest: '1.400.000,25',
+        totalInput: '5000000.50',
+        interestInput: '1400000.25',
         note: null,
+        accountId: null,
+        accountName: null,
+        accountArchived: false,
       },
     ])
   })

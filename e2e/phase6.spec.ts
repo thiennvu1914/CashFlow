@@ -105,8 +105,9 @@ const TOMORROW = formatCalendarDate(
  * which is what the user is shown, instead of a "31 February" that rolls over
  * into March.
  */
+const FIRST_DUE = formatCalendarDate(addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1))
 const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
-  addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1),
+  addMonthsUtcClamped(calendarDateToUtcCarrier(FIRST_DUE), 1),
 )
 
 /** The day of the month the MONTHLY income reminder is anchored to. */
@@ -513,6 +514,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
     await row.getByRole('button', { name: paymentAction }).click()
     const dialog = page.getByRole('dialog', { name: paymentAction })
+    // These planning tests track agreements only: the account picker starts on
+    // the user's account, so "don't record" is chosen to keep the Net Worth
+    // arithmetic below about the accounts alone.
+    await dialog.getByLabel(/^Tài khoản$|^Account$/).selectOption('')
     await dialog.getByLabel(/^Số tiền$|^Amount$/).fill('400000')
     await expect(dialog.getByLabel(/Ngày thanh toán|Payment date/)).toHaveValue(TODAY)
     await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
@@ -532,6 +537,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // 700.000 against 600.000 outstanding → the friendly OVERPAYMENT message,
     // not a raw server error, and nothing recorded.
     await row.getByRole('button', { name: paymentAction }).click()
+    await dialog.getByLabel(/^Tài khoản$|^Account$/).selectOption('')
     const amount = dialog.getByLabel(/^Số tiền$|^Amount$/)
     await amount.fill('700000')
     await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
@@ -634,10 +640,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(row).toBeVisible()
     await expect(row.getByText(eitherLocale('Đang trả', 'Active'), { exact: true })).toBeVisible()
     await expect(row).toContainText(loanOutstandingLine('12.000.000'))
-    // Due today, so the schedule line is the "due soon" wording; the instalment
-    // and cadence are on the same line.
-    await expect(row).toContainText(eitherLocale('Sắp đến hạn', 'Due soon'))
-    await expect(row).toContainText(displayDate(TODAY))
+    // First due one month after the start date (the form's default), not
+    // today; the instalment and cadence are on the same line.
+    await expect(row).toContainText(eitherLocale('Kỳ tới', 'Next due'))
+    await expect(row).toContainText(displayDate(FIRST_DUE))
     await expect(row).toContainText(eitherLocale('Hàng tháng', 'Monthly'))
     await expect(row).toContainText(/12 (tháng từ|months from)/)
     await expect(
@@ -653,33 +659,37 @@ test.describe.serial('Phase 6 — planning modules', () => {
     ).toBeVisible()
     await page.keyboard.press('Escape')
 
-    // The split: the user types the two parts and Tổng is derived — the
-    // read-only field has to show it BEFORE the instalment is saved, because
-    // that figure is the one the resolver then submits, and it must be a
-    // FIGURE, never an em dash, at every point along the way.
+    // The split: the total is pre-filled with the scheduled instalment, the
+    // user types the interest, and Gốc is derived — it has to show BEFORE the
+    // instalment is saved, because that figure is the one the resolver then
+    // submits, and it must be a FIGURE, never an em dash, at every point.
     const paymentAction = eitherLocale('Ghi nhận thanh toán', 'Record payment')
     await row.getByRole('button', { name: paymentAction, exact: true }).click()
     const dialog = page.getByRole('dialog', { name: paymentAction })
-    const principal = dialog.getByLabel(/^Gốc$|^Principal$/)
-    const interest = dialog.getByLabel(/^Lãi$|^Interest$/)
     const total = dialog.getByLabel(/^Tổng$|^Total$/)
+    const interest = dialog.getByLabel(/^Lãi$|^Interest$/)
+    const principal = dialog.getByLabel(/^Gốc$|^Principal$/)
+    // Tracking only (see the debt payment above).
+    await dialog.getByLabel(/^Trả từ tài khoản$|^Paid from account$/).selectOption('')
 
-    // Both parts blank: Tổng reads a computed zero, never "—".
-    await expect(total).toHaveValue(/^0(,00)?\s?VND$/)
-    await expect(total).not.toHaveValue('—')
+    // Pre-filled with the scheduled instalment; interest blank, so Gốc starts as
+    // the whole total.
+    await expect(total).toHaveValue('1100000')
+    await expect(interest).toHaveValue('')
+    await expect(principal).toHaveValue(/^1.100.000(,00)?\s?VND$/)
 
-    await principal.fill('1000000')
+    await total.fill('1085000')
     await interest.fill('85000')
-    await expect(total).toHaveValue(/1.085.000/)
-    await expect(total).not.toHaveValue('—')
+    await expect(principal).toHaveValue(/^1.000.000(,00)?\s?VND$/)
+    await expect(principal).not.toHaveValue('—')
 
-    // Clearing Gốc shows the interest alone rather than a dash — a blank part
-    // counts as zero for DISPLAY only (`displayTotal`); the schema still
-    // requires the real field before submitting.
-    await principal.fill('')
-    await expect(total).toHaveValue(/85.000/)
-    await expect(total).not.toHaveValue('—')
-    await principal.fill('1000000')
+    // Clearing the interest shows the whole total rather than a dash — a blank
+    // part counts as zero for DISPLAY only (`displayPrincipal`); the schema
+    // still requires the real field before submitting.
+    await interest.fill('')
+    await expect(principal).toHaveValue(/1.085.000/)
+    await expect(principal).not.toHaveValue('—')
+    await interest.fill('85000')
 
     await expect(dialog.getByLabel(/Ngày trả|Payment date/)).toHaveValue(TODAY)
     await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
@@ -699,7 +709,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // sweep of the principal carries none), so the only thing wrong with this
     // instalment is the part the service checks.
     await row.getByRole('button', { name: paymentAction, exact: true }).click()
-    await principal.fill('11000001')
+    await total.fill('11000001')
     await interest.fill('0')
     await dialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 

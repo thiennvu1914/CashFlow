@@ -5,35 +5,48 @@ import { useForm, useWatch } from 'react-hook-form'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
 import { type RecordLoanPaymentInput } from '@/lib/validation/loan'
-import { recordLoanPaymentAction } from '@/lib/server/actions/loan-actions'
+import { recordLoanPaymentAction, updateLoanPaymentAction } from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { defaultPaymentAccountId, type DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { formatMoney } from '@/lib/ui/format-money'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
-import type { LoanDto } from '@/lib/ui/loan-view-model'
+import type { LoanDto, LoanPaymentDto } from '@/lib/ui/loan-view-model'
+import { DebtAccountField } from '@/components/debts/debt-account-field'
 import { FormField } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { DERIVED_FIELD, displayTotal, paymentResolver } from './loan-payment-math'
+import { DERIVED_FIELD, displayPrincipal, paymentResolver } from './loan-payment-math'
 
 /**
- * "How much of this instalment paid the loan down, how much was interest, and
- * when?" — the only write that moves a loan's outstanding principal.
+ * "How much did I pay, how much of it was interest, and when?" — the only write
+ * that moves a loan's outstanding principal. Records a new instalment, or (with
+ * `payment`) corrects a recorded one.
  *
- * States the current outstanding principal above the fields (owner
- * requirement G4, mirroring `DebtPaymentForm`'s outstanding line) so the
- * OVERPAYMENT refusal below is predictable — the figure the service is about
- * to compare the Gốc field against is right there while the user types.
+ * The user types the instalment's TOTAL — pre-filled with the loan's scheduled
+ * amount, so the usual instalment is one field to fill — and the INTEREST part;
+ * Gốc (principal) is what is left, computed live and read-only (spec §6.3). It
+ * is a subtraction the form can do exactly (`displayPrincipal`), so the user is
+ * never asked for a third number that must agree with the other two. An
+ * interest-only instalment is simply total = interest, principal 0.
  *
- * Three visible fields, Gốc / Lãi / Tổng, in that order (spec §6.6): the user
- * types the split and Tổng is read-only, computed live from `displayTotal` and
- * bound to the two inputs via `aria-describedby` on a note explaining it is
- * computed. Tổng NEVER shows an em dash for a valid number, including two
- * zeros — see `displayTotal`'s own doc comment. `locale` (threaded from the
- * page) is what keeps Tổng's digit grouping in the reader's own language
- * (fix round 1, finding 1) — `formatMoney`'s locale parameter defaults to
- * `vi` when omitted, which is exactly the bug this closes: an English-locale
- * reader was shown Vietnamese grouping inside an otherwise English dialog.
+ * States the current outstanding principal above the fields for a new
+ * instalment (owner requirement G4, mirroring `DebtPaymentForm`) so the
+ * OVERPAYMENT refusal below is predictable. A correction does not state it: the
+ * comparison is against what is outstanding without this instalment, a number
+ * this form does not have. `locale` (threaded from the page) keeps Gốc's digit
+ * grouping in the reader's own language.
+ *
+ * Money-source linking (spec 2026-10-12 §6.3): an optional account the
+ * instalment was paid from — the principal leaves it as one transaction and the
+ * interest as another ("Loan Interest & Fees"). Only accounts in the loan's
+ * currency are listed. A new instalment starts on the account the loan was
+ * received into, else the most recently used one (when the picker lists it);
+ * a correction starts on what the instalment actually used — never a fresh
+ * pre-selection, or saving a note fix would silently link a plain instalment —
+ * and an account archived since stays in the list, labelled, rather than the
+ * picker falling back to "don't record" (which would unlink the instalment and
+ * delete its transactions on save).
  *
  * The service refuses a principal payment above what is still outstanding,
  * under a row lock, so OVERPAYMENT is a genuinely reachable answer here (two
@@ -41,15 +54,18 @@ import { DERIVED_FIELD, displayTotal, paymentResolver } from './loan-payment-mat
  * form's fields. The interest part is never compared against anything: a
  * repaid loan can still owe a final charge.
  *
- * Mounted only while its `Dialog` is open (`LoanPaymentButton` in
- * `loan-row-actions.tsx`), so `useForm` snapshots the *current* loan as its
- * defaults; there is no stale-default problem to gate for, and no
- * `useHydrated` here — a click cannot happen before hydration.
+ * Mounted only while its `Dialog` is open (`LoanPaymentButton` /
+ * `LoanPaymentActions` in `loan-row-actions.tsx`), so `useForm` snapshots the
+ * *current* loan as its defaults; there is no stale-default problem to gate
+ * for, and no `useHydrated` here — a click cannot happen before hydration.
  */
 export function LoanPaymentForm({
   loan,
   today,
   locale,
+  accounts,
+  mostRecentAccountId,
+  payment,
   onDone,
 }: {
   loan: LoanDto
@@ -57,6 +73,10 @@ export function LoanPaymentForm({
    *  never `new Date()` in the browser, whose zone is not the profile's. */
   today: string
   locale: Locale
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+  /** Present when correcting a recorded instalment rather than recording one. */
+  payment?: LoanPaymentDto
   onDone: () => void
 }) {
   const t = useTranslations()
@@ -64,6 +84,31 @@ export function LoanPaymentForm({
   const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `loan-payment-${name}-${uid}`
+  // A loan moves money only in its own currency, so the picker lists no other.
+  const activeOptions = accounts.filter((account) => account.currency === loan.currency)
+  const options: DebtAccountOption[] =
+    payment?.accountId && payment.accountArchived
+      ? [
+          ...activeOptions,
+          {
+            id: payment.accountId,
+            name: payment.accountName ?? '',
+            currency: loan.currency,
+            archived: true,
+          },
+        ]
+      : activeOptions
+  const initialAccountId = payment
+    ? options.some((option) => option.id === payment.accountId)
+      ? payment.accountId!
+      : ''
+    : defaultPaymentAccountId(options, loan.disbursementAccountId, mostRecentAccountId)
+  // The total starts on the scheduled instalment (a correction: on what was
+  // recorded). The interest has no default on a new instalment: the user reads
+  // it off their statement, and a pre-filled `0` would state a figure nobody
+  // gave. (Neither can hit the `0`-default hazard of the create forms — this
+  // form mounts only after hydration — but the interest still stays blank.)
+  const initialTotal = Number(payment ? payment.totalInput : loan.scheduledPaymentInput)
   const {
     control,
     register,
@@ -71,27 +116,36 @@ export function LoanPaymentForm({
     formState: { errors },
   } = useForm<RecordLoanPaymentInput>({
     resolver: paymentResolver,
-    // No default for either amount: a pre-filled `0` would be written into the
-    // DOM by react-hook-form (`lib/ui/use-hydrated.ts` documents the
-    // mechanism), and `totalAmount > 0` means an instalment of nothing is
-    // rejected — so the form would start on a value it cannot submit.
-    defaultValues: { paymentDate: today },
+    defaultValues: {
+      paymentDate: payment ? payment.date : today,
+      totalAmount: initialTotal,
+      ...(payment
+        ? {
+            interestAmount: Number(payment.interestInput),
+            note: payment.note ?? undefined,
+          }
+        : {}),
+      accountId: initialAccountId === '' ? undefined : initialAccountId,
+    },
   })
 
-  // Watched rather than read on submit, so the total updates as the user types
-  // and they can see the arithmetic agree with their own statement before
-  // saving. `valueAsNumber` makes an emptied field `NaN`, which `displayTotal`
+  // Watched rather than read on submit, so Gốc updates as the user types and
+  // they can see the arithmetic agree with their own statement before saving.
+  // `valueAsNumber` makes an emptied field `NaN`, which `displayPrincipal`
   // treats as zero for THIS read-only field — never an em dash.
-  const principalAmount = useWatch({ control, name: 'principalAmount' })
+  const totalAmount = useWatch({ control, name: 'totalAmount' })
   const interestAmount = useWatch({ control, name: 'interestAmount' })
-  const total = displayTotal(principalAmount, interestAmount)
+  const principal = displayPrincipal(totalAmount, interestAmount)
 
   async function onSubmit(values: RecordLoanPaymentInput) {
     await submit.run({
-      tag: 'LoanPaymentForm: record failed',
-      // `values` is the resolver's output, so `values.totalAmount` is the
-      // derived figure the read-only field showed — not a fourth number.
-      action: () => recordLoanPaymentAction(loan.id, values),
+      tag: payment ? 'LoanPaymentForm: edit failed' : 'LoanPaymentForm: record failed',
+      // `values` is the resolver's output, so `values.principalAmount` is the
+      // derived figure the read-only field showed — not a third number.
+      action: () =>
+        payment
+          ? updateLoanPaymentAction(payment.id, values)
+          : recordLoanPaymentAction(loan.id, values),
       errorKeys: LOAN_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
@@ -100,28 +154,33 @@ export function LoanPaymentForm({
     })
   }
 
+  const currencySuffix = (
+    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+      {loan.currency}
+    </span>
+  )
+
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
       <fieldset disabled={submit.locked} aria-busy={submit.busy} className="flex flex-col gap-3">
-        <legend className="sr-only">{t('loans.paymentAction')}</legend>
+        <legend className="sr-only">
+          {payment ? t('loans.paymentEditAction') : t('loans.paymentAction')}
+        </legend>
 
-        <p className="text-sm text-muted-foreground">
-          {t('loans.paymentOutstanding', {
-            amount: loan.outstandingPrincipal,
-            currency: loan.currency,
-          })}
-        </p>
+        {!payment && (
+          <p className="text-sm text-muted-foreground">
+            {t('loans.paymentOutstanding', {
+              amount: loan.outstandingPrincipal,
+              currency: loan.currency,
+            })}
+          </p>
+        )}
 
         <FormField
-          id={fieldId('principal')}
-          label={t('loans.paymentPrincipal')}
-          error={errors.principalAmount?.message}
+          id={fieldId('total')}
+          label={t('loans.paymentTotal')}
+          error={errors.totalAmount?.message}
         >
-          {/* Zero is valid: a final principal-only sweep, with the interest
-              already settled separately, is a real instalment. The currency
-              suffix matches the debt payment form's amount field (fix round
-              1, finding 8: the three amount fields in these two dialogs — the
-              debt's, Gốc and Lãi — either all show the code or none do). */}
           {(aria) => (
             <div className="relative">
               <Input
@@ -129,11 +188,10 @@ export function LoanPaymentForm({
                 type="number"
                 step="0.01"
                 className="pr-14"
-                {...register('principalAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
+                defaultValue={initialTotal}
+                {...register('totalAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
               />
-              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                {loan.currency}
-              </span>
+              {currencySuffix}
             </div>
           )}
         </FormField>
@@ -143,10 +201,10 @@ export function LoanPaymentForm({
           label={t('loans.paymentInterest')}
           error={errors.interestAmount?.message}
         >
-          {/* Zero is valid on both parts: an interest-only instalment is what
-              every grace period and the early months of many loans look like
-              (ruling R6-6), and a final sweep of the principal carries no
-              interest. */}
+          {/* Zero is valid: a 0 % loan, and the final sweep of what is left,
+              carry no interest — and an interest-only instalment (a grace
+              period, the early months of many loans; ruling R6-6) is the
+              total entered here in full. */}
           {(aria) => (
             <div className="relative">
               <Input
@@ -156,37 +214,33 @@ export function LoanPaymentForm({
                 className="pr-14"
                 {...register('interestAmount', { valueAsNumber: true, deps: DERIVED_FIELD })}
               />
-              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
-                {loan.currency}
-              </span>
+              {currencySuffix}
             </div>
           )}
         </FormField>
 
         <FormField
-          id={fieldId('total')}
-          label={t('loans.paymentTotal')}
-          helper={t('loans.paymentTotalNote')}
-          error={errors.totalAmount?.message}
+          id={fieldId('principal')}
+          label={t('loans.paymentPrincipal')}
+          helper={t('loans.paymentPrincipalNote')}
+          error={errors.principalAmount?.message}
         >
-          {/* Read-only and unregistered: the total is derived, not entered. See
-              `paymentResolver` (`loan-payment-math.ts`) for what is SUBMITTED
-              and `displayTotal` for what is SHOWN — the two differ on purpose
-              while a part is blank, and this field must never read "—" for a
-              valid number, including zero. `FormField`'s own
-              `aria-describedby` already points at the helper note above
-              (`loans.paymentTotalNote`) — this is the binding the spec asks
-              for between the two input fields and the note explaining Tổng is
-              computed. `bg-muted text-muted-foreground` (fix round 1, finding
-              8) is the visual cue that this field cannot be typed into, on top
-              of the `readOnly`/`aria-readonly` that already say so to
-              assistive tech. */}
+          {/* Read-only and unregistered: the principal is derived, not
+              entered. See `paymentResolver` (`loan-payment-math.ts`) for what
+              is SUBMITTED and `displayPrincipal` for what is SHOWN — the two
+              differ on purpose while a part is blank, and this field must never
+              read "—" for a valid number, including zero. `FormField`'s own
+              `aria-describedby` points at the helper note above, which says it
+              is computed. `bg-muted text-muted-foreground` is the visual cue
+              that this field cannot be typed into, on top of the
+              `readOnly`/`aria-readonly` that already say so to assistive
+              tech. */}
           {(aria) => (
             <Input
               {...aria}
               readOnly
               aria-readonly="true"
-              value={`${formatMoney(total, loan.currency, locale)} ${loan.currency}`}
+              value={`${formatMoney(principal, loan.currency, locale)} ${loan.currency}`}
               className="bg-muted tabular-nums text-muted-foreground"
             />
           )}
@@ -203,6 +257,18 @@ export function LoanPaymentForm({
           {(aria) => <Input {...aria} type="date" {...register('paymentDate')} />}
         </FormField>
 
+        <DebtAccountField
+          id={fieldId('account')}
+          label={t('loans.paymentAccount')}
+          accounts={options}
+          defaultAccountId={initialAccountId}
+          registration={register('accountId', {
+            setValueAs: (v: string) => (v === '' ? undefined : v),
+          })}
+          error={errors.accountId?.message}
+          helper={payment?.accountId ? t('loans.paymentEditLinkedNote') : undefined}
+        />
+
         <FormField id={fieldId('note')} label={t('loans.paymentNote')} error={errors.note?.message}>
           {(aria) => (
             <Input
@@ -214,9 +280,9 @@ export function LoanPaymentForm({
           )}
         </FormField>
 
-        {/* Where OVERPAYMENT and SPLIT_MISMATCH land: right under the fields
-            the user typed, with the outstanding principal still visible on the
-            row behind the dialog. */}
+        {/* Where OVERPAYMENT and the other refusals land: right under the
+            fields the user typed, with the outstanding principal still visible
+            on the row behind the dialog. */}
         {error && <InlineAlert tone="negative">{error}</InlineAlert>}
 
         <div className="flex justify-end gap-2 pt-2">

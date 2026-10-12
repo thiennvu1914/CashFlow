@@ -15,6 +15,10 @@ import { FormField, SELECT_CLASS } from '@/components/common/form-field'
  * `selected` marker from `defaultValue` with no hydration gymnastics.
  * `''` is "don't record in an account"; the form's `setValueAs` turns it into
  * `undefined` so the schema reads it as no account.
+ *
+ * The loan forms use it too — the options and their wording are the same; only
+ * the label differs ("received into" a loan's account, "paid from" an
+ * instalment's), so `label` overrides the debts' plain "Account".
  */
 export function DebtAccountField({
   id,
@@ -23,6 +27,7 @@ export function DebtAccountField({
   registration,
   error,
   helper,
+  label,
 }: {
   id: string
   accounts: ReadonlyArray<DebtAccountOption>
@@ -30,11 +35,12 @@ export function DebtAccountField({
   registration: UseFormRegisterReturn
   error?: string
   helper?: string
+  label?: string
 }) {
   const t = useTranslations()
 
   return (
-    <FormField id={id} label={t('debts.account')} helper={helper} error={error}>
+    <FormField id={id} label={label ?? t('debts.account')} helper={helper} error={error}>
       {(aria) => (
         <select
           {...aria}

@@ -3,10 +3,11 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
-import { closeLoanAction } from '@/lib/server/actions/loan-actions'
+import { closeLoanAction, deleteLoanPaymentAction } from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
-import type { LoanDto } from '@/lib/ui/loan-view-model'
+import type { LoanDto, LoanPaymentDto } from '@/lib/ui/loan-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
 import { RowActionsMenu } from '@/components/common/row-actions-menu'
@@ -44,11 +45,13 @@ import { LoanPaymentForm } from './loan-payment-form'
  * recorded (ruling R6-6), and closing it is how the user says they are
  * finished with it.
  *
- * Nothing here moves money. Recording an instalment writes a `LoanPayment` row
- * and advances the loan's `nextDueDate`, and nothing else: no Transaction, no
- * Transfer, no account balance. Whether the cash also left a tracked account is
- * a separate fact the user records separately, which is why the page says so in
- * its subtitle rather than leaving the reader to wonder.
+ * Recording an instalment writes a `LoanPayment` row, advances the loan's
+ * `nextDueDate` and, when an account is chosen, books the principal and the
+ * interest into it (money-source linking, spec 2026-10-12 §6.3).
+ * `LoanPaymentActions` is the third piece: Edit and Delete for one line of the
+ * instalment history, mounted by `LoanList`'s `renderPaymentActions` — a
+ * correction or removal updates both linked transactions with it, which the
+ * confirm copy says.
  *
  * An instalment and an edit are two forms, not one — `LoanPaymentForm`
  * (`loan-payment-form.tsx`) and `LoanEditForm` (`loan-edit-form.tsx`) — because
@@ -68,10 +71,14 @@ export function LoanPaymentButton({
   loan,
   today,
   locale,
+  accounts,
+  mostRecentAccountId,
 }: {
   loan: LoanDto
   today: string
   locale: Locale
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
 }) {
   const t = useTranslations()
   const [paymentOpen, setPaymentOpen] = useState(false)
@@ -110,10 +117,112 @@ export function LoanPaymentButton({
             loan={loan}
             today={today}
             locale={locale}
+            accounts={accounts}
+            mostRecentAccountId={mostRecentAccountId}
             onDone={() => setPaymentOpen(false)}
           />
         )}
       </Dialog>
+    </>
+  )
+}
+
+export function LoanPaymentActions({
+  loan,
+  payment,
+  today,
+  locale,
+  accounts,
+  mostRecentAccountId,
+  dateLabel,
+}: {
+  loan: LoanDto
+  payment: LoanPaymentDto
+  today: string
+  locale: Locale
+  accounts: ReadonlyArray<DebtAccountOption>
+  mostRecentAccountId: string | null
+  /** The date exactly as the history line prints it, for the accessible names. */
+  dateLabel: string
+}) {
+  const t = useTranslations()
+  const [editOpen, setEditOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const { setError } = useRowError()
+  const deleteSubmit = useActionSubmit(t)
+  const labelArgs = { date: dateLabel, amount: payment.total }
+
+  async function confirmDelete() {
+    await deleteSubmit.run({
+      tag: 'LoanPaymentActions: delete failed',
+      action: () => deleteLoanPaymentAction(payment.id),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes: the row's message renders behind this
+      // dialog's own scrim (`components/common/confirm-dialog.tsx`).
+      onSettled: () => setDeleting(false),
+    })
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        aria-label={t('loans.paymentEditLabel', labelArgs)}
+        onClick={() => setEditOpen(true)}
+      >
+        {t('loans.paymentEditAction')}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-negative"
+        aria-label={t('loans.paymentDeleteLabel', labelArgs)}
+        onClick={() => {
+          setError(null)
+          setDeleting(true)
+        }}
+      >
+        {t('loans.paymentDeleteAction')}
+      </Button>
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        title={t('loans.paymentEditTitle', { name: loan.lender })}
+        closeLabel={t('common.close')}
+      >
+        {editOpen && (
+          <LoanPaymentForm
+            loan={loan}
+            today={today}
+            locale={locale}
+            accounts={accounts}
+            mostRecentAccountId={mostRecentAccountId}
+            payment={payment}
+            onDone={() => setEditOpen(false)}
+          />
+        )}
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title={t('loans.paymentDeleteConfirmTitle')}
+        description={
+          payment.accountId
+            ? t('loans.paymentDeleteConfirmLinked')
+            : t('loans.paymentDeleteConfirmPlain')
+        }
+        confirmLabel={t('loans.paymentDeleteAction')}
+        cancelLabel={t('common.cancel')}
+        pendingLabel={t('loans.paymentDeletePending')}
+        onConfirm={confirmDelete}
+      />
     </>
   )
 }

@@ -3,12 +3,18 @@ import { Landmark } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
+import { getMostRecentlyUsedAccountId } from '@/lib/server/services/linked-transaction'
 import { getLoansWithOutstanding } from '@/lib/server/services/loan'
 import { loanSubtotalsByCurrency, toLoanDto, type LoanDto } from '@/lib/ui/loan-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { LoanCreateButton } from '@/components/loans/loan-create-button'
 import { LoanList } from '@/components/loans/loan-list'
-import { LoanPaymentButton, LoanRowMenu } from '@/components/loans/loan-row-actions'
+import {
+  LoanPaymentActions,
+  LoanPaymentButton,
+  LoanRowMenu,
+} from '@/components/loans/loan-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { MoneyText } from '@/components/common/money-text'
 import { PageHeader } from '@/components/common/page-header'
@@ -19,14 +25,14 @@ import { SectionHeader } from '@/components/common/section-header'
  * they have recorded against it — each in its own currency and never converted
  * to `User.baseCurrency` (ledger ruling R5-3).
  *
- * Nothing on this page moves money. A loan is a record of an agreement with a
- * lender, and recording an instalment writes a `LoanPayment` row and advances
- * the loan's `nextDueDate` and nothing else — no Transaction, no Transfer, no
- * account balance — which is why the subtitle says so outright rather than
- * leaving the reader to wonder whether "I paid the April instalment" has left an
- * account somewhere. Whether the cash also passed through a tracked account is
- * a separate fact the user records separately, and no automatic rule can tell
- * the two apart.
+ * Money-source linking (spec 2026-10-12 §6.3): creating a loan offers an
+ * account the principal was received into, and recording (or correcting) an
+ * instalment an account it was paid from, so the account's derived balance
+ * follows. "Don't record in an account" stays the first option for a loan that
+ * predates the app or whose cash never touched a tracked account — nothing can
+ * tell those apart automatically, so the user says. The pickers start on the
+ * most recently used account (an instalment's on the loan's own account first)
+ * and list only active accounts, both read here beside the loans.
  *
  * One query, not two: `getLoansWithOutstanding` already returns every status
  * (the closed section needs them anyway), so the split happens in memory. The
@@ -56,7 +62,7 @@ export default async function LoansPage() {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own. `user.id` scopes the only query below.
   const user = await requireUserOrRedirect()
-  const { timezone } = resolveProfileDefaults(user)
+  const { timezone, baseCurrency } = resolveProfileDefaults(user)
   const t = await getTranslations()
   const locale = await resolveLocale()
   // The one place the user's zone enters: whether an instalment is overdue, or
@@ -66,7 +72,13 @@ export default async function LoansPage() {
   // and another in the browser.
   const today = todayCalendarDateInZone(timezone, new Date())
 
-  const rows = await getLoansWithOutstanding(user.id, today)
+  const [rows, accountRows, mostRecentAccountId] = await Promise.all([
+    getLoansWithOutstanding(user.id, today),
+    listActiveAccountPickerRows(user.id),
+    getMostRecentlyUsedAccountId(user.id),
+  ])
+  // Projected to what the pickers render, like the other pages do.
+  const accounts = accountRows.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))
 
   // Subtotals are taken from the service rows — `Prisma.Decimal` sums, one per
   // currency — before anything is formatted, so the strip can never be the
@@ -105,7 +117,14 @@ export default async function LoansPage() {
             </ul>
           )
         }
-        actions={<LoanCreateButton today={today} />}
+        actions={
+          <LoanCreateButton
+            accounts={accounts}
+            defaultAccountId={mostRecentAccountId}
+            baseCurrency={baseCurrency}
+            today={today}
+          />
+        }
       />
 
       {active.length === 0 ? (
@@ -127,9 +146,28 @@ export default async function LoansPage() {
               locale={locale}
               timeZone={timezone}
               renderActions={(loan) => ({
-                inlineAction: <LoanPaymentButton loan={loan} today={today} locale={locale} />,
+                inlineAction: (
+                  <LoanPaymentButton
+                    loan={loan}
+                    today={today}
+                    locale={locale}
+                    accounts={accounts}
+                    mostRecentAccountId={mostRecentAccountId}
+                  />
+                ),
                 actions: <LoanRowMenu loan={loan} />,
               })}
+              renderPaymentActions={(loan, payment, dateLabel) => (
+                <LoanPaymentActions
+                  loan={loan}
+                  payment={payment}
+                  today={today}
+                  locale={locale}
+                  accounts={accounts}
+                  mostRecentAccountId={mostRecentAccountId}
+                  dateLabel={dateLabel}
+                />
+              )}
             />
           </div>
         </div>

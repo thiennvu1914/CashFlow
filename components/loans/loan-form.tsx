@@ -1,15 +1,19 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import type { Currency } from '@prisma/client'
 import { createLoanSchema, type CreateLoanInput } from '@/lib/validation/loan'
 import { createLoanAction } from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { paymentFrequencyLabelKey } from '@/lib/ui/labels'
+import { defaultNextDueDate } from '@/lib/ui/loan-schedule'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import { useHydrated } from '@/lib/ui/use-hydrated'
+import { DebtAccountField } from '@/components/debts/debt-account-field'
 import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
@@ -19,10 +23,24 @@ import { Input } from '@/components/ui/input'
  * The create form for a loan.
  *
  * Takes `today` — the user's own calendar day, from `todayCalendarDateInZone`
- * on the page — because the next due date is pre-filled with it. Never
- * `new Date()` in the browser: the visitor's zone is not the profile's, so a
- * user in `Asia/Ho_Chi_Minh` reading the page on a UTC machine would be handed
- * yesterday.
+ * on the page — because the start date is pre-filled with it and the next due
+ * date is counted from the start date. Never `new Date()` in the browser: the
+ * visitor's zone is not the profile's, so a user in `Asia/Ho_Chi_Minh` reading
+ * the page on a UTC machine would be handed yesterday.
+ *
+ * Money-source linking (spec 2026-10-12 §2 Q2, §6.3): the form asks which
+ * account the loan money arrived in. The picker starts on the user's most
+ * recently used account (`defaultAccountId`, null when there is none) and its
+ * first option, "don't record in an account", is for a loan that predates the
+ * app. Choosing an account fixes the currency to the account's and books the
+ * principal into it on the start date (no separate "money moved on" date is
+ * asked for); choosing none offers the VND/USD choice, defaulting to
+ * `baseCurrency`. The server takes the currency from the account either way —
+ * the read-only field only shows it.
+ *
+ * The next due date is the first instalment's: one period after the start date,
+ * not today. It follows the start date and the frequency until the user types a
+ * date of their own, after which it is theirs.
  *
  * Every term is asked here and most are asked *only* here: `updateLoanSchema`
  * contains just the lender, the scheduled payment and the notes, because the
@@ -46,11 +64,36 @@ import { Input } from '@/components/ui/input'
  * interest-free loan from family — but pre-filling it would state a term the
  * user never gave.
  */
-function defaultValues(today: string): Partial<CreateLoanInput> {
-  return { lender: '', currency: 'VND', paymentFrequency: 'MONTHLY', nextDueDate: today }
+function defaultValues(
+  baseCurrency: Currency,
+  defaultAccountId: string | null,
+  today: string,
+): Partial<CreateLoanInput> {
+  return {
+    lender: '',
+    currency: baseCurrency,
+    paymentFrequency: 'MONTHLY',
+    startDate: today,
+    nextDueDate: defaultNextDueDate(today, 'MONTHLY') ?? today,
+    // `undefined`, not `''`, for "don't record": it is what `setValueAs` below
+    // turns the picker's empty option into.
+    accountId: defaultAccountId ?? undefined,
+  }
 }
 
-export function LoanForm({ today, onCreated }: { today: string; onCreated?: () => void }) {
+export function LoanForm({
+  accounts,
+  defaultAccountId,
+  baseCurrency,
+  today,
+  onCreated,
+}: {
+  accounts: ReadonlyArray<DebtAccountOption>
+  defaultAccountId: string | null
+  baseCurrency: Currency
+  today: string
+  onCreated?: () => void
+}) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -62,20 +105,43 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
     register,
     handleSubmit,
     reset,
+    control,
+    getValues,
+    setValue,
     formState: { errors },
   } = useForm<CreateLoanInput>({
     resolver: zodResolver(createLoanSchema),
-    defaultValues: defaultValues(today),
+    defaultValues: defaultValues(baseCurrency, defaultAccountId, today),
   })
+  const accountId = useWatch({ control, name: 'accountId' })
+  const account = accounts.find((option) => option.id === accountId)
+  /** Once the user types a next due date it is theirs: later changes to the
+   *  start date or frequency stop moving it. */
+  const [nextDueTouched, setNextDueTouched] = useState(false)
+
+  /** Re-derives the next due date from the start date and frequency, unless the
+   *  user has chosen one. Called from those two fields' own `onChange`, so the
+   *  value it is handed is the one just typed. */
+  function followSchedule(startDate: string, frequency: CreateLoanInput['paymentFrequency']) {
+    if (nextDueTouched) return
+    const next = defaultNextDueDate(startDate, frequency)
+    if (next) setValue('nextDueDate', next)
+  }
 
   async function onSubmit(values: CreateLoanInput) {
+    // The currency of a linked loan is the account's; with no account the
+    // choice stands and no account id travels.
+    const input: CreateLoanInput = account
+      ? { ...values, currency: account.currency }
+      : { ...values, accountId: undefined }
     await submit.run({
       tag: 'LoanForm: create failed',
-      action: () => createLoanAction(values),
+      action: () => createLoanAction(input),
       errorKeys: LOAN_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        reset(defaultValues(today))
+        setNextDueTouched(false)
+        reset(defaultValues(baseCurrency, defaultAccountId, today))
         onCreated?.()
       },
     })
@@ -116,22 +182,49 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
           )}
         </FormField>
 
-        <FormField
-          id={fieldId('currency')}
-          label={t('loans.currency')}
-          error={errors.currency?.message}
-        >
-          {/* `defaultValue` (never `value` — that would make this
-              controlled). VND is already the first option, so react-dom would
-              land here anyway; it is passed so the server HTML states the
-              form's own default rather than relying on a browser fallback. */}
-          {(aria) => (
-            <select {...aria} {...register('currency')} defaultValue="VND" className={SELECT_CLASS}>
-              <option value="VND">VND</option>
-              <option value="USD">USD</option>
-            </select>
-          )}
-        </FormField>
+        <DebtAccountField
+          id={fieldId('account')}
+          label={t('loans.account')}
+          accounts={accounts}
+          defaultAccountId={defaultAccountId ?? ''}
+          registration={register('accountId', {
+            setValueAs: (v: string) => (v === '' ? undefined : v),
+          })}
+          error={errors.accountId?.message}
+          helper={t('loans.accountHelper')}
+        />
+
+        {account ? (
+          <FormField
+            id={fieldId('currency')}
+            label={t('loans.currency')}
+            helper={t('loans.currencyFromAccount')}
+          >
+            {(aria) => <Input {...aria} readOnly value={account.currency} />}
+          </FormField>
+        ) : (
+          <FormField
+            id={fieldId('currency')}
+            label={t('loans.currency')}
+            error={errors.currency?.message}
+          >
+            {/* `defaultValue` (never `value` — that would make this
+                controlled): the server HTML states the form's own default (the
+                profile's base currency) rather than relying on a browser
+                fallback that happens to agree with it. */}
+            {(aria) => (
+              <select
+                {...aria}
+                {...register('currency')}
+                defaultValue={baseCurrency}
+                className={SELECT_CLASS}
+              >
+                <option value="VND">VND</option>
+                <option value="USD">USD</option>
+              </select>
+            )}
+          </FormField>
+        )}
 
         <FormField
           id={fieldId('interest-rate')}
@@ -159,8 +252,19 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
           {/* A calendar date as a string, never `valueAsDate`: the value that
               travels is `yyyy-MM-dd` and the carrier is built server-side by
               `calendarDateToUtcCarrier` (ruling R6-7). `valueAsDate` would hand
-              over an instant the browser's zone had already coloured. */}
-          {(aria) => <Input {...aria} type="date" {...register('startDate')} />}
+              over an instant the browser's zone had already coloured. With an
+              account, this is also the day the principal is booked on. */}
+          {(aria) => (
+            <Input
+              {...aria}
+              type="date"
+              defaultValue={today}
+              {...register('startDate', {
+                onChange: (event) =>
+                  followSchedule(event.target.value, getValues('paymentFrequency')),
+              })}
+            />
+          )}
         </FormField>
 
         <FormField
@@ -189,7 +293,9 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
           {(aria) => (
             <select
               {...aria}
-              {...register('paymentFrequency')}
+              {...register('paymentFrequency', {
+                onChange: (event) => followSchedule(getValues('startDate'), event.target.value),
+              })}
               defaultValue="MONTHLY"
               className={SELECT_CLASS}
             >
@@ -220,13 +326,23 @@ export function LoanForm({ today, onCreated }: { today: string; onCreated?: () =
           label={t('loans.nextDueDate')}
           error={errors.nextDueDate?.message}
         >
-          {/* Pre-filled with the user's own today, and the source of the
-              schedule's anchor: the service reads this date's day of the month
-              into `dueDayOfMonth` and advances from that anchor after every
+          {/* Pre-filled one period after the start date (not today: a loan that
+              began today is not due today), and the source of the schedule's
+              anchor: the service reads this date's day of the month into
+              `dueDayOfMonth` and advances from that anchor after every
               payment, so a loan due on the 31st goes Jan 31 → Feb 28 → Mar 31
-              rather than drifting (ruling R6-6a). */}
+              rather than drifting (ruling R6-6a). Typing here freezes it. */}
           {(aria) => (
-            <Input {...aria} type="date" {...register('nextDueDate')} defaultValue={today} />
+            <Input
+              {...aria}
+              type="date"
+              defaultValue={defaultNextDueDate(today, 'MONTHLY') ?? today}
+              {...register('nextDueDate', {
+                onChange: () => {
+                  setNextDueTouched(true)
+                },
+              })}
+            />
           )}
         </FormField>
 

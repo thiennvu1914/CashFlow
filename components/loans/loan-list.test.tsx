@@ -28,6 +28,8 @@ function dto(overrides: Partial<LoanDto> = {}): LoanDto {
     interestRateLabel: '8,5 %',
     termMonths: 60,
     startDate: '2026-01-15',
+    scheduledPaymentInput: '5000000.00',
+    disbursementAccountId: null,
     status: 'ACTIVE',
     active: true,
     notes: null,
@@ -37,7 +39,44 @@ function dto(overrides: Partial<LoanDto> = {}): LoanDto {
   }
 }
 
+const PAYMENT: LoanDto['payments'][number] = {
+  id: 'p1',
+  date: '2026-04-15',
+  total: '5.000.000',
+  principal: '3.500.000',
+  interest: '1.500.000',
+  totalInput: '5000000.00',
+  interestInput: '1500000.00',
+  note: null,
+  accountId: 'acc_bank',
+  accountName: 'Bank',
+  accountArchived: false,
+}
+
 describe('LoanList', () => {
+  it('renders the per-payment actions inside each history line, and none without renderPaymentActions', async () => {
+    const withActions = renderToStaticMarkup(
+      await LoanList({
+        loans: [dto({ payments: [PAYMENT] })],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+        renderPaymentActions: (_loan, payment, dateLabel) => (
+          <button type="button">{`actions:${payment.id}:${dateLabel}`}</button>
+        ),
+      }),
+    )
+    expect(withActions).toMatch(/<li[^>]*>.*actions:p1:.*<\/li>/)
+
+    const without = renderToStaticMarkup(
+      await LoanList({
+        loans: [dto({ payments: [PAYMENT] })],
+        locale: 'vi',
+        timeZone: 'Asia/Ho_Chi_Minh',
+      }),
+    )
+    expect(without).not.toContain('actions:')
+  })
+
   it('renders a muted caption via loans.outstandingLabel plus the dominant figure, at two sizes for two breakpoints', async () => {
     const html = renderToStaticMarkup(
       await LoanList({ loans: [dto()], locale: 'vi', timeZone: 'Asia/Ho_Chi_Minh' }),

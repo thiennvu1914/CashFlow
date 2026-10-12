@@ -3,6 +3,8 @@ import os from 'os'
 import path from 'path'
 import type { Browser, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
+import { addMonthsUtcClamped } from '@/lib/datetime/add-months-clamped'
+import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 
 /**
  * Registers a brand-new throwaway user via `/register` (the same UI flow
@@ -418,6 +420,12 @@ export async function createLoanViaUi(
   const sheet = page.getByRole('dialog', { name: /Thêm khoản vay|Add loan/ })
   await sheet.getByLabel(/^Bên cho vay$|^Lender$/).fill(opts.lender)
   await sheet.getByLabel(/^Số tiền vay$|^Principal$/).fill(String(opts.principal))
+  // The account picker starts on the user's most recently used account, which
+  // would record the loan as a ledger transaction and move balances. Callers of
+  // this helper want a tracking-only loan (the account-linked flow has its own
+  // coverage in `phase7-debts-loans.spec.ts`), so "don't record" is chosen
+  // explicitly.
+  await sheet.getByLabel(/^Nhận tiền vào tài khoản$|^Received into account$/).selectOption('')
   await sheet.getByLabel(/Lãi suất|Interest rate/).fill(String(opts.interestRate))
   await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(SEED_TODAY)
   await sheet.getByLabel(/Kỳ hạn|Term \(months\)/).fill(String(opts.termMonths))
@@ -428,8 +436,11 @@ export async function createLoanViaUi(
   await sheet.getByLabel(/Tần suất trả|Payment frequency/).selectOption('MONTHLY')
   await sheet.getByLabel(/Số tiền mỗi kỳ|Scheduled payment/).fill(String(opts.scheduledPayment))
   // Left at its pre-filled default rather than typed: the loan's whole schedule
-  // anchor comes from this field, and "today" is what the page seeded it with.
-  await expect(sheet.getByLabel(/^Kỳ tới$|^Next due date$/)).toHaveValue(SEED_TODAY)
+  // anchor comes from this field, and one month after the start date (not the
+  // start date itself) is what the form seeds it with.
+  await expect(sheet.getByLabel(/^Kỳ tới$|^Next due date$/)).toHaveValue(
+    formatCalendarDate(addMonthsUtcClamped(calendarDateToUtcCarrier(SEED_TODAY), 1)),
+  )
   await sheet.getByRole('button', { name: /Thêm khoản vay|Add loan/ }).click()
   // The sheet closes itself on success — the app's own confirmation that the
   // loan was created.

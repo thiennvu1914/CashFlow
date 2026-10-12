@@ -36,11 +36,13 @@ const SESSION = authenticatedSession('phase7-debts-loans')
 
 const TODAY = todayInZone(TIMEZONE)
 
-/** Where a MONTHLY loan due today lands after one accepted instalment — the
- *  same month arithmetic `e2e/phase6.spec.ts`'s `NEXT_DUE_AFTER_ONE_PAYMENT`
- *  uses, so a test run on the 31st expects the 28th/29th and not a rollover. */
+/** A new loan's first due date (the form seeds it one month after the start
+ *  date), and where a MONTHLY loan lands after one accepted instalment — the
+ *  same month arithmetic `e2e/phase6.spec.ts` uses, so a test run on the 31st
+ *  expects the 28th/29th and not a rollover. */
+const FIRST_DUE = formatCalendarDate(addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1))
 const NEXT_DUE_AFTER_ONE_PAYMENT = formatCalendarDate(
-  addMonthsUtcClamped(calendarDateToUtcCarrier(TODAY), 1),
+  addMonthsUtcClamped(calendarDateToUtcCarrier(FIRST_DUE), 1),
 )
 
 /** A `yyyy-MM-dd` calendar-date carrier, formatted the way `formatDate(...,
@@ -116,6 +118,12 @@ async function createLoanViaUi(
   const sheet = page.getByRole('dialog', { name: /Thêm khoản vay|Add loan/ })
   await sheet.getByLabel(/^Bên cho vay$|^Lender$/).fill(opts.lender)
   await sheet.getByLabel(/^Số tiền vay$|^Principal$/).fill(String(opts.principal))
+  // The account picker starts on the user's most recently used account, which
+  // would record the loan as a ledger transaction and move balances. Callers of
+  // this helper want a tracking-only loan (the account-linked flow has its own
+  // coverage in `phase7-debts-loans.spec.ts`), so "don't record" is chosen
+  // explicitly.
+  await sheet.getByLabel(/^Nhận tiền vào tài khoản$|^Received into account$/).selectOption('')
   await sheet.getByLabel(/Lãi suất|Interest rate/).fill(String(opts.interestRate))
   await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(TODAY)
   await sheet.getByLabel(/Kỳ hạn|Term \(months\)/).fill(String(opts.termMonths))
@@ -248,35 +256,41 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     const row = namedRow(page, page, 'Bank')
     await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
     const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Bank' })
-    const principal = dialog.getByLabel('Gốc')
-    const interest = dialog.getByLabel('Lãi')
     const total = dialog.getByLabel('Tổng')
+    const interest = dialog.getByLabel('Lãi')
+    const principal = dialog.getByLabel('Gốc')
 
-    // Both parts blank: Tổng reads a computed zero, never an em dash.
-    await expect(total).toHaveValue(/^0(,00)?\s?VND$/)
-    await expect(total).not.toHaveValue('—')
+    // Pre-filled with the scheduled instalment; the interest is blank, so Gốc is
+    // the whole total — a computed figure, never an em dash.
+    await expect(total).toHaveValue('900000')
+    await expect(principal).toHaveValue(/^900.000(,00)?\s?VND$/)
+    await expect(principal).not.toHaveValue('—')
 
-    // Explicit zeros: still a computed figure, never a dash.
-    await principal.fill('0')
-    await interest.fill('0')
-    await expect(total).toHaveValue(/^0(,00)?\s?VND$/)
-    await expect(total).not.toHaveValue('—')
+    // Interest equal to the total: an interest-only instalment, principal 0.
+    await interest.fill('900000')
+    await expect(principal).toHaveValue(/^0(,00)?\s?VND$/)
+    await expect(principal).not.toHaveValue('—')
 
-    // A real split: Tổng is the live sum.
-    await principal.fill('900000')
+    // A real split: Gốc is the live difference.
     await interest.fill('85000')
-    await expect(total).toHaveValue(/985.000/)
-    await expect(total).not.toHaveValue('—')
+    await expect(principal).toHaveValue(/815.000/)
+    await expect(principal).not.toHaveValue('—')
+
+    // Both blank: still a figure.
+    await total.fill('')
+    await interest.fill('')
+    await expect(principal).toHaveValue(/^0(,00)?\s?VND$/)
 
     // A principal above what is outstanding → the friendly OVERPAYMENT
     // message, never a raw server error.
-    await principal.fill('10000001')
+    await total.fill('10000001')
     await interest.fill('0')
     await dialog.getByRole('button', { name: 'Lưu' }).click()
     await expect(dialog.getByText('Phần gốc thanh toán lớn hơn dư nợ gốc còn lại.')).toBeVisible()
 
-    // Correct it to exactly the scheduled instalment, and save for real.
-    await principal.fill('900000')
+    // Correct it to the scheduled instalment with 85.000 of interest, and save
+    // for real.
+    await total.fill('985000')
     await interest.fill('85000')
     await dialog.getByRole('button', { name: 'Lưu' }).click()
     await expect(dialog).toBeHidden()
@@ -381,12 +395,12 @@ test.describe.serial('Phase 7 Task 8 — debts, loans', () => {
     const englishRow = namedRow(page, page, 'English Bank')
     await englishRow.getByRole('button', { name: 'Record payment' }).click()
     const englishDialog = page.getByRole('dialog', { name: 'Record payment · English Bank' })
-    await englishDialog.getByLabel('Principal').fill('3000000')
+    await englishDialog.getByLabel('Total').fill('3800000')
     await englishDialog.getByLabel('Interest').fill('800000')
-    const englishTotal = englishDialog.getByLabel('Total')
+    const englishPrincipal = englishDialog.getByLabel('Principal')
     // Comma grouping (en-US), never the Vietnamese dot grouping.
-    await expect(englishTotal).toHaveValue(/3,800,000/)
-    await expect(englishTotal).not.toHaveValue(/3\.800\.000/)
+    await expect(englishPrincipal).toHaveValue(/3,000,000/)
+    await expect(englishPrincipal).not.toHaveValue(/3\.000\.000/)
   })
 })
 
@@ -523,5 +537,165 @@ test.describe.serial('Money-source linking — debts', () => {
     await expect(row).toContainText('1.500')
 
     await expectCashBalance(page, '4.000.000')
+  })
+})
+
+/**
+ * Money-source linking for loans (spec 2026-10-12 §6.3, owner decision Q2): a
+ * loan received into an account raises its balance; an instalment paid from an
+ * account lowers it by the total (principal and interest are two transactions,
+ * the interest one filed under "Loan Interest & Fees"); correcting or deleting
+ * the instalment moves the balance back — or the loan is not recorded at all
+ * and nothing moves.
+ *
+ * Its own user, one account "Cash" at 5.000.000 (the picker's pre-selection:
+ * the first active account while the user has no transaction yet).
+ */
+const LOAN_LINKING_SESSION = authenticatedSession('phase7-loans-linking')
+
+test.describe.serial('Money-source linking — loans', () => {
+  test.use({ storageState: LOAN_LINKING_SESSION.path })
+  test.describe.configure({ timeout: 120_000 })
+
+  test.beforeAll(async ({ browser }) => {
+    await LOAN_LINKING_SESSION.bootstrap(browser, async (page) => {
+      await createAccountViaUi(page, { name: 'Cash', currency: 'VND', initialBalance: 5_000_000 })
+    })
+  })
+
+  test('a loan received into an account raises its balance; the picker starts on that account, the currency is read-only and the next due date is a month after the start', async ({
+    page,
+  }) => {
+    await page.goto('/loans')
+    await page.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm khoản vay' })
+
+    const account = sheet.getByLabel('Nhận tiền vào tài khoản')
+    await expect(account.locator('option').first()).toHaveText('Không ghi vào tài khoản')
+    await expect(account.locator('option:checked')).toHaveText('Cash · VND')
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveValue('VND')
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveJSProperty('readOnly', true)
+    await expect(sheet.getByLabel('Ngày bắt đầu')).toHaveValue(TODAY)
+    // Not today: the first instalment is one period after the start date.
+    await expect(sheet.getByLabel('Kỳ tới')).toHaveValue(FIRST_DUE)
+    // ...and it follows the frequency until the user types a date of their own.
+    await sheet.getByLabel('Tần suất trả').selectOption('YEARLY')
+    await expect(sheet.getByLabel('Kỳ tới')).not.toHaveValue(FIRST_DUE)
+    await sheet.getByLabel('Tần suất trả').selectOption('MONTHLY')
+    await expect(sheet.getByLabel('Kỳ tới')).toHaveValue(FIRST_DUE)
+
+    await sheet.getByLabel('Bên cho vay').fill('Home Bank')
+    await sheet.getByLabel('Số tiền vay', { exact: true }).fill('2000000')
+    await sheet.getByLabel(/Lãi suất/).fill('0')
+    await sheet.getByLabel(/Kỳ hạn/).fill('4')
+    await sheet.getByLabel('Số tiền mỗi kỳ').fill('500000')
+    await sheet.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    await expect(sheet).toBeHidden()
+
+    await expectCashBalance(page, '7.000.000')
+  })
+
+  test('an instalment starts at the scheduled amount on the receiving account; interest splits it into two transactions and the balance drops by the total; editing and deleting move it back', async ({
+    page,
+  }) => {
+    await page.goto('/loans')
+    const row = namedRow(page, page, 'Home Bank')
+
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Home Bank' })
+    await expect(dialog.getByLabel('Tổng')).toHaveValue('500000')
+    await expect(dialog.getByLabel('Trả từ tài khoản').locator('option:checked')).toHaveText(
+      'Cash · VND',
+    )
+    await expect(dialog.getByLabel('Gốc')).toHaveValue(/^500.000(,00)?\s?VND$/)
+    await dialog.getByLabel('Lãi').fill('50000')
+    await expect(dialog.getByLabel('Gốc')).toHaveValue(/^450.000(,00)?\s?VND$/)
+    await dialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(dialog).toBeHidden()
+
+    await expect(row).toContainText('1.550.000')
+    await expect(row).toContainText(displayDate(NEXT_DUE_AFTER_ONE_PAYMENT))
+    await expectCashBalance(page, '6.500.000')
+
+    // Two transactions: the principal out, and the interest as an expense in
+    // "Loan Interest & Fees".
+    await page.goto('/transactions')
+    await expect(page.getByText('Trả gốc – Home Bank')).toBeVisible()
+    await expect(page.getByText('Lãi vay – Home Bank')).toBeVisible()
+    await expect(page.getByText('Loan Interest & Fees').first()).toBeVisible()
+
+    // Edit: the same form, prefilled with what was recorded; a bigger interest
+    // on the same total changes the split, not the balance.
+    await page.goto('/loans')
+    await row.getByText('Lần trả (1)', { exact: true }).click()
+    await row.getByRole('button', { name: /^Sửa kỳ trả / }).click()
+    const editDialog = page.getByRole('dialog', { name: 'Sửa kỳ trả · Home Bank' })
+    await expect(editDialog.getByLabel('Tổng')).toHaveValue('500000')
+    await expect(editDialog.getByLabel('Lãi')).toHaveValue('50000')
+    await expect(editDialog.getByLabel('Trả từ tài khoản').locator('option:checked')).toHaveText(
+      'Cash · VND',
+    )
+    await editDialog.getByLabel('Lãi').fill('100000')
+    await editDialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(editDialog).toBeHidden()
+    await expect(row).toContainText('1.600.000')
+    await expectCashBalance(page, '6.500.000')
+
+    // A bigger total lowers the balance by the difference.
+    await page.goto('/loans')
+    await row.getByText('Lần trả (1)', { exact: true }).click()
+    await row.getByRole('button', { name: /^Sửa kỳ trả / }).click()
+    await editDialog.getByLabel('Tổng').fill('600000')
+    await editDialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(editDialog).toBeHidden()
+    await expectCashBalance(page, '6.400.000')
+
+    // Delete: the confirmation says both transactions go and the due date steps
+    // back; the balance and the outstanding principal are restored.
+    await page.goto('/loans')
+    await row.getByText('Lần trả (1)', { exact: true }).click()
+    await row.getByRole('button', { name: /^Xóa kỳ trả / }).click()
+    const confirm = page.getByRole('dialog', { name: 'Xóa kỳ trả này?' })
+    await expect(confirm).toContainText('Cả hai giao dịch đã ghi trong tài khoản')
+    await expect(confirm).toContainText('lùi lại một kỳ')
+    await confirm.getByRole('button', { name: 'Xóa', exact: true }).click()
+    await expect(confirm).toBeHidden()
+    await expect(row.getByText('Lần trả', { exact: false })).toHaveCount(0)
+    await expect(row).toContainText('2.000.000')
+    await expectCashBalance(page, '7.000.000')
+  })
+
+  test("choosing 'don't record in an account' creates the loan and an instalment without touching any balance, and offers the currency choice", async ({
+    page,
+  }) => {
+    await page.goto('/loans')
+    await page.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm khoản vay' })
+
+    await sheet.getByLabel('Nhận tiền vào tài khoản').selectOption('')
+    await expect(sheet.getByLabel('Tiền tệ')).toHaveValue('VND')
+    await sheet.getByLabel('Tiền tệ').selectOption('USD')
+    await sheet.getByLabel('Bên cho vay').fill('Old Lender')
+    await sheet.getByLabel('Số tiền vay', { exact: true }).fill('1000')
+    await sheet.getByLabel(/Lãi suất/).fill('0')
+    await sheet.getByLabel(/Kỳ hạn/).fill('10')
+    await sheet.getByLabel('Số tiền mỗi kỳ').fill('100')
+    await sheet.getByRole('button', { name: 'Thêm khoản vay' }).click()
+    await expect(sheet).toBeHidden()
+    await expectCashBalance(page, '7.000.000')
+
+    // A USD loan lists no VND account; the instalment records nothing.
+    await page.goto('/loans')
+    const row = namedRow(page, page, 'Old Lender')
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Old Lender' })
+    const paidFrom = dialog.getByLabel('Trả từ tài khoản')
+    await expect(paidFrom.locator('option')).toHaveCount(1)
+    await expect(paidFrom.locator('option:checked')).toHaveText('Không ghi vào tài khoản')
+    await dialog.getByLabel('Lãi').fill('0')
+    await dialog.getByRole('button', { name: 'Lưu' }).click()
+    await expect(dialog).toBeHidden()
+    await expect(row).toContainText('Lần trả (1)')
+    await expectCashBalance(page, '7.000.000')
   })
 })

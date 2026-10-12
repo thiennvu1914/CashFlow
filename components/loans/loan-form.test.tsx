@@ -38,10 +38,28 @@ const messages = await loadMessages('vi')
 /** The user's own calendar day, as the page passes it in. */
 const TODAY = '2026-04-15'
 
-function render(): string {
+const ACCOUNTS = [
+  { id: 'acc_wallet', name: 'Ví tiền mặt', currency: 'VND' as const },
+  { id: 'acc_usd', name: 'Savings USD', currency: 'USD' as const },
+]
+
+function render(
+  props: Partial<{
+    accounts: typeof ACCOUNTS
+    defaultAccountId: string | null
+    baseCurrency: 'VND' | 'USD'
+  }> = {},
+): string {
   return renderToStaticMarkup(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
-      <LoanForm today={TODAY} />
+      <LoanForm
+        accounts={props.accounts ?? ACCOUNTS}
+        defaultAccountId={
+          props.defaultAccountId === undefined ? 'acc_wallet' : props.defaultAccountId
+        }
+        baseCurrency={props.baseCurrency ?? 'VND'}
+        today={TODAY}
+      />
     </NextIntlClientProvider>,
   )
 }
@@ -94,14 +112,16 @@ describe('LoanForm', () => {
 
   it('renders a visible <label for> naming every field, against the vi strings themselves', () => {
     const html = render()
-    // lender, principal, currency, interest rate, start date, term months,
-    // payment frequency, scheduled payment, next due date, notes.
+    // lender, principal, received-into account, currency, interest rate, start
+    // date, term months, payment frequency, scheduled payment, next due date,
+    // notes.
     const labelCount = (html.match(/<label for="/g) ?? []).length
-    expect(labelCount).toBe(10)
+    expect(labelCount).toBe(11)
 
     for (const label of [
       viLoans.lender,
       viLoans.principal,
+      viLoans.account,
       viLoans.currency,
       viLoans.interestRate,
       viLoans.startDate,
@@ -144,29 +164,65 @@ describe('LoanForm', () => {
     expect(html.match(/id="loan-payment-frequency-[^"]*"/g)).toHaveLength(1)
   })
 
-  it('server-renders VND as the selected currency, from a single currency select', () => {
+  it("offers 'don't record in an account' first, then the active accounts, pre-selecting the default", () => {
+    const accountSelect = selectMarkupById(render(), 'loan-account')
+
+    expect(accountSelect).toMatch(/<option value=""[^>]*>Không ghi vào tài khoản<\/option>/)
+    expect(accountSelect.indexOf('Không ghi vào tài khoản')).toBeLessThan(
+      accountSelect.indexOf('Ví tiền mặt'),
+    )
+    expect(accountSelect).toContain('Ví tiền mặt · VND')
+    expect(accountSelect).toContain('Savings USD · USD')
+    expect(accountSelect).toMatch(selectedOption('acc_wallet'))
+    expect(accountSelect).not.toMatch(selectedOption('acc_usd'))
+    expect(accountSelect).not.toMatch(/<select[^>]*\svalue=/)
+  })
+
+  it("pre-selects 'don't record' when there is no default account", () => {
+    const accountSelect = selectMarkupById(
+      render({ defaultAccountId: null, accounts: [] }),
+      'loan-account',
+    )
+
+    expect(accountSelect).toMatch(selectedOption(''))
+    expect(accountSelect.match(/<option/g)).toHaveLength(1)
+  })
+
+  it('shows the account currency read-only while an account is chosen, never the VND/USD select', () => {
     const html = render()
+
+    expect(inputMarkupById(html, 'loan-currency')).toMatch(/readOnly=""|readonly=""/)
+    expect(inputMarkupById(html, 'loan-currency')).toContain('value="VND"')
+    expect(html).toContain(viLoans.currencyFromAccount)
+    expect(html).not.toMatch(/<select[^>]*id="loan-currency-/)
+  })
+
+  it('takes the read-only currency from the pre-selected account, not the base currency', () => {
+    const html = render({ defaultAccountId: 'acc_usd' })
+
+    expect(inputMarkupById(html, 'loan-currency')).toContain('value="USD"')
+  })
+
+  it("offers the VND/USD select, defaulting to the base currency, only for 'don't record'", () => {
+    const html = render({ defaultAccountId: null, baseCurrency: 'USD' })
     const currencySelect = selectMarkupById(html, 'loan-currency')
 
-    // VND is the first option, and the marker is asserted anyway so the server
-    // HTML states the form's own default rather than relying on a browser
-    // fallback that happens to agree with it.
-    expect(currencySelect).toMatch(selectedOption('VND'))
-    expect(currencySelect).not.toMatch(selectedOption('USD'))
+    expect(currencySelect).toMatch(selectedOption('USD'))
+    expect(currencySelect).not.toMatch(selectedOption('VND'))
     expect(currencySelect).not.toMatch(/<select[^>]*\svalue=/)
     expect(html.match(/id="loan-currency-[^"]*"/g)).toHaveLength(1)
   })
 
-  it("pre-fills the next due date with the user's own today", () => {
+  it('pre-fills the next due date one period after the start date, never with today itself', () => {
     const nextDueDate = inputMarkupById(render(), 'loan-next-due-date')
 
-    // `today` comes from `todayCalendarDateInZone` on the page, never from
-    // `new Date()` in the browser — whose zone is not the profile's. It is
-    // rendered as the input's value on the server so the field is already
-    // filled in the first paint, and so the DOM and `useForm` agree before
-    // hydration rather than after it.
+    // A loan that starts today is first due a period later (monthly is the
+    // default frequency). It is rendered as the input's value on the server so
+    // the field is already filled in the first paint, and so the DOM and
+    // `useForm` agree before hydration rather than after it.
     expect(nextDueDate).toContain('type="date"')
-    expect(nextDueDate).toContain(`value="${TODAY}"`)
+    expect(nextDueDate).toContain('value="2026-05-15"')
+    expect(nextDueDate).not.toContain(`value="${TODAY}"`)
   })
 
   it('renders both loan dates as date inputs, so the browser submits yyyy-MM-dd', () => {
@@ -179,10 +235,12 @@ describe('LoanForm', () => {
     expect(inputMarkupById(html, 'loan-next-due-date')).toContain('type="date"')
   })
 
-  it('starts the start date empty rather than guessing when the loan began', () => {
-    // Unlike the next due date, there is no defensible default for a start
-    // date: a loan began when it began, and today would be a fabricated term.
-    expect(inputMarkupById(render(), 'loan-start-date')).not.toContain('value=')
+  it("starts the start date on the user's own today", () => {
+    // `today` comes from `todayCalendarDateInZone` on the page, never from
+    // `new Date()` in the browser — whose zone is not the profile's. It is the
+    // day the principal is booked on when an account is chosen, and what the
+    // next due date is counted from.
+    expect(inputMarkupById(render(), 'loan-start-date')).toContain(`value="${TODAY}"`)
   })
 
   it('starts every numeric field empty rather than pre-filling a zero', () => {
