@@ -14,6 +14,15 @@ export const DEFAULT_ACCOUNT_TYPES = [
   'Other',
 ]
 
+/**
+ * The EXPENSE category a loan instalment's interest is filed under when the
+ * instalment is recorded in an account (money-source linking spec §4). Seeded
+ * with the other defaults for new users, backfilled for existing users by the
+ * `loan_interest_category` migration, and re-created on demand by
+ * `ensureLoanInterestCategoryId` for anyone left without an active one.
+ */
+export const LOAN_INTEREST_CATEGORY_NAME = 'Loan Interest & Fees'
+
 export const DEFAULT_EXPENSE_CATEGORIES = [
   'Food & Dining',
   'Transportation',
@@ -24,6 +33,7 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
   'Education',
   'Family',
   'Travel',
+  LOAN_INTEREST_CATEGORY_NAME,
   'Other',
 ]
 
@@ -49,7 +59,8 @@ export const DEFAULT_INCOME_CATEGORIES = [
  * by a second row with the same name.
  *
  * This is the same rule the `backfill_default_taxonomy` migration applies to
- * users who registered before this hook existed; keep the two in step.
+ * users who registered before this hook existed (and `loan_interest_category`
+ * for the one default added since); keep them in step.
  */
 export async function seedDefaultsForUser(userId: string): Promise<void> {
   const [existingAccountTypes, existingCategories] = await Promise.all([

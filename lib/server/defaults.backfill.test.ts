@@ -6,6 +6,7 @@ import {
   DEFAULT_ACCOUNT_TYPES,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
+  LOAN_INTEREST_CATEGORY_NAME,
   seedDefaultsForUser,
 } from './defaults'
 
@@ -24,6 +25,16 @@ import {
  * database are irrelevant to (and unharmed by) it.
  */
 const statements = splitSqlStatements(readMigrationSql('backfill_default_taxonomy'))
+
+/**
+ * The expense defaults as they stood when this migration shipped. A default
+ * added later gets its own backfill migration rather than an edit to this
+ * already-applied one — `LOAN_INTEREST_CATEGORY_NAME` is backfilled by
+ * `loan_interest_category` — so this file holds that one out.
+ */
+const BACKFILLED_EXPENSE_CATEGORIES = DEFAULT_EXPENSE_CATEGORIES.filter(
+  (name) => name !== LOAN_INTEREST_CATEGORY_NAME,
+)
 
 async function runBackfill(): Promise<void> {
   for (const statement of statements) {
@@ -63,7 +74,7 @@ describe('backfill_default_taxonomy migration SQL', () => {
     expect(statements.every((statement) => statement.startsWith('INSERT INTO'))).toBe(true)
   })
 
-  it('gives a user with no taxonomy the full 5 account types and 16 categories', async () => {
+  it('gives a user with no taxonomy the 5 account types and 16 categories it shipped with', async () => {
     const userId = await createUser()
 
     await runBackfill()
@@ -82,7 +93,7 @@ describe('backfill_default_taxonomy migration SQL', () => {
         .filter((c) => c.type === 'EXPENSE')
         .map((c) => c.name)
         .sort(),
-    ).toEqual([...DEFAULT_EXPENSE_CATEGORIES].sort())
+    ).toEqual([...BACKFILLED_EXPENSE_CATEGORIES].sort())
     expect(
       categories
         .filter((c) => c.type === 'INCOME')
@@ -202,18 +213,18 @@ describe('backfill_default_taxonomy migration SQL', () => {
     )
   })
 
-  it('leaves a freshly hook-seeded user at exactly 5 + 16', async () => {
+  it('leaves a freshly hook-seeded user at exactly 5 + 17', async () => {
     const userId = await createUser()
 
     // The registration path: `onUserCreated` -> `seedDefaultsForUser`.
     await seedDefaultsForUser(userId)
     expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId } })).toBe(17)
 
     await runBackfill()
 
     expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId } })).toBe(17)
   })
 
   it('keeps every inserted row scoped to its own user', async () => {

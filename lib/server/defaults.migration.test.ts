@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { readMigrationSql } from '@/lib/testing/migration-sql'
+import { readMigrationSql, splitSqlStatements } from '@/lib/testing/migration-sql'
 import {
   DEFAULT_ACCOUNT_TYPES,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
+  LOAN_INTEREST_CATEGORY_NAME,
 } from './defaults'
 
 /**
@@ -39,12 +40,17 @@ describe('backfill_default_taxonomy migration', () => {
     expect([...names].sort()).toEqual([...DEFAULT_ACCOUNT_TYPES].sort())
   })
 
-  it('inserts exactly the expense category names from DEFAULT_EXPENSE_CATEGORIES', () => {
+  it('inserts every DEFAULT_EXPENSE_CATEGORIES name except the later loan-interest one', () => {
     const names = namesInSection('DEFAULT_EXPENSE_CATEGORIES')
 
+    // `LOAN_INTEREST_CATEGORY_NAME` joined the defaults after this migration
+    // shipped and is backfilled by its own `loan_interest_category` migration
+    // (below); between them the two cover the whole list.
     expect(names).toHaveLength(10)
     expect(new Set(names).size).toBe(10)
-    expect([...names].sort()).toEqual([...DEFAULT_EXPENSE_CATEGORIES].sort())
+    expect([...names, LOAN_INTEREST_CATEGORY_NAME].sort()).toEqual(
+      [...DEFAULT_EXPENSE_CATEGORIES].sort(),
+    )
   })
 
   it('inserts exactly the income category names from DEFAULT_INCOME_CATEGORIES', () => {
@@ -65,5 +71,26 @@ describe('backfill_default_taxonomy migration', () => {
     // duplicate that section for every user.
     expect(sql.match(/INSERT INTO/g)).toHaveLength(3)
     expect(sql.match(/WHERE NOT EXISTS/g)).toHaveLength(3)
+  })
+})
+
+/**
+ * The backfill for the one default added since: the `"Loan Interest & Fees"`
+ * EXPENSE category loan instalments file their interest under. Its effect on
+ * real rows (one per user, idempotent) is exercised against the database in
+ * `services/linked-transaction.test.ts`; this pins the SQL to the constant.
+ */
+describe('loan_interest_category migration', () => {
+  const statements = splitSqlStatements(readMigrationSql('loan_interest_category'))
+
+  it('is one guarded insert of LOAN_INTEREST_CATEGORY_NAME as an EXPENSE category', () => {
+    expect(statements).toHaveLength(1)
+    const [insert] = statements
+    expect(insert.startsWith('INSERT INTO "Category"')).toBe(true)
+    expect(insert.match(/WHERE NOT EXISTS/g)).toHaveLength(1)
+    // Once as the inserted value and once in the guard — the same name both
+    // times, so the guard really does find what an earlier run inserted.
+    expect(insert.split(`'${LOAN_INTEREST_CATEGORY_NAME}'`)).toHaveLength(3)
+    expect(insert.match(/'EXPENSE'::"CategoryType"/g)).toHaveLength(2)
   })
 })

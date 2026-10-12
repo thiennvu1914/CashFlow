@@ -1,10 +1,15 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
-import type { TransactionType } from '@prisma/client'
 import { createTransactionSchema, type CreateTransactionInput } from '@/lib/validation/transaction'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
+import {
+  InvalidCategoryError,
+  SNAPSHOT_PAIR,
+  insertTransactionInTx,
+  resolveCategoryId,
+} from './linked-transaction'
 
 /**
  * Transaction service (spec §4.4, §6.3).
@@ -32,14 +37,15 @@ import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
  * `requireUser().id`) and scopes every query — there is no ambient user here.
  */
 
-/** The FX snapshot pair, fixed for every transaction: the account's own currency
- *  does not change which rate is recorded, only how it is later applied. */
-const SNAPSHOT_PAIR = { base: 'USD', quote: 'VND' } as const
-
 // `ArchivedAccountError` now lives with the locking code that raises it;
 // re-exported here so every existing importer (the transfer service, the
 // financial-account service, both action error maps) is unaffected.
 export { ArchivedAccountError }
+
+// `InvalidCategoryError` likewise lives with `resolveCategoryId` in the shared
+// linking core (`linked-transaction.ts`), which every transaction write goes
+// through; re-exported so the action error map and existing tests are unchanged.
+export { InvalidCategoryError }
 
 /**
  * Thrown when a transaction changed underneath a write between the read that
@@ -126,57 +132,6 @@ export class CurrencyMismatchError extends Error {
     super('Move the transaction to an account in the same currency, or delete and re-enter it.')
     this.name = 'CurrencyMismatchError'
   }
-}
-
-export class InvalidCategoryError extends Error {
-  constructor(reason: string) {
-    super(`Invalid category: ${reason}`)
-    this.name = 'InvalidCategoryError'
-  }
-}
-
-const P_AND_L_TYPES = new Set<TransactionType>(['INCOME', 'EXPENSE'])
-
-/**
- * Returns the categoryId to store (null for P&L-neutral types with no category
- * supplied).
- *
- * `keptCategoryId` is the categoryId the row already carries, passed only from
- * `updateTransaction`. Archiving a category must not freeze the transactions
- * filed under it: an edit that leaves the category exactly as it was skips the
- * ACTIVE check, so a note can still be corrected on an old expense. Everything
- * else still applies — moving a row to a *different* archived category is
- * refused, and the type-compatibility rule is checked either way, so an EXPENSE
- * row cannot become INCOME while keeping its (archived) EXPENSE category.
- */
-async function resolveCategoryId(
-  db: Prisma.TransactionClient,
-  userId: string,
-  type: TransactionType,
-  categoryId?: string,
-  keptCategoryId?: string | null,
-): Promise<string | null> {
-  if (!categoryId) {
-    if (P_AND_L_TYPES.has(type)) throw new InvalidCategoryError(`${type} requires a category`)
-    return null
-  }
-  // `findUniqueOrThrow` on the composite `(userId, id)` key is what makes
-  // another user's category a NotFound rather than a usable reference. Read
-  // through the caller's transaction client so the check and the write that
-  // depends on it are the same transaction.
-  const category = await db.category.findUniqueOrThrow({
-    where: { userId_id: { userId, id: categoryId } },
-  })
-  const isUnchanged = keptCategoryId !== undefined && categoryId === keptCategoryId
-  if (!isUnchanged && category.status !== 'ACTIVE') {
-    throw new InvalidCategoryError('category is archived')
-  }
-  if (P_AND_L_TYPES.has(type) && category.type !== type) {
-    throw new InvalidCategoryError(
-      `${type} requires a category of type ${type}, got ${category.type}`,
-    )
-  }
-  return category.id
 }
 
 /** How many rows the transactions list loads when no caller says otherwise. */
@@ -297,36 +252,27 @@ export async function createTransaction(
   // while a row lock is held (see `account-lock.ts`).
   const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
 
-  return prisma.$transaction(async (tx) => {
-    // The lock is what makes the ACTIVE check binding: a concurrent archive
-    // either commits before this and turns the check into an
-    // `ArchivedAccountError`, or waits until this insert has committed.
-    const [account] = await lockAccountsForUpdate(tx, userId, [parsed.accountId])
-    const categoryId = await resolveCategoryId(tx, userId, parsed.type, parsed.categoryId)
-
-    return tx.transaction.create({
-      data: {
-        userId,
+  // The whole locked check-and-insert is the shared linking core, so a
+  // transaction entered here and one a debt, loan or reminder records are
+  // validated and written by the same code.
+  return prisma.$transaction((tx) =>
+    insertTransactionInTx(
+      tx,
+      userId,
+      {
         accountId: parsed.accountId,
-        categoryId,
         type: parsed.type,
-        amount: parsed.amount,
-        currency: account.currency,
+        // `new Decimal(number)` reads the number's shortest round-trip string —
+        // the same representation the pg adapter writes for a bare number — so
+        // the stored amount is unchanged by the conversion.
+        amount: new Prisma.Decimal(parsed.amount),
         date: parsed.date,
         note: parsed.note ?? null,
-        // `rateDecimal`, not `rate`: the snapshot is written straight from the
-        // cache row's `Decimal(18, 6)`, so it never passes through a
-        // JavaScript number on the cache-hit or fallback paths.
-        vndPerUsdAtEntry: fx.rateDecimal,
-        // Two distinct facts: when we retrieved the rate, and which UTC day
-        // the rate is effective for. On the fallback path both are the
-        // original cached row's own values, never "now".
-        fxRateFetchedAt: fx.fetchedAt,
-        fxRateEffectiveAt: fx.effectiveDate,
-        fxRateSource: fx.source,
+        categoryId: parsed.categoryId,
       },
-    })
-  })
+      fx,
+    ),
+  )
 }
 
 /**

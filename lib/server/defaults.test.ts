@@ -5,6 +5,7 @@ import {
   DEFAULT_ACCOUNT_TYPES,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
+  LOAN_INTEREST_CATEGORY_NAME,
   seedDefaultsForUser,
 } from './defaults'
 
@@ -43,7 +44,7 @@ describe('seedDefaultsForUser', () => {
     }
   })
 
-  it('creates 5 default account types and 16 default categories owned by the user', async () => {
+  it('creates 5 default account types and 17 default categories owned by the user', async () => {
     const userId = await createUser()
 
     await seedDefaultsForUser(userId)
@@ -55,9 +56,9 @@ describe('seedDefaultsForUser', () => {
     expect(accountTypes.every((t) => t.isDefault)).toBe(true)
     expect(accountTypes.map((t) => t.name).sort()).toEqual([...DEFAULT_ACCOUNT_TYPES].sort())
 
-    expect(categories).toHaveLength(16)
+    expect(categories).toHaveLength(17)
     expect(categories.every((c) => c.isDefault)).toBe(true)
-    expect(categories.filter((c) => c.type === 'EXPENSE')).toHaveLength(10)
+    expect(categories.filter((c) => c.type === 'EXPENSE')).toHaveLength(11)
     expect(categories.filter((c) => c.type === 'INCOME')).toHaveLength(6)
     expect(
       categories
@@ -71,6 +72,10 @@ describe('seedDefaultsForUser', () => {
         .map((c) => c.name)
         .sort(),
     ).toEqual([...DEFAULT_INCOME_CATEGORIES].sort())
+    // Loan instalments file their interest here (money-source linking spec §4).
+    expect(
+      categories.filter((c) => c.type === 'EXPENSE' && c.name === LOAN_INTEREST_CATEGORY_NAME),
+    ).toHaveLength(1)
 
     // Every row is ACTIVE and owned by this user only.
     expect(accountTypes.every((t) => t.status === 'ACTIVE' && t.userId === userId)).toBe(true)
@@ -84,7 +89,7 @@ describe('seedDefaultsForUser', () => {
     await seedDefaultsForUser(userId)
 
     expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId } })).toBe(17)
   })
 
   it('fills in only the missing defaults for a partially seeded user', async () => {
@@ -101,7 +106,7 @@ describe('seedDefaultsForUser', () => {
     await seedDefaultsForUser(userId)
 
     expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId } })).toBe(17)
     expect(await prisma.accountType.count({ where: { userId, name: 'Cash' } })).toBe(1)
     expect(await prisma.category.count({ where: { userId, name: 'Salary', type: 'INCOME' } })).toBe(
       1,
@@ -126,7 +131,7 @@ describe('seedDefaultsForUser', () => {
       await prisma.category.findMany({ where: { userId, name: 'Other', type: 'EXPENSE' } }),
     ).toEqual([customCategory])
     expect(await prisma.accountType.count({ where: { userId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId } })).toBe(17)
   })
 
   it('seeds each user separately', async () => {
@@ -138,7 +143,7 @@ describe('seedDefaultsForUser', () => {
 
     expect(await prisma.accountType.count({ where: { userId: firstUserId } })).toBe(5)
     expect(await prisma.accountType.count({ where: { userId: secondUserId } })).toBe(5)
-    expect(await prisma.category.count({ where: { userId: firstUserId } })).toBe(16)
-    expect(await prisma.category.count({ where: { userId: secondUserId } })).toBe(16)
+    expect(await prisma.category.count({ where: { userId: firstUserId } })).toBe(17)
+    expect(await prisma.category.count({ where: { userId: secondUserId } })).toBe(17)
   })
 })
