@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
 import { formatDate } from '@/lib/ui/format-date'
-import { authenticatedSession, eitherLocale, todayInZone } from './helpers'
+import { authenticatedSession, createAccountViaUi, eitherLocale, todayInZone } from './helpers'
 
 /**
  * Phase 7 Task 9: owner requirement S — coverage the Reminders rebuild adds on
@@ -12,7 +12,10 @@ import { authenticatedSession, eitherLocale, todayInZone } from './helpers'
  * view-model change), the Dashboard widget's own localisation, acknowledge/
  * dismiss actually removing a row, the create form's twelve visible labels
  * with the monthly/yearly anchor fields, the weekly-reminder collapse with its
- * "+n kỳ" badge and expander, and the Overdue group's count.
+ * "+n kỳ" badge and expander, and the Overdue group's count — plus the
+ * money-source linking "Đã trả / Paid" flows (spec 2026-10-12 §2 Q6, §6.6):
+ * one tap records the transaction and moves the balance, and a reminder with no
+ * account hands over to the pre-filled create form.
  *
  * `resolveLocale()` reads the signed-in session's stored `locale` before the
  * `NEXT_LOCALE` cookie (same reasoning `phase7-debts-loans.spec.ts` and
@@ -66,7 +69,8 @@ function sectionFor(page: Page, heading: string | RegExp): Locator {
 /**
  * Creates one reminder through the `/reminders` page's header action ("Thêm
  * nhắc nhở") and its create `Sheet` — the same flow `phase6.spec.ts`'s local
- * helper uses.
+ * helper uses, plus the optional category and account the Paid flows need
+ * (picked by their visible names).
  */
 async function createReminderViaUi(
   page: Page,
@@ -77,6 +81,8 @@ async function createReminderViaUi(
     frequency: 'ONE_TIME' | 'WEEKLY' | 'MONTHLY' | 'YEARLY'
     dayOfMonth?: number
     startDate: string
+    categoryName?: string
+    accountName?: string
   },
 ): Promise<void> {
   await page.goto('/reminders')
@@ -90,8 +96,29 @@ async function createReminderViaUi(
     await sheet.getByLabel(/Ngày trong tháng|Day of month/).fill(String(opts.dayOfMonth))
   }
   await sheet.getByLabel(/^Ngày bắt đầu$|^Start date$/).fill(opts.startDate)
+  if (opts.categoryName) {
+    await sheet
+      .getByLabel(/Danh mục \(tùy chọn\)|Category \(optional\)/)
+      .selectOption({ label: opts.categoryName })
+  }
+  if (opts.accountName) {
+    await sheet
+      .getByLabel(/Tài khoản \(tùy chọn\)|Account \(optional\)/)
+      .selectOption({ label: opts.accountName })
+  }
   await sheet.getByRole('button', { name: /Thêm nhắc nhở|Add reminder/ }).click()
   await expect(sheet).toBeHidden()
+}
+
+/** The account's balance as `/accounts` renders it on the account's own row. */
+async function expectAccountBalance(page: Page, name: string, balance: string): Promise<void> {
+  await page.goto('/accounts')
+  await expect(
+    page
+      .locator('main')
+      .getByRole('listitem')
+      .filter({ has: page.getByText(name, { exact: true }) }),
+  ).toContainText(balance)
 }
 
 test.describe.serial('Phase 7 Task 9 — reminders', () => {
@@ -226,7 +253,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
     const todayPattern = displayDate(TODAY).source
     await page
       .getByRole('button', {
-        name: new RegExp(`Ghi nhận.*Streaming subscription.*${todayPattern}`),
+        name: new RegExp(`Chỉ đánh dấu.*Streaming subscription.*${todayPattern}`),
       })
       .click()
     await expect(namedRow(page, page, 'Streaming subscription')).toHaveCount(0)
@@ -309,9 +336,111 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
     const restCount = await restRows.count()
     expect(restCount).toBeGreaterThan(0)
 
-    // Every remaining occurrence still gets its own Acknowledge/Dismiss pair —
+    // Every remaining occurrence still gets its own Paid/Mark only/Dismiss —
     // nothing behind the disclosure is read-only.
-    await expect(restRows.first().getByRole('button', { name: /^Ghi nhận/ })).toBeVisible()
+    await expect(restRows.first().getByRole('button', { name: /^Đã trả/ })).toBeVisible()
+    await expect(restRows.first().getByRole('button', { name: /^Chỉ đánh dấu/ })).toBeVisible()
+  })
+
+  test('Paid records the transaction in one tap: the ledger shows it and the balance moves', async ({
+    page,
+  }) => {
+    await createAccountViaUi(page, {
+      name: 'Ví nhắc nhở',
+      currency: 'VND',
+      initialBalance: 1_000_000,
+    })
+    await createReminderViaUi(page, {
+      title: 'Electricity bill',
+      type: 'EXPENSE',
+      amount: 300_000,
+      frequency: 'ONE_TIME',
+      startDate: TODAY,
+      categoryName: 'Bills & Utilities',
+      accountName: 'Ví nhắc nhở',
+    })
+
+    await page.goto('/reminders?view=due&type=all')
+    const todayPattern = displayDate(TODAY).source
+    await page
+      .getByRole('button', { name: new RegExp(`Đã trả.*Electricity bill.*${todayPattern}`) })
+      .click()
+
+    // Recorded: the bill leaves the due list, and the page says so — with an
+    // Edit link to the new row, since the row it came from is gone.
+    const notice = page
+      .getByRole('status')
+      .filter({ hasText: 'Đã ghi giao dịch: Electricity bill' })
+    await expect(notice).toBeVisible()
+    await expect(namedRow(page, page, 'Electricity bill')).toHaveCount(0)
+
+    // Edit opens the recorded row's own edit sheet, pre-filled.
+    await notice.getByRole('link', { name: 'Sửa giao dịch Electricity bill' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Sửa giao dịch' })
+    await expect(sheet).toBeVisible()
+    await expect(sheet.getByLabel(/^Số tiền$/)).toHaveValue('300000')
+    await expect(sheet.getByLabel(/^Ghi chú/)).toHaveValue('Electricity bill')
+    await page.keyboard.press('Escape')
+    await expect(sheet).toBeHidden()
+
+    // In the ledger as an ordinary expense, and the account moved by it.
+    await expect(
+      page.locator('main').getByRole('listitem').filter({ hasText: 'Electricity bill' }),
+    ).toContainText('300.000')
+    await expectAccountBalance(page, 'Ví nhắc nhở', '700.000')
+  })
+
+  test('Paid on a reminder with no account opens the create form pre-filled, and saving it answers the reminder', async ({
+    page,
+  }) => {
+    await createReminderViaUi(page, {
+      title: 'Water delivery',
+      type: 'EXPENSE',
+      amount: 120_000,
+      frequency: 'ONE_TIME',
+      startDate: TODAY,
+      categoryName: 'Bills & Utilities',
+    })
+
+    await page.goto('/reminders?view=due&type=all')
+    const todayPattern = displayDate(TODAY).source
+    await page
+      .getByRole('button', { name: new RegExp(`Đã trả.*Water delivery.*${todayPattern}`) })
+      .click()
+
+    // Nothing recorded yet: the create form, filled in from the reminder. At
+    // this desktop width it is the sticky panel (`#new`).
+    await expect(page).toHaveURL(/\/transactions\?occurrence=/)
+    const panel = page.locator('#new')
+    await expect(
+      panel.getByText(
+        'Điền sẵn từ nhắc nhở «Water delivery» — lưu giao dịch sẽ đánh dấu nhắc nhở là đã trả.',
+      ),
+    ).toBeVisible()
+    const amount = panel.getByLabel(/^Số tiền$/)
+    await expect(amount).toHaveValue('120000')
+    await expect(panel.getByLabel(/^Ghi chú/)).toHaveValue('Water delivery')
+    await expect(panel.getByRole('radio', { name: 'Chi tiêu' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await expect(panel.getByRole('combobox', { name: 'Danh mục' })).toContainText(
+      'Bills & Utilities',
+    )
+    await expect(panel.getByLabel(/^Ngày$/)).toHaveValue(TODAY)
+
+    await panel.getByRole('button', { name: 'Thêm giao dịch' }).click()
+    // Saved, linked, and the form starts the next entry unlinked.
+    await expect(amount).toHaveValue('0')
+    await expect(panel.getByText(/Điền sẵn từ nhắc nhở/)).toHaveCount(0)
+    await expect(
+      page.locator('main').getByRole('listitem').filter({ hasText: 'Water delivery' }),
+    ).toContainText('120.000')
+
+    // The reminder is answered: gone from the due list.
+    await page.goto('/reminders?view=due&type=all')
+    await expect(page.getByRole('heading', { name: 'Sắp tới', level: 2 })).toBeVisible()
+    await expect(namedRow(page, page, 'Water delivery')).toHaveCount(0)
   })
 
   test('375: no horizontal overflow on /reminders (both tabs)', async ({ page }) => {

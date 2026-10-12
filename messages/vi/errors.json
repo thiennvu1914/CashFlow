@@ -22,6 +22,7 @@
     "INVALID_CATEGORY": "Hãy chọn danh mục hợp lệ cho loại giao dịch này.",
     "CONFLICT": "Bản ghi đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
     "LINKED_TRANSACTION": "Giao dịch này thuộc một khoản nợ hoặc khoản vay. Hãy mở khoản nợ hoặc khoản vay đó để sửa hoặc xóa.",
+    "OCCURRENCE_NOT_PENDING": "Nhắc nhở này đã được xử lý nên giao dịch chưa được lưu. Hãy tải lại trang để xem trạng thái mới.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Bản ghi này không còn tồn tại."
   },
@@ -70,6 +71,8 @@
   "reminder": {
     "INVALID_CATEGORY": "Hãy chọn danh mục phù hợp với loại nhắc nhở.",
     "INVALID_ACCOUNT": "Hãy chọn một trong các tài khoản đang hoạt động của bạn.",
+    "OCCURRENCE_NOT_PENDING": "Nhắc nhở này đã được xử lý. Hãy tải lại trang để xem trạng thái mới.",
+    "FX_UNAVAILABLE": "Tỷ giá tạm thời không khả dụng. Vui lòng thử lại sau một lát.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Nhắc nhở này không còn tồn tại."
   }

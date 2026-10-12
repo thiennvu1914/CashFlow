@@ -836,14 +836,14 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // Back to the unfiltered due tab to answer both occurrences. Each button
     // names its row by title AND due date, because a monthly reminder can have
     // more than one unanswered occurrence — but collapsing groups those under
-    // one row, and the visible Acknowledge/Dismiss always act on the NEXT
+    // one row, and the visible Mark only/Dismiss always act on the NEXT
     // (soonest) one, which is today's.
     await page.goto('/reminders?view=due&type=all')
     // The accessible name reads the row's own VISIBLE date (fix round 1,
     // finding 5 — `formatDate`, not the bare `yyyy-MM-dd` carrier), so the
     // regex matches the same locale-formatted pattern `displayDate` builds.
     const todayPattern = displayDate(TODAY).source
-    const acknowledgeInternet = new RegExp(`(Ghi nhận|Acknowledge).*Internet.*${todayPattern}`)
+    const acknowledgeInternet = new RegExp(`(Chỉ đánh dấu|Mark only).*Internet.*${todayPattern}`)
     await page.getByRole('button', { name: acknowledgeInternet }).click()
     await expect(namedRow(page, upcoming, 'Internet')).toHaveCount(0)
 

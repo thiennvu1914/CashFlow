@@ -283,14 +283,17 @@ model Transaction {
   /// Back-relations of the money-source links (spec 2026-10-12 §5): the debt
   /// whose opening money movement this row records, or the debt payment it
   /// records; the loan whose principal it received, or the principal or
-  /// interest part of the loan instalment it paid. At most one of each, by the
-  /// unique constraints on the linking side; the links are `onDelete:
-  /// Restrict`, so a linked row cannot be deleted out from under its source.
-  openedDebt           Debt?        @relation("DebtOpeningTransaction")
-  debtPayment          DebtPayment? @relation("DebtPaymentTransaction")
-  disbursedLoan        Loan?        @relation("LoanDisbursementTransaction")
-  loanPaymentPrincipal LoanPayment? @relation("LoanPaymentPrincipalTransaction")
-  loanPaymentInterest  LoanPayment? @relation("LoanPaymentInterestTransaction")
+  /// interest part of the loan instalment it paid; the reminder occurrence it
+  /// paid. At most one of each, by the unique constraints on the linking side;
+  /// the links are `onDelete: Restrict`, so a linked row cannot be deleted out
+  /// from under its source — `deleteTransaction` returns a paid occurrence to
+  /// PENDING before it deletes the row that paid it.
+  openedDebt           Debt?               @relation("DebtOpeningTransaction")
+  debtPayment          DebtPayment?        @relation("DebtPaymentTransaction")
+  disbursedLoan        Loan?               @relation("LoanDisbursementTransaction")
+  loanPaymentPrincipal LoanPayment?        @relation("LoanPaymentPrincipalTransaction")
+  loanPaymentInterest  LoanPayment?        @relation("LoanPaymentInterestTransaction")
+  reminderOccurrence   ReminderOccurrence? @relation("ReminderOccurrenceTransaction")
 
   @@unique([userId, id])
   @@index([userId, date])
@@ -727,7 +730,9 @@ enum RecurrenceFrequency {
 
 /// What the user has done about one due instance. PENDING is the only state
 /// materialization ever writes; the other two are the user's own answer to
-/// "have you dealt with this?".
+/// "have you dealt with this?". "Đã trả / Paid" and "Chỉ đánh dấu / Mark only"
+/// both answer ACKNOWLEDGED — Paid also links the transaction it recorded
+/// (`ReminderOccurrence.transactionId`).
 ///
 /// "Overdue" is deliberately **not** a member: it is a derived display flag —
 /// PENDING, with `dueAt`'s calendar day in the viewer's zone before the viewer's
@@ -740,9 +745,13 @@ enum OccurrenceStatus {
   DISMISSED
 }
 
-/// A recurring financial reminder or bill (spec §4.7). Never a Transaction: when
-/// an occurrence is due it is shown in-app, and acknowledging or dismissing it
-/// changes only the occurrence. `startDate` is the instant of LOCAL midnight on
+/// A recurring financial reminder or bill (spec §4.7). Not itself a
+/// Transaction: when an occurrence is due it is shown in-app, and "Chỉ đánh dấu
+/// / Mark only" or "Bỏ qua / Dismiss" changes only the occurrence. "Đã trả /
+/// Paid" (money-source linking spec 2026-10-12 §2 Q6, §6.6, amending §4.7's
+/// "never creates a Transaction") records the INCOME or EXPENSE the occurrence
+/// reminds the user of and links it from the occurrence (see
+/// `ReminderOccurrence.transactionId`). `startDate` is the instant of LOCAL midnight on
 /// the chosen day in `timezone` — the zone recorded on this row, not whatever
 /// the user's profile says today (ruling R6-22) — and every `dueAt` is likewise
 /// a local midnight in it, so "due on the 1st" means the 1st where the user
@@ -752,13 +761,15 @@ enum OccurrenceStatus {
 /// and "Bill Reminders": read side by side they describe the same mechanism, and
 /// Bills is the `type = EXPENSE` view of it (spec §4.7's design decision).
 ///
-/// Tracking only, like `Debt` and `Loan`: there is no foreign key and no code
-/// path from here to `Transaction` or `Transfer`, so no reminder can ever move
-/// money. `accountId` is which account the user *expects* to pay from — a label
-/// on the reminder, not a link that debits anything — and
-/// `lib/server/services/reminder.ts` imports nothing that could write to a
-/// ledger (`reminder.test.ts` proves the absence both structurally and
-/// behaviourally).
+/// The reminder row itself has no foreign key to `Transaction` or `Transfer`,
+/// and nothing moves money until the user presses Paid on one of its
+/// occurrences. `accountId` and `categoryId` are where the user *expects* the
+/// money to go — what Paid records the transaction against while the account is
+/// still ACTIVE and in the reminder's currency and the category is still usable
+/// (otherwise Paid opens the create form pre-filled instead). That one ledger
+/// write goes through the shared linking core
+/// (`lib/server/services/linked-transaction.ts`); `reminder.ts` imports nothing
+/// else that writes to a ledger (`reminder.test.ts` proves that structurally).
 ///
 /// `categoryId` and `accountId` are optional and carry composite
 /// `(userId, categoryId)` / `(userId, accountId)` foreign keys, so a reminder can
@@ -869,19 +880,35 @@ model RecurringReminder {
 /// reference impossible at the database level: an occurrence can never point at
 /// another user's reminder (spec §4.12), and an attempt raises P2003 even when it
 /// bypasses the service.
+///
+/// `transactionId` is the INCOME or EXPENSE "Đã trả / Paid" recorded for this
+/// occurrence (money-source linking spec 2026-10-12 §5, §6.6), written in the
+/// same database transaction as the row it names — by the one-tap path
+/// (`payOccurrence`) or by the pre-filled create form (`createTransaction` with
+/// an `occurrenceId`). NULL for every other occurrence, including one answered
+/// with "Mark only". The same composite, unique, `onDelete: Restrict` shape as
+/// `DebtPayment.transactionId` — not SetNull, which would null `userId` too — so
+/// `deleteTransaction` clears the link and returns the occurrence to PENDING
+/// itself, inside the delete's own database transaction, with RESTRICT as the
+/// backstop. Unlike a debt's or loan's, a reminder's transaction is not locked
+/// on the Transactions page: it stays an ordinary, editable row (§6.5).
 model ReminderOccurrence {
-  id         String           @id @default(cuid())
-  userId     String
-  reminderId String
+  id            String           @id @default(cuid())
+  userId        String
+  reminderId    String
   /// The instant of LOCAL midnight of the day this occurrence is due.
-  dueAt      DateTime
-  status     OccurrenceStatus @default(PENDING)
-  actionedAt DateTime?
-  createdAt  DateTime         @default(now())
+  dueAt         DateTime
+  status        OccurrenceStatus @default(PENDING)
+  actionedAt    DateTime?
+  /// The transaction "Paid" recorded, when it was answered that way.
+  transactionId String?
+  createdAt     DateTime         @default(now())
 
-  reminder RecurringReminder @relation(fields: [userId, reminderId], references: [userId, id])
+  reminder    RecurringReminder @relation(fields: [userId, reminderId], references: [userId, id])
+  transaction Transaction?      @relation("ReminderOccurrenceTransaction", fields: [userId, transactionId], references: [userId, id], onDelete: Restrict)
 
   @@unique([reminderId, dueAt])
   @@unique([userId, id])
+  @@unique([userId, transactionId])
   @@index([userId, status, dueAt])
 }

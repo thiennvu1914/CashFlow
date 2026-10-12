@@ -44,6 +44,7 @@ export const TRANSACTION_ERROR_KEYS: Record<TransactionActionError, string> = {
   INVALID_CATEGORY: 'errors.transaction.INVALID_CATEGORY',
   CONFLICT: 'errors.transaction.CONFLICT',
   LINKED_TRANSACTION: 'errors.transaction.LINKED_TRANSACTION',
+  OCCURRENCE_NOT_PENDING: 'errors.transaction.OCCURRENCE_NOT_PENDING',
   INVALID_INPUT: 'errors.transaction.INVALID_INPUT',
   NOT_FOUND: 'errors.transaction.NOT_FOUND',
 }
@@ -98,6 +99,8 @@ export const LOAN_ERROR_KEYS: Record<LoanActionError, string> = {
 export const REMINDER_ERROR_KEYS: Record<ReminderActionError, string> = {
   INVALID_CATEGORY: 'errors.reminder.INVALID_CATEGORY',
   INVALID_ACCOUNT: 'errors.reminder.INVALID_ACCOUNT',
+  OCCURRENCE_NOT_PENDING: 'errors.reminder.OCCURRENCE_NOT_PENDING',
+  FX_UNAVAILABLE: 'errors.reminder.FX_UNAVAILABLE',
   INVALID_INPUT: 'errors.reminder.INVALID_INPUT',
   NOT_FOUND: 'errors.reminder.NOT_FOUND',
 }

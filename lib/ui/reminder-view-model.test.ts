@@ -81,6 +81,7 @@ function occurrence(overrides: Partial<OccurrenceRow> = {}): OccurrenceRow {
     dueAt: localMidnight(TODAY),
     status: 'PENDING',
     actionedAt: null,
+    transactionId: null,
     createdAt: CREATED_AT,
     reminder: reminder(),
     ...overrides,

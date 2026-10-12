@@ -11,6 +11,12 @@ import {
   resolveCategoryId,
 } from './linked-transaction'
 import {
+  OccurrenceNotPendingError,
+  lockPendingOccurrence,
+  markOccurrencePaidInTx,
+  releasePaidOccurrenceInTx,
+} from './reminder'
+import {
   LinkedTransactionError,
   findTransactionLinks,
   findTransactionLinksAmong,
@@ -56,6 +62,11 @@ export { InvalidCategoryError }
 // when it applies; re-exported so the action error map reaches every domain
 // error of this service through one import.
 export { LinkedTransactionError }
+
+// `OccurrenceNotPendingError` lives with the reminder occurrence lock that
+// raises it; re-exported for the same reason — saving the create form opened
+// from a reminder's "Paid" can be refused with it.
+export { OccurrenceNotPendingError }
 
 /**
  * Thrown when a transaction changed underneath a write between the read that
@@ -115,18 +126,22 @@ export async function lockAndVerifyTransactionRow(
     SELECT "accountId", "updatedAt" FROM "Transaction"
     WHERE "userId" = ${userId} AND "id" = ${transactionId}
     FOR UPDATE`
-  if (!current) {
-    throw new Prisma.PrismaClientKnownRequestError(
-      'An operation failed because it depends on one or more records that were required but not found.',
-      { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
-    )
-  }
+  if (!current) throw transactionNotFound()
   if (
     current.accountId !== expected.accountId ||
     current.updatedAt.getTime() !== expected.updatedAt.getTime()
   ) {
     throw new ConcurrentModificationError()
   }
+}
+
+/** Prisma's own P2025, for the raw reads in this file that find no row — an id
+ *  that is not this user's or does not exist, indistinguishably. */
+function transactionNotFound(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    'An operation failed because it depends on one or more records that were required but not found.',
+    { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
+  )
 }
 
 /**
@@ -316,12 +331,26 @@ export async function listTransactionsForExport(
   })
 }
 
+/**
+ * Records a transaction entered on the Transactions page.
+ *
+ * With an `occurrenceId` — the create form opened from a reminder's "Đã trả /
+ * Paid" because the reminder could not record it in one tap (money-source
+ * linking spec 2026-10-12 §6.6) — the same database transaction also marks
+ * that occurrence paid by the new row. The occurrence must be the user's
+ * (else P2025) and still PENDING under its lock (else
+ * `OccurrenceNotPendingError`), so a form saved twice, or after the bill was
+ * answered elsewhere, records nothing. What the user typed is what is
+ * recorded: the occurrence only supplied the form's starting values, so the
+ * amount, account or date may differ from the reminder's.
+ */
 export async function createTransaction(
   userId: string,
   input: CreateTransactionInput,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ) {
   const parsed = createTransactionSchema.parse(input)
+  const { occurrenceId } = parsed
   // Before the transaction opens, deliberately, and for two reasons: an
   // FxUnavailableError here leaves no row behind rather than a row with a
   // missing or invented snapshot, and a provider HTTP call must never happen
@@ -331,8 +360,15 @@ export async function createTransaction(
   // The whole locked check-and-insert is the shared linking core, so a
   // transaction entered here and one a debt, loan or reminder records are
   // validated and written by the same code.
-  return prisma.$transaction((tx) =>
-    insertTransactionInTx(
+  return prisma.$transaction(async (tx) => {
+    if (occurrenceId !== undefined) {
+      // Accounts first, then the occurrence — the lock order `payOccurrence`
+      // and every other linked write keep. The core's own account lock below
+      // then returns at once.
+      await lockAccountsForUpdate(tx, userId, [parsed.accountId])
+      await lockPendingOccurrence(tx, userId, occurrenceId)
+    }
+    const created = await insertTransactionInTx(
       tx,
       userId,
       {
@@ -347,8 +383,12 @@ export async function createTransaction(
         categoryId: parsed.categoryId,
       },
       fx,
-    ),
-  )
+    )
+    if (occurrenceId !== undefined) {
+      await markOccurrencePaidInTx(tx, userId, occurrenceId, created.id, new Date())
+    }
+    return created
+  })
 }
 
 /**
@@ -490,12 +530,27 @@ export async function updateTransaction(
  * A moved (or otherwise changed) row is a `ConcurrentModificationError`.
  *
  * A transaction a debt or loan owns is deleted from that record, never from
- * here: see `refuseLinkedTransaction`.
+ * here: see `refuseLinkedTransaction`. One a reminder's "Paid" recorded is an
+ * ordinary row and is deleted here (spec 2026-10-12 §6.5): the payment it
+ * recorded no longer exists, so the occurrence goes back to PENDING — the bill
+ * is due again — in the same database transaction, before the row its `ON
+ * DELETE RESTRICT` link points at is removed.
  */
 export async function deleteTransaction(userId: string, transactionId: string) {
-  const existing = await prisma.transaction.findUniqueOrThrow({
-    where: { userId_id: { userId, id: transactionId } },
-  })
+  // One statement for the two facts the delete needs before its transaction
+  // opens: which account to lock (and the version to re-verify under that
+  // lock), and whether a reminder occurrence was paid with this row. A row can
+  // only gain that link in the transaction that creates it, so a row read
+  // here as unpaid stays unpaid, and its delete skips the release entirely.
+  const [existing] = await prisma.$queryRaw<
+    Array<{ accountId: string; updatedAt: Date; paidOccurrenceId: string | null }>
+  >`
+    SELECT t."accountId", t."updatedAt", o."id" AS "paidOccurrenceId"
+      FROM "Transaction" t
+      LEFT JOIN "ReminderOccurrence" o
+        ON o."userId" = t."userId" AND o."transactionId" = t."id"
+     WHERE t."userId" = ${userId} AND t."id" = ${transactionId}`
+  if (!existing) throw transactionNotFound()
   await prisma.$transaction(async (tx) => {
     // Accounts first, then the transaction row — the same order as
     // `updateTransaction`, so the two can never deadlock against each other.
@@ -504,6 +559,9 @@ export async function deleteTransaction(userId: string, transactionId: string) {
     // Refused before the delete rather than left to the `ON DELETE RESTRICT`
     // foreign key, which would surface as an unmapped database error.
     await refuseLinkedTransaction(tx, userId, transactionId)
+    if (existing.paidOccurrenceId !== null) {
+      await releasePaidOccurrenceInTx(tx, userId, transactionId)
+    }
     await tx.transaction.delete({ where: { userId_id: { userId, id: transactionId } } })
   })
 }

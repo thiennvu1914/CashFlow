@@ -7,6 +7,7 @@ import { resolveLocale } from '@/lib/i18n/config'
 import { getAccountBalancesForUser } from '@/lib/server/services/balance-timeline'
 import { listCategories } from '@/lib/server/services/category'
 import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
+import { getOccurrencePrefill } from '@/lib/server/services/reminder'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
@@ -25,7 +26,14 @@ import {
 /** One day, in milliseconds — for computing "yesterday" from "now". */
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
-export default async function TransactionsPage() {
+export default async function TransactionsPage({
+  searchParams,
+}: {
+  // Query parameters as Next delivers them — untrusted, and never cast: a
+  // repeated key arrives as `string[]` (the convention of
+  // `app/(app)/reminders/page.tsx`).
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   // A layout is not an auth boundary (see the note in `app/(app)/settings/page.tsx`),
   // so this page redirects on its own rather than relying on `requireUser`.
   const user = await requireUserOrRedirect()
@@ -37,8 +45,15 @@ export default async function TransactionsPage() {
   const now = new Date()
   const today = todayCalendarDateInZone(timezone, now)
   const yesterday = todayCalendarDateInZone(timezone, new Date(now.getTime() - MS_PER_DAY))
+  // `?occurrence=<id>`: a reminder's "Đã trả / Paid" could not record the
+  // transaction in one tap and sent the user here to finish it (money-source
+  // linking spec 2026-10-12 §6.6). Only the id comes from the URL; the form's
+  // values are read from the occurrence itself, scoped to this user, and a
+  // stale, answered or foreign id simply opens the ordinary empty form.
+  const { occurrence } = await searchParams
+  const occurrenceId = typeof occurrence === 'string' && occurrence !== '' ? occurrence : null
 
-  const [accounts, categories, balances] = await Promise.all([
+  const [accounts, categories, balances, prefill] = await Promise.all([
     listActiveAccountPickerRows(user.id),
     // Both transaction types use the same picker payload. One tenant-scoped
     // read preserves the service ordering and avoids two parallel queries for
@@ -48,6 +63,8 @@ export default async function TransactionsPage() {
     // the page's other queries instead of after the account list; joined by id
     // below.
     getAccountBalancesForUser(user.id, now),
+    // Beside the other reads, so a Paid hand-off costs no extra wait.
+    occurrenceId ? getOccurrencePrefill(user.id, occurrenceId, timezone) : null,
   ])
 
   // The month total needs a summary query and the ledger a 200-row one; neither
@@ -109,6 +126,7 @@ export default async function TransactionsPage() {
       }))}
       timezone={timezone}
       locale={locale}
+      prefill={prefill}
     >
       {/* max-w 1200 because the two-column desktop layout needs it. */}
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">

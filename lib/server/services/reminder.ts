@@ -1,8 +1,18 @@
 import { Prisma } from '@prisma/client'
-import type { OccurrenceStatus } from '@prisma/client'
+import type { Currency, OccurrenceStatus, ReminderType } from '@prisma/client'
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz'
 import { prisma } from '@/lib/prisma'
+import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
+import type { ExchangeRateProvider } from '@/lib/currency/provider'
 import { calendarDateToUtcCarrier, formatCalendarDate } from '@/lib/datetime/calendar-date'
+import { calendarDateToEntryInstant } from '@/lib/datetime/local-date-time'
+import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
+import {
+  InvalidCategoryError,
+  LinkedAccountCurrencyMismatchError,
+  SNAPSHOT_PAIR,
+  insertTransactionInTx,
+} from './linked-transaction'
 import { computeDueDates, oneIntervalBefore, type RecurrenceRule } from './recurrence'
 import { createReminderSchema, type CreateReminderInput } from '@/lib/validation/reminder'
 
@@ -12,17 +22,21 @@ import { createReminderSchema, type CreateReminderInput } from '@/lib/validation
  *
  * Five invariants live here and are never delegated to the UI:
  *
- * 1. **A reminder is NOT a Transaction** (directive M). Nothing in this file
- *    creates a Transaction or a Transfer, reads or writes a FinancialAccount, or
- *    changes a balance — it imports none of `transaction.ts`, `transfer.ts`,
- *    `balance.ts` or `financial-account.ts`, and `reminder.test.ts` proves the
- *    absence twice over: structurally (no such import specifier appears in this
- *    source) and behaviourally (the account/transaction/transfer counts, the
- *    seeded rows and the derived balance are re-asserted after *every* case).
- *    A reminder is a note about money the user expects to move; whether it
- *    actually moved is a separate fact they record separately, and no automatic
- *    rule can tell the two apart. `accountId` is which account they *expect* to
- *    pay from — a label, not a link that debits anything.
+ * 1. **A reminder is not a Transaction, and only "Paid" records one**
+ *    (money-source linking spec 2026-10-12 §2 Q6, §6.6, amending directive M).
+ *    Creating, listing, materializing, pausing, "Mark only" and "Dismiss" never
+ *    touch the ledger — `reminder.test.ts` re-asserts the account/transaction/
+ *    transfer counts, the seeded rows and the derived balance after *every*
+ *    one of its cases. The single exception is `payOccurrence`, the one tap
+ *    that says "I paid this": it records the INCOME or EXPENSE through the
+ *    shared linking core (`insertTransactionInTx`, the same code the
+ *    Transactions page writes through) and links it from the occurrence, in
+ *    one database transaction. This file still imports none of
+ *    `transaction.ts`, `transfer.ts`, `balance.ts` or `financial-account.ts`
+ *    (`reminder.test.ts` checks the import specifiers), so that core is the
+ *    only way in. `accountId` and `categoryId` are where the user *expects* the
+ *    money to go: Paid uses them when they can still take a transaction, and
+ *    otherwise hands the create form a prefill instead of guessing.
  * 2. **Occurrences are materialized lazily on read, with no cron.** Reading the
  *    upcoming list computes each active reminder's due dates for a window around
  *    today and inserts the missing rows. There is no background job in this
@@ -35,17 +49,23 @@ import { createReminderSchema, type CreateReminderInput } from '@/lib/validation
  *    two that two simultaneous page loads would both walk through. The unique
  *    index has no window. `reminder.test.ts` proves it with three genuinely
  *    concurrent reads against the real database.
- * 4. **Nothing here ever updates an existing occurrence.** Materialization only
+ * 4. **Materialization never updates an existing occurrence.** It only
  *    inserts, so an ACKNOWLEDGED or DISMISSED row can never be resurrected as
  *    PENDING by a later read — the property that makes "I have dealt with this"
- *    stick. The only writes to an existing row are `acknowledgeOccurrence` and
- *    `dismissOccurrence`, which change the status and `actionedAt` and nothing
- *    else.
+ *    stick. The writes to an existing row are the user's own answers —
+ *    `acknowledgeOccurrence` and `dismissOccurrence` (status and `actionedAt`),
+ *    and Paid (`markOccurrencePaidInTx`, which also links the transaction) —
+ *    plus one undo: deleting a paid transaction returns its occurrence to
+ *    PENDING (`releasePaidOccurrenceInTx`), because the payment it recorded no
+ *    longer exists.
  * 5. **Money is `Prisma.Decimal` end to end.** `expectedAmount` is built with
- *    `new Prisma.Decimal(String(...))` so a 2-decimal input is exact, and there
- *    is no `toNumber()` anywhere in this file. Each reminder keeps its own
- *    currency and nothing here converts one (`User.baseCurrency` is display-only,
- *    ledger ruling R5-3), so there is no FX import at all.
+ *    `new Prisma.Decimal(String(...))` so a 2-decimal input is exact, Paid
+ *    records that same Decimal, and there is no `toNumber()` anywhere in this
+ *    file. Each reminder keeps its own currency and nothing here converts one
+ *    (`User.baseCurrency` is display-only, ledger ruling R5-3): Paid records a
+ *    transaction only in an account of the reminder's own currency. The one FX
+ *    call is the snapshot every transaction carries, taken before Paid's
+ *    database transaction opens.
  *
  * ## Timezone: the one thing this service exists to get right
  *
@@ -90,17 +110,23 @@ import { createReminderSchema, type CreateReminderInput } from '@/lib/validation
  * on the clock: the tests pin a single instant and assert real UTC values
  * against it.
  *
- * ## No transaction, and no lock
+ * ## Transactions and locks: only where money moves
  *
  * Materialization deliberately runs *outside* any interactive transaction. It is
  * one read followed by up to one insert per reminder, each insert atomic and
  * self-idempotent, and wrapping the lot in a transaction would hold a pooled
  * connection for the whole of a page render's worth of round trips to protect an
  * invariant the unique index already protects (the reasoning `account-lock.ts`
- * sets out at length). Nor is there a row lock anywhere: no invariant here spans
- * rows. The one write that reads first — acknowledge/dismiss — is idempotent by
- * construction, and its worst race is the user's own two clicks arriving
- * together, where either outcome is a state they asked for.
+ * sets out at length). "Mark only" and "Dismiss" take no lock either: each is
+ * one conditional `UPDATE … WHERE status = 'PENDING'`, so whichever answer
+ * lands first stands and a later one changes nothing.
+ *
+ * Paid is the exception, because it writes two rows that must agree: one
+ * `prisma.$transaction` that locks the account (`lockAccountsForUpdate`), then
+ * the occurrence (`lockPendingOccurrence`, which re-checks PENDING under the
+ * lock), then inserts the transaction and links it. Accounts first, then the
+ * source row, then transaction rows — the order every linked write keeps
+ * (`debt.ts` sets it out), so this path cannot deadlock against them.
  */
 
 /** Milliseconds in a day — exact in UTC, where no DST shift can shorten one.
@@ -156,6 +182,25 @@ export class InvalidReminderAccountError extends Error {
   constructor(reason: string) {
     super(`Invalid reminder account: ${reason}`)
     this.name = 'InvalidReminderAccountError'
+  }
+}
+
+/**
+ * Thrown when Paid — the one tap, or the pre-filled form saved with an
+ * `occurrenceId` — reaches an occurrence that is no longer PENDING: it was
+ * paid, marked or dismissed in the meantime (a stale tab, a double tap, the
+ * form saved twice).
+ *
+ * Refused rather than answered idempotently, unlike Mark only and Dismiss:
+ * those change nothing when repeated, but a repeated Paid would record the same
+ * bill twice, so the second one must write nothing and say why. Checked under
+ * the occurrence's row lock (`lockPendingOccurrence`), which is what makes two
+ * simultaneous taps record one transaction, not two.
+ */
+export class OccurrenceNotPendingError extends Error {
+  constructor() {
+    super('This reminder has already been answered.')
+    this.name = 'OccurrenceNotPendingError'
   }
 }
 
@@ -375,12 +420,14 @@ export async function createReminder(
         `expected a ${parsed.type} category, got ${category.type}`,
       )
     }
-    // ACTIVE at creation, matching `resolveCategoryId` in `transaction.ts` and
-    // `createBudget` in `budget.ts` (ruling R6-17): a *new* record must not be
-    // filed under a category the user has retired, or the reminder would appear
-    // in a list under a label the category picker no longer offers. As with the
-    // account below, this is a creation-time rule only — archiving a category
-    // later must never freeze the reminders already filed under it.
+    // ACTIVE at creation, matching `resolveCategoryId` in `linked-transaction.ts`
+    // and `createBudget` in `budget.ts` (ruling R6-17): a *new* record must not
+    // be filed under a category the user has retired, or the reminder would
+    // appear in a list under a label the category picker no longer offers. As
+    // with the account below, this is a creation-time rule only — archiving a
+    // category later must never freeze the reminders already filed under it
+    // (Paid then opens the create form instead of filing a new transaction
+    // under it).
     if (category.status !== 'ACTIVE') {
       throw new InvalidReminderCategoryError('category is archived')
     }
@@ -809,7 +856,8 @@ export async function listOccurrences(
  *
  * Two things and no more change: the status, and `actionedAt`. No Transaction, no
  * account, no balance — and nothing about the reminder itself, whose schedule
- * carries on regardless (invariant 1, directive M).
+ * carries on regardless (invariant 1). Recording the money is Paid's job
+ * (`payOccurrence`); this is "Chỉ đánh dấu / Mark only" and "Bỏ qua / Dismiss".
  *
  * **Idempotent, and it never flips one answer into the other.** An occurrence
  * that is already ACKNOWLEDGED or DISMISSED is returned exactly as it stands,
@@ -817,18 +865,21 @@ export async function listOccurrences(
  * decided. That is deliberately not an error: a double-clicked button or a stale
  * tab produces the same request as the one that succeeded, and answering it with
  * a failure would report a problem for a state the user already has. But it must
- * not *change* their answer either — "Dismiss" then "Acknowledge" from a page
+ * not *change* their answer either — "Dismiss" then "Mark only" from a page
  * rendered before the dismiss would otherwise silently overwrite the newer
  * decision with the older one.
  *
- * No row lock: the only race is the user's own two clicks arriving together, and
- * every interleaving lands on a state they asked for. There is no cross-row
- * invariant to protect, which is what makes this different from `debt.ts` and
- * `loan.ts`, where a payment has to be checked against a sum.
+ * **One conditional write, then a read.** The update only matches a row that
+ * is still PENDING, so the check and the write are one statement with no
+ * window between them. That matters since Paid: a Dismiss read as PENDING an
+ * instant before a Paid committed would otherwise overwrite it and leave a
+ * "dismissed" bill holding the transaction that paid it. Racing a Paid that
+ * holds the row's lock, the update waits for it, re-checks the committed row,
+ * and changes nothing.
  *
  * `findUniqueOrThrow` on the composite `userId_id` key is what makes another
  * user's occurrence id a P2025 (propagated untouched) rather than a usable
- * reference.
+ * reference — the conditional update matched nothing of theirs either.
  */
 async function actionOccurrence(
   userId: string,
@@ -836,20 +887,19 @@ async function actionOccurrence(
   status: Extract<OccurrenceStatus, 'ACKNOWLEDGED' | 'DISMISSED'>,
   now: Date,
 ): Promise<OccurrenceRow> {
-  const existing = await prisma.reminderOccurrence.findUniqueOrThrow({
-    where: { userId_id: { userId, id: occurrenceId } },
-    include: OCCURRENCE_INCLUDE,
-  })
-  if (existing.status !== 'PENDING') return existing
-
-  return prisma.reminderOccurrence.update({
-    where: { userId_id: { userId, id: occurrenceId } },
+  await prisma.reminderOccurrence.updateMany({
+    where: { userId, id: occurrenceId, status: 'PENDING' },
     data: { status, actionedAt: now },
+  })
+  return prisma.reminderOccurrence.findUniqueOrThrow({
+    where: { userId_id: { userId, id: occurrenceId } },
     include: OCCURRENCE_INCLUDE,
   })
 }
 
-/** "I have dealt with this" — the bill is paid, the salary arrived. */
+/** "Chỉ đánh dấu / Mark only" — the user has dealt with it and records no
+ *  transaction here (paid in cash from an untracked wallet, or recorded
+ *  already). */
 export async function acknowledgeOccurrence(
   userId: string,
   occurrenceId: string,
@@ -868,4 +918,259 @@ export async function dismissOccurrence(
   now: Date = new Date(),
 ): Promise<OccurrenceRow> {
   return actionOccurrence(userId, occurrenceId, 'DISMISSED', now)
+}
+
+/**
+ * What the transaction create form opens with when Paid cannot record the
+ * transaction itself (money-source linking spec 2026-10-12 §6.6) — and what it
+ * opens with whenever `/transactions?occurrence=<id>` is visited for a pending
+ * occurrence.
+ *
+ * Read on the server from the occurrence, never taken from the URL: the link
+ * carries only the occurrence id, so no amount or account a client encoded can
+ * reach the form.
+ */
+export interface OccurrencePrefill {
+  type: ReminderType
+  /** `expectedAmount` as a fixed-2-decimal string: a `Prisma.Decimal` cannot
+   *  cross into the client component the form is. */
+  amount: string
+  /** The reminder's own currency — what `amount` is in. */
+  currency: Currency
+  /** The reminder's account while it can take the transaction (ACTIVE, in the
+   *  reminder's currency); otherwise null and the form's own default applies. */
+  accountId: string | null
+  /** The reminder's category while it is ACTIVE and of the reminder's type. */
+  categoryId: string | null
+  /** `yyyy-MM-dd`: the due day as the user's list shows it, in their zone. */
+  date: string
+  /** The reminder's title — the transaction's note unless the user edits it. */
+  note: string
+  /** Saved with the transaction, so the same write marks the occurrence paid. */
+  occurrenceId: string
+}
+
+export type PayOccurrenceResult =
+  | { status: 'created'; transactionId: string }
+  | { status: 'needs-form'; prefill: OccurrencePrefill }
+
+/** Everything Paid decides on, read in one query: the occurrence, its
+ *  reminder, and the two facts about the reminder's account and category that
+ *  say whether a transaction can be recorded against them. */
+const PAYABLE_OCCURRENCE_INCLUDE = {
+  reminder: {
+    include: {
+      account: { select: { status: true, currency: true } },
+      category: { select: { status: true, type: true } },
+    },
+  },
+} satisfies Prisma.ReminderOccurrenceInclude
+
+type PayableOccurrence = Prisma.ReminderOccurrenceGetPayload<{
+  include: typeof PAYABLE_OCCURRENCE_INCLUDE
+}>
+
+/**
+ * The prefill for `occurrence`, read in the *viewer's* zone (`timezone`, from
+ * their profile) — the zone the Reminders list renders `dueAt` in — so the
+ * transaction lands on the day the user saw next to the button, even after a
+ * move away from the zone the reminder was created in (ruling R6-22 anchors
+ * the schedule there; display, and so this, follows the viewer).
+ *
+ * The account and the category are kept only while a transaction could be
+ * recorded against them exactly as `insertTransactionInTx` would check:
+ * the account ACTIVE and holding the reminder's currency (a 20 USD bill
+ * written into a VND wallet would record 20 VND), the category ACTIVE and of
+ * the reminder's type. Both null-out cases are what send Paid to the form.
+ */
+function toPrefill(occurrence: PayableOccurrence, timezone: string): OccurrencePrefill {
+  const { reminder } = occurrence
+  const accountUsable =
+    reminder.account?.status === 'ACTIVE' && reminder.account.currency === reminder.currency
+  const categoryUsable =
+    reminder.category?.status === 'ACTIVE' && reminder.category.type === reminder.type
+  return {
+    type: reminder.type,
+    amount: reminder.expectedAmount.toFixed(2),
+    currency: reminder.currency,
+    accountId: accountUsable ? reminder.accountId : null,
+    categoryId: categoryUsable ? reminder.categoryId : null,
+    date: formatInTimeZone(occurrence.dueAt, timezone, 'yyyy-MM-dd'),
+    note: reminder.title,
+    occurrenceId: occurrence.id,
+  }
+}
+
+/**
+ * The create form's prefill for one of this user's PENDING occurrences, or
+ * null — for an answered occurrence, another user's, or an id that does not
+ * exist, which the Transactions page then simply ignores (a stale or edited
+ * link opens the ordinary empty form, never an error page).
+ */
+export async function getOccurrencePrefill(
+  userId: string,
+  occurrenceId: string,
+  timezone: string,
+): Promise<OccurrencePrefill | null> {
+  const occurrence = await prisma.reminderOccurrence.findUnique({
+    where: { userId_id: { userId, id: occurrenceId } },
+    include: PAYABLE_OCCURRENCE_INCLUDE,
+  })
+  if (!occurrence || occurrence.status !== 'PENDING') return null
+  return toPrefill(occurrence, timezone)
+}
+
+/**
+ * "Đã trả / Paid": records the transaction a pending occurrence reminds the
+ * user of, in one tap (spec 2026-10-12 §2 Q6, §6.6).
+ *
+ * When the reminder has an account and a category that can take it
+ * (`toPrefill`), one database transaction locks the account, then the
+ * occurrence (re-checking PENDING under the lock), inserts the INCOME or
+ * EXPENSE through the shared linking core — the reminder's type, its
+ * `expectedAmount` Decimal, its category, the account (which must still hold
+ * the reminder's currency), the title as the note — and marks the occurrence
+ * ACKNOWLEDGED with `actionedAt = now` and the new `transactionId`. Either
+ * both rows change or neither does.
+ *
+ * The transaction is dated on the due day as the user sees it
+ * (`calendarDateToEntryInstant`, Ruling P4): the current instant when that is
+ * today, so the balance moves at once; otherwise 12:00 that day in the user's
+ * zone, so it never crosses into another day.
+ *
+ * Otherwise nothing is written and no rate is fetched: the answer is
+ * `needs-form`, with the prefill the create form opens with. The same answer
+ * covers an account or category retired between the read and the locked
+ * write (the core refuses them under the lock and the whole transaction rolls
+ * back) — the form is the right place to choose again, not an error.
+ *
+ * Refusals: another user's or an unknown occurrence is Prisma's P2025, from
+ * the scoped read; one that is no longer PENDING is `OccurrenceNotPendingError`
+ * — before anything is fetched, and again under the lock, so two simultaneous
+ * taps record one transaction. FX is fetched before the transaction opens,
+ * never while a lock is held, and an outage (`FxUnavailableError`) writes
+ * nothing.
+ *
+ * `timezone` is the user's profile zone from the action layer; `now` is
+ * injectable for tests.
+ */
+export async function payOccurrence(
+  userId: string,
+  occurrenceId: string,
+  timezone: string,
+  providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
+  now: Date = new Date(),
+): Promise<PayOccurrenceResult> {
+  const occurrence = await prisma.reminderOccurrence.findUniqueOrThrow({
+    where: { userId_id: { userId, id: occurrenceId } },
+    include: PAYABLE_OCCURRENCE_INCLUDE,
+  })
+  if (occurrence.status !== 'PENDING') throw new OccurrenceNotPendingError()
+
+  const prefill = toPrefill(occurrence, timezone)
+  const { accountId, categoryId } = prefill
+  if (accountId === null || categoryId === null) return { status: 'needs-form', prefill }
+
+  const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
+  try {
+    const transaction = await prisma.$transaction(async (tx) => {
+      // Accounts first, then the occurrence: the lock order of every linked
+      // write. `insertTransactionInTx` locks the account again, which returns
+      // at once for a row this transaction already holds.
+      await lockAccountsForUpdate(tx, userId, [accountId])
+      await lockPendingOccurrence(tx, userId, occurrenceId)
+      const created = await insertTransactionInTx(
+        tx,
+        userId,
+        {
+          accountId,
+          type: occurrence.reminder.type,
+          amount: occurrence.reminder.expectedAmount,
+          date: calendarDateToEntryInstant(prefill.date, timezone, now),
+          note: prefill.note,
+          categoryId,
+          expectedCurrency: occurrence.reminder.currency,
+        },
+        fx,
+      )
+      await markOccurrencePaidInTx(tx, userId, occurrenceId, created.id, now)
+      return created
+    })
+    return { status: 'created', transactionId: transaction.id }
+  } catch (e) {
+    // Retired (or re-pointed) between the read above and the lock: the
+    // transaction rolled back with nothing written, and the form is where the
+    // user picks again.
+    if (e instanceof InvalidCategoryError) {
+      return { status: 'needs-form', prefill: { ...prefill, categoryId: null } }
+    }
+    if (e instanceof ArchivedAccountError || e instanceof LinkedAccountCurrencyMismatchError) {
+      return { status: 'needs-form', prefill: { ...prefill, accountId: null } }
+    }
+    throw e
+  }
+}
+
+/**
+ * Takes an exclusive lock on one occurrence row, tenant-scoped in the SQL, and
+ * refuses it unless it is still PENDING (`OccurrenceNotPendingError`).
+ *
+ * Must run inside `prisma.$transaction`, after the account lock and before the
+ * transaction insert — the lock order every linked write keeps. Shared by
+ * `payOccurrence` and `createTransaction` (the pre-filled form), so the one-tap
+ * path and the form refuse a paid occurrence with the same statement. An empty
+ * result is an id that is not this user's or does not exist: Prisma's own
+ * P2025, indistinguishable between the two.
+ */
+export async function lockPendingOccurrence(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  occurrenceId: string,
+): Promise<void> {
+  const [row] = await tx.$queryRaw<{ status: OccurrenceStatus }[]>`
+    SELECT "status" FROM "ReminderOccurrence"
+    WHERE "userId" = ${userId} AND "id" = ${occurrenceId}
+    FOR UPDATE`
+  if (!row) {
+    throw new Prisma.PrismaClientKnownRequestError(
+      `An operation failed because it depends on one or more records that were required but not found. Reminder occurrence ${occurrenceId} was not found for this user.`,
+      { code: 'P2025', clientVersion: Prisma.prismaVersion.client },
+    )
+  }
+  if (row.status !== 'PENDING') throw new OccurrenceNotPendingError()
+}
+
+/** Marks a locked, pending occurrence paid by `transactionId` — ACKNOWLEDGED,
+ *  stamped `now`. Runs in the transaction that inserted that row, after
+ *  `lockPendingOccurrence`. */
+export async function markOccurrencePaidInTx(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  occurrenceId: string,
+  transactionId: string,
+  now: Date,
+): Promise<void> {
+  await tx.reminderOccurrence.update({
+    where: { userId_id: { userId, id: occurrenceId } },
+    data: { status: 'ACKNOWLEDGED', actionedAt: now, transactionId },
+  })
+}
+
+/**
+ * Returns the occurrence `transactionId` paid to PENDING, clearing `actionedAt`
+ * and the link — the payment it recorded is about to be deleted, so the bill
+ * is due again (spec 2026-10-12 §6.5). `deleteTransaction` calls it inside its
+ * own transaction, after its locks and before the delete, which the `ON DELETE
+ * RESTRICT` link would otherwise refuse. A no-op when no occurrence names the
+ * row.
+ */
+export async function releasePaidOccurrenceInTx(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  transactionId: string,
+): Promise<void> {
+  await tx.reminderOccurrence.updateMany({
+    where: { userId, transactionId },
+    data: { status: 'PENDING', actionedAt: null, transactionId: null },
+  })
 }

@@ -58,7 +58,8 @@ const INLINE_ROW_ACTIONS = [
   { url: '/debts', name: /Ghi nhận thanh toán|Record payment/ },
   { url: '/loans', name: /Ghi nhận thanh toán|Record payment/ },
   { url: '/goals', name: /Cập nhật tiến độ|Update progress/ },
-  { url: '/reminders', name: /^Ghi nhận |^Acknowledge / },
+  { url: '/reminders', name: /^Đã trả |^Paid / },
+  { url: '/reminders', name: /^Chỉ đánh dấu |^Mark only / },
   { url: '/reminders', name: /^Bỏ qua |^Dismiss / },
   { url: '/reminders?view=schedule', name: /^Tạm dừng |^Pause |^Tiếp tục |^Resume / },
 ] as const

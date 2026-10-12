@@ -27,6 +27,7 @@ const createReminderMock = vi.hoisted(() => vi.fn())
 const setReminderActiveMock = vi.hoisted(() => vi.fn())
 const acknowledgeOccurrenceMock = vi.hoisted(() => vi.fn())
 const dismissOccurrenceMock = vi.hoisted(() => vi.fn())
+const payOccurrenceMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
 /**
@@ -49,6 +50,20 @@ class MockInvalidReminderAccountError extends Error {
   }
 }
 
+class MockOccurrenceNotPendingError extends Error {
+  constructor() {
+    super('This reminder has already been answered.')
+    this.name = 'OccurrenceNotPendingError'
+  }
+}
+
+class MockFxUnavailableError extends Error {
+  constructor() {
+    super('Unable to retrieve an exchange rate.')
+    this.name = 'FxUnavailableError'
+  }
+}
+
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
 }))
@@ -58,8 +73,16 @@ vi.mock('@/lib/server/services/reminder', () => ({
   setReminderActive: setReminderActiveMock,
   acknowledgeOccurrence: acknowledgeOccurrenceMock,
   dismissOccurrence: dismissOccurrenceMock,
+  payOccurrence: payOccurrenceMock,
   InvalidReminderCategoryError: MockInvalidReminderCategoryError,
   InvalidReminderAccountError: MockInvalidReminderAccountError,
+  OccurrenceNotPendingError: MockOccurrenceNotPendingError,
+}))
+
+// Paid snapshots a live rate; the real policy module would drag the FX cache
+// (and Prisma) in for a test that never fetches one.
+vi.mock('@/lib/currency/current-rate-policy', () => ({
+  isFxUnavailableError: (e: unknown) => e instanceof MockFxUnavailableError,
 }))
 
 vi.mock('next/cache', () => ({
@@ -71,6 +94,7 @@ const {
   setReminderActiveAction,
   acknowledgeOccurrenceAction,
   dismissOccurrenceAction,
+  payOccurrenceAction,
 } = await import('./reminder-actions')
 const { REMINDER_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ZodError } = await import('zod')
@@ -116,6 +140,7 @@ beforeEach(() => {
   setReminderActiveMock.mockReset()
   acknowledgeOccurrenceMock.mockReset()
   dismissOccurrenceMock.mockReset()
+  payOccurrenceMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
@@ -173,9 +198,9 @@ describe('createReminderAction', () => {
 
     await createReminderAction(validCreateInput)
 
-    // A reminder is not a Transaction: nothing here writes a Transaction, a
-    // Transfer or an account, so `/accounts` and `/transactions` have nothing
-    // to re-render and revalidating them would claim otherwise.
+    // Creating a reminder writes no Transaction, Transfer or account (only
+    // Paid does), so `/accounts` and `/transactions` have nothing to re-render
+    // and revalidating them would claim otherwise.
     expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual([
       '/reminders',
       '/dashboard',
@@ -457,6 +482,82 @@ describe('dismissOccurrenceAction', () => {
   })
 })
 
+describe('payOccurrenceAction', () => {
+  const PREFILL = {
+    type: 'EXPENSE' as const,
+    amount: '350000.00',
+    currency: 'VND' as const,
+    accountId: null,
+    categoryId: 'cat_1',
+    date: '2026-04-15',
+    note: 'Internet bill',
+    occurrenceId: 'occ_1',
+  }
+
+  it("calls the service with the session user id, the occurrence id and the user's zone only", async () => {
+    payOccurrenceMock.mockResolvedValue({ status: 'created', transactionId: 'tx_1' })
+
+    const result = await payOccurrenceAction('occ_1')
+
+    expect(result).toEqual({ ok: true, data: { status: 'created', transactionId: 'tx_1' } })
+    // No provider override (the real FX policy runs) and no `now`: the
+    // transaction's date and `actionedAt` come from the server's clock, in the
+    // zone the user's list shows the due day in.
+    expect(payOccurrenceMock).toHaveBeenCalledWith(FIXED_USER.id, 'occ_1', FIXED_USER.timezone)
+    expect(payOccurrenceMock.mock.calls[0]).toHaveLength(3)
+  })
+
+  it('revalidates every page the new transaction changes when it was recorded', async () => {
+    payOccurrenceMock.mockResolvedValue({ status: 'created', transactionId: 'tx_1' })
+
+    await payOccurrenceAction('occ_1')
+
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual([
+      '/reminders',
+      '/dashboard',
+      '/transactions',
+      '/accounts',
+    ])
+  })
+
+  it('hands back the prefill and revalidates nothing when the form must open instead', async () => {
+    payOccurrenceMock.mockResolvedValue({ status: 'needs-form', prefill: PREFILL })
+
+    const result = await payOccurrenceAction('occ_1')
+
+    expect(result).toEqual({ ok: true, data: { status: 'needs-form', prefill: PREFILL } })
+    // Nothing was written, so no page changed.
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [new MockOccurrenceNotPendingError(), 'OCCURRENCE_NOT_PENDING'],
+    [new MockFxUnavailableError(), 'FX_UNAVAILABLE'],
+    [notFoundError(), 'NOT_FOUND'],
+  ])('maps %o to its code, and does not revalidate', async (error, code) => {
+    payOccurrenceMock.mockRejectedValue(error)
+
+    const result = await payOccurrenceAction('occ_1')
+
+    expect(result).toEqual({ ok: false, error: code })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    payOccurrenceMock.mockRejectedValue(new Error('boom'))
+
+    await expect(payOccurrenceAction('occ_1')).rejects.toThrow('boom')
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(payOccurrenceAction('occ_1')).rejects.toThrow('Not authenticated')
+    expect(payOccurrenceMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('REMINDER_ERROR_KEYS', () => {
   // The temporary English `REMINDER_ERROR_MESSAGES` alias this test used to
   // pin (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives
@@ -470,6 +571,8 @@ describe('REMINDER_ERROR_KEYS', () => {
     expect(REMINDER_ERROR_KEYS).toEqual({
       INVALID_CATEGORY: 'errors.reminder.INVALID_CATEGORY',
       INVALID_ACCOUNT: 'errors.reminder.INVALID_ACCOUNT',
+      OCCURRENCE_NOT_PENDING: 'errors.reminder.OCCURRENCE_NOT_PENDING',
+      FX_UNAVAILABLE: 'errors.reminder.FX_UNAVAILABLE',
       INVALID_INPUT: 'errors.reminder.INVALID_INPUT',
       NOT_FOUND: 'errors.reminder.NOT_FOUND',
     })

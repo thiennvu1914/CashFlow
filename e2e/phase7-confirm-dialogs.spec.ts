@@ -428,7 +428,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
     {
       name: 'acknowledge',
       url: '/reminders?view=due&type=all',
-      button: /(Ghi nhận|Acknowledge) Power bill/,
+      button: /(Chỉ đánh dấu|Mark only) Power bill/,
       form: false,
     },
     {

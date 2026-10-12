@@ -33,6 +33,11 @@ import {
  * belongs to a debt or loan and is changed from there. The UI never offers
  * edit or delete on such a row, so this is the answer to a stale page or a
  * crafted request, and its copy sends the user to the debt or loan.
+ *
+ * `OCCURRENCE_NOT_PENDING` (§6.6): the create form was opened from a
+ * reminder's "Paid", and that occurrence was answered before the form was
+ * saved (the form saved twice, or the bill paid from another tab). Nothing is
+ * recorded — saving it would count the bill twice.
  */
 export type TransactionActionError =
   | 'FX_UNAVAILABLE'
@@ -41,6 +46,7 @@ export type TransactionActionError =
   | 'INVALID_CATEGORY'
   | 'CONFLICT'
   | 'LINKED_TRANSACTION'
+  | 'OCCURRENCE_NOT_PENDING'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
 
@@ -63,6 +69,9 @@ function mapError(e: unknown): TransactionActionResult {
   if (e instanceof transactionService.LinkedTransactionError) {
     return { ok: false, error: 'LINKED_TRANSACTION' }
   }
+  if (e instanceof transactionService.OccurrenceNotPendingError) {
+    return { ok: false, error: 'OCCURRENCE_NOT_PENDING' }
+  }
   return mapCommonActionError(e)
 }
 
@@ -79,18 +88,30 @@ function toServiceInput(
   return { ...parsed, date: localDateTimeToInstant(parsed.date, timezone) }
 }
 
+/**
+ * The create form's submit. Saved with an `occurrenceId` (the form opened from
+ * a reminder's "Paid", spec 2026-10-12 §6.6), the same write marks that
+ * occurrence paid — so the reminder pages change too: it leaves the due list
+ * and the dashboard's widget.
+ */
 export async function createTransactionAction(
   input: CreateTransactionFormInput,
 ): Promise<TransactionActionResult> {
   const user = await requireUser()
   const { timezone } = resolveProfileDefaults(user)
+  let serviceInput: CreateTransactionInput
   try {
-    await transactionService.createTransaction(user.id, toServiceInput(input, timezone))
+    serviceInput = toServiceInput(input, timezone)
+    await transactionService.createTransaction(user.id, serviceInput)
   } catch (e) {
     return mapError(e)
   }
   revalidatePath('/transactions')
   revalidatePath('/accounts')
+  if (serviceInput.occurrenceId !== undefined) {
+    revalidatePath('/reminders')
+    revalidatePath('/dashboard')
+  }
   return { ok: true }
 }
 

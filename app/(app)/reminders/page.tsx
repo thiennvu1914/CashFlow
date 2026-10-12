@@ -17,6 +17,10 @@ import { toOccurrenceDto, toReminderDto } from '@/lib/ui/reminder-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { OccurrenceActions } from '@/components/reminders/occurrence-actions'
 import { OccurrenceList } from '@/components/reminders/occurrence-list'
+import {
+  OccurrencePaidNotice,
+  OccurrencePaidProvider,
+} from '@/components/reminders/occurrence-paid-notice'
 import { ReminderCreateButton } from '@/components/reminders/reminder-create-button'
 import { ReminderList } from '@/components/reminders/reminder-list'
 import { ReminderToggle } from '@/components/reminders/reminder-toggle'
@@ -30,13 +34,14 @@ import { SegmentedControl } from '@/components/common/segmented-control'
  * they are waiting for, each in its own currency and never converted to
  * `User.baseCurrency` (ledger ruling R5-3).
  *
- * **Nothing on this page records a transaction.** A reminder is a note about
- * money the user expects to move; whether it actually moved is a separate fact
- * they record separately, and no automatic rule can tell the two apart — which
- * is why the subtitle says so outright rather than leaving the reader to wonder
- * whether "Ghi nhận" has filed an expense somewhere. Acknowledging or
- * dismissing an occurrence changes that occurrence's status and nothing else
- * (directive M).
+ * **Only "Đã trả / Paid" records a transaction** (money-source linking spec
+ * 2026-10-12 §2 Q6, §6.6). A reminder is a note about money the user expects to
+ * move; Paid is the user saying it did, and records it — in one tap when the
+ * reminder names a usable account and category, otherwise through the
+ * Transactions page's create form, pre-filled. "Chỉ đánh dấu / Mark only" and
+ * "Bỏ qua / Dismiss" change the occurrence's status and nothing else, and the
+ * subtitle says which button records the money rather than leaving the reader
+ * to wonder.
  *
  * There is no cron in this project. `listUpcomingOccurrences` is what
  * materializes the rows — one materializing read per page load, which is why it
@@ -257,21 +262,28 @@ export default async function RemindersPage({
       )}
 
       {view === 'due' ? (
-        overdue.length === 0 && upcoming.length === 0 ? (
-          <EmptyState
-            icon={BellRing}
-            size="page"
-            // `occurrenceRows`, not `occurrences`: the UNFILTERED list is what
-            // decides whether "nothing is due" is true or is just this filter.
-            title={t(dueEmptyKey(filter, occurrenceRows.length > 0), {
-              days: OCCURRENCE_LOOKAHEAD_DAYS,
-            })}
-          />
-        ) : (
-          <div className="flex flex-col gap-6">
-            {overdue.length > 0 && (
-              <section className="flex flex-col gap-2">
-                {/* Both Overdue and Upcoming are `h2` (fix round 1, finding
+        // Paid's "Transaction recorded — Edit" sits above both branches and the
+        // provider around them: the paid row leaves the list in the action's
+        // own re-render (and the list may turn into its empty state), so the
+        // confirmation cannot live in the row — see `occurrence-paid-notice.tsx`.
+        <OccurrencePaidProvider>
+          <OccurrencePaidNotice />
+          {overdue.length === 0 && upcoming.length === 0 ? (
+            <EmptyState
+              icon={BellRing}
+              size="page"
+              // `occurrenceRows`, not `occurrences`: the UNFILTERED list is
+              // what decides whether "nothing is due" is true or is just this
+              // filter.
+              title={t(dueEmptyKey(filter, occurrenceRows.length > 0), {
+                days: OCCURRENCE_LOOKAHEAD_DAYS,
+              })}
+            />
+          ) : (
+            <div className="flex flex-col gap-6">
+              {overdue.length > 0 && (
+                <section className="flex flex-col gap-2">
+                  {/* Both Overdue and Upcoming are `h2` (fix round 1, finding
                     2): Overdue renders FIRST on the page, so giving it `h3`
                     while Upcoming — which follows it — stayed `h2` produced
                     an actual h1 → h3 → h2 sequence, not merely an out-of-order
@@ -279,56 +291,57 @@ export default async function RemindersPage({
                     what spec §8's "nothing skipped" order actually requires
                     here; the count in `right` is what still marks Overdue as
                     the more urgent of the two. */}
-                <SectionHeader
-                  title={t('reminders.groupOverdue')}
-                  right={
-                    // A muted count rather than a banner: the list can be long
-                    // (nothing prunes an unanswered bill) and the user needs to
-                    // know how much of it there is without being shouted at.
-                    <span className="text-xs/[1rem] text-negative tabular-nums">
-                      {t('reminders.overdueCount', { count: overdue.length })}
-                    </span>
-                  }
-                />
-                <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
-                  <OccurrenceList
-                    occurrences={overdue}
-                    locale={locale}
-                    timeZone={timezone}
-                    collapse
-                    renderActions={(occurrence) => (
-                      <OccurrenceActions
-                        occurrence={occurrence}
-                        locale={locale}
-                        timeZone={timezone}
-                      />
-                    )}
+                  <SectionHeader
+                    title={t('reminders.groupOverdue')}
+                    right={
+                      // A muted count rather than a banner: the list can be long
+                      // (nothing prunes an unanswered bill) and the user needs to
+                      // know how much of it there is without being shouted at.
+                      <span className="text-xs/[1rem] text-negative tabular-nums">
+                        {t('reminders.overdueCount', { count: overdue.length })}
+                      </span>
+                    }
                   />
-                </div>
-              </section>
-            )}
-            {upcoming.length > 0 && (
-              <section className="flex flex-col gap-2">
-                <SectionHeader title={t('reminders.groupUpcoming')} />
-                <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
-                  <OccurrenceList
-                    occurrences={upcoming}
-                    locale={locale}
-                    timeZone={timezone}
-                    collapse
-                    renderActions={(occurrence) => (
-                      <OccurrenceActions
-                        occurrence={occurrence}
-                        locale={locale}
-                        timeZone={timezone}
-                      />
-                    )}
-                  />
-                </div>
-              </section>
-            )}
-          </div>
-        )
+                  <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
+                    <OccurrenceList
+                      occurrences={overdue}
+                      locale={locale}
+                      timeZone={timezone}
+                      collapse
+                      renderActions={(occurrence) => (
+                        <OccurrenceActions
+                          occurrence={occurrence}
+                          locale={locale}
+                          timeZone={timezone}
+                        />
+                      )}
+                    />
+                  </div>
+                </section>
+              )}
+              {upcoming.length > 0 && (
+                <section className="flex flex-col gap-2">
+                  <SectionHeader title={t('reminders.groupUpcoming')} />
+                  <div className="card-hover-effect overflow-hidden rounded-lg border border-border bg-surface shadow-xs">
+                    <OccurrenceList
+                      occurrences={upcoming}
+                      locale={locale}
+                      timeZone={timezone}
+                      collapse
+                      renderActions={(occurrence) => (
+                        <OccurrenceActions
+                          occurrence={occurrence}
+                          locale={locale}
+                          timeZone={timezone}
+                        />
+                      )}
+                    />
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+        </OccurrencePaidProvider>
       ) : reminders.length === 0 ? (
         // Unfiltered by construction (fix round 1, finding 3: `reminders`
         // above no longer drops rows by `?type=`), so there is only one fact

@@ -27,6 +27,7 @@
   "linkedLoanBadge": "Loan: {lender}",
   "openDebtAction": "Open debt",
   "openLoanAction": "Open loan",
+  "fromReminder": "Filled in from the reminder “{title}” — saving the transaction marks it paid.",
   "deleteAction": "Delete transaction",
   "deleteConfirmTitle": "Delete this transaction?",
   "deleteConfirmBody": "The account balance will be recalculated. This cannot be undone.",

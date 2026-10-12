@@ -12,6 +12,7 @@ import {
 import { usePathname } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
+import type { OccurrencePrefill } from '@/lib/server/services/reminder'
 import { Sheet } from '@/components/common/sheet'
 import { Button } from '@/components/ui/button'
 import {
@@ -72,6 +73,13 @@ import {
  * The same Provider also serves the edit form's home, `TransactionEditSheet`
  * (money-source linking spec 2026-10-12 §6.5), which the ledger renders and
  * opens with a row: one set of picker options for both forms.
+ *
+ * `prefill` (§6.6) is a reminder occurrence's starting values, read by the page
+ * for `?occurrence=<id>` when a reminder's "Đã trả / Paid" could not record the
+ * transaction in one tap. Both create forms — the sheet's and the panel's —
+ * start from it, and both are keyed by its occurrence: once the save marks the
+ * occurrence paid, the page re-renders without a prefill and they remount
+ * empty, so the next entry can never be linked to the same bill again.
  */
 
 /**
@@ -99,7 +107,13 @@ interface TransactionCreateContextValue {
   categories: CategoryOption[]
   timezone: string
   locale: Locale
+  prefill: OccurrencePrefill | null
   openSheet: () => void
+}
+
+/** A create form's `key`: a new occurrence prefill (or none) is a new form. */
+function createFormKey(prefill: OccurrencePrefill | null): string {
+  return prefill ? `occurrence-${prefill.occurrenceId}` : 'blank'
 }
 
 const TransactionCreateContext = createContext<TransactionCreateContextValue | null>(null)
@@ -109,12 +123,15 @@ export function TransactionCreatePanelProvider({
   categories,
   timezone,
   locale,
+  prefill = null,
   children,
 }: {
   accounts: AccountOption[]
   categories: CategoryOption[]
   timezone: string
   locale: Locale
+  /** A pending reminder occurrence's values, from `?occurrence=<id>`. */
+  prefill?: OccurrencePrefill | null
   children: React.ReactNode
 }) {
   const t = useTranslations()
@@ -155,8 +172,15 @@ export function TransactionCreatePanelProvider({
   }, [pathname])
 
   const value = useMemo<TransactionCreateContextValue>(
-    () => ({ accounts, categories, timezone, locale, openSheet: () => setSheetOpen(true) }),
-    [accounts, categories, timezone, locale],
+    () => ({
+      accounts,
+      categories,
+      timezone,
+      locale,
+      prefill,
+      openSheet: () => setSheetOpen(true),
+    }),
+    [accounts, categories, timezone, locale, prefill],
   )
 
   return (
@@ -169,10 +193,12 @@ export function TransactionCreatePanelProvider({
         closeLabel={t('common.close')}
       >
         <TransactionForm
+          key={createFormKey(prefill)}
           accounts={accounts}
           categories={categories}
           timezone={timezone}
           locale={locale}
+          prefill={prefill}
           onSaved={() => setSheetOpen(false)}
         />
       </Sheet>
@@ -297,10 +323,12 @@ export function TransactionCreatePanelBody() {
         {t('transactions.createTitle')}
       </h2>
       <TransactionForm
+        key={createFormKey(ctx.prefill)}
         accounts={ctx.accounts}
         categories={ctx.categories}
         timezone={ctx.timezone}
         locale={ctx.locale}
+        prefill={ctx.prefill}
       />
     </div>
   )

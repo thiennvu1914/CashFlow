@@ -12,6 +12,7 @@ import {
   createTransactionAction,
   updateTransactionAction,
 } from '@/lib/server/actions/transaction-actions'
+import type { OccurrencePrefill } from '@/lib/server/services/reminder'
 import { TRANSACTION_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { formatMoney } from '@/lib/ui/format-money'
 import { transactionTypeLabelKey } from '@/lib/ui/labels'
@@ -177,6 +178,41 @@ function defaultValues(accounts: AccountOption[], timezone: string): FormInput {
 }
 
 /**
+ * The form's values for a reminder occurrence's "Paid" that could not be
+ * recorded in one tap (money-source linking spec 2026-10-12 §6.6): the
+ * reminder's type, expected amount and title, its account and category when
+ * the pickers offer them (else the form's own default account, and no
+ * category), and its due day — at the current time when that is today in the
+ * user's zone, so the balance moves at once, else 12:00, the same rule a
+ * one-tap Paid follows (`calendarDateToEntryInstant`). `occurrenceId` rides
+ * along unrendered, so saving links the occurrence.
+ */
+function prefillValues(
+  prefill: OccurrencePrefill,
+  accounts: AccountOption[],
+  categories: CategoryOption[],
+  timezone: string,
+): FormInput {
+  const [today, nowTime] = nowInZone(timezone).split('T')
+  const accountOffered = accounts.some((account) => account.id === prefill.accountId)
+  const categoryOffered = categories.some(
+    (category) => category.id === prefill.categoryId && category.type === prefill.type,
+  )
+  return {
+    accountId: accountOffered && prefill.accountId ? prefill.accountId : (accounts[0]?.id ?? ''),
+    categoryId: categoryOffered && prefill.categoryId ? prefill.categoryId : undefined,
+    type: prefill.type,
+    datePart: prefill.date,
+    timePart: prefill.date === today ? nowTime : '12:00',
+    // The number input's own value type, from the server's fixed-2-decimal
+    // string — the same conversion `editValues` makes.
+    amount: Number(prefill.amount),
+    note: prefill.note,
+    occurrenceId: prefill.occurrenceId,
+  }
+}
+
+/**
  * The form's values for an existing row: its own type, account, category and
  * note, and its instant read back as the wall-clock date and time in the
  * user's zone — the same zone the action converts the submitted pair in, so an
@@ -254,6 +290,7 @@ export function TransactionForm({
   timezone,
   locale,
   transaction,
+  prefill,
   onSaved,
 }: {
   accounts: AccountOption[]
@@ -271,6 +308,12 @@ export function TransactionForm({
    * `updateTransactionAction`.
    */
   transaction?: EditableTransaction
+  /**
+   * A reminder occurrence's starting values (spec 2026-10-12 §6.6), for a new
+   * transaction only. Read once, at mount — the caller keys the form by the
+   * occurrence, so a different prefill is a different form.
+   */
+  prefill?: OccurrencePrefill | null
   /** A sheet closes itself on success; the sticky panel passes nothing. */
   onSaved?: () => void
 }) {
@@ -303,7 +346,11 @@ export function TransactionForm({
   // initialized" the moment it does. The lazy `useState` initializer is what
   // keeps it the one instant the form actually started from.
   const [initial] = useState(() =>
-    transaction ? editValues(transaction, timezone) : defaultValues(accounts, timezone),
+    transaction
+      ? editValues(transaction, timezone)
+      : prefill
+        ? prefillValues(prefill, accounts, categories, timezone)
+        : defaultValues(accounts, timezone),
   )
   const accountOptions = useMemo(
     () => withEditedAccount(accounts, transaction),
@@ -327,6 +374,9 @@ export function TransactionForm({
 
   const type = useWatch({ control, name: 'type' })
   const accountId = useWatch({ control, name: 'accountId' })
+  /** Still linked to the reminder occurrence it was opened for — until a save
+   *  succeeds and `reset` starts the next, unlinked entry. */
+  const occurrenceId = useWatch({ control, name: 'occurrenceId' })
   const needsCategory = CATEGORY_REQUIRED_TYPES.has(type)
   const selectedAccount = accountOptions.find((account) => account.id === accountId)
 
@@ -457,6 +507,13 @@ export function TransactionForm({
         <legend className="sr-only">
           {transaction ? t('transactions.editTitle') : t('transactions.createTitle')}
         </legend>
+
+        {/* Says why the form arrived filled in, and what saving it also does. */}
+        {prefill && occurrenceId && (
+          <InlineAlert tone="neutral">
+            {t('transactions.fromReminder', { title: prefill.note })}
+          </InlineAlert>
+        )}
 
         {/* `Controller`, not `register`, because `TransactionTypeField` is a
             button group with no form value of its own. The `onChange` clears

@@ -22,6 +22,7 @@
     "INVALID_CATEGORY": "Choose a valid category for this type.",
     "CONFLICT": "This record changed while you were editing it. Reload and try again.",
     "LINKED_TRANSACTION": "This transaction belongs to a debt or loan. Open that debt or loan to change or delete it.",
+    "OCCURRENCE_NOT_PENDING": "This reminder has already been answered, so the transaction was not saved. Reload the page to see its current state.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That record no longer exists."
   },
@@ -70,6 +71,8 @@
   "reminder": {
     "INVALID_CATEGORY": "Choose a category that matches the reminder type.",
     "INVALID_ACCOUNT": "Choose one of your active accounts.",
+    "OCCURRENCE_NOT_PENDING": "This reminder has already been answered. Reload the page to see its current state.",
+    "FX_UNAVAILABLE": "Exchange rate is temporarily unavailable. Please try again in a moment.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That reminder no longer exists."
   }

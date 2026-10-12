@@ -37,8 +37,11 @@ import {
  *
  * Eight properties are what this suite exists to hold:
  *
- * 1. **Nothing here moves money.** A reminder is not a Transaction (directive
- *    M): the fixture seeds an account and an EXPENSE transaction, and `afterEach`
+ * 1. **Nothing here moves money.** A reminder is not a Transaction, and only
+ *    "Đã trả / Paid" (`payOccurrence`) records one — that is
+ *    `reminder-payment.test.ts`'s subject, and no case here calls it
+ *    (money-source linking spec 2026-10-12 §6.6). The fixture seeds an account
+ *    and an EXPENSE transaction, and `afterEach`
  *    re-asserts the account / transaction / transfer counts, the two seeded rows
  *    field for field, and the account's derived balance — after *every* case, not
  *    just a dedicated one. Materializing, acknowledging and dismissing all run
@@ -348,8 +351,9 @@ describe('reminder service', () => {
       // cascade of unrelated ones.
       await cleanupUsers([fx.userId, ...extraUserIds])
     }
-    // A reminder keeps its own currency and is never converted, so no code path
-    // here has any reason to reach an FX provider.
+    // A reminder keeps its own currency and is never converted, and no case
+    // here pays one (Paid's transaction is the only thing that snapshots a
+    // rate), so nothing here has any reason to reach an FX provider.
     expect(fetchCalls).toBe(0)
   })
 
@@ -1810,11 +1814,13 @@ describe('reminder service', () => {
   })
 
   describe('tracking only — no money moves', () => {
-    it('leaves accounts, transactions, transfers and the balance untouched by every mutation', async () => {
-      // Every mutation the service has, in the sequence a real user would
-      // produce. `afterEach` checks the ledger after every case; this one exists
-      // so the check has run against the whole surface at least once, in one
-      // place a reviewer can read.
+    it('leaves accounts, transactions, transfers and the balance untouched by every mutation but Paid', async () => {
+      // Every mutation the service has except Paid — the one that records the
+      // money on purpose (`reminder-payment.test.ts`) — in the sequence a real
+      // user would produce, with an account and a category set so the money
+      // *could* have moved. `afterEach` checks the ledger after every case; this
+      // one exists so the check has run against the whole surface at least
+      // once, in one place a reviewer can read.
       const reminder = await createReminder(fx.userId, TEST_TIMEZONE, {
         ...BASE_REMINDER,
         categoryId: fx.expenseCategoryId,
@@ -1850,33 +1856,36 @@ describe('reminder service', () => {
     })
 
     /**
-     * The structural half of "a reminder is not a Transaction": the service
-     * cannot touch the ledger because it does not import anything that writes to
-     * it.
+     * The structural half of "only Paid records money": the service reaches the
+     * ledger through the shared linking core (`linked-transaction.ts`, the
+     * code the Transactions page writes through) and through nothing else.
      *
      * Reading the source is deliberate rather than fragile. The behavioural
      * checks can only catch a write they happen to provoke, whereas a later
-     * phase adding "record the bill as a transaction when acknowledged" would
-     * reintroduce exactly the coupling directive M exists to forbid — and
-     * importing the module is the first step of doing so. Only import specifiers
-     * are matched, so the doc comment may keep naming these modules to say why
-     * they are absent.
+     * change writing a transaction or a transfer some other way — around the
+     * core's account lock, currency check and FX snapshot — would start by
+     * importing the module that does it. Matched against the module's own
+     * name, whether imported through `@/` or relatively, so
+     * `./linked-transaction` is allowed and `./transaction` is not. The rate
+     * comes through the FX policy (`current-rate-policy`), never the raw cache
+     * (`fx-service`). Only import specifiers are matched, so the doc comment
+     * may keep naming these modules to say why they are absent.
      */
-    it('imports nothing that could move money or reach a live rate', () => {
+    it('reaches the ledger only through the shared linking core', () => {
       const source = readFileSync(fileURLToPath(new URL('./reminder.ts', import.meta.url)), 'utf8')
 
       for (const forbidden of [
-        'services/transaction',
-        'services/transfer',
-        'services/balance',
-        'services/financial-account',
-        'current-rate-policy',
+        'transaction',
+        'transfer',
+        'balance',
+        'financial-account',
         'fx-service',
         'current-amount',
         'historical-amount',
       ]) {
-        expect(source).not.toMatch(new RegExp(`from '[^']*${forbidden}`))
+        expect(source).not.toMatch(new RegExp(`from '[^']*/${forbidden}'`))
       }
+      expect(source).toMatch(/from '\.\/linked-transaction'/)
     })
 
     it('never reads the host timezone, and never puts money through a float', () => {

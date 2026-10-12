@@ -27,6 +27,7 @@
   "linkedLoanBadge": "Vay: {lender}",
   "openDebtAction": "Mở khoản nợ",
   "openLoanAction": "Mở khoản vay",
+  "fromReminder": "Điền sẵn từ nhắc nhở «{title}» — lưu giao dịch sẽ đánh dấu nhắc nhở là đã trả.",
   "deleteAction": "Xóa giao dịch",
   "deleteConfirmTitle": "Xóa giao dịch này?",
   "deleteConfirmBody": "Số dư tài khoản sẽ được tính lại. Không thể hoàn tác.",

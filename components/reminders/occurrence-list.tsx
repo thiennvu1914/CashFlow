@@ -12,10 +12,10 @@ import { clusterByReminder, type OccurrenceCluster } from './occurrence-group'
 
 /**
  * The shared occurrence row, used by both the Reminders page (full rows, with
- * acknowledge/dismiss via `renderActions`, and the collapse this task adds) and
- * — from a later group — the Dashboard's reminders widget (`compact`: what it
- * is, when it is due, and how much, nothing else, with `collapse` always
- * `false` — see the prop's own doc).
+ * Paid / Mark only / Dismiss via `renderActions`, and the collapse this task
+ * adds) and — from a later group — the Dashboard's reminders widget
+ * (`compact`: what it is, when it is due, and how much, nothing else, with
+ * `collapse` always `false` — see the prop's own doc).
  *
  * An async server component with no state of its own: every figure it renders
  * is already a formatted string or plain enum from `toOccurrenceDto`
@@ -27,8 +27,8 @@ import { clusterByReminder, type OccurrenceCluster } from './occurrence-group'
  * converted (ledger ruling R5-3). There is no total anywhere in this list, and
  * that is deliberate rather than an omission: an expected amount is money the
  * user *thinks* will move, so summing a column of them would state a figure
- * that has not happened — and a reminder is never a Transaction (spec §4.7,
- * directive M).
+ * that has not happened; only "Đã trả / Paid" turns one into a recorded
+ * transaction (money-source linking spec 2026-10-12 §6.6).
  *
  * Nothing here shouts. An overdue occurrence is marked — a negative-toned due
  * line — and that is all: no icon, no count of days late, no banner. Colour is
@@ -82,7 +82,7 @@ export async function OccurrenceList({
   /** Dashboard variant: title, when it is due, and the amount. */
   compact?: boolean
   /** The Reminders page passes a client component rendering the row's
-   *  acknowledge/dismiss buttons. */
+   *  Paid / Mark only / Dismiss buttons. */
   renderActions?: (occurrence: OccurrenceDto) => ReactNode
 }) {
   const t = await getTranslations()

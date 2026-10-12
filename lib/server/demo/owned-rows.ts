@@ -38,7 +38,9 @@ interface OwnedRowDeletion {
  * Occurrences and reminders come first of all, ahead of the transactions,
  * because a reminder also references a Category and a FinancialAccount — both
  * deleted further down — so a reminder still standing would block those
- * deletions rather than its own.
+ * deletions rather than its own; and an occurrence answered with "Paid"
+ * references the Transaction it recorded, `ON DELETE RESTRICT` (spec
+ * 2026-10-12 §5).
  *
  * Budget comes before Category for the same reason: a CATEGORY budget
  * references one, so deleting the category first is a foreign-key violation.

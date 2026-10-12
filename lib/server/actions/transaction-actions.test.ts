@@ -59,6 +59,13 @@ class MockLinkedTransactionError extends Error {
   }
 }
 
+class MockOccurrenceNotPendingError extends Error {
+  constructor() {
+    super('This reminder has already been answered.')
+    this.name = 'OccurrenceNotPendingError'
+  }
+}
+
 vi.mock('@/lib/auth/require-user', () => ({
   requireUser: requireUserMock,
 }))
@@ -72,6 +79,7 @@ vi.mock('@/lib/server/services/transaction', () => ({
   InvalidCategoryError: MockInvalidCategoryError,
   ConcurrentModificationError: MockConcurrentModificationError,
   LinkedTransactionError: MockLinkedTransactionError,
+  OccurrenceNotPendingError: MockOccurrenceNotPendingError,
 }))
 
 vi.mock('@/lib/currency/current-rate-policy', () => ({
@@ -286,6 +294,54 @@ describe('createTransactionAction', () => {
   })
 })
 
+describe('createTransactionAction — saved from a reminder’s Paid', () => {
+  it('passes the occurrence id through, and revalidates the reminder pages too', async () => {
+    createTransactionMock.mockResolvedValue(undefined)
+
+    const result = await createTransactionAction({ ...validInput, occurrenceId: 'occ_1' })
+
+    expect(result).toEqual({ ok: true })
+    expect(createTransactionMock).toHaveBeenCalledWith(FIXED_USER.id, {
+      ...expectedServiceInput,
+      occurrenceId: 'occ_1',
+    })
+    // The occurrence left the due list, and the dashboard widget shows it.
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual([
+      '/transactions',
+      '/accounts',
+      '/reminders',
+      '/dashboard',
+    ])
+  })
+
+  it('revalidates only the ledger pages for an ordinary create', async () => {
+    createTransactionMock.mockResolvedValue(undefined)
+
+    await createTransactionAction(validInput)
+
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual([
+      '/transactions',
+      '/accounts',
+    ])
+  })
+
+  it('maps OccurrenceNotPendingError to OCCURRENCE_NOT_PENDING and does not revalidate', async () => {
+    createTransactionMock.mockRejectedValue(new MockOccurrenceNotPendingError())
+
+    const result = await createTransactionAction({ ...validInput, occurrenceId: 'occ_1' })
+
+    expect(result).toEqual({ ok: false, error: 'OCCURRENCE_NOT_PENDING' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('maps an empty occurrence id to INVALID_INPUT and never calls the service', async () => {
+    const result = await createTransactionAction({ ...validInput, occurrenceId: '' })
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createTransactionMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('deleteTransactionAction', () => {
   it('calls the service with the session user id and the transaction id only', async () => {
     deleteTransactionMock.mockResolvedValue(undefined)
@@ -420,6 +476,7 @@ describe('TRANSACTION_ERROR_KEYS', () => {
       INVALID_CATEGORY: 'errors.transaction.INVALID_CATEGORY',
       CONFLICT: 'errors.transaction.CONFLICT',
       LINKED_TRANSACTION: 'errors.transaction.LINKED_TRANSACTION',
+      OCCURRENCE_NOT_PENDING: 'errors.transaction.OCCURRENCE_NOT_PENDING',
       INVALID_INPUT: 'errors.transaction.INVALID_INPUT',
       NOT_FOUND: 'errors.transaction.NOT_FOUND',
     })

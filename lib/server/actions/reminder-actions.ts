@@ -2,14 +2,18 @@
 
 import { revalidatePath } from 'next/cache'
 import { requireUser } from '@/lib/auth/require-user'
+import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { mapCommonActionError } from './map-action-error'
 import {
   acknowledgeOccurrence,
   createReminder,
   dismissOccurrence,
+  payOccurrence,
   setReminderActive,
   InvalidReminderAccountError,
   InvalidReminderCategoryError,
+  OccurrenceNotPendingError,
+  type PayOccurrenceResult,
 } from '@/lib/server/services/reminder'
 import { createReminderSchema, type CreateReminderInput } from '@/lib/validation/reminder'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
@@ -40,25 +44,44 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * the schema — an unmapped error rather than "check the highlighted fields".
  * The service re-parses, exactly as it does for every other caller.
  *
- * **Nothing here moves money.** A reminder is not a Transaction (spec §4.7,
- * directive M): acknowledging a bill records that the user dealt with it and
- * writes no Transaction, no Transfer and no account balance. So nothing here
- * revalidates a ledger page: `/reminders` is the page that changed, and
- * `/dashboard` because a later group's widget reads the same occurrences.
- * `/accounts` and `/transactions` are deliberately absent.
+ * **Only Paid moves money.** "Chỉ đánh dấu / Mark only" and "Bỏ qua / Dismiss"
+ * record the user's answer and write no Transaction, no Transfer and no account
+ * balance, so they revalidate `/reminders` (the page that changed) and
+ * `/dashboard` (whose widget reads the same occurrences) and no ledger page.
+ * "Đã trả / Paid" (`payOccurrenceAction`, money-source linking spec 2026-10-12
+ * §6.6) is the exception: when it records the transaction, `/transactions` and
+ * `/accounts` change too.
+ *
+ * `OCCURRENCE_NOT_PENDING` is Paid's answer to an occurrence already answered
+ * (a stale tab, a double tap): recording it again would count the bill twice.
+ * `FX_UNAVAILABLE` is Paid's too — the transaction it records snapshots the
+ * live rate, and an outage writes nothing.
  */
 export type ReminderActionError =
-  'INVALID_CATEGORY' | 'INVALID_ACCOUNT' | 'INVALID_INPUT' | 'NOT_FOUND'
+  | 'INVALID_CATEGORY'
+  | 'INVALID_ACCOUNT'
+  | 'OCCURRENCE_NOT_PENDING'
+  | 'FX_UNAVAILABLE'
+  | 'INVALID_INPUT'
+  | 'NOT_FOUND'
 
 export type ReminderActionResult = { ok: true } | { ok: false; error: ReminderActionError }
 
-function mapError(e: unknown): ReminderActionResult {
+/** Paid's answer: what happened, for the button to act on — the recorded
+ *  transaction to offer an edit link to, or the occurrence whose pre-filled
+ *  form to open. */
+export type PayOccurrenceActionResult =
+  { ok: true; data: PayOccurrenceResult } | { ok: false; error: ReminderActionError }
+
+function mapError(e: unknown): { ok: false; error: ReminderActionError } {
   // The *class* is what is mapped, never the error's `reason`: "no such
   // category", "not your category", "wrong type of category" and "archived
   // category" are one code on purpose, or the message becomes an oracle for
   // which ids exist.
   if (e instanceof InvalidReminderCategoryError) return { ok: false, error: 'INVALID_CATEGORY' }
   if (e instanceof InvalidReminderAccountError) return { ok: false, error: 'INVALID_ACCOUNT' }
+  if (e instanceof OccurrenceNotPendingError) return { ok: false, error: 'OCCURRENCE_NOT_PENDING' }
+  if (isFxUnavailableError(e)) return { ok: false, error: 'FX_UNAVAILABLE' }
   return mapCommonActionError(e)
 }
 
@@ -108,7 +131,8 @@ export async function setReminderActiveAction(
 }
 
 /**
- * "I have dealt with this" — the bill is paid, the salary arrived.
+ * "Chỉ đánh dấu / Mark only" — the user has dealt with it and records no
+ * transaction for it here.
  *
  * No `now` is passed: `actionedAt` records when the *server* took the answer,
  * and a client-supplied clock would let a stale tab backdate a decision. The
@@ -139,4 +163,36 @@ export async function dismissOccurrenceAction(id: string): Promise<ReminderActio
   }
   revalidateReminderPages()
   return { ok: true }
+}
+
+/**
+ * "Đã trả / Paid" — records the occurrence's transaction in one tap, or says
+ * which pre-filled form to open instead (spec 2026-10-12 §2 Q6, §6.6).
+ *
+ * The zone is the session user's, like `createReminderAction`'s: the
+ * transaction is dated on the due day the user's list shows, in that zone. No
+ * `now` and no provider override — the server's clock and the real FX policy.
+ *
+ * Only a recorded transaction revalidates anything, and then every page it
+ * changes: the occurrence leaves the due list (`/reminders`, `/dashboard`), and
+ * the ledger and the balances move (`/transactions`, `/accounts`). A
+ * `needs-form` answer wrote nothing.
+ */
+export async function payOccurrenceAction(
+  occurrenceId: string,
+): Promise<PayOccurrenceActionResult> {
+  const user = await requireUser()
+  const { timezone } = resolveProfileDefaults(user)
+  let result: PayOccurrenceResult
+  try {
+    result = await payOccurrence(user.id, occurrenceId, timezone)
+  } catch (e) {
+    return mapError(e)
+  }
+  if (result.status === 'created') {
+    revalidateReminderPages()
+    revalidatePath('/transactions')
+    revalidatePath('/accounts')
+  }
+  return { ok: true, data: result }
 }

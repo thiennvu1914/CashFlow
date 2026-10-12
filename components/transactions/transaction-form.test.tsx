@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { NextIntlClientProvider } from 'next-intl'
 import type { Currency } from '@prisma/client'
 import { loadMessages } from '@/lib/i18n/messages'
+import type { OccurrencePrefill } from '@/lib/server/services/reminder'
 
 /**
  * A markup test, not a DOM test: `renderToStaticMarkup` is enough to pin down
@@ -322,5 +323,83 @@ describe('TransactionForm editing an existing transaction', () => {
 
     expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Old wallet · 0 VND'])
     expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Bonus'])
+  })
+})
+
+/**
+ * Opened from a reminder's "Đã trả / Paid" that could not record the
+ * transaction in one tap (money-source linking spec 2026-10-12 §6.6): a new
+ * transaction, pre-filled from the occurrence the page read on the server.
+ * Static markup pins what the first paint offers — the pre-hydration
+ * stand-ins carry the form's initial values.
+ */
+describe('TransactionForm opened from a reminder', () => {
+  const ACCOUNTS: Account[] = [
+    { id: 'acc_cash', name: 'Cash', currency: 'VND', balance: '1000000.00' },
+    { id: 'acc_bank', name: 'Bank', currency: 'VND', balance: '2000000.00' },
+  ]
+
+  const PREFILL: OccurrencePrefill = {
+    type: 'EXPENSE',
+    amount: '1250000.00',
+    currency: 'VND',
+    accountId: 'acc_bank',
+    categoryId: 'cat_food',
+    // Not today, so the time is the 12:00 a one-tap Paid would use.
+    date: '2026-03-10',
+    note: 'Rent',
+    occurrenceId: 'occ_1',
+  }
+
+  function renderPrefilled(prefill: OccurrencePrefill) {
+    return renderToStaticMarkup(
+      <NextIntlClientProvider locale="vi" timeZone={TIMEZONE} messages={messages}>
+        <TransactionForm
+          accounts={ACCOUNTS}
+          categories={CATEGORIES}
+          timezone={TIMEZONE}
+          locale="vi"
+          prefill={prefill}
+        />
+      </NextIntlClientProvider>,
+    )
+  }
+
+  it('says where the values came from, and still adds a new transaction', () => {
+    const html = renderPrefilled(PREFILL)
+
+    expect(html).toContain(
+      'Điền sẵn từ nhắc nhở «Rent» — lưu giao dịch sẽ đánh dấu nhắc nhở là đã trả.',
+    )
+    expect(html).toContain('<legend class="sr-only">Thêm giao dịch</legend>')
+    expect(html).toMatch(/<button type="submit"[^>]*>Thêm giao dịch<\/button>/)
+  })
+
+  it("starts from the reminder's type, account, category and due day at 12:00", () => {
+    const html = renderPrefilled(PREFILL)
+
+    expect(radiogroupMarkup(html)).toMatch(/aria-checked="true"[^>]*>Chi tiêu/)
+    expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Bank · 2.000.000 VND'])
+    expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Food &amp; Dining'])
+    expect(html).toMatch(/id="transaction-date-[^"]*"[^>]*value="2026-03-10"/)
+    expect(html).toMatch(/id="transaction-time-[^"]*"[^>]*value="12:00"/)
+  })
+
+  it('falls back to the default account and no category when the reminder has none to offer', () => {
+    const html = renderPrefilled({ ...PREFILL, accountId: null, categoryId: null })
+
+    expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Cash · 1.000.000 VND'])
+    expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Chọn danh mục'])
+  })
+
+  it('pre-selects INCOME for an income reminder, with its own category', () => {
+    const html = renderPrefilled({ ...PREFILL, type: 'INCOME', categoryId: 'cat_salary' })
+
+    expect(radiogroupMarkup(html)).toMatch(/aria-checked="true"[^>]*>Thu nhập/)
+    expect(optionLabels(selectMarkup(html, 'category'))).toEqual(['Salary'])
+  })
+
+  it('shows no reminder notice on an ordinary create form', () => {
+    expect(render(ACCOUNTS)).not.toContain('Điền sẵn từ nhắc nhở')
   })
 })

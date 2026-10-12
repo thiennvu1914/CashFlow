@@ -44,6 +44,15 @@ const transactionFields = {
   // The `max` mirror of `accountId`'s `min`: the field carries no `maxLength`,
   // so a pasted note reaches this check and its message reaches the user.
   note: z.string().max(500, 'Keep the note under 500 characters').optional(),
+  /**
+   * The reminder occurrence this transaction pays, when the create form was
+   * opened from a reminder's "Đã trả / Paid" (money-source linking spec
+   * 2026-10-12 §6.6). Only an id: `createTransaction` checks it is the user's
+   * and still PENDING under a lock and links it in the same write. No field
+   * renders it, and `updateTransaction` ignores it — a link is made when the
+   * transaction is created, never moved onto an existing one.
+   */
+  occurrenceId: z.string().min(1).optional(),
 }
 
 const categoryRequirement = {

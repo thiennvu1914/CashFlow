@@ -72,8 +72,8 @@ export const createReminderSchema = z
     type: z.enum(['INCOME', 'EXPENSE'], { error: 'Choose income or expense' }),
     /** Strictly positive, matching `RecurringReminder_expectedAmount_positive`:
      *  a reminder for nothing is nothing to remind anyone of. It is what the
-     *  user *expects* to pay or receive, not a recorded amount — no Transaction
-     *  is ever created from it. */
+     *  user *expects* to pay or receive, not a recorded amount — it becomes
+     *  one only when the user presses "Đã trả / Paid" on an occurrence. */
     expectedAmount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
     currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
     /**

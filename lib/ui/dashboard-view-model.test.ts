@@ -256,6 +256,7 @@ function occurrence(overrides: {
     dueAt: overrides.dueAt,
     status: 'PENDING',
     actionedAt: null,
+    transactionId: null,
     createdAt: at,
     reminder: {
       id: `r-${overrides.id}`,
