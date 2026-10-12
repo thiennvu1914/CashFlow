@@ -430,7 +430,7 @@ describe('loan service', () => {
       expect(loan.scheduledPaymentAmount.toString()).toBe('4600000')
       expect(loan.notes).toBe('Home improvement loan')
       expect(loan.status).toBe('ACTIVE')
-      expect(loan.payments).toEqual([])
+      expect((await listLoans(fx.userId))[0].payments).toEqual([])
 
       // The anchor, derived rather than submitted: this loan is due on the 31st,
       // and that is what keeps the schedule off the 28th from February onwards.
@@ -1321,7 +1321,7 @@ describe('loan service', () => {
       expect((await entryFor(loan.id)).outstandingPrincipal.toString()).toBe('0')
     })
 
-    it('deletes the latest instalment, stepping the due date back by the period it advanced', async () => {
+    it('deletes an instalment, stepping the due date back by the one period recording it advanced', async () => {
       const loan = await createLoan(fx.userId, BASE_LOAN)
       await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 90_000,
@@ -1346,9 +1346,12 @@ describe('loan service', () => {
       expect(entry.interestPaid.toString()).toBe('10000')
     })
 
-    it('deletes an older instalment without moving the due date', async () => {
+    it('deletes an earlier instalment and still steps the due date back one period', async () => {
+      // Recording advances the schedule one period per instalment whatever its
+      // payment date, so the stored due date is "first due + N periods" and
+      // removing *any* one of the N must take one period off (Ruling P5).
       const loan = await createLoan(fx.userId, BASE_LOAN)
-      const { payment: older } = await recordLoanPayment(fx.userId, loan.id, {
+      const { payment: earlier } = await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 90_000,
         principalAmount: 80_000,
         interestAmount: 10_000,
@@ -1360,49 +1363,74 @@ describe('loan service', () => {
         interestAmount: 10_000,
         paymentDate: '2026-03-01',
       })
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
 
-      await deleteLoanPayment(fx.userId, older.id)
+      await deleteLoanPayment(fx.userId, earlier.id)
 
       expect(await paymentCount(loan.id)).toBe(1)
-      expect(await dueDate(loan.id)).toBe('2026-04-01')
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
       expect((await entryFor(loan.id)).outstandingPrincipal.toString()).toBe('920000')
     })
 
-    it('decides "latest" by payment date, not by entry order, and breaks a same-day tie by creation', async () => {
+    it('deletes the earlier of two same-day instalments, stepping the due date back once', async () => {
       const loan = await createLoan(fx.userId, BASE_LOAN)
-      // Entered last, but paid first: not the latest instalment.
+      const { payment: first } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 1_000,
+        principalAmount: 1_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-01',
+      })
+      const { payment: second } = await recordLoanPayment(fx.userId, loan.id, {
+        totalAmount: 2_000,
+        principalAmount: 2_000,
+        interestAmount: 0,
+        paymentDate: '2026-02-01',
+      })
+      expect(await dueDate(loan.id)).toBe('2026-04-01')
+
+      await deleteLoanPayment(fx.userId, first.id)
+
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
+      const remaining = await prisma.loanPayment.findMany({
+        where: { userId: fx.userId, loanId: loan.id },
+      })
+      expect(remaining.map((payment) => payment.id)).toEqual([second.id])
+      expect((await entryFor(loan.id)).outstandingPrincipal.toString()).toBe('998000')
+    })
+
+    it('returns the schedule to the first due date once every instalment is deleted, in any order', async () => {
+      const loan = await createLoan(fx.userId, BASE_LOAN)
       const { payment: march } = await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 1_000,
         principalAmount: 1_000,
         interestAmount: 0,
         paymentDate: '2026-03-01',
       })
+      // Entered after March but paid before it.
       const { payment: backdated } = await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 1_000,
         principalAmount: 1_000,
         interestAmount: 0,
         paymentDate: '2026-02-01',
       })
-      expect(await dueDate(loan.id)).toBe('2026-04-01')
-
-      await deleteLoanPayment(fx.userId, backdated.id)
-      expect(await dueDate(loan.id)).toBe('2026-04-01')
-
-      // Two on the same day: the one created later is the latest.
       const { payment: sameDay } = await recordLoanPayment(fx.userId, loan.id, {
         totalAmount: 1_000,
         principalAmount: 1_000,
         interestAmount: 0,
         paymentDate: '2026-03-01',
       })
-      expect(sameDay.createdAt.getTime()).toBeGreaterThanOrEqual(march.createdAt.getTime())
       expect(await dueDate(loan.id)).toBe('2026-05-01')
 
-      await deleteLoanPayment(fx.userId, march.id)
-      expect(await dueDate(loan.id)).toBe('2026-05-01')
-      await deleteLoanPayment(fx.userId, sameDay.id)
+      await deleteLoanPayment(fx.userId, backdated.id)
       expect(await dueDate(loan.id)).toBe('2026-04-01')
+      await deleteLoanPayment(fx.userId, march.id)
+      expect(await dueDate(loan.id)).toBe('2026-03-01')
+      await deleteLoanPayment(fx.userId, sameDay.id)
+
+      // Three instalments recorded, three deleted: the loan asks for its very
+      // first instalment again, exactly as it did before any was recorded.
       expect(await paymentCount(loan.id)).toBe(0)
+      expect(await dueDate(loan.id)).toBe(BASE_LOAN.nextDueDate)
     })
 
     it('steps a month-end schedule back across February onto its anchor day', async () => {
@@ -1423,10 +1451,12 @@ describe('loan service', () => {
       })
       expect(await dueDate(loan.id)).toBe('2026-03-31')
 
-      await deleteLoanPayment(fx.userId, second.id)
+      // The earlier one first: which instalment goes does not matter, each
+      // deletion takes exactly one period off the anchored schedule.
+      await deleteLoanPayment(fx.userId, first.id)
       expect(await dueDate(loan.id)).toBe('2026-02-28')
 
-      await deleteLoanPayment(fx.userId, first.id)
+      await deleteLoanPayment(fx.userId, second.id)
       expect(await dueDate(loan.id)).toBe('2026-01-31')
     })
 
@@ -1558,6 +1588,36 @@ describe('loan service', () => {
         // the due date: the second payment re-read 2026-03-01 rather than the
         // pre-race 2026-02-01, so neither advance was lost.
         expect(await dueDate(loan.id)).toBe('2026-04-01')
+      }
+    }, 30_000)
+
+    it('steps the due date back twice for two concurrent deletions, losing neither', async () => {
+      for (const run of [1, 2, 3]) {
+        const loan = await createLoan(fx.userId, { ...BASE_LOAN, lender: `Delete ${run}` })
+        const { payment: first } = await recordLoanPayment(fx.userId, loan.id, {
+          totalAmount: 1_000,
+          principalAmount: 1_000,
+          interestAmount: 0,
+          paymentDate: '2026-02-01',
+        })
+        const { payment: second } = await recordLoanPayment(fx.userId, loan.id, {
+          totalAmount: 1_000,
+          principalAmount: 1_000,
+          interestAmount: 0,
+          paymentDate: '2026-03-01',
+        })
+        expect(await dueDate(loan.id)).toBe('2026-04-01')
+
+        const results = await Promise.allSettled([
+          deleteLoanPayment(fx.userId, first.id),
+          deleteLoanPayment(fx.userId, second.id),
+        ])
+
+        // Both re-read the due date under the loan lock, so the second steps
+        // back from where the first left it rather than from the pre-race value.
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+        expect(await paymentCount(loan.id)).toBe(0)
+        expect(await dueDate(loan.id)).toBe(BASE_LOAN.nextDueDate)
       }
     }, 30_000)
 
@@ -2089,8 +2149,10 @@ describe('money-source linking', () => {
 
       expect(loan.currency).toBe('VND')
       expect(loan.disbursementTransactionId).not.toBeNull()
-      // What the instalment picker pre-selects (spec §6.3) travels with the row.
-      expect(loan.disbursementTransaction).toMatchObject({
+      // What the instalment picker pre-selects (spec §6.3) travels with the row
+      // the Loans page reads.
+      const [listed] = await listLoans(s.userId)
+      expect(listed.disbursementTransaction).toMatchObject({
         accountId: s.walletId,
         account: { name: 'Wallet', status: 'ACTIVE' },
       })
@@ -2160,7 +2222,7 @@ describe('money-source linking', () => {
 
       expect(loan.currency).toBe('USD')
       expect(loan.disbursementTransactionId).toBeNull()
-      expect(loan.disbursementTransaction).toBeNull()
+      expect((await listLoans(s.userId))[0].disbursementTransaction).toBeNull()
       expect(await transactionCount(s)).toBe(0)
       expect(await balanceOf(s, s.walletId)).toBe('5000000')
     })
@@ -2200,6 +2262,34 @@ describe('money-source linking', () => {
 
       expect(await prisma.loan.count({ where: { userId: s.userId } })).toBe(0)
       expect(await transactionCount(s)).toBe(0)
+    })
+
+    it('returns the committed loan without a read after the write, so a failing read cannot report a lost write', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      // Every way of reading a loan back fails from here on. A read made after
+      // the write had committed would turn a successful create into an error —
+      // and the user's retry into a second loan with a second CASH_IN.
+      for (const method of ['findUnique', 'findUniqueOrThrow', 'findFirst', 'findMany'] as const) {
+        vi.spyOn(prisma.loan, method).mockRejectedValue(new Error('read failed'))
+      }
+
+      const linked = await createLoan(
+        s.userId,
+        { ...BASE_LOAN, lender: 'Linked', accountId: s.walletId },
+        provider,
+      )
+      const unlinked = await createLoan(s.userId, { ...BASE_LOAN, lender: 'Unlinked' }, provider)
+      vi.restoreAllMocks()
+
+      expect(linked).toMatchObject({ lender: 'Linked', currency: 'VND', status: 'ACTIVE' })
+      expect(linked.disbursementTransactionId).not.toBeNull()
+      expect(unlinked).toMatchObject({ lender: 'Unlinked', disbursementTransactionId: null })
+      expect((await listLoans(s.userId)).map((loan) => loan.id).sort()).toEqual(
+        [linked.id, unlinked.id].sort(),
+      )
+      expect(await transactionCount(s)).toBe(1)
+      expect(await balanceOf(s, s.walletId)).toBe('6000000')
     })
 
     it('rolls the disbursement back when the loan row itself fails to write', async () => {
@@ -2920,14 +3010,14 @@ describe('money-source linking', () => {
       expect(await balanceOf(s, s.walletId)).toBe('4990000')
     })
 
-    it('re-asserts the type and category of both linked transactions, healing a stray edit', async () => {
+    it('re-asserts the type of both linked transactions, and keeps the category the interest was filed under', async () => {
       const s = await setup()
       const { payment, principal, interest } = await linkedPayment(s)
       const elsewhere = await prisma.category.create({
-        data: { userId: s.userId, name: 'Groceries', type: 'EXPENSE' },
+        data: { userId: s.userId, name: 'Bank fees', type: 'EXPENSE' },
       })
       // As the Transactions page could still do to a linked row before it is
-      // locked there (spec §6.5).
+      // locked there (spec §6.5): a stray type change, and a refiled category.
       await prisma.transaction.update({
         where: { userId_id: { userId: s.userId, id: principal.id } },
         data: { type: 'CASH_IN' },
@@ -2944,15 +3034,74 @@ describe('money-source linking', () => {
         fakeProvider().provider,
       )
 
+      // The type is what makes the money move the right way, so it heals; the
+      // interest's category is the user's own filing (Ruling P6), so it stays.
       expect(await transactionById(s, principal.id)).toMatchObject({
         type: 'CASH_OUT',
         categoryId: null,
       })
       expect(await transactionById(s, interest.id)).toMatchObject({
         type: 'EXPENSE',
-        categoryId: interest.categoryId,
+        categoryId: elsewhere.id,
       })
       expect(await balanceOf(s, s.walletId)).toBe('4910000')
+    })
+
+    it('keeps an archived "Loan Interest & Fees" on the interest transaction and creates no new category', async () => {
+      const s = await setup()
+      const { payment, interest } = await linkedPayment(s)
+      await prisma.category.update({
+        where: { userId_id: { userId: s.userId, id: interest.categoryId as string } },
+        data: { status: 'ARCHIVED' },
+      })
+
+      // A note-only edit…
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, note: 'Note only', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+      // …and a principal-only one.
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        {
+          totalAmount: 80_000,
+          principalAmount: 70_000,
+          interestAmount: 10_000,
+          paymentDate: '2026-03-05',
+          accountId: s.walletId,
+        },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, interest.id)).categoryId).toBe(interest.categoryId)
+      // Still only the one, archived category: nothing was created beside it.
+      const categories = await interestCategories(s)
+      expect(categories.map((category) => [category.id, category.status])).toEqual([
+        [interest.categoryId, 'ARCHIVED'],
+      ])
+      expect(await balanceOf(s, s.walletId)).toBe('4920000')
+    })
+
+    it('files an interest transaction that lost its category under "Loan Interest & Fees" again', async () => {
+      const s = await setup()
+      const { payment, interest } = await linkedPayment(s)
+      await prisma.transaction.update({
+        where: { userId_id: { userId: s.userId, id: interest.id } },
+        data: { categoryId: null },
+      })
+
+      await updateLoanPayment(
+        s.userId,
+        payment.id,
+        { ...INSTALMENT, note: 'Refiled', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, interest.id)).categoryId).toBe(interest.categoryId)
+      expect(await interestCategories(s)).toHaveLength(1)
     })
 
     it('keeps the over-payment rule and changes nothing when it refuses', async () => {
@@ -3113,8 +3262,7 @@ describe('money-source linking', () => {
       expect(await transactionCount(s)).toBe(0)
       expect(await balanceOf(s, s.walletId)).toBe('5000000')
       expect((await getLoanOutstandingPrincipal(s.userId, loan.id)).toString()).toBe('1000000')
-      // It was the latest instalment, so the due date steps back to where
-      // recording it found it.
+      // The due date steps back the one period recording it advanced.
       expect(formatCalendarDate((await loanById(s, loan.id)).nextDueDate)).toBe('2026-04-01')
     })
 

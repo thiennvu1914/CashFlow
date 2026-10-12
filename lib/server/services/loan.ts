@@ -74,10 +74,14 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  *    is enforced here — under a row lock, see below. Interest is *not* capped:
  *    a fully repaid loan can still owe a final interest charge.
  * 5. **The schedule never drifts.** `nextDueDate` advances by exactly one
- *    interval per accepted instalment, computed from `dueDayOfMonth` — the
- *    anchor day captured at creation (ruling R6-6a). A loan due on the 31st
- *    therefore reads Jan 31 → Feb 28 → Mar 31, not Jan 31 → Feb 28 → Mar 28 (a
- *    plain clamp) and not Jan 31 → Mar 2 → Apr 1 (`+30 days`). See
+ *    interval per accepted instalment, whatever its payment date, computed from
+ *    `dueDayOfMonth` — the anchor day captured at creation (ruling R6-6a) — so
+ *    it is always "first due date + N intervals" for N instalments. A loan due
+ *    on the 31st therefore reads Jan 31 → Feb 28 → Mar 31, not Jan 31 → Feb 28
+ *    → Mar 28 (a plain clamp) and not Jan 31 → Mar 2 → Apr 1 (`+30 days`).
+ *    Deleting an instalment — any one of the N — steps it back by exactly one
+ *    interval on the same anchor (Ruling P5), so deleting every instalment
+ *    returns the loan to its first due date. See
  *    `lib/datetime/add-months-clamped.ts`, which is where that arithmetic and
  *    its reasoning live.
  * 6. **Money is `Prisma.Decimal` end to end.** Every amount that enters is built
@@ -430,9 +434,21 @@ const PAYMENT_ORDER = [
   { id: 'asc' },
 ] satisfies Prisma.LoanPaymentOrderByWithRelationInput[]
 
-/** The one include every read here uses, so no caller can accidentally fetch a
- *  loan without its instalments or with them in a different order — or without
- *  the linked accounts `LoanRow` promises. */
+/**
+ * The one include every read here uses, so no caller can accidentally fetch a
+ * loan without its instalments or with them in a different order — or without
+ * the linked accounts `LoanRow` promises.
+ *
+ * Reads only. The writes return the plain committed `Loan` row they wrote, from
+ * inside their own write (no read after the commit, whose failure would report
+ * a write that did happen as a failure — and invite a retry that writes it
+ * twice), and never with this include: Prisma loads an include's sibling
+ * relations concurrently, and inside a transaction — an interactive one, or the
+ * implicit one a write with an `include` opens — those queries share one pg
+ * connection, which pg 8 deprecates ("Calling client.query() when the client is
+ * already executing a query"). Read through the pool, as the page does, each
+ * relation query gets a connection of its own.
+ */
 const WITH_PAYMENTS = {
   payments: {
     orderBy: PAYMENT_ORDER,
@@ -443,34 +459,6 @@ const WITH_PAYMENTS = {
   },
   disbursementTransaction: { select: LINKED_ACCOUNT },
 } satisfies Prisma.LoanInclude
-
-/**
- * A loan with everything `LoanRow` promises, read back after a write.
- *
- * Every write here returns its row through this read rather than through an
- * `include` on the write itself, and always *after* its transaction: Prisma
- * loads an include's sibling relations concurrently, and inside a transaction —
- * an interactive one, or the implicit one a write with an `include` opens —
- * those reads share a single pg connection, which pg 8 deprecates ("Calling
- * client.query() when the client is already executing a query"). Read through
- * the pool, each relation query gets a connection of its own. It reads the
- * committed row, so it can only ever show the write that just succeeded, or a
- * later one.
- */
-function readLoanRow(userId: string, loanId: string): Promise<LoanRow> {
-  return prisma.loan.findUniqueOrThrow({
-    where: { userId_id: { userId, id: loanId } },
-    include: WITH_PAYMENTS,
-  })
-}
-
-/** Newest instalment first, with the same total tie-breaks as `PAYMENT_ORDER`
- *  — which instalment is "the latest" when one is deleted. */
-const LATEST_PAYMENT_FIRST = [
-  { paymentDate: 'desc' },
-  { createdAt: 'desc' },
-  { id: 'desc' },
-] satisfies Prisma.LoanPaymentOrderByWithRelationInput[]
 
 /** Live loans before closed ones — the order the Loans page renders. */
 const STATUS_RANK: Record<LoanStoredStatus, number> = { ACTIVE: 0, CLOSED: 1 }
@@ -708,13 +696,16 @@ export async function getLoanOutstandingPrincipal(
  * Only the account is locked (by `insertTransactionInTx`): the loan row is
  * being created inside this transaction, so no one else can see it, let alone
  * lock it, before it commits.
+ *
+ * Returns the committed `Loan` row as written — its relations are the read
+ * path's to load (see `WITH_PAYMENTS`).
  */
 export async function createLoan(
   userId: string,
   input: CreateLoanInput,
   context: LoanLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
-): Promise<LoanRow> {
+): Promise<Loan> {
   const parsed = createLoanSchema.parse(input)
   const nextDueDate = calendarDateToUtcCarrier(parsed.nextDueDate)
   const data = {
@@ -743,11 +734,7 @@ export async function createLoan(
 
   const { accountId } = parsed
   if (accountId === undefined) {
-    const loan = await prisma.loan.create({
-      data: { ...data, currency: parsed.currency },
-      select: { id: true },
-    })
-    return readLoanRow(userId, loan.id)
+    return prisma.loan.create({ data: { ...data, currency: parsed.currency } })
   }
 
   // Before the transaction opens: never a provider call under a row lock, and
@@ -755,7 +742,7 @@ export async function createLoan(
   const fx = await getUsableCurrentRate(SNAPSHOT_PAIR, providerOverride)
   const date = calendarDateToEntryInstant(parsed.startDate, context.timezone)
 
-  const loanId = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const disbursement = await insertTransactionInTx(
       tx,
       userId,
@@ -768,7 +755,7 @@ export async function createLoan(
       },
       fx,
     )
-    const loan = await tx.loan.create({
+    return tx.loan.create({
       // `disbursement.currency` was copied from the locked account row, so the
       // loan and the money it brought in cannot disagree about the currency.
       data: {
@@ -776,11 +763,8 @@ export async function createLoan(
         currency: disbursement.currency,
         disbursementTransactionId: disbursement.id,
       },
-      select: { id: true },
     })
-    return loan.id
   })
-  return readLoanRow(userId, loanId)
 }
 
 /**
@@ -806,19 +790,21 @@ export async function createLoan(
  * into breaking an invariant. The worst a concurrent close can do is let an edit
  * land a moment before the freeze, which is indistinguishable from the user
  * having clicked Save a moment earlier.
+ *
+ * Returns the updated `Loan` row as written (see `WITH_PAYMENTS`).
  */
 export async function updateLoan(
   userId: string,
   loanId: string,
   input: UpdateLoanInput,
-): Promise<LoanRow> {
+): Promise<Loan> {
   const parsed = updateLoanSchema.parse(input)
   const existing = await prisma.loan.findUniqueOrThrow({
     where: { userId_id: { userId, id: loanId } },
   })
   if (existing.status !== 'ACTIVE') throw new LoanNotActiveError()
 
-  await prisma.loan.update({
+  return prisma.loan.update({
     where: { userId_id: { userId, id: loanId } },
     data: {
       lender: parsed.lender,
@@ -829,7 +815,6 @@ export async function updateLoan(
       notes: parsed.notes ?? null,
     },
   })
-  return readLoanRow(userId, loanId)
 }
 
 /**
@@ -1116,13 +1101,18 @@ function planLeg(
  *   have fit.
  * - **Each linked transaction follows its part** (`planLeg`): part wanted and
  *   linked — the same transaction row is updated (account, amount, date, note,
- *   and its type and category re-asserted — CASH_OUT with none, EXPENSE in
- *   "Loan Interest & Fees" — so a stray edit from elsewhere is healed); wanted
- *   and not linked — a transaction is created, exactly as `recordLoanPayment`
- *   would; linked and no longer wanted (no account, or the part became zero) —
- *   the link is cleared and the transaction deleted (in that order — the link
- *   is `ON DELETE RESTRICT`). Both parts always move to the same account, which
+ *   and its type re-asserted — CASH_OUT, EXPENSE — so a stray edit from
+ *   elsewhere cannot leave the money moving the wrong way); wanted and not
+ *   linked — a transaction is created, exactly as `recordLoanPayment` would;
+ *   linked and no longer wanted (no account, or the part became zero) — the
+ *   link is cleared and the transaction deleted (in that order — the link is
+ *   `ON DELETE RESTRICT`). Both parts always move to the same account, which
  *   must hold the loan's currency.
+ * - **Categories** (Ruling P6): the principal's CASH_OUT carries none. The
+ *   interest's EXPENSE keeps the category it already has — the user may have
+ *   refiled it, or archived "Loan Interest & Fees", and the composite foreign
+ *   key guarantees it is their own — so `ensureLoanInterestCategoryId` runs
+ *   only for a new interest transaction, or one whose category is missing.
  * - **The instant** stays the one the transactions already have when the date
  *   is unchanged (a note-only edit of an instalment paid today is not
  *   restamped, which would read as an economic change and need a fresh rate);
@@ -1229,9 +1219,12 @@ export async function updateLoanPayment(
       const plan = plans[leg]
       // A create or an update implies an account was chosen, so `target` is set.
       if (plan.kind === 'none' || plan.kind === 'delete' || target === undefined) continue
-      // After the account and loan locks, and only for a transaction that is
-      // written — re-asserted on an update, so the sync heals itself.
-      const categoryId = leg === 'interest' ? await ensureLoanInterestCategoryId(tx, userId) : null
+      // The interest keeps the category it is filed under; only a new interest
+      // transaction (or one that lost its category) is filed under "Loan
+      // Interest & Fees" — looked up after the account and loan locks.
+      const kept = plan.kind === 'update' ? plan.linked.categoryId : null
+      const categoryId =
+        leg === 'principal' ? null : (kept ?? (await ensureLoanInterestCategoryId(tx, userId)))
       if (plan.kind === 'create') {
         const created = await insertTransactionInTx(
           tx,
@@ -1297,12 +1290,13 @@ export async function updateLoanPayment(
  * Removes a recorded instalment and, when it was paid from an account, the
  * transactions that moved its money (spec §6.3) — all or nothing.
  *
- * When it was the loan's latest instalment — by `paymentDate`, a tie broken by
- * `createdAt` (`LATEST_PAYMENT_FIRST`), decided under the loan lock — the due
- * date steps back by exactly the interval recording it advanced
- * (`retreatByFrequency`, the inverse of `advanceByFrequency` on the same
- * anchor), so the schedule asks for that instalment again. Deleting an older
- * instalment leaves the due date alone.
+ * The due date steps back by exactly one interval (`retreatByFrequency`, the
+ * inverse of `advanceByFrequency` on the same anchor), whichever instalment is
+ * deleted (Ruling P5): recording advanced it one interval per instalment
+ * regardless of payment date, so it is "first due date + N intervals", and
+ * with one instalment fewer it must be "+ N − 1" — a schedule left ahead could
+ * never be corrected, because `nextDueDate` is not editable. Read and written
+ * under the loan lock, so two concurrent deletions step it back twice.
  *
  * Same locks and re-verification as `updateLoanPayment` (the linked account,
  * then the loan, then the transaction rows), so an archived account's frozen
@@ -1336,28 +1330,20 @@ export async function deleteLoanPayment(userId: string, paymentId: string): Prom
       await lockAndVerifyTransactionRow(tx, userId, linked.id, linked)
     }
 
-    const latest = await tx.loanPayment.findFirst({
-      where: { userId, loanId: loan.id },
-      orderBy: LATEST_PAYMENT_FIRST,
-      select: { id: true },
-    })
-
     await tx.loanPayment.delete({ where: { userId_id: { userId, id: paymentId } } })
     for (const linked of linkedRows) {
       await tx.transaction.delete({ where: { userId_id: { userId, id: linked.id } } })
     }
-    if (latest?.id === paymentId) {
-      await tx.loan.update({
-        where: { userId_id: { userId, id: loan.id } },
-        data: {
-          nextDueDate: retreatByFrequency(
-            loan.nextDueDate,
-            loan.paymentFrequency,
-            loan.dueDayOfMonth,
-          ),
-        },
-      })
-    }
+    await tx.loan.update({
+      where: { userId_id: { userId, id: loan.id } },
+      data: {
+        nextDueDate: retreatByFrequency(
+          loan.nextDueDate,
+          loan.paymentFrequency,
+          loan.dueDayOfMonth,
+        ),
+      },
+    })
   })
 }
 
@@ -1384,21 +1370,19 @@ export async function deleteLoanPayment(userId: string, paymentId: string): Prom
  * would report a failure for a state the user already has. The early return is a
  * true no-op — no write at all, so `updatedAt` is not bumped either. Payments
  * and edits still throw, because those ask for a change that will not happen.
+ *
+ * Returns the `Loan` row as it stands under the lock (see `WITH_PAYMENTS`).
  */
-export async function closeLoan(userId: string, loanId: string): Promise<LoanRow> {
-  await prisma.$transaction(async (tx) => {
+export async function closeLoan(userId: string, loanId: string): Promise<Loan> {
+  return prisma.$transaction(async (tx) => {
     await lockLoanRow(tx, userId, loanId)
 
-    const loan = await tx.loan.findUniqueOrThrow({
-      where: { userId_id: { userId, id: loanId } },
-      select: { status: true },
-    })
-    if (loan.status === 'CLOSED') return
+    const loan = await tx.loan.findUniqueOrThrow({ where: { userId_id: { userId, id: loanId } } })
+    if (loan.status === 'CLOSED') return loan
 
-    await tx.loan.update({
+    return tx.loan.update({
       where: { userId_id: { userId, id: loanId } },
       data: { status: 'CLOSED' },
     })
   })
-  return readLoanRow(userId, loanId)
 }

@@ -193,8 +193,8 @@ export async function updateLoanPaymentAction(
   return { ok: true }
 }
 
-/** Removes a recorded instalment and, when it moved money, its transactions;
- *  the latest instalment also steps the due date back. */
+/** Removes a recorded instalment and, when it moved money, its transactions,
+ *  and steps the due date back one period. */
 export async function deleteLoanPaymentAction(paymentId: string): Promise<LoanActionResult> {
   const user = await requireUser()
   try {

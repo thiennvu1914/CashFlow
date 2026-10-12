@@ -627,7 +627,8 @@ model Loan {
   paymentFrequency          PaymentFrequency
   scheduledPaymentAmount    Decimal          @db.Decimal(18, 2)
   /// Calendar date, stored as its UTC-midnight carrier (ruling R6-7). Advanced
-  /// by exactly one interval inside the same transaction as each payment.
+  /// by exactly one interval inside the same transaction as each payment, and
+  /// stepped back by one inside the same transaction as each payment deleted.
   nextDueDate               DateTime
   /// The schedule's anchor day, 1–31, captured from the first `nextDueDate`.
   dueDayOfMonth             Int

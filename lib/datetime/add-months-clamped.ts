@@ -150,9 +150,10 @@ export function advanceByFrequency(
  * anchored schedule. WEEKLY: −7 days. MONTHLY: −1 month at `anchorDay`.
  * YEARLY: −12 months at `anchorDay`.
  *
- * Used when the latest recorded instalment is deleted, to return the due date
- * to where recording it found it. That is exact, not approximate, because a
- * loan's `nextDueDate` always sits on its anchor day (clamped to the month):
+ * Used when a recorded instalment is deleted: recording advanced the due date
+ * one interval per instalment, so taking one away steps it back one. That is
+ * exact, not approximate, because a loan's `nextDueDate` always sits on its
+ * anchor day (clamped to the month):
  * it starts there (`dueDayOfMonth` is derived from it) and every advance lands
  * there. So 31 March steps back to 28 February — the day the advance from
  * 31 January produced — and 28 February steps back to 31 January, not the
