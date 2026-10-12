@@ -1,30 +1,36 @@
 import * as z from 'zod'
-import { optionalCalendarDateSchema } from '@/lib/validation/calendar-date'
+import {
+  calendarDateStringSchema,
+  optionalCalendarDateSchema,
+} from '@/lib/validation/calendar-date'
 import { moneyAmountSchema } from '@/lib/validation/money'
 
 /**
- * A savings goal's client-supplied fields (spec §4.8).
+ * A savings goal's and a goal entry's client-supplied fields (spec §4.8, as
+ * amended by money-source linking, spec 2026-10-12 §6.7).
  *
  * No Prisma import, for the reason `lib/validation/budget.ts` gives: the goal
  * forms are client components and import these schemas straight into their
  * `zodResolver`, so nothing here may drag the Prisma client into a browser
- * bundle. `currency` is therefore a literal enum mirroring the schema's own
- * `Currency`, and the service's `create`/`update` calls are type-checked
- * against the generated Prisma types, so a divergence fails `tsc` rather than
- * reaching the database.
+ * bundle. `currency` and `kind` are therefore literal enums mirroring the
+ * schema's own `Currency` / `SavingsGoalEntryKind`, and the service's calls are
+ * type-checked against the generated Prisma types, so a divergence fails `tsc`
+ * rather than reaching the database.
  *
  * Every field carries product copy. A Zod default message ("Invalid input",
  * "Too small: expected string to have >=1 characters") is a developer's
  * sentence, and these strings are rendered verbatim under a form field —
  * `savings-goal.test.ts` asserts that none of them can leak.
  *
- * `status` is deliberately absent from all three schemas: ACHIEVED is derived
- * from progress against target on every write, and ARCHIVED is set only by
- * `archiveSavingsGoal`. A client that posts a status is ignored, not obeyed.
+ * `status` is deliberately absent from every schema: ACHIEVED is derived from
+ * progress against target, and ARCHIVED is set only by `archiveSavingsGoal`. A
+ * client that posts a status is ignored, not obeyed. Progress itself is not an
+ * input at all any more: it is a linked account's balance or the sum of the
+ * goal's entries.
  */
 
 /** Shared so the create form and the edit form cannot word the same field
- *  differently — the edit form is the create form minus `currentProgress`. */
+ *  differently. */
 const savingsGoalFields = {
   name: z
     .string({ error: 'Enter a name' })
@@ -34,6 +40,8 @@ const savingsGoalFields = {
   /** Strictly positive, matching `SavingsGoal_targetAmount_positive`: a goal of
    *  zero is already met and can never be progressed. */
   targetAmount: moneyAmountSchema.refine((v) => v > 0, 'Target must be greater than zero'),
+  /** With a linked account, ignored by the service: the goal takes the
+   *  account's currency (spec 2026-10-12 §6.7). */
   currency: z.enum(['VND', 'USD'], { error: 'Choose a currency' }),
   deadline: optionalCalendarDateSchema,
   // The `max` message is the one a user can actually reach: the textarea
@@ -46,36 +54,94 @@ const savingsGoalFields = {
     .string({ error: 'Enter the note as text' })
     .max(500, 'Keep the note under 500 characters')
     .optional(),
+  /**
+   * The account whose derived balance IS this goal's progress; absent means
+   * "not linked", and the goal's own entries are its progress. Same field and
+   * copy as the debt and reminder forms' account: an id or nothing. Whether it
+   * is the user's own, active account is decided by the service.
+   */
+  linkedAccountId: z.string({ error: 'Choose an account' }).min(1, 'Choose an account').optional(),
 }
 
 /**
- * `>= 0`, not `> 0`, and with no upper bound against the target:
- * `SavingsGoal_currentProgress_nonnegative` is the database's half of the same
- * rule, and over-saving is a real thing a user does — the progress *bar* is
- * clamped in the view model, the stored figure never is.
+ * Create takes the definition plus, optionally, what is already saved — which
+ * the service records as the goal's first CONTRIBUTION, dated today, rather
+ * than as an absolute figure. `>= 0` so a typed `0` reads as "nothing yet"
+ * (the service records no entry for it).
+ *
+ * A linked goal's progress is its account's balance, so an opening amount there
+ * would be a contribution the goal can never show — refused on the field
+ * itself, so the form highlights it.
  */
-const currentProgressField = moneyAmountSchema.refine((v) => v >= 0, 'Progress cannot be negative')
+export const createSavingsGoalSchema = z
+  .object({
+    ...savingsGoalFields,
+    initialContribution: moneyAmountSchema
+      .refine((v) => v >= 0, 'Progress cannot be negative')
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.linkedAccountId !== undefined &&
+      value.initialContribution !== undefined &&
+      value.initialContribution > 0
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['initialContribution'],
+        message: 'A linked goal follows its account balance — leave this empty',
+      })
+    }
+  })
 
-export const createSavingsGoalSchema = z.object({
-  ...savingsGoalFields,
-  // Optional on create, and defaulted to 0 by the service rather than by Zod:
-  // "how much do you already have set aside?" is a question the user may
-  // reasonably skip, and 0 is not a value they should have to type.
-  currentProgress: currentProgressField.optional(),
+/**
+ * An edit changes the goal's definition — and which source its progress comes
+ * from — but never the progress itself: that moves through entries (or the
+ * linked account). Absent `linkedAccountId` unlinks, exactly as an absent
+ * deadline clears the deadline: the edit form always posts the whole
+ * definition. Switching keeps the goal's entries (spec §6.7).
+ */
+export const updateSavingsGoalSchema = z.object({ ...savingsGoalFields })
+
+/**
+ * One "+ contribution" or "− withdrawal" on an unlinked goal (spec §6.7).
+ *
+ * `amount` is strictly positive — the sign is `kind`, never the number, the way
+ * a transaction's sign is its type — and the database's
+ * `SavingsGoalEntry_amount_nonnegative` is the backstop. Whether a withdrawal
+ * fits under what is saved is a cross-row question the service answers under
+ * the goal's row lock.
+ */
+export const savingsGoalEntrySchema = z.object({
+  kind: z.enum(['CONTRIBUTION', 'WITHDRAWAL'], { error: 'Choose contribute or withdraw' }),
+  amount: moneyAmountSchema.refine((v) => v > 0, 'Amount must be greater than zero'),
+  /**
+   * Required: an entry happened on a day, and which day is what the history is
+   * for. Fronted with its own `z.string().min(1)` so the reachable empty cases
+   * (an untouched date input's `''`, a missing key) get copy about this field;
+   * a malformed or impossible value gets `calendarDateStringSchema`'s shared
+   * wording — the same shape as a debt payment's date.
+   */
+  date: z.string({ error: 'Enter a date' }).min(1, 'Enter a date').pipe(calendarDateStringSchema),
+  note: z
+    .string({ error: 'Enter the note as text' })
+    .max(500, 'Keep the note under 500 characters')
+    .optional(),
 })
 
 /**
- * An edit changes the goal's definition, never its progress. The two are
- * separate actions because they are separate user intents — "I actually need
- * 60 million, not 50" and "I have saved another 2 million" — and mixing them
- * into one form would make either one an accidental overwrite of the other.
+ * @deprecated Transitional (money-source linking Task 9 → Task 10): the
+ * Savings page's "Cập nhật tiến độ / Update progress" dialog still posts an
+ * absolute "current amount". The service records the difference as one entry
+ * rather than overwriting anything. Removed with that dialog when the
+ * contribute/withdraw UI lands.
  */
-export const updateSavingsGoalSchema = createSavingsGoalSchema.omit({ currentProgress: true })
-
 export const updateSavingsGoalProgressSchema = z.object({
-  currentProgress: currentProgressField,
+  progress: moneyAmountSchema.refine((v) => v >= 0, 'Progress cannot be negative'),
 })
 
 export type CreateSavingsGoalInput = z.infer<typeof createSavingsGoalSchema>
 export type UpdateSavingsGoalInput = z.infer<typeof updateSavingsGoalSchema>
+export type SavingsGoalEntryInput = z.infer<typeof savingsGoalEntrySchema>
+/** @deprecated See `updateSavingsGoalProgressSchema`. */
 export type UpdateSavingsGoalProgressInput = z.infer<typeof updateSavingsGoalProgressSchema>

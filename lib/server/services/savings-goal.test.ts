@@ -6,39 +6,51 @@ import type { MockInstance } from 'vitest'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { formatCalendarDate } from '@/lib/datetime/calendar-date'
-import { getAccountBalance } from '@/lib/server/services/balance'
+import { readMigrationSql, splitSqlStatements } from '@/lib/testing/migration-sql'
+import { ArchivedAccountError } from './account-lock'
+import { getAccountBalance } from './balance'
+import { createTransfer } from './transfer'
 import {
+  addSavingsGoalEntry,
   archiveSavingsGoal,
   createSavingsGoal,
+  deleteSavingsGoalEntry,
   deriveSavingsGoalStatus,
   listAllSavingsGoals,
   listSavingsGoals,
   updateSavingsGoal,
+  updateSavingsGoalEntry,
   updateSavingsGoalProgress,
   SavingsGoalArchivedError,
+  SavingsGoalLinkedError,
+  SavingsGoalWithdrawalExceedsProgressError,
+  type SavingsGoalRow,
 } from './savings-goal'
 
 /**
- * Group 1's data-layer acceptance check (spec §4.8).
+ * The savings-goal data layer (spec §4.8, amended by money-source linking,
+ * spec 2026-10-12 §2 Q5, §5 and §6.7).
  *
- * Five properties are what this suite exists to hold:
+ * The properties this suite exists to hold:
  *
- * 1. **Nothing here moves money.** The fixture seeds an account and an EXPENSE
- *    transaction, and the "no account mutation" case runs *every* mutation in
- *    the service before re-asserting the account/transaction/transfer counts
- *    and the account's derived balance. A stray write to any of them fails it.
- * 2. **ACHIEVED is derived on every write.** The boundary is exercised on the
- *    exact `Decimal` (target 100.10 against progress 100.10 and 100.09), which
- *    is the case a `toNumber()` comparison can flip, and in both directions —
- *    raising a target un-achieves a goal, lowering it re-achieves one.
- * 3. **ARCHIVED is terminal but archiving is idempotent.** Edits and progress
- *    updates on an archived goal throw; archiving one again is a no-op that
- *    does not even bump `updatedAt`.
- * 4. **A calendar deadline survives the round trip.** A deadline written as
- *    `2026-12-31` comes back out of Postgres as `2026-12-31` — at UTC midnight,
- *    never shifted by the server's or the user's zone.
- * 5. **Every query is tenant-scoped.** A second user's goal is targeted by each
- *    mutation, which must fail with P2025 and leave the row byte-identical.
+ * 1. **Progress is derived, never stored.** A goal linked to an account reads
+ *    that account's current derived balance — so a transfer into the account
+ *    moves the goal with no goal write at all — and an unlinked goal reads
+ *    Σ contributions − Σ withdrawals over its entries. The deprecated
+ *    `currentProgress` column is neither read nor written.
+ * 2. **Progress never goes below zero.** A withdrawal, a shrunk contribution
+ *    or a deleted one that would take an unlinked goal negative is refused,
+ *    under the goal's row lock, so two concurrent withdrawals cannot both pass.
+ * 3. **Entries belong to unlinked, unarchived goals only.**
+ * 4. **ACHIEVED is derived from that progress**, on every read and every write,
+ *    at the exact `Decimal` boundary.
+ * 5. **ARCHIVED is terminal but archiving is idempotent.**
+ * 6. **Every query is tenant-scoped**: another user's goal, entry or account is
+ *    a P2025 and their rows stay byte-identical.
+ * 7. **Nothing here moves money** — a goal follows an account, it never writes
+ *    to one.
+ * 8. **The data backfill is idempotent**: the migration's INSERT, run twice,
+ *    gives each pre-existing goal exactly one opening contribution.
  *
  * `fetch` is a throwing spy for every test and `afterEach` asserts it was never
  * called: a savings goal has no FX dimension at all (each goal keeps its own
@@ -47,19 +59,20 @@ import {
 
 /** UTC+7, no DST — so no wall-clock assertion below depends on a DST date. */
 const TEST_TIMEZONE = 'Asia/Ho_Chi_Minh'
+const CONTEXT = { timezone: TEST_TIMEZONE }
 
 interface GoalFixture {
   userId: string
+  accountTypeId: string
+  /** "Wallet", VND: 5,000,000 initial − a 250,000 expense = 4,750,000. */
   accountId: string
   transactionId: string
 }
 
 /**
- * A user with one account and one expense already recorded.
- *
- * The account and the transaction exist purely so the "no account mutation"
- * case has something that *could* be corrupted: with an empty ledger, "counts
- * unchanged" and "balance unchanged" would both hold trivially.
+ * A user with one account and one expense already recorded — the expense so
+ * the account's derived balance is a real, non-initial figure, and so the
+ * "no money moves" case has something that *could* be corrupted.
  */
 async function createGoalUser(): Promise<GoalFixture> {
   const user = await prisma.user.create({
@@ -79,6 +92,7 @@ async function createGoalUser(): Promise<GoalFixture> {
       accountTypeId: accountType.id,
       initialBalance: new Prisma.Decimal('5000000'),
       currency: 'VND',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
     },
   })
   const date = new Date('2026-03-15T05:00:00.000Z')
@@ -96,13 +110,37 @@ async function createGoalUser(): Promise<GoalFixture> {
       fxRateSource: 'savings-goal-test',
     },
   })
-  return { userId: user.id, accountId: account.id, transactionId: transaction.id }
+  return {
+    userId: user.id,
+    accountTypeId: accountType.id,
+    accountId: account.id,
+    transactionId: transaction.id,
+  }
+}
+
+/** A second account of the fixture user, created long before any test's `now`. */
+async function createAccount(
+  fx: GoalFixture,
+  data: { name: string; currency?: 'VND' | 'USD'; initialBalance?: string; archived?: boolean },
+) {
+  return prisma.financialAccount.create({
+    data: {
+      userId: fx.userId,
+      accountTypeId: fx.accountTypeId,
+      name: data.name,
+      currency: data.currency ?? 'VND',
+      initialBalance: new Prisma.Decimal(data.initialBalance ?? '0'),
+      status: data.archived ? 'ARCHIVED' : 'ACTIVE',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  })
 }
 
 /** Deletes a user's rows in FK order, then the user. */
 async function cleanupUsers(userIds: string[]) {
   if (userIds.length === 0) return
   try {
+    await prisma.savingsGoalEntry.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.savingsGoal.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.transaction.deleteMany({ where: { userId: { in: userIds } } })
     await prisma.transfer.deleteMany({ where: { userId: { in: userIds } } })
@@ -141,6 +179,17 @@ const BASE_INPUT = {
   currency: 'VND' as const,
 }
 
+/** One listed goal, by id — what the page and the dashboard actually render. */
+async function listed(userId: string, goalId: string, now?: Date): Promise<SavingsGoalRow> {
+  const goal = (await listAllSavingsGoals(userId, { now })).find((row) => row.id === goalId)
+  if (!goal) throw new Error(`goal ${goalId} not listed`)
+  return goal
+}
+
+async function storedGoal(userId: string, goalId: string) {
+  return prisma.savingsGoal.findUniqueOrThrow({ where: { userId_id: { userId, id: goalId } } })
+}
+
 describe('deriveSavingsGoalStatus', () => {
   const d = (value: string) => new Prisma.Decimal(value)
 
@@ -159,9 +208,11 @@ describe('deriveSavingsGoalStatus', () => {
   })
 
   it('re-derives an already-ACHIEVED goal back to ACTIVE', () => {
-    // The stored status is not consulted except for ARCHIVED: a goal whose
-    // target was just raised is ACTIVE again, however it was stored.
     expect(deriveSavingsGoalStatus(d('100'), d('200'), 'ACHIEVED')).toBe('ACTIVE')
+  })
+
+  it('reads a negative progress (an overdrawn linked account) as ACTIVE', () => {
+    expect(deriveSavingsGoalStatus(d('-500'), d('100'), 'ACTIVE')).toBe('ACTIVE')
   })
 
   it('keeps ARCHIVED whatever the arithmetic says', () => {
@@ -202,52 +253,85 @@ describe('savings-goal service', () => {
   })
 
   describe('create', () => {
-    it('defaults progress to 0, starts ACTIVE, and stores no deadline', async () => {
-      const goal = await createSavingsGoal(fx.userId, BASE_INPUT)
+    it('starts unlinked at zero progress, ACTIVE, with no entries and no deadline', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
 
       expect(goal.name).toBe('MacBook Pro')
       expect(goal.targetAmount.toString()).toBe('50000000')
-      expect(goal.currentProgress.toString()).toBe('0')
+      expect(goal.progress.toString()).toBe('0')
+      expect(goal.linkedAccount).toBeNull()
+      expect(goal.linkedAccountId).toBeNull()
       expect(goal.currency).toBe('VND')
       expect(goal.status).toBe('ACTIVE')
       expect(goal.deadline).toBeNull()
       expect(goal.note).toBeNull()
       expect(goal.userId).toBe(fx.userId)
+      // The deprecated column is not even part of what the service returns.
+      expect(goal).not.toHaveProperty('currentProgress')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('records the initial amount as a first CONTRIBUTION dated today in the user zone', async () => {
+      // 20:00 UTC on the 15th is already 03:00 on the 16th in Ho Chi Minh City.
+      const now = new Date('2026-03-15T20:00:00.000Z')
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000_000, initialContribution: 400_000 },
+        CONTEXT,
+        now,
+      )
+
+      expect(goal.progress.toString()).toBe('400000')
+      expect(goal.status).toBe('ACTIVE')
+      const entries = await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toMatchObject({ goalId: goal.id, kind: 'CONTRIBUTION', note: null })
+      expect(entries[0].amount.toString()).toBe('400000')
+      expect(entries[0].date.toISOString()).toBe('2026-03-16T00:00:00.000Z')
+      // The deprecated column stays exactly as the database defaulted it.
+      expect((await storedGoal(fx.userId, goal.id)).currentProgress.toString()).toBe('0')
+    })
+
+    it('is ACHIEVED from its first render when the initial amount meets the target', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000_000, initialContribution: 1_000_000 },
+        CONTEXT,
+      )
+
+      expect(goal.status).toBe('ACHIEVED')
+      expect((await storedGoal(fx.userId, goal.id)).status).toBe('ACHIEVED')
+    })
+
+    it('treats an initial amount of zero as none', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 0 },
+        CONTEXT,
+      )
+
+      expect(goal.progress.toString()).toBe('0')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
     })
 
     it('round-trips a deadline through Postgres as the same calendar date', async () => {
-      const goal = await createSavingsGoal(fx.userId, { ...BASE_INPUT, deadline: '2026-12-31' })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, deadline: '2026-12-31' },
+        CONTEXT,
+      )
 
-      // Not 2026-12-30T17:00Z (the +07 midnight) and not the 30th read back:
-      // the stored instant's UTC components ARE the calendar date the user
-      // picked, in every zone.
       expect(goal.deadline?.toISOString()).toBe('2026-12-31T00:00:00.000Z')
-      expect(formatCalendarDate(goal.deadline as Date)).toBe('2026-12-31')
-
-      const stored = await prisma.savingsGoal.findUniqueOrThrow({
-        where: { userId_id: { userId: fx.userId, id: goal.id } },
-      })
+      const stored = await storedGoal(fx.userId, goal.id)
       expect(formatCalendarDate(stored.deadline as Date)).toBe('2026-12-31')
     })
 
-    it('is ACHIEVED immediately when the starting progress already meets the target', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        targetAmount: 1_000_000,
-        currentProgress: 1_000_000,
-      })
-
-      expect(goal.status).toBe('ACHIEVED')
-      expect(goal.currentProgress.toString()).toBe('1000000')
-    })
-
     it('stores a note and a USD currency as given', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        name: 'Trip',
-        targetAmount: 2_500.5,
-        currency: 'USD',
-        note: 'Japan, spring',
-      })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { name: 'Trip', targetAmount: 2_500.5, currency: 'USD', note: 'Japan, spring' },
+        CONTEXT,
+      )
 
       expect(goal.currency).toBe('USD')
       expect(goal.targetAmount.toString()).toBe('2500.5')
@@ -255,28 +339,69 @@ describe('savings-goal service', () => {
     })
 
     it('ignores a client-supplied status', async () => {
-      // Zod strips it and the service writes a derived status regardless, so a
-      // crafted request cannot mark an unmet goal ACHIEVED or archive one.
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        ...({ status: 'ARCHIVED' } as object),
-      })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, ...({ status: 'ARCHIVED' } as object) },
+        CONTEXT,
+      )
 
       expect(goal.status).toBe('ACTIVE')
     })
 
     it('rejects an impossible deadline rather than storing a rolled-over date', async () => {
       await expect(
-        createSavingsGoal(fx.userId, { ...BASE_INPUT, deadline: '2026-02-30' }),
+        createSavingsGoal(fx.userId, { ...BASE_INPUT, deadline: '2026-02-30' }, CONTEXT),
       ).rejects.toThrow()
 
+      expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it("links to an account: the account's currency, and its derived balance as progress", async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        // USD is asked for and ignored: a linked goal is in its account's currency.
+        { ...BASE_INPUT, currency: 'USD', targetAmount: 4_000_000, linkedAccountId: fx.accountId },
+        CONTEXT,
+      )
+
+      expect(goal.currency).toBe('VND')
+      expect(goal.linkedAccountId).toBe(fx.accountId)
+      expect(goal.linkedAccount).toEqual({ id: fx.accountId, name: 'Wallet', status: 'ACTIVE' })
+      // 5,000,000 initial − 250,000 expense.
+      expect(goal.progress.toString()).toBe('4750000')
+      expect(goal.status).toBe('ACHIEVED')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('refuses an initial amount on a linked goal, and writes nothing', async () => {
+      await expect(
+        createSavingsGoal(
+          fx.userId,
+          { ...BASE_INPUT, linkedAccountId: fx.accountId, initialContribution: 100 },
+          CONTEXT,
+        ),
+      ).rejects.toThrow()
+
+      expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('refuses to link a new goal to an archived account', async () => {
+      const archived = await createAccount(fx, { name: 'Old', archived: true })
+
+      await expect(
+        createSavingsGoal(fx.userId, { ...BASE_INPUT, linkedAccountId: archived.id }, CONTEXT),
+      ).rejects.toThrow(ArchivedAccountError)
       expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(0)
     })
   })
 
   describe('update', () => {
-    it('changes name, target, currency, deadline and note', async () => {
-      const goal = await createSavingsGoal(fx.userId, { ...BASE_INPUT, deadline: '2026-12-31' })
+    it('changes name, target, currency, deadline and note, and leaves progress alone', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, deadline: '2026-12-31', initialContribution: 1_000 },
+        CONTEXT,
+      )
 
       const updated = await updateSavingsGoal(fx.userId, goal.id, {
         name: 'MacBook Air',
@@ -291,16 +416,16 @@ describe('savings-goal service', () => {
       expect(updated.currency).toBe('USD')
       expect(formatCalendarDate(updated.deadline as Date)).toBe('2027-06-30')
       expect(updated.note).toBe('Cheaper option')
-      // Progress is not the edit form's business.
-      expect(updated.currentProgress.toString()).toBe('0')
+      expect(updated.progress.toString()).toBe('1000')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(1)
     })
 
     it('clears a deadline and a note when the fields come back empty', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        deadline: '2026-12-31',
-        note: 'Original',
-      })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, deadline: '2026-12-31', note: 'Original' },
+        CONTEXT,
+      )
 
       const updated = await updateSavingsGoal(fx.userId, goal.id, {
         ...BASE_INPUT,
@@ -308,18 +433,16 @@ describe('savings-goal service', () => {
         note: undefined,
       })
 
-      // The absence has to be *written*: skipping the field would leave the old
-      // deadline in place, so a user could never remove one.
       expect(updated.deadline).toBeNull()
       expect(updated.note).toBeNull()
     })
 
-    it('flips ACHIEVED back to ACTIVE when the target is raised above the progress', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        targetAmount: 1_000_000,
-        currentProgress: 1_000_000,
-      })
+    it('flips ACHIEVED back to ACTIVE when the target is raised above the derived progress', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000_000, initialContribution: 1_000_000 },
+        CONTEXT,
+      )
       expect(goal.status).toBe('ACHIEVED')
 
       const raised = await updateSavingsGoal(fx.userId, goal.id, {
@@ -328,16 +451,16 @@ describe('savings-goal service', () => {
       })
 
       expect(raised.status).toBe('ACTIVE')
-      // The progress itself is untouched — only the verdict changed.
-      expect(raised.currentProgress.toString()).toBe('1000000')
+      expect(raised.progress.toString()).toBe('1000000')
+      expect((await storedGoal(fx.userId, goal.id)).status).toBe('ACTIVE')
     })
 
-    it('flips ACTIVE to ACHIEVED when the target is lowered to the progress', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        targetAmount: 2_000_000,
-        currentProgress: 1_000_000,
-      })
+    it('flips ACTIVE to ACHIEVED when the target is lowered to the derived progress', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 2_000_000, initialContribution: 1_000_000 },
+        CONTEXT,
+      )
       expect(goal.status).toBe('ACTIVE')
 
       const lowered = await updateSavingsGoal(fx.userId, goal.id, {
@@ -349,15 +472,11 @@ describe('savings-goal service', () => {
     })
 
     it('re-derives at the exact Decimal boundary, not at a float one', async () => {
-      // Progress 100.10 against targets 100.10 and 100.09/100.11: the same
-      // boundary `deriveSavingsGoalStatus` is unit-tested on, this time all the
-      // way through Postgres, so the column's own scale is in the loop too.
-      const goal = await createSavingsGoal(fx.userId, {
-        name: 'Boundary',
-        targetAmount: 100.1,
-        currency: 'USD',
-        currentProgress: 100.1,
-      })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { name: 'Boundary', targetAmount: 100.1, currency: 'USD', initialContribution: 100.1 },
+        CONTEXT,
+      )
       expect(goal.status).toBe('ACHIEVED')
 
       const justAbove = await updateSavingsGoal(fx.userId, goal.id, {
@@ -374,145 +493,536 @@ describe('savings-goal service', () => {
       })
       expect(justBelow.status).toBe('ACHIEVED')
     })
-  })
 
-  describe('progress', () => {
-    it('marks a goal ACHIEVED at exactly the target', async () => {
-      const goal = await createSavingsGoal(fx.userId, { ...BASE_INPUT, targetAmount: 1_000_000 })
+    it('switches the progress source both ways and keeps the entries throughout', async () => {
+      const savings = await createAccount(fx, { name: 'Savings', initialBalance: '700000' })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, currency: 'USD', targetAmount: 1_000_000, initialContribution: 300 },
+        CONTEXT,
+      )
 
-      const halfway = await updateSavingsGoalProgress(fx.userId, goal.id, {
-        currentProgress: 500_000,
+      const linked = await updateSavingsGoal(fx.userId, goal.id, {
+        ...BASE_INPUT,
+        currency: 'USD',
+        targetAmount: 1_000_000,
+        linkedAccountId: savings.id,
       })
-      expect(halfway.status).toBe('ACTIVE')
-      expect(halfway.currentProgress.toString()).toBe('500000')
+      expect(linked.linkedAccount).toEqual({ id: savings.id, name: 'Savings', status: 'ACTIVE' })
+      // The currency follows the account; the progress is its balance.
+      expect(linked.currency).toBe('VND')
+      expect(linked.progress.toString()).toBe('700000')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(1)
 
-      const met = await updateSavingsGoalProgress(fx.userId, goal.id, {
-        currentProgress: 1_000_000,
-      })
-      expect(met.status).toBe('ACHIEVED')
-    })
-
-    it('stores over-saved progress as given rather than clamping it', async () => {
-      const goal = await createSavingsGoal(fx.userId, { ...BASE_INPUT, targetAmount: 1_000_000 })
-
-      const over = await updateSavingsGoalProgress(fx.userId, goal.id, {
-        currentProgress: 1_200_000,
-      })
-
-      // Clamping happens only in the DTO's progress *bar*: the figure the user
-      // typed is not the service's to round down.
-      expect(over.currentProgress.toString()).toBe('1200000')
-      expect(over.status).toBe('ACHIEVED')
-    })
-
-    it('accepts a reduction back to zero, which un-achieves the goal', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
+      const unlinked = await updateSavingsGoal(fx.userId, goal.id, {
         ...BASE_INPUT,
         targetAmount: 1_000_000,
-        currentProgress: 1_000_000,
       })
-      expect(goal.status).toBe('ACHIEVED')
+      expect(unlinked.linkedAccount).toBeNull()
+      expect(unlinked.linkedAccountId).toBeNull()
+      expect(unlinked.progress.toString()).toBe('300')
+    })
 
-      const spent = await updateSavingsGoalProgress(fx.userId, goal.id, { currentProgress: 0 })
+    it('keeps a link to an account archived since, but refuses a new link to an archived one', async () => {
+      const kept = await createAccount(fx, { name: 'Kept' })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, linkedAccountId: kept.id },
+        CONTEXT,
+      )
+      await prisma.financialAccount.update({
+        where: { userId_id: { userId: fx.userId, id: kept.id } },
+        data: { status: 'ARCHIVED' },
+      })
 
-      expect(spent.currentProgress.toString()).toBe('0')
-      expect(spent.status).toBe('ACTIVE')
+      // Renaming a goal whose account was archived must not be blocked by it.
+      const renamed = await updateSavingsGoal(fx.userId, goal.id, {
+        ...BASE_INPUT,
+        name: 'Renamed',
+        linkedAccountId: kept.id,
+      })
+      expect(renamed.name).toBe('Renamed')
+      expect(renamed.linkedAccount).toEqual({ id: kept.id, name: 'Kept', status: 'ARCHIVED' })
+
+      const other = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+      await expect(
+        updateSavingsGoal(fx.userId, other.id, { ...BASE_INPUT, linkedAccountId: kept.id }),
+      ).rejects.toThrow(ArchivedAccountError)
+      expect((await storedGoal(fx.userId, other.id)).linkedAccountId).toBeNull()
+    })
+  })
+
+  describe('linked progress', () => {
+    it('follows a transfer into the account, with no write to the goal', async () => {
+      const savings = await createAccount(fx, { name: 'Savings' })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000_000, linkedAccountId: savings.id },
+        CONTEXT,
+      )
+      expect(goal.progress.toString()).toBe('0')
+      expect(goal.status).toBe('ACTIVE')
+      const before = await storedGoal(fx.userId, goal.id)
+
+      await createTransfer(fx.userId, {
+        fromAccountId: fx.accountId,
+        toAccountId: savings.id,
+        fromAmount: 1_000_000,
+        toAmount: 1_000_000,
+        date: new Date(Date.now() - 60_000),
+      })
+
+      const after = await listed(fx.userId, goal.id)
+      expect(after.progress.toString()).toBe('1000000')
+      // ACHIEVED is derived from the derived progress on the read itself...
+      expect(after.status).toBe('ACHIEVED')
+      // ...because nothing wrote to the goal: the stored row is untouched.
+      expect(await storedGoal(fx.userId, goal.id)).toEqual(before)
+      expect((await listSavingsGoals(fx.userId)).map((row) => row.status)).toEqual(['ACHIEVED'])
+    })
+
+    it('counts only activity up to now, like every current balance', async () => {
+      const savings = await createAccount(fx, { name: 'Savings' })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, linkedAccountId: savings.id },
+        CONTEXT,
+      )
+      await createTransfer(fx.userId, {
+        fromAccountId: fx.accountId,
+        toAccountId: savings.id,
+        fromAmount: 500_000,
+        toAmount: 500_000,
+        date: new Date('2026-06-01T00:00:00.000Z'),
+      })
+
+      expect(
+        (
+          await listed(fx.userId, goal.id, new Date('2026-05-31T00:00:00.000Z'))
+        ).progress.toString(),
+      ).toBe('0')
+      expect(
+        (
+          await listed(fx.userId, goal.id, new Date('2026-06-02T00:00:00.000Z'))
+        ).progress.toString(),
+      ).toBe('500000')
+    })
+
+    it('reads two goals on the same account and an unlinked one in one listing', async () => {
+      const a = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, name: 'A', linkedAccountId: fx.accountId },
+        CONTEXT,
+      )
+      const b = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, name: 'B', linkedAccountId: fx.accountId },
+        CONTEXT,
+      )
+      const c = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, name: 'C', initialContribution: 42 },
+        CONTEXT,
+      )
+
+      const rows = await listSavingsGoals(fx.userId)
+      const progress = Object.fromEntries(rows.map((row) => [row.id, row.progress.toString()]))
+      expect(progress).toEqual({ [a.id]: '4750000', [b.id]: '4750000', [c.id]: '42' })
+    })
+
+    it('refuses every entry write on a linked goal', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 500 },
+        CONTEXT,
+      )
+      const [entry] = await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })
+      await updateSavingsGoal(fx.userId, goal.id, { ...BASE_INPUT, linkedAccountId: fx.accountId })
+
+      await expect(
+        addSavingsGoalEntry(fx.userId, goal.id, {
+          kind: 'CONTRIBUTION',
+          amount: 1,
+          date: '2026-03-01',
+        }),
+      ).rejects.toThrow(SavingsGoalLinkedError)
+      await expect(
+        updateSavingsGoalEntry(fx.userId, entry.id, {
+          kind: 'CONTRIBUTION',
+          amount: 1,
+          date: '2026-03-01',
+        }),
+      ).rejects.toThrow(SavingsGoalLinkedError)
+      await expect(deleteSavingsGoalEntry(fx.userId, entry.id)).rejects.toThrow(
+        SavingsGoalLinkedError,
+      )
+      await expect(
+        updateSavingsGoalProgress(fx.userId, goal.id, { progress: 1 }, CONTEXT),
+      ).rejects.toThrow(SavingsGoalLinkedError)
+
+      expect(await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })).toEqual([
+        entry,
+      ])
+    })
+  })
+
+  describe('entries', () => {
+    const contribution = (amount: number, date = '2026-03-01') => ({
+      kind: 'CONTRIBUTION' as const,
+      amount,
+      date,
+    })
+    const withdrawal = (amount: number, date = '2026-03-02') => ({
+      kind: 'WITHDRAWAL' as const,
+      amount,
+      date,
+    })
+
+    it('derives unlinked progress as contributions minus withdrawals', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+
+      const first = await addSavingsGoalEntry(fx.userId, goal.id, {
+        ...contribution(1_000_000.5),
+        note: 'Salary',
+      })
+      await addSavingsGoalEntry(fx.userId, goal.id, contribution(250_000, '2026-03-05'))
+      await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(300_000.25, '2026-03-04'))
+
+      expect(first).toMatchObject({ userId: fx.userId, goalId: goal.id, kind: 'CONTRIBUTION' })
+      expect(first.amount.toString()).toBe('1000000.5')
+      expect(first.note).toBe('Salary')
+      expect(first.date.toISOString()).toBe('2026-03-01T00:00:00.000Z')
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('950000.25')
+      // The deprecated column is never written.
+      expect((await storedGoal(fx.userId, goal.id)).currentProgress.toString()).toBe('0')
+    })
+
+    it('lists the history newest first when asked for it', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+      const older = await addSavingsGoalEntry(fx.userId, goal.id, contribution(10, '2026-03-01'))
+      const newer = await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(5, '2026-03-09'))
+      const sameDay = await addSavingsGoalEntry(fx.userId, goal.id, contribution(1, '2026-03-09'))
+
+      const [row] = await listSavingsGoals(fx.userId, { entries: true })
+      expect(row.entries?.map((entry) => entry.id)).toEqual([sameDay.id, newer.id, older.id])
+      // Without the option the listing carries no history at all.
+      const [plain] = await listSavingsGoals(fx.userId)
+      expect(plain).not.toHaveProperty('entries')
+    })
+
+    it('refuses a withdrawal larger than the progress, and writes nothing', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 100 },
+        CONTEXT,
+      )
+
+      const caught = await captureRejection(
+        addSavingsGoalEntry(fx.userId, goal.id, withdrawal(100.01)),
+      )
+
+      expect(caught).toBeInstanceOf(SavingsGoalWithdrawalExceedsProgressError)
+      expect((caught as SavingsGoalWithdrawalExceedsProgressError).progress.toString()).toBe('100')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(1)
+    })
+
+    it('allows a withdrawal down to exactly zero', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 100 },
+        CONTEXT,
+      )
+
+      await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(100))
+
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('0')
+    })
+
+    it('edits an entry, refusing an edit that would take progress below zero', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+      const saved = await addSavingsGoalEntry(fx.userId, goal.id, contribution(1_000))
+      await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(600))
+
+      // Shrinking the contribution below what was already taken out.
+      await expect(updateSavingsGoalEntry(fx.userId, saved.id, contribution(500))).rejects.toThrow(
+        SavingsGoalWithdrawalExceedsProgressError,
+      )
+      // Turning it into a withdrawal is the same mistake, larger.
+      await expect(updateSavingsGoalEntry(fx.userId, saved.id, withdrawal(1))).rejects.toThrow(
+        SavingsGoalWithdrawalExceedsProgressError,
+      )
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('400')
+
+      const edited = await updateSavingsGoalEntry(fx.userId, saved.id, {
+        ...contribution(700, '2026-02-20'),
+        note: 'Corrected',
+      })
+      expect(edited.id).toBe(saved.id)
+      expect(edited.amount.toString()).toBe('700')
+      expect(edited.date.toISOString()).toBe('2026-02-20T00:00:00.000Z')
+      expect(edited.note).toBe('Corrected')
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('100')
+    })
+
+    it('deletes an entry, refusing a delete that would take progress below zero', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+      const saved = await addSavingsGoalEntry(fx.userId, goal.id, contribution(1_000))
+      const taken = await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(600))
+
+      await expect(deleteSavingsGoalEntry(fx.userId, saved.id)).rejects.toThrow(
+        SavingsGoalWithdrawalExceedsProgressError,
+      )
+
+      await deleteSavingsGoalEntry(fx.userId, taken.id)
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('1000')
+      await deleteSavingsGoalEntry(fx.userId, saved.id)
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('0')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('derives ACHIEVED from the entries, on the read and on the stored row', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000 },
+        CONTEXT,
+      )
+
+      const reach = await addSavingsGoalEntry(fx.userId, goal.id, contribution(1_000))
+      expect((await listed(fx.userId, goal.id)).status).toBe('ACHIEVED')
+      expect((await storedGoal(fx.userId, goal.id)).status).toBe('ACHIEVED')
+
+      await addSavingsGoalEntry(fx.userId, goal.id, withdrawal(0.01))
+      expect((await listed(fx.userId, goal.id)).status).toBe('ACTIVE')
+      expect((await storedGoal(fx.userId, goal.id)).status).toBe('ACTIVE')
+
+      await updateSavingsGoalEntry(fx.userId, reach.id, contribution(1_000.01))
+      expect((await listed(fx.userId, goal.id)).status).toBe('ACHIEVED')
+    })
+
+    it('refuses every entry write on an archived goal', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 500 },
+        CONTEXT,
+      )
+      const [entry] = await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })
+      await archiveSavingsGoal(fx.userId, goal.id)
+
+      await expect(addSavingsGoalEntry(fx.userId, goal.id, contribution(1))).rejects.toThrow(
+        SavingsGoalArchivedError,
+      )
+      await expect(updateSavingsGoalEntry(fx.userId, entry.id, contribution(1))).rejects.toThrow(
+        SavingsGoalArchivedError,
+      )
+      await expect(deleteSavingsGoalEntry(fx.userId, entry.id)).rejects.toThrow(
+        SavingsGoalArchivedError,
+      )
+      expect(await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })).toEqual([
+        entry,
+      ])
+    })
+
+    it('rejects an invalid entry before writing anything', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+
+      for (const input of [
+        contribution(0),
+        contribution(-5),
+        contribution(1, '2026-02-30'),
+        { ...contribution(1), kind: 'GIFT' },
+      ]) {
+        await expect(
+          addSavingsGoalEntry(fx.userId, goal.id, input as ReturnType<typeof contribution>),
+        ).rejects.toThrow()
+      }
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
+    })
+
+    it('lets only one of two concurrent withdrawals through when both would fit alone', async () => {
+      // Three runs, because a race that passes once may simply have been
+      // scheduled kindly. Each run is a fresh goal.
+      for (const run of [1, 2, 3]) {
+        const goal = await createSavingsGoal(
+          fx.userId,
+          { ...BASE_INPUT, name: `Race ${run}`, initialContribution: 100 },
+          CONTEXT,
+        )
+
+        // 60 each: either alone fits inside 100, both together do not. Without
+        // the goal row lock both would read the same progress, both would pass,
+        // and the goal would end at −20.
+        const results = await Promise.allSettled([
+          addSavingsGoalEntry(fx.userId, goal.id, withdrawal(60)),
+          addSavingsGoalEntry(fx.userId, goal.id, withdrawal(60)),
+        ])
+
+        const rejected = results.filter((result) => result.status === 'rejected')
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+        expect(rejected).toHaveLength(1)
+        expect(rejected[0].reason).toBeInstanceOf(SavingsGoalWithdrawalExceedsProgressError)
+        // The loser saw the winner's committed withdrawal, not the pre-race state.
+        expect(
+          (rejected[0].reason as SavingsGoalWithdrawalExceedsProgressError).progress.toString(),
+        ).toBe('40')
+        expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('40')
+      }
+    }, 30_000)
+  })
+
+  /**
+   * The progress dialog the Savings page still renders until the entry UI
+   * replaces it (Task 10) posts an absolute "current amount". It is recorded
+   * as the difference — never as an overwritten figure.
+   */
+  describe('updateSavingsGoalProgress (transitional)', () => {
+    it('records the difference as one contribution or withdrawal dated today', async () => {
+      const now = new Date('2026-03-15T20:00:00.000Z')
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000, initialContribution: 250 },
+        CONTEXT,
+      )
+
+      const up = await updateSavingsGoalProgress(
+        fx.userId,
+        goal.id,
+        { progress: 1_000 },
+        CONTEXT,
+        now,
+      )
+      expect(up).toMatchObject({ kind: 'CONTRIBUTION', goalId: goal.id })
+      expect(up?.amount.toString()).toBe('750')
+      expect(up?.date.toISOString()).toBe('2026-03-16T00:00:00.000Z')
+      expect((await listed(fx.userId, goal.id)).status).toBe('ACHIEVED')
+
+      const down = await updateSavingsGoalProgress(
+        fx.userId,
+        goal.id,
+        { progress: 0 },
+        CONTEXT,
+        now,
+      )
+      expect(down).toMatchObject({ kind: 'WITHDRAWAL' })
+      expect(down?.amount.toString()).toBe('1000')
+      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('0')
+
+      // The same figure again is no change at all.
+      expect(
+        await updateSavingsGoalProgress(fx.userId, goal.id, { progress: 0 }, CONTEXT),
+      ).toBeNull()
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(3)
+      expect((await storedGoal(fx.userId, goal.id)).currentProgress.toString()).toBe('0')
     })
   })
 
   describe('archive', () => {
-    it('sets ARCHIVED and keeps the row readable', async () => {
-      const goal = await createSavingsGoal(fx.userId, BASE_INPUT)
+    it('sets ARCHIVED and keeps the row and its entries readable', async () => {
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, initialContribution: 10 },
+        CONTEXT,
+      )
 
       const archived = await archiveSavingsGoal(fx.userId, goal.id)
 
       expect(archived.status).toBe('ARCHIVED')
-      expect(await prisma.savingsGoal.count({ where: { userId: fx.userId, id: goal.id } })).toBe(1)
+      expect(archived).not.toHaveProperty('currentProgress')
+      const row = await listed(fx.userId, goal.id)
+      expect(row.status).toBe('ARCHIVED')
+      expect(row.progress.toString()).toBe('10')
     })
 
-    it('refuses an edit or a progress update afterwards', async () => {
-      const goal = await createSavingsGoal(fx.userId, BASE_INPUT)
+    it('refuses an edit afterwards', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
       await archiveSavingsGoal(fx.userId, goal.id)
 
       await expect(
         updateSavingsGoal(fx.userId, goal.id, { ...BASE_INPUT, name: 'Renamed' }),
       ).rejects.toThrow(SavingsGoalArchivedError)
-      await expect(
-        updateSavingsGoalProgress(fx.userId, goal.id, { currentProgress: 1 }),
-      ).rejects.toThrow(SavingsGoalArchivedError)
 
-      const stored = await prisma.savingsGoal.findUniqueOrThrow({
-        where: { userId_id: { userId: fx.userId, id: goal.id } },
-      })
+      const stored = await storedGoal(fx.userId, goal.id)
       expect(stored.name).toBe('MacBook Pro')
-      expect(stored.currentProgress.toString()).toBe('0')
       expect(stored.status).toBe('ARCHIVED')
     })
 
     it('is a no-op when the goal is already archived', async () => {
-      const goal = await createSavingsGoal(fx.userId, BASE_INPUT)
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
       const first = await archiveSavingsGoal(fx.userId, goal.id)
 
       const second = await archiveSavingsGoal(fx.userId, goal.id)
 
       expect(second.status).toBe('ARCHIVED')
-      // A true no-op: no write happened, so `updatedAt` did not move. A
-      // double-click on Archive is the same request that already succeeded.
       expect(second.updatedAt.getTime()).toBe(first.updatedAt.getTime())
     })
 
     it('does not un-archive a goal whose progress passes its target', async () => {
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        targetAmount: 100,
-        currentProgress: 500,
-      })
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 100, linkedAccountId: fx.accountId },
+        CONTEXT,
+      )
       await archiveSavingsGoal(fx.userId, goal.id)
 
-      const stored = await prisma.savingsGoal.findUniqueOrThrow({
-        where: { userId_id: { userId: fx.userId, id: goal.id } },
-      })
       // The arithmetic says ACHIEVED; the user's decision outranks it.
-      expect(stored.status).toBe('ARCHIVED')
+      expect((await listed(fx.userId, goal.id)).status).toBe('ARCHIVED')
     })
   })
 
   describe('listing', () => {
     it('excludes archived goals and puts in-progress ones first', async () => {
-      const active = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Active' })
-      const achieved = await createSavingsGoal(fx.userId, {
-        name: 'Achieved',
-        targetAmount: 100,
-        currency: 'VND',
-        currentProgress: 100,
-      })
-      const alsoActive = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Also active' })
-      const gone = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Archived' })
+      const active = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Active' }, CONTEXT)
+      const achieved = await createSavingsGoal(
+        fx.userId,
+        { name: 'Achieved', targetAmount: 100, currency: 'VND', initialContribution: 100 },
+        CONTEXT,
+      )
+      const alsoActive = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, name: 'Also active' },
+        CONTEXT,
+      )
+      const gone = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Archived' }, CONTEXT)
       await archiveSavingsGoal(fx.userId, gone.id)
 
-      const listed = await listSavingsGoals(fx.userId)
+      const rows = await listSavingsGoals(fx.userId)
 
-      // ACTIVE before ACHIEVED, and within a status the creation order — even
-      // though 'Achieved' was created second.
-      expect(listed.map((g) => g.name)).toEqual(['Active', 'Also active', 'Achieved'])
-      expect(listed.map((g) => g.id)).not.toContain(gone.id)
-      expect(listed.map((g) => g.id)).toEqual([active.id, alsoActive.id, achieved.id])
+      expect(rows.map((g) => g.name)).toEqual(['Active', 'Also active', 'Achieved'])
+      expect(rows.map((g) => g.id)).toEqual([active.id, alsoActive.id, achieved.id])
+    })
+
+    it('ranks by the DERIVED status, so a goal its account carried past the target sorts as achieved', async () => {
+      const savings = await createAccount(fx, { name: 'Savings' })
+      const linked = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, name: 'Linked', targetAmount: 100, linkedAccountId: savings.id },
+        CONTEXT,
+      )
+      const later = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Later' }, CONTEXT)
+      expect((await listSavingsGoals(fx.userId)).map((g) => g.id)).toEqual([linked.id, later.id])
+
+      await createTransfer(fx.userId, {
+        fromAccountId: fx.accountId,
+        toAccountId: savings.id,
+        fromAmount: 100,
+        toAmount: 100,
+        date: new Date(Date.now() - 60_000),
+      })
+
+      expect((await listSavingsGoals(fx.userId)).map((g) => g.id)).toEqual([later.id, linked.id])
     })
 
     it('includes every status, oldest first, for the archived section', async () => {
-      const first = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'First' })
-      const second = await createSavingsGoal(fx.userId, {
-        name: 'Second',
-        targetAmount: 100,
-        currency: 'VND',
-        currentProgress: 100,
-      })
-      const third = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Third' })
+      const first = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'First' }, CONTEXT)
+      const second = await createSavingsGoal(
+        fx.userId,
+        { name: 'Second', targetAmount: 100, currency: 'VND', initialContribution: 100 },
+        CONTEXT,
+      )
+      const third = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Third' }, CONTEXT)
       await archiveSavingsGoal(fx.userId, first.id)
 
       const all = await listAllSavingsGoals(fx.userId)
 
-      // A history reads in the order things happened — not status-ranked.
       expect(all.map((g) => `${g.name}:${g.status}`)).toEqual([
         'First:ARCHIVED',
         'Second:ACHIEVED',
@@ -523,62 +1033,111 @@ describe('savings-goal service', () => {
 
     it('returns nothing for a user with no goals', async () => {
       expect(await listSavingsGoals(fx.userId)).toEqual([])
-      expect(await listAllSavingsGoals(fx.userId)).toEqual([])
+      expect(await listAllSavingsGoals(fx.userId, { entries: true })).toEqual([])
     })
   })
 
   describe('tenant isolation', () => {
-    it("refuses every mutation on another user's goal and leaves the row identical", async () => {
+    it("refuses every mutation on another user's goal and entries, and leaves them identical", async () => {
       const other = await createGoalUser()
       extraUserIds.push(other.userId)
-      const theirs = await createSavingsGoal(other.userId, {
-        name: 'Their goal',
-        targetAmount: 9_000_000,
-        currency: 'VND',
-        currentProgress: 1_000,
-        deadline: '2027-01-31',
-        note: 'Theirs',
+      const theirs = await createSavingsGoal(
+        other.userId,
+        {
+          name: 'Their goal',
+          targetAmount: 9_000_000,
+          currency: 'VND',
+          initialContribution: 1_000,
+          deadline: '2027-01-31',
+          note: 'Theirs',
+        },
+        CONTEXT,
+      )
+      const theirGoal = await storedGoal(other.userId, theirs.id)
+      const theirEntries = await prisma.savingsGoalEntry.findMany({
+        where: { userId: other.userId },
       })
+      expect(theirEntries).toHaveLength(1)
 
       await expectPrismaCode(
         updateSavingsGoal(fx.userId, theirs.id, { ...BASE_INPUT, name: 'Stolen' }),
         'P2025',
       )
+      await expectPrismaCode(archiveSavingsGoal(fx.userId, theirs.id), 'P2025')
       await expectPrismaCode(
-        updateSavingsGoalProgress(fx.userId, theirs.id, { currentProgress: 9_000_000 }),
+        addSavingsGoalEntry(fx.userId, theirs.id, {
+          kind: 'WITHDRAWAL',
+          amount: 1,
+          date: '2026-03-01',
+        }),
         'P2025',
       )
-      await expectPrismaCode(archiveSavingsGoal(fx.userId, theirs.id), 'P2025')
+      await expectPrismaCode(
+        updateSavingsGoalEntry(fx.userId, theirEntries[0].id, {
+          kind: 'CONTRIBUTION',
+          amount: 9_000_000,
+          date: '2026-03-01',
+        }),
+        'P2025',
+      )
+      await expectPrismaCode(deleteSavingsGoalEntry(fx.userId, theirEntries[0].id), 'P2025')
+      await expectPrismaCode(
+        updateSavingsGoalProgress(fx.userId, theirs.id, { progress: 0 }, CONTEXT),
+        'P2025',
+      )
 
-      const stored = await prisma.savingsGoal.findUniqueOrThrow({
-        where: { userId_id: { userId: other.userId, id: theirs.id } },
-      })
-      // Byte-identical, `updatedAt` included: not one of the three attempts
-      // reached a write.
-      expect(stored).toEqual(theirs)
+      expect(await storedGoal(other.userId, theirs.id)).toEqual(theirGoal)
+      expect(await prisma.savingsGoalEntry.findMany({ where: { userId: other.userId } })).toEqual(
+        theirEntries,
+      )
     })
 
-    it("never lists another user's goals", async () => {
+    it("refuses to link a goal to another user's account", async () => {
       const other = await createGoalUser()
       extraUserIds.push(other.userId)
-      // The other user's goals are identical in every respect except ownership,
-      // and cover all three statuses so no list or filter can leak one.
-      const theirActive = await createSavingsGoal(other.userId, BASE_INPUT)
-      const theirArchived = await createSavingsGoal(other.userId, BASE_INPUT)
+      const mine = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+
+      await expectPrismaCode(
+        createSavingsGoal(fx.userId, { ...BASE_INPUT, linkedAccountId: other.accountId }, CONTEXT),
+        'P2025',
+      )
+      await expectPrismaCode(
+        updateSavingsGoal(fx.userId, mine.id, { ...BASE_INPUT, linkedAccountId: other.accountId }),
+        'P2025',
+      )
+
+      expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(1)
+      expect((await storedGoal(fx.userId, mine.id)).linkedAccountId).toBeNull()
+    })
+
+    it("never lists another user's goals, nor counts their entries or balances", async () => {
+      const other = await createGoalUser()
+      extraUserIds.push(other.userId)
+      const theirActive = await createSavingsGoal(
+        other.userId,
+        { ...BASE_INPUT, initialContribution: 7 },
+        CONTEXT,
+      )
+      const theirArchived = await createSavingsGoal(other.userId, BASE_INPUT, CONTEXT)
       await archiveSavingsGoal(other.userId, theirArchived.id)
-      await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Mine' })
+      await createSavingsGoal(
+        other.userId,
+        { ...BASE_INPUT, linkedAccountId: other.accountId },
+        CONTEXT,
+      )
+      const mine = await createSavingsGoal(fx.userId, { ...BASE_INPUT, name: 'Mine' }, CONTEXT)
 
-      const mine = await listSavingsGoals(fx.userId)
-      const allMine = await listAllSavingsGoals(fx.userId)
-
-      for (const list of [mine, allMine]) {
-        expect(list.map((g) => g.userId)).toEqual([fx.userId])
-        expect(list.map((g) => g.id)).not.toContain(theirActive.id)
-        expect(list.map((g) => g.id)).not.toContain(theirArchived.id)
+      for (const list of [
+        await listSavingsGoals(fx.userId, { entries: true }),
+        await listAllSavingsGoals(fx.userId, { entries: true }),
+      ]) {
+        expect(list.map((g) => g.id)).toEqual([mine.id])
+        expect(list[0].progress.toString()).toBe('0')
+        expect(list[0].entries).toEqual([])
       }
-      // And symmetrically: their own read is unaffected by ours.
-      expect(await listSavingsGoals(other.userId)).toHaveLength(1)
-      expect(await listAllSavingsGoals(other.userId)).toHaveLength(2)
+      expect(await listSavingsGoals(other.userId)).toHaveLength(2)
+      expect(await listAllSavingsGoals(other.userId)).toHaveLength(3)
+      expect((await listed(other.userId, theirActive.id)).progress.toString()).toBe('7')
     })
   })
 
@@ -595,47 +1154,60 @@ describe('savings-goal service', () => {
             },
           }),
         )
-        // The CHECK's own name, so a migration that dropped it fails here
-        // rather than passing quietly.
         expect(String(caught)).toContain('SavingsGoal_targetAmount_positive')
       }
 
       expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(0)
     })
 
-    it('rejects negative progress even bypassing the service', async () => {
+    it('rejects a negative entry amount even bypassing the service', async () => {
+      const goal = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
+
       const caught = await captureRejection(
-        prisma.savingsGoal.create({
+        prisma.savingsGoalEntry.create({
           data: {
             userId: fx.userId,
-            name: 'Bad progress',
-            targetAmount: new Prisma.Decimal('100'),
-            currentProgress: new Prisma.Decimal('-1'),
-            currency: 'VND',
+            goalId: goal.id,
+            kind: 'CONTRIBUTION',
+            amount: new Prisma.Decimal('-0.01'),
+            date: new Date('2026-03-01T00:00:00.000Z'),
           },
         }),
       )
 
-      expect(String(caught)).toContain('SavingsGoal_currentProgress_nonnegative')
-      expect(await prisma.savingsGoal.count({ where: { userId: fx.userId } })).toBe(0)
+      expect(String(caught)).toContain('SavingsGoalEntry_amount_nonnegative')
+      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(0)
     })
 
-    it('accepts progress above the target — there is deliberately no such CHECK', async () => {
-      const goal = await prisma.savingsGoal.create({
-        data: {
-          userId: fx.userId,
-          name: 'Over-saved',
-          targetAmount: new Prisma.Decimal('100'),
-          currentProgress: new Prisma.Decimal('500'),
-          currency: 'VND',
-        },
-      })
+    it("cannot point an entry at another user's goal, or a goal at another user's account", async () => {
+      const other = await createGoalUser()
+      extraUserIds.push(other.userId)
+      const theirs = await createSavingsGoal(other.userId, BASE_INPUT, CONTEXT)
+      const mine = await createSavingsGoal(fx.userId, BASE_INPUT, CONTEXT)
 
-      expect(goal.currentProgress.toString()).toBe('500')
+      await expectPrismaCode(
+        prisma.savingsGoalEntry.create({
+          data: {
+            userId: fx.userId,
+            goalId: theirs.id,
+            kind: 'CONTRIBUTION',
+            amount: new Prisma.Decimal('1'),
+            date: new Date('2026-03-01T00:00:00.000Z'),
+          },
+        }),
+        'P2003',
+      )
+      await expectPrismaCode(
+        prisma.savingsGoal.update({
+          where: { userId_id: { userId: fx.userId, id: mine.id } },
+          data: { linkedAccountId: other.accountId },
+        }),
+        'P2003',
+      )
     })
   })
 
-  describe('tracking only — no money moves', () => {
+  describe('no money moves', () => {
     it('leaves accounts, transactions, transfers and the balance untouched by every mutation', async () => {
       const before = {
         accounts: await prisma.financialAccount.count({ where: { userId: fx.userId } }),
@@ -649,32 +1221,34 @@ describe('savings-goal service', () => {
           where: { userId_id: { userId: fx.userId, id: fx.transactionId } },
         }),
       }
-      // 5,000,000 initial minus the fixture's 250,000 expense — a real,
-      // non-trivial figure, so "unchanged" is a meaningful assertion.
       expect(before.balance).toBe('4750000')
 
-      // Every mutation the service has, on a goal whose target is met and then
-      // exceeded: the exact sequence a user would produce, ending in an
-      // archive.
-      const goal = await createSavingsGoal(fx.userId, {
-        ...BASE_INPUT,
-        targetAmount: 1_000_000,
-        currentProgress: 250_000,
-        deadline: '2026-12-31',
-        note: 'Tracking only',
+      // Every mutation the service has: entries on an unlinked goal, then a
+      // link to the very account whose balance is checked, then an archive.
+      const goal = await createSavingsGoal(
+        fx.userId,
+        { ...BASE_INPUT, targetAmount: 1_000_000, initialContribution: 250_000 },
+        CONTEXT,
+      )
+      const entry = await addSavingsGoalEntry(fx.userId, goal.id, {
+        kind: 'CONTRIBUTION',
+        amount: 900_000,
+        date: '2026-03-01',
       })
+      await updateSavingsGoalEntry(fx.userId, entry.id, {
+        kind: 'CONTRIBUTION',
+        amount: 800_000,
+        date: '2026-03-01',
+      })
+      await deleteSavingsGoalEntry(fx.userId, entry.id)
+      await updateSavingsGoalProgress(fx.userId, goal.id, { progress: 5 }, CONTEXT)
       await updateSavingsGoal(fx.userId, goal.id, {
         ...BASE_INPUT,
-        targetAmount: 900_000,
-        currency: 'USD',
-        deadline: '2027-01-01',
-        note: 'Edited',
+        linkedAccountId: fx.accountId,
       })
-      await updateSavingsGoalProgress(fx.userId, goal.id, { currentProgress: 900_000 })
-      await updateSavingsGoalProgress(fx.userId, goal.id, { currentProgress: 1_500_000 })
       await archiveSavingsGoal(fx.userId, goal.id)
-      await listSavingsGoals(fx.userId)
-      await listAllSavingsGoals(fx.userId)
+      await listSavingsGoals(fx.userId, { entries: true })
+      await listAllSavingsGoals(fx.userId, { entries: true })
 
       expect(await prisma.financialAccount.count({ where: { userId: fx.userId } })).toBe(
         before.accounts,
@@ -684,9 +1258,6 @@ describe('savings-goal service', () => {
       )
       expect(await prisma.transfer.count({ where: { userId: fx.userId } })).toBe(before.transfers)
       expect((await getAccountBalance(fx.userId, fx.accountId)).toString()).toBe(before.balance)
-      // Not just the counts: the rows themselves, field for field. A goal that
-      // quietly rewrote an account's currency or an expense's amount would keep
-      // every count identical.
       expect(
         await prisma.financialAccount.findUniqueOrThrow({
           where: { userId_id: { userId: fx.userId, id: fx.accountId } },
@@ -700,15 +1271,10 @@ describe('savings-goal service', () => {
     })
 
     /**
-     * The structural half of "no money moves": the service cannot touch the
-     * ledger because it does not import anything that writes to it.
-     *
-     * Reading the source is deliberate rather than fragile. The behavioural case
-     * above can only catch a write it happens to provoke, whereas a later phase
-     * adding "mark achieved and move the money" would reintroduce exactly the
-     * coupling spec §4.8 exists to avoid — and importing the module is the first
-     * step of doing so. The doc comment names these modules on purpose, to say
-     * why they are absent, so only import specifiers are matched.
+     * The structural half of "no money moves": the service READS a balance for
+     * a linked goal (`./balance-timeline`), but imports nothing that could write to the
+     * ledger or reach a live rate. Matched on import specifiers ending in the
+     * module name, relative or aliased, so the doc comment may name them.
      */
     it('imports nothing that could move money or reach a live rate', () => {
       const source = readFileSync(
@@ -717,17 +1283,118 @@ describe('savings-goal service', () => {
       )
 
       for (const forbidden of [
-        'services/transaction',
-        'services/transfer',
-        'services/balance',
-        'services/financial-account',
+        'transaction',
+        'transfer',
+        'linked-transaction',
+        'financial-account',
         'current-rate-policy',
         'fx-service',
         'current-amount',
         'historical-amount',
       ]) {
-        expect(source).not.toMatch(new RegExp(`from '[^']*${forbidden}`))
+        expect(source).not.toMatch(new RegExp(`from '[^']*/${forbidden}'`))
       }
     })
+  })
+})
+
+/**
+ * The idempotent data backfill in the `savings_goal_entries` migration (spec
+ * 2026-10-12 §5): every goal that had a typed-in `currentProgress > 0` and no
+ * entries yet gets one CONTRIBUTION of that amount, dated the calendar day of
+ * its `updatedAt` in its owner's zone, so the derived progress equals the
+ * figure the user last saw.
+ *
+ * Only that statement is run — the DDL around it is already applied to the
+ * test database — twice, inside a transaction that is then rolled back, so the
+ * rest of the shared database is left as it was.
+ */
+describe('savings_goal_entries migration backfill', () => {
+  const userIds: string[] = []
+
+  afterEach(async () => {
+    await cleanupUsers(userIds.splice(0))
+  })
+
+  async function user(timezone: string): Promise<string> {
+    const id = randomUUID()
+    await prisma.user.create({
+      data: { id, email: `goal-backfill-${id}@example.com`, name: 'Backfill', timezone },
+    })
+    userIds.push(id)
+    return id
+  }
+
+  /** A goal written the way the pre-linking app wrote it: progress in the column. */
+  async function legacyGoal(userId: string, currentProgress: string): Promise<string> {
+    const goal = await prisma.savingsGoal.create({
+      data: {
+        userId,
+        name: `Legacy ${currentProgress}`,
+        targetAmount: new Prisma.Decimal('1000000'),
+        currentProgress: new Prisma.Decimal(currentProgress),
+        currency: 'VND',
+      },
+    })
+    return goal.id
+  }
+
+  it('gives each legacy goal exactly one opening contribution, even when run twice', async () => {
+    const statements = splitSqlStatements(readMigrationSql('savings_goal_entries')).filter(
+      (statement) => statement.startsWith('INSERT INTO "SavingsGoalEntry"'),
+    )
+    expect(statements).toHaveLength(1)
+
+    const vietnam = await user('Asia/Ho_Chi_Minh')
+    const unknownZone = await user('Not/A_Zone')
+    const saved = await legacyGoal(vietnam, '250000.50')
+    const untouched = await legacyGoal(vietnam, '0')
+    const alreadyMigrated = await legacyGoal(vietnam, '500')
+    const kept = await prisma.savingsGoalEntry.create({
+      data: {
+        userId: vietnam,
+        goalId: alreadyMigrated,
+        kind: 'WITHDRAWAL',
+        amount: new Prisma.Decimal('1'),
+        date: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    })
+    const fallback = await legacyGoal(unknownZone, '42')
+
+    const rollback = new Error('roll back the migration run')
+    await expect(
+      prisma.$transaction(async (tx) => {
+        // 20:00 UTC on the 10th is 03:00 on the 11th in Ho Chi Minh City.
+        await tx.$executeRaw`
+          UPDATE "SavingsGoal" SET "updatedAt" = ${new Date('2026-09-10T20:00:00.000Z')}
+          WHERE "id" IN (${Prisma.join([saved, untouched, alreadyMigrated, fallback])})`
+        for (let run = 0; run < 2; run++) await tx.$executeRawUnsafe(statements[0])
+
+        const entries = await tx.savingsGoalEntry.findMany({
+          where: { userId: { in: [vietnam, unknownZone] } },
+        })
+        const forGoal = (goalId: string) => entries.filter((entry) => entry.goalId === goalId)
+
+        expect(forGoal(saved)).toHaveLength(1)
+        expect(forGoal(saved)[0]).toMatchObject({
+          userId: vietnam,
+          kind: 'CONTRIBUTION',
+          note: null,
+        })
+        expect(forGoal(saved)[0].amount.toString()).toBe('250000.5')
+        expect(forGoal(saved)[0].id).toMatch(/^c[0-9a-f]{32}$/)
+        // The user's calendar day, as a UTC-midnight carrier.
+        expect(forGoal(saved)[0].date.toISOString()).toBe('2026-09-11T00:00:00.000Z')
+        // Nothing saved, nothing to record.
+        expect(forGoal(untouched)).toEqual([])
+        // A goal that already has entries is left exactly as it is.
+        expect(forGoal(alreadyMigrated)).toEqual([kept])
+        // A zone the database does not know falls back to the UTC day rather
+        // than failing the migration.
+        expect(forGoal(fallback)).toHaveLength(1)
+        expect(forGoal(fallback)[0].date.toISOString()).toBe('2026-09-10T00:00:00.000Z')
+        throw rollback
+      }),
+    ).rejects.toBe(rollback)
   })
 })

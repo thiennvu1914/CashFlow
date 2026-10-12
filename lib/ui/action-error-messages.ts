@@ -65,6 +65,9 @@ export const BUDGET_ERROR_KEYS: Record<BudgetActionError, string> = {
 
 export const SAVINGS_GOAL_ERROR_KEYS: Record<SavingsGoalActionError, string> = {
   ARCHIVED: 'errors.goal.ARCHIVED',
+  ARCHIVED_ACCOUNT: 'errors.goal.ARCHIVED_ACCOUNT',
+  LINKED: 'errors.goal.LINKED',
+  WITHDRAWAL_EXCEEDS_PROGRESS: 'errors.goal.WITHDRAWAL_EXCEEDS_PROGRESS',
   INVALID_INPUT: 'errors.goal.INVALID_INPUT',
   NOT_FOUND: 'errors.goal.NOT_FOUND',
 }

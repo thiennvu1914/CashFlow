@@ -156,9 +156,10 @@ export function GoalRowMenu({ goal }: { goal: SavingsGoalDto }) {
   )
 }
 
-/** "How much have you put aside now?" — one field, and the only write that
- *  moves a goal's progress. Its own copy makes clear that saving it moves no
- *  account money: it only records what the user says they now have. */
+/** "How much have you put aside now?" — one field. Saving it moves no account
+ *  money: the server records the difference from the derived progress as one
+ *  contribution or withdrawal (transitional — `updateSavingsGoalProgressAction`
+ *  until the contribute/withdraw UI replaces this form). */
 function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () => void }) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
@@ -170,7 +171,7 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
     formState: { errors },
   } = useForm<UpdateSavingsGoalProgressInput>({
     resolver: zodResolver(updateSavingsGoalProgressSchema),
-    defaultValues: { currentProgress: Number(goal.editable.currentProgress) },
+    defaultValues: { progress: Number(goal.editable.progress) },
   })
 
   async function onSubmit(values: UpdateSavingsGoalProgressInput) {
@@ -193,14 +194,14 @@ function GoalProgressForm({ goal, onDone }: { goal: SavingsGoalDto; onDone: () =
         <FormField
           id={`goal-progress-${uid}`}
           label={t('goals.progressField')}
-          error={errors.currentProgress?.message}
+          error={errors.progress?.message}
         >
           {(aria) => (
             <Input
               {...aria}
               type="number"
               step="0.01"
-              {...register('currentProgress', { valueAsNumber: true })}
+              {...register('progress', { valueAsNumber: true })}
             />
           )}
         </FormField>

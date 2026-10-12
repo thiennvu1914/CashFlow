@@ -58,7 +58,9 @@ export async function getDashboardData(
       getCashFlowTrend(userId, timezone, displayCurrency, limits.months, now),
       listTransactions(userId, { limit: limits.transactions }),
       getBudgetProgressForMonth(userId, timezone, month.year, month.month),
-      listSavingsGoals(userId),
+      // The same `now` as the position: a linked goal's progress is its
+      // account's balance at the instant the rest of the page reads.
+      listSavingsGoals(userId, { now }),
       listDashboardOccurrences(userId, timezone, limits.occurrences, now),
     ])
   return { ...finance, monthly, cashFlowTrend, recentTransactions, budgets, goals, occurrences }

@@ -102,14 +102,14 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
         <FormField
           id={fieldId('current')}
           label={t('goals.current')}
-          error={errors.currentProgress?.message}
+          error={errors.initialContribution?.message}
         >
           {(aria) => (
             <Input
               {...aria}
               type="number"
               step="0.01"
-              {...register('currentProgress', {
+              {...register('initialContribution', {
                 // `setValueAs` rather than `valueAsNumber` (the two are
                 // mutually exclusive in react-hook-form, and `valueAsNumber`
                 // wins): an untouched optional field's DOM value is `''`,

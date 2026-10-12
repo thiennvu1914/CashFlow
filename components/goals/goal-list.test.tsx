@@ -29,7 +29,7 @@ function dto(overrides: Partial<SavingsGoalDto> = {}): SavingsGoalDto {
       currency: 'VND',
       deadline: '2026-12-31',
       note: '',
-      currentProgress: '20000000.00',
+      progress: '20000000.00',
     },
     ...overrides,
   }

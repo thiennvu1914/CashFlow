@@ -19,7 +19,9 @@ function goal(overrides: Partial<SavingsGoalRow> = {}): SavingsGoalRow {
     userId: 'user_1',
     name: 'MacBook',
     targetAmount: new Prisma.Decimal('50000000'),
-    currentProgress: new Prisma.Decimal('20000000'),
+    progress: new Prisma.Decimal('20000000'),
+    linkedAccountId: null,
+    linkedAccount: null,
     currency: 'VND',
     deadline: null,
     note: null,
@@ -56,7 +58,7 @@ describe('toSavingsGoalDto', () => {
       goal({
         currency: 'USD',
         targetAmount: new Prisma.Decimal('2000'),
-        currentProgress: new Prisma.Decimal('1500.50'),
+        progress: new Prisma.Decimal('1500.50'),
       }),
       TODAY,
     )
@@ -80,7 +82,7 @@ describe('toSavingsGoalDto', () => {
     const dto = toSavingsGoalDto(
       goal({
         targetAmount: new Prisma.Decimal('1000000'),
-        currentProgress: new Prisma.Decimal('1200000'),
+        progress: new Prisma.Decimal('1200000'),
         status: 'ACHIEVED',
       }),
       TODAY,
@@ -95,8 +97,20 @@ describe('toSavingsGoalDto', () => {
     expect(dto.status).toBe('ACHIEVED')
   })
 
+  it('keeps the bar empty, never negative, for a goal linked to an overdrawn account', () => {
+    // A linked goal's progress is its account's balance, which a credit card
+    // can take below zero. The figure says so; the bar cannot.
+    const dto = toSavingsGoalDto(goal({ progress: new Prisma.Decimal('-1000000') }), TODAY)
+
+    expect(dto.percent).toBe(0)
+    // The figure keeps its sign (with the non-breaking space before "%").
+    expect(dto.percentLabel).toBe('-2 %')
+    expect(dto.progress).toBe('-1.000.000')
+    expect(dto.remaining).toBe('51.000.000')
+  })
+
   it('reports 0 % for an untouched goal and 100 % at exactly the target', () => {
-    const untouched = toSavingsGoalDto(goal({ currentProgress: new Prisma.Decimal('0') }), TODAY)
+    const untouched = toSavingsGoalDto(goal({ progress: new Prisma.Decimal('0') }), TODAY)
     expect(untouched.percent).toBe(0)
     expect(untouched.percentLabel).toBe('0 %')
     expect(untouched.remaining).toBe('50.000.000')
@@ -104,7 +118,7 @@ describe('toSavingsGoalDto', () => {
     const exact = toSavingsGoalDto(
       goal({
         targetAmount: new Prisma.Decimal('100.10'),
-        currentProgress: new Prisma.Decimal('100.10'),
+        progress: new Prisma.Decimal('100.10'),
         status: 'ACHIEVED',
       }),
       TODAY,
@@ -119,7 +133,7 @@ describe('toSavingsGoalDto', () => {
     const dto = toSavingsGoalDto(
       goal({
         targetAmount: new Prisma.Decimal('3'),
-        currentProgress: new Prisma.Decimal('2'),
+        progress: new Prisma.Decimal('2'),
       }),
       TODAY,
     )
@@ -155,7 +169,7 @@ describe('toSavingsGoalDto', () => {
     const dto = toSavingsGoalDto(
       goal({
         deadline: new Date('2026-01-01T00:00:00.000Z'),
-        currentProgress: new Prisma.Decimal('50000000'),
+        progress: new Prisma.Decimal('50000000'),
         status: 'ACHIEVED',
       }),
       TODAY,
@@ -179,7 +193,7 @@ describe('toSavingsGoalDto', () => {
       goal({
         name: 'Emergency fund',
         targetAmount: new Prisma.Decimal('12000000'),
-        currentProgress: new Prisma.Decimal('4500000.5'),
+        progress: new Prisma.Decimal('4500000.5'),
         deadline: new Date('2026-06-30T00:00:00.000Z'),
         note: 'Three months of expenses',
       }),
@@ -192,7 +206,7 @@ describe('toSavingsGoalDto', () => {
       currency: 'VND',
       deadline: '2026-06-30',
       note: 'Three months of expenses',
-      currentProgress: '4500000.50',
+      progress: '4500000.50',
     })
     // Plain strings only — a `Prisma.Decimal` cannot cross into a client component.
     for (const value of Object.values(dto.editable)) {
@@ -213,7 +227,7 @@ describe('toSavingsGoalDto', () => {
     const dto = toSavingsGoalDto(
       goal({
         status: 'ARCHIVED',
-        currentProgress: new Prisma.Decimal('50000000'),
+        progress: new Prisma.Decimal('50000000'),
       }),
       TODAY,
     )

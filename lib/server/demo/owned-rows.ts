@@ -59,7 +59,12 @@ export const OWNED_ROW_DELETIONS: readonly OwnedRowDeletion[] = [
     model: 'recurringReminder',
     deleteMany: (c, ids) => c.recurringReminder.deleteMany({ where: { userId: { in: ids } } }),
   },
-  // No children of its own, and referenced by nothing.
+  // A goal's entries before the goal (composite FK, ON DELETE RESTRICT); the
+  // goal before the accounts below, which a linked goal references.
+  {
+    model: 'savingsGoalEntry',
+    deleteMany: (c, ids) => c.savingsGoalEntry.deleteMany({ where: { userId: { in: ids } } }),
+  },
   {
     model: 'savingsGoal',
     deleteMany: (c, ids) => c.savingsGoal.deleteMany({ where: { userId: { in: ids } } }),

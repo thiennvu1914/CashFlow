@@ -70,6 +70,8 @@ it.each([false, true])(
     }
     expect(reads.history).not.toHaveBeenCalled()
     expect(reads.agreements).toHaveBeenCalledWith('owner', now)
+    // A linked goal reads its account balance at the page's one `now`.
+    expect(reads.goals).toHaveBeenCalledWith('owner', { now })
     expect(reads.position).toHaveBeenCalledWith('owner', 'VND', {
       now,
       agreements,

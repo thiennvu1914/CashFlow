@@ -40,6 +40,9 @@
   },
   "goal": {
     "ARCHIVED": "Mục tiêu này đã lưu trữ và không thể thay đổi.",
+    "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ — chọn một tài khoản đang hoạt động hoặc \"Không gắn\".",
+    "LINKED": "Mục tiêu này tự động theo số dư của tài khoản đã gắn nên không thể góp hoặc rút thủ công.",
+    "WITHDRAWAL_EXCEEDS_PROGRESS": "Số tiền rút vượt quá số đã tiết kiệm — tiến độ của mục tiêu không thể nhỏ hơn 0.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Mục tiêu này không còn tồn tại."
   },

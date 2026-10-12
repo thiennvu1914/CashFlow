@@ -40,6 +40,9 @@
   },
   "goal": {
     "ARCHIVED": "This goal is archived and can no longer be changed.",
+    "ARCHIVED_ACCOUNT": "That account is archived. Choose an active account, or \"Not linked\".",
+    "LINKED": "This goal follows its linked account's balance, so contributions and withdrawals can't be recorded on it.",
+    "WITHDRAWAL_EXCEEDS_PROGRESS": "That would take out more than this goal has saved — its progress can't go below zero.",
     "INVALID_INPUT": "Check the highlighted fields.",
     "NOT_FOUND": "That goal no longer exists."
   },

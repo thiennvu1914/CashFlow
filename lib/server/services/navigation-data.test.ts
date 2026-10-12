@@ -153,7 +153,10 @@ it('preserves every Dashboard widget while reducing measured SQL commands', asyn
   ]).toEqual(expected.other)
   expect(actual.monthly.expense.toString()).toBe('100')
   expect(actual.position?.totalBalance.toString()).toBe('900')
-  expect(batched.calls).toBeLessThanOrEqual(28)
+  // 28 before money-source linking; the goals widget now also reads the
+  // accounts its goals follow and their entry sums (+2 commands, issued beside
+  // the goals in the same round trip — see the per-widget counts below).
+  expect(batched.calls).toBeLessThanOrEqual(30)
 })
 
 it('preserves Accounts balances and metadata while reducing measured SQL commands', async () => {
@@ -329,7 +332,10 @@ it('measures unchanged navigation read paths and the remaining Dashboard widgets
       listActiveFinancialAccounts(userId),
     ]),
   )
-  expect(counts).toEqual({ monthly: 3, trend: 1, recent: 3, budgets: 3, goals: 1, reminders: 11 })
+  // Goals: the goals, the accounts linked goals follow and the entry sums, all
+  // three in one parallel round trip (a balance statement joins them only when
+  // some goal is linked; this fixture has none).
+  expect(counts).toEqual({ monthly: 3, trend: 1, recent: 3, budgets: 3, goals: 3, reminders: 11 })
   expect(transactions.calls).toBe(12)
   expect(reminders.calls).toBe(12)
 })

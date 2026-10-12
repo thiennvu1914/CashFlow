@@ -13,7 +13,9 @@ import { formatMoney, formatPercent } from './format-money'
 /**
  * The Savings page's DTO boundary, as one pure function.
  *
- * `listSavingsGoals` returns rows carrying `Prisma.Decimal`s and a `Date`;
+ * `listSavingsGoals` returns rows carrying `Prisma.Decimal`s and a `Date` —
+ * `progress` already derived (a linked account's balance, or the goal's
+ * entries), and `status` already derived from it;
  * nothing downstream of this file may touch either, because neither can cross
  * the server-to-client-component boundary (`GoalRowActions` and the edit form
  * are client components). `percent` is the one `toNumber()` in this DTO — a
@@ -46,7 +48,9 @@ export interface SavingsGoalDto {
   /** How much is still to go — `max(0, target − progress)`, never negative:
    *  over-saving leaves nothing remaining rather than a "−200.000" to read. */
   remaining: string
-  /** Bar fill 0–100, clamped; the one `toNumber()` for this DTO. */
+  /** Bar fill 0–100, clamped at both ends — a linked account can be
+   *  overdrawn, and a bar cannot be narrower than empty; the one `toNumber()`
+   *  for this DTO. */
   percent: number
   /** e.g. "120 %" — whole percent, half-up on the `Decimal`, and deliberately
    *  NOT clamped: the bar's width may not overflow, the figure may. A
@@ -75,7 +79,9 @@ export interface SavingsGoalDto {
     /** `yyyy-MM-dd` for `<input type="date">`; `''` when the goal has none. */
     deadline: string
     note: string
-    currentProgress: string
+    /** The derived progress, `toFixed(2)` — the transitional progress
+     *  dialog's prefill (`GoalProgressButton`). */
+    progress: string
   }
 }
 
@@ -104,7 +110,7 @@ export function toSavingsGoalDto(
 ): SavingsGoalDto {
   const currency = goal.currency
   const target = goal.targetAmount
-  const progress = goal.currentProgress
+  const progress = goal.progress
 
   const shortfall = target.sub(progress)
   const remaining = shortfall.isNegative() ? new Prisma.Decimal(0) : shortfall
@@ -123,7 +129,7 @@ export function toSavingsGoalDto(
     target: formatMoney(target, currency, locale),
     progress: formatMoney(progress, currency, locale),
     remaining: formatMoney(remaining, currency, locale),
-    percent: Math.min(MAX_PERCENT, ratio.mul(100).toNumber()),
+    percent: Math.max(0, Math.min(MAX_PERCENT, ratio.mul(100).toNumber())),
     // Rounded on the `Decimal` first (unchanged rounding semantics);
     // `formatPercent` only formats that already-rounded whole number for the
     // reader's locale and appends the sign -- it does no rounding of its own.
@@ -145,7 +151,7 @@ export function toSavingsGoalDto(
       currency,
       deadline: deadline ?? '',
       note: goal.note ?? '',
-      currentProgress: progress.toFixed(2),
+      progress: progress.toFixed(2),
     },
   }
 }

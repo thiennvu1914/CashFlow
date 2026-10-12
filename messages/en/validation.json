@@ -1,4 +1,5 @@
 {
+  "A linked goal follows its account balance — leave this empty": "A linked goal follows its account balance — leave this empty",
   "A one-time reminder happens once — leave this at 1": "A one-time reminder happens once — leave this at 1",
   "Amount is too large": "Amount is too large",
   "Amount must be greater than zero": "Amount must be greater than zero",
@@ -12,6 +13,7 @@
   "Choose a payment frequency": "Choose a payment frequency",
   "Choose an account": "Choose an account",
   "Choose an account type": "Choose an account type",
+  "Choose contribute or withdraw": "Choose contribute or withdraw",
   "Choose how often": "Choose how often",
   "Choose income or expense": "Choose income or expense",
   "Choose the account to transfer from": "Choose the account to transfer from",
@@ -19,6 +21,7 @@
   "Choose whether to record the existing payments": "Choose whether to record the existing payments",
   "Choose who owes whom": "Choose who owes whom",
   "Current password is required": "Current password is required",
+  "Enter a date": "Enter a date",
   "Enter a date as yyyy-MM-dd": "Enter a date as yyyy-MM-dd",
   "Enter a name": "Enter a name",
   "Enter a payment date": "Enter a payment date",

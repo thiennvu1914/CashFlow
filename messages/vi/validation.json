@@ -1,4 +1,5 @@
 {
+  "A linked goal follows its account balance — leave this empty": "Mục tiêu đã gắn tài khoản tự động theo số dư — hãy để trống ô này",
   "A one-time reminder happens once — leave this at 1": "Nhắc nhở một lần thì không lặp lại — hãy để giá trị này là 1",
   "Amount is too large": "Số tiền quá lớn",
   "Amount must be greater than zero": "Số tiền phải lớn hơn 0",
@@ -12,6 +13,7 @@
   "Choose a payment frequency": "Hãy chọn tần suất thanh toán",
   "Choose an account": "Hãy chọn tài khoản",
   "Choose an account type": "Chọn loại tài khoản",
+  "Choose contribute or withdraw": "Hãy chọn góp thêm hoặc rút ra",
   "Choose how often": "Hãy chọn tần suất",
   "Choose income or expense": "Hãy chọn thu nhập hoặc chi tiêu",
   "Choose the account to transfer from": "Hãy chọn tài khoản chuyển từ",
@@ -19,6 +21,7 @@
   "Choose whether to record the existing payments": "Hãy chọn có ghi bù các lần trả đã có hay không",
   "Choose who owes whom": "Hãy chọn ai nợ ai",
   "Current password is required": "Vui lòng nhập mật khẩu hiện tại",
+  "Enter a date": "Hãy nhập ngày",
   "Enter a date as yyyy-MM-dd": "Hãy nhập ngày theo định dạng yyyy-MM-dd",
   "Enter a name": "Hãy nhập tên",
   "Enter a payment date": "Hãy nhập ngày thanh toán",

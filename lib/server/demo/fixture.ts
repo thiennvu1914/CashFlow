@@ -351,22 +351,34 @@ export async function seedDemoFixture(
 
   // --- Savings goals -------------------------------------------------------
   // One in each currency, one part-way and one nearly there, so both the
-  // progress bar and the ACHIEVED-threshold rendering have a subject.
-  await createSavingsGoal(userId, {
-    name: 'Emergency Fund',
-    targetAmount: 50_000_000,
-    currency: 'VND',
-    currentProgress: 18_000_000,
-    deadline: shiftCalendarDate(today, 365),
-    note: 'Six months of expenses',
-  })
-  await createSavingsGoal(userId, {
-    name: 'New Laptop',
-    targetAmount: 2_000,
-    currency: 'USD',
-    currentProgress: 1_650,
-    deadline: shiftCalendarDate(today, 120),
-  })
+  // progress bar and the ACHIEVED-threshold rendering have a subject. Unlinked:
+  // each starting figure is the goal's first contribution, dated today.
+  const goalContext = { timezone: DEMO_TIMEZONE }
+  await createSavingsGoal(
+    userId,
+    {
+      name: 'Emergency Fund',
+      targetAmount: 50_000_000,
+      currency: 'VND',
+      initialContribution: 18_000_000,
+      deadline: shiftCalendarDate(today, 365),
+      note: 'Six months of expenses',
+    },
+    goalContext,
+    now,
+  )
+  await createSavingsGoal(
+    userId,
+    {
+      name: 'New Laptop',
+      targetAmount: 2_000,
+      currency: 'USD',
+      initialContribution: 1_650,
+      deadline: shiftCalendarDate(today, 120),
+    },
+    goalContext,
+    now,
+  )
   const savingsGoals = 2
 
   // --- Debt (receivable) with payments -------------------------------------

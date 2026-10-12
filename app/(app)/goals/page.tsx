@@ -16,13 +16,12 @@ import { PageHeader } from '@/components/common/page-header'
  * Savings (spec §4.8): manual targets, each in its own currency and never
  * converted to `User.baseCurrency` (ledger ruling R5-3).
  *
- * Nothing on this page moves money. A goal's progress is a figure the user
- * types in, so creating, editing, progressing or archiving a goal writes no
- * Transaction, no Transfer and no account balance — which is why the subtitle
- * says so outright rather than leaving the reader to wonder whether "saved
- * 20.000.000" has been taken out of an account somewhere.
+ * Nothing on this page moves money. A goal's progress is derived — a linked
+ * account's balance, or the goal's own contributions and withdrawals (spec
+ * 2026-10-12 §6.7) — so creating, editing, progressing or archiving a goal
+ * writes no Transaction, no Transfer and no account balance.
  *
- * One query, not two: `listAllSavingsGoals` already returns every status, and
+ * One listing, not two: `listAllSavingsGoals` already returns every status, and
  * the archived section needs it anyway, so the split happens in memory. The
  * non-archived half is then re-ordered to `listSavingsGoals`' display order —
  * in-progress goals before achieved ones — because that ordering is the
@@ -47,9 +46,11 @@ export default async function GoalsPage() {
   const locale = await resolveLocale()
   // The one place the user's zone enters: whether a deadline has passed is a
   // comparison of calendar dates, never of instants (ruling R6-7).
-  const today = todayCalendarDateInZone(timezone, new Date())
+  const now = new Date()
+  const today = todayCalendarDateInZone(timezone, now)
 
-  const goals = await listAllSavingsGoals(user.id)
+  // Progress and status arrive derived, a linked goal's read at this `now`.
+  const goals = await listAllSavingsGoals(user.id, { now })
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders `SavingsGoalDto`s.

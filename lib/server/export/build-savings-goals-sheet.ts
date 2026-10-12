@@ -48,13 +48,25 @@ import type { ExportContext } from './sheet-registry'
  * computes it, because "−200.000 still to go" is not a fact about an over-saved
  * goal. The two together are lossless: the excess is visible in the percentage.
  *
- * One query, whatever the user's history looks like.
+ * ## `Progress` is derived, exactly as the page shows it
+ *
+ * Money-source linking (spec 2026-10-12 §6.7): `Progress` is the goal's
+ * derived progress from `listAllSavingsGoals` — a linked goal's account
+ * balance, or Σ contributions − Σ withdrawals over an unlinked goal's entries —
+ * and `Status` is the status derived from it, so the sheet and the Savings page
+ * can never disagree. The deprecated `currentProgress` column is never read.
+ *
+ * A fixed number of queries, whatever the user's history looks like: the
+ * goals, their entry sums and — only when a goal is linked — one batched
+ * balance read.
  */
 export async function buildSavingsGoalsSheet(
   workbook: ExcelJS.Workbook,
   ctx: ExportContext,
 ): Promise<void> {
-  const goals = await listAllSavingsGoals(ctx.userId)
+  // `ctx.now`: a linked goal reads its account at the same instant as the
+  // Accounts sheet, so the two cannot disagree within one workbook.
+  const goals = await listAllSavingsGoals(ctx.userId, { now: ctx.now })
   const sheet = workbook.addWorksheet('Savings Goals')
 
   writeHeader(sheet, [
@@ -72,18 +84,18 @@ export async function buildSavingsGoalsSheet(
 
   for (const goal of goals) {
     const moneyFormat = moneyFmt(goal.currency)
-    const shortfall = goal.targetAmount.sub(goal.currentProgress)
+    const shortfall = goal.targetAmount.sub(goal.progress)
     const remaining = shortfall.isNegative() ? new Prisma.Decimal(0) : shortfall
 
     const written = sheet.addRow([
       goal.name,
       moneyCell(goal.targetAmount),
-      moneyCell(goal.currentProgress),
+      moneyCell(goal.progress),
       moneyCell(remaining),
       // Safe without a zero guard: `SavingsGoal_targetAmount_positive` and
       // `createSavingsGoalSchema` both forbid a target of zero, so there is no
       // stored row this could divide by.
-      percentCell(goal.currentProgress.div(goal.targetAmount)),
+      percentCell(goal.progress.div(goal.targetAmount)),
       goal.currency,
       // The stored carrier, written straight through: a deadline is already the
       // calendar day at UTC midnight (ruling R6-7), so projecting it through

@@ -54,6 +54,7 @@ async function countOwnedRows(userId: string): Promise<Record<string, number>> {
   const [
     reminderOccurrence,
     recurringReminder,
+    savingsGoalEntry,
     savingsGoal,
     transaction,
     transfer,
@@ -68,6 +69,7 @@ async function countOwnedRows(userId: string): Promise<Record<string, number>> {
   ] = await Promise.all([
     prisma.reminderOccurrence.count({ where }),
     prisma.recurringReminder.count({ where }),
+    prisma.savingsGoalEntry.count({ where }),
     prisma.savingsGoal.count({ where }),
     prisma.transaction.count({ where }),
     prisma.transfer.count({ where }),
@@ -83,6 +85,7 @@ async function countOwnedRows(userId: string): Promise<Record<string, number>> {
   return {
     reminderOccurrence,
     recurringReminder,
+    savingsGoalEntry,
     savingsGoal,
     transaction,
     transfer,
@@ -105,7 +108,7 @@ async function countOwnedRows(userId: string): Promise<Record<string, number>> {
  * loan and reminder are written with their derived columns (`dueDayOfMonth`,
  * the reminder's anchors) spelled out rather than computed.
  *
- * It holds at least one row in EVERY one of the thirteen models
+ * It holds at least one row in EVERY one of the fourteen models
  * `deleteOwnedRows` walks, so dropping the `userId` filter from any single
  * step of that sequence moves one of these counts and fails this suite.
  * `beforeAll` asserts that coverage rather than trusting this list to stay
@@ -161,13 +164,33 @@ async function createOtherUser(): Promise<string> {
       currency: 'VND',
     },
   })
-  await prisma.savingsGoal.create({
+  // A goal with one contribution, and a goal following the account: the
+  // entry is what puts entries ahead of goals in the delete order, and the
+  // link (`ON DELETE RESTRICT`) what puts goals ahead of accounts.
+  const goal = await prisma.savingsGoal.create({
     data: {
       userId,
       name: 'Neighbour Goal',
       targetAmount: new Prisma.Decimal('2000000'),
-      currentProgress: new Prisma.Decimal('250000'),
       currency: 'VND',
+    },
+  })
+  await prisma.savingsGoalEntry.create({
+    data: {
+      userId,
+      goalId: goal.id,
+      kind: 'CONTRIBUTION',
+      amount: new Prisma.Decimal('250000'),
+      date: new Date('2026-01-12T00:00:00.000Z'),
+    },
+  })
+  await prisma.savingsGoal.create({
+    data: {
+      userId,
+      name: 'Neighbour Linked Goal',
+      targetAmount: new Prisma.Decimal('5000000'),
+      currency: 'VND',
+      linkedAccountId: account.id,
     },
   })
   // The debt and its payment are each linked to the transaction that moved
@@ -372,6 +395,8 @@ describe('seedDemoUser', () => {
     expect(stored.transfer).toBe(3)
     expect(stored.budget).toBe(3)
     expect(stored.savingsGoal).toBe(2)
+    // Each demo goal's starting figure is its first contribution.
+    expect(stored.savingsGoalEntry).toBe(2)
     expect(stored.debt).toBe(1)
     expect(stored.debtPayment).toBe(2)
     expect(stored.loan).toBe(1)
@@ -430,6 +455,7 @@ describe('clearDemoUser', () => {
     expect(await countOwnedRows(demo.id)).toEqual({
       reminderOccurrence: 0,
       recurringReminder: 0,
+      savingsGoalEntry: 0,
       savingsGoal: 0,
       transaction: 0,
       transfer: 0,

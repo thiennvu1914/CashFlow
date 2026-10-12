@@ -115,6 +115,8 @@ const EXPORT_NOW = new Date('2026-03-15T05:00:00Z')
 const DEBT_CONTEXT = { timezone: TEST_TIMEZONE, locale: 'vi' } as const
 /** The same session context for the loan writes, which take it too. */
 const LOAN_CONTEXT = { timezone: TEST_TIMEZONE, locale: 'vi' } as const
+/** A goal's create takes the zone its opening contribution is dated in. */
+const GOAL_CONTEXT = { timezone: TEST_TIMEZONE } as const
 
 /**
  * The workbook this fixture produced BEFORE Task 4 changed what the Debts and
@@ -248,22 +250,32 @@ describe('full export workbook', () => {
    * "own currency" and "unclamped percentage" rules at once.
    */
   async function seedSavingsGoals(userId: string) {
-    const emergency = await createSavingsGoal(userId, {
-      name: 'Emergency fund',
-      targetAmount: 10_000_000,
-      currency: 'VND',
-      deadline: '2026-12-31',
-      note: 'three months of expenses',
-      currentProgress: 2_500_000,
-    })
-    const laptop = await createSavingsGoal(userId, {
-      name: 'New laptop',
-      targetAmount: 1_000,
-      currency: 'USD',
-      // Over the target on purpose: ACHIEVED, then archived, and 120 % is a
-      // figure the sheet must be able to state.
-      currentProgress: 1_200,
-    })
+    // Each starting figure is recorded as the goal's first contribution, and
+    // the sheet's `Progress` is the derived sum of those entries.
+    const emergency = await createSavingsGoal(
+      userId,
+      {
+        name: 'Emergency fund',
+        targetAmount: 10_000_000,
+        currency: 'VND',
+        deadline: '2026-12-31',
+        note: 'three months of expenses',
+        initialContribution: 2_500_000,
+      },
+      GOAL_CONTEXT,
+    )
+    const laptop = await createSavingsGoal(
+      userId,
+      {
+        name: 'New laptop',
+        targetAmount: 1_000,
+        currency: 'USD',
+        // Over the target on purpose: ACHIEVED, then archived, and 120 % is a
+        // figure the sheet must be able to state.
+        initialContribution: 1_200,
+      },
+      GOAL_CONTEXT,
+    )
     await archiveSavingsGoal(userId, laptop.id)
     return { emergency, laptop }
   }
@@ -1472,12 +1484,11 @@ describe('full export workbook', () => {
       },
     })
     // No note, and nothing saved yet: the two zero cells of assertion 8.
-    const goal = await createSavingsGoal(s.userId, {
-      name: 'Untouched fund',
-      targetAmount: 5_000_000,
-      currency: 'VND',
-      currentProgress: 0,
-    })
+    const goal = await createSavingsGoal(
+      s.userId,
+      { name: 'Untouched fund', targetAmount: 5_000_000, currency: 'VND' },
+      GOAL_CONTEXT,
+    )
     // No description, no notes, no due date.
     const debt = await createDebt(
       s.userId,
