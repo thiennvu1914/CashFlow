@@ -161,15 +161,28 @@ const CATEGORY_REQUIRED_TYPES = new Set<FormType>(['INCOME', 'EXPENSE'])
 
 const DEFAULT_TYPE: FormType = 'EXPENSE'
 
-function defaultValues(accounts: AccountOption[], timezone: string): FormInput {
+/**
+ * A new entry's starting values. `keep` carries the account and type the last
+ * save used (plain create flow only): entering several transactions in a row
+ * rarely switches either, so the next entry starts from them. The category is
+ * not carried — it is cleared like the amount and note, so it can never sit
+ * under a type it does not match — and a kept account that is no longer offered
+ * falls back to the first one.
+ */
+export function defaultValues(
+  accounts: AccountOption[],
+  timezone: string,
+  keep?: { accountId: string; type: FormType },
+): FormInput {
   // `nowInZone` returns exactly `yyyy-MM-ddTHH:mm`, so the split is the 'T' —
   // no second clock read, and therefore no chance of the date and the time
   // coming from two different instants either side of midnight.
   const [datePart, timePart] = nowInZone(timezone).split('T')
   return {
-    accountId: accounts[0]?.id ?? '',
+    accountId:
+      accounts.find((account) => account.id === keep?.accountId)?.id ?? accounts[0]?.id ?? '',
     categoryId: undefined,
-    type: DEFAULT_TYPE,
+    type: keep?.type ?? DEFAULT_TYPE,
     datePart,
     timePart,
     amount: 0,
@@ -455,9 +468,13 @@ export function TransactionForm({
       errorKeys: TRANSACTION_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
-        // A new entry starts the next one from "now"; an edit's sheet closes,
-        // and the form goes with it.
-        if (!transaction) reset(defaultValues(accounts, timezone))
+        // A new entry starts the next one from "now", on the account and type
+        // just used; an edit's sheet closes, and the form goes with it.
+        if (!transaction) {
+          reset(
+            defaultValues(accounts, timezone, { accountId: values.accountId, type: values.type }),
+          )
+        }
         onSaved?.()
       },
     })

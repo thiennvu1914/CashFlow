@@ -34,7 +34,7 @@ vi.mock('@/lib/server/actions/transaction-actions', () => ({
   updateTransactionAction: vi.fn(),
 }))
 
-const { TransactionForm } = await import('./transaction-form')
+const { TransactionForm, defaultValues } = await import('./transaction-form')
 
 type Account = { id: string; name: string; currency: Currency; balance: string }
 
@@ -438,5 +438,29 @@ describe('TransactionForm opened from a reminder', () => {
       expect(optionLabels(selectMarkup(html, 'account'))).toEqual(['Dollars · 500,00 USD'])
       expect(html).toContain(CURRENCY_NOTE)
     })
+  })
+})
+
+describe('defaultValues after a save', () => {
+  const accounts = [
+    { id: 'a1', name: 'Cash', currency: 'VND' as Currency, balance: '0.00' },
+    { id: 'a2', name: 'Bank', currency: 'VND' as Currency, balance: '0.00' },
+  ]
+
+  it('starts from the first account and EXPENSE with nothing kept', () => {
+    const values = defaultValues(accounts, 'UTC')
+    expect([values.accountId, values.type]).toEqual(['a1', 'EXPENSE'])
+  })
+
+  it('keeps the account and type just used, and clears category, amount and note', () => {
+    const values = defaultValues(accounts, 'UTC', { accountId: 'a2', type: 'INCOME' })
+    expect([values.accountId, values.type]).toEqual(['a2', 'INCOME'])
+    expect([values.categoryId, values.amount, values.note]).toEqual([undefined, 0, undefined])
+  })
+
+  it('falls back to the first account when the kept one is no longer offered', () => {
+    expect(defaultValues(accounts, 'UTC', { accountId: 'gone', type: 'INCOME' }).accountId).toBe(
+      'a1',
+    )
   })
 })

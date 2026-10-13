@@ -306,6 +306,23 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
     await expect(dialog).toBeHidden()
     await expect(page.getByRole('listitem').filter({ hasText: '88.888' })).toHaveCount(1)
   })
+
+  test('after saving, the form keeps the account and type just used', async ({ page }) => {
+    await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 0 })
+    await page.goto('/transactions')
+
+    await page.getByRole('radio', { name: /Thu nhập|^Income$/ }).click()
+    await page.getByRole('combobox', { name: /Tài khoản|^Account$/ }).click()
+    await page.getByRole('option', { name: /Bank/ }).click()
+    await page.getByRole('combobox', { name: /Danh mục|^Category$/ }).click()
+    await page.getByRole('option').first().click()
+    await page.getByLabel(/Số tiền|^Amount$/).fill('77777')
+    await page.getByRole('button', { name: /Thêm giao dịch|Add transaction/ }).click()
+
+    await expect(page.getByLabel(/Số tiền|^Amount$/)).toHaveValue('0')
+    await expect(page.getByRole('radio', { name: /Thu nhập|^Income$/ })).toBeChecked()
+    await expect(page.getByRole('combobox', { name: /Tài khoản|^Account$/ })).toContainText('Bank')
+  })
 })
 
 /**
