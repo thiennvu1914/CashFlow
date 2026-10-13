@@ -52,7 +52,7 @@ export async function getDashboardData(
           now,
           state,
         )
-        return { position, balanceOverTime }
+        return { position, balanceOverTime, agreements }
       })(),
       getActivitySummary(userId, displayCurrency, getPeriodBounds(timezone, 'month', now)),
       getCashFlowTrend(userId, timezone, displayCurrency, limits.months, now),

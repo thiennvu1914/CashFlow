@@ -1,12 +1,18 @@
-import { Prisma, type TransactionType } from '@prisma/client'
+import { Prisma, type DebtDirection, type TransactionType } from '@prisma/client'
 import { formatInTimeZone } from 'date-fns-tz'
 import type { Currency } from '@/lib/currency/provider'
+import {
+  calendarDateToUtcCarrier,
+  calendarDaysBetween,
+  compareCalendarDates,
+  formatCalendarDate,
+} from '@/lib/datetime/calendar-date'
 import type { Locale } from '@/lib/i18n/locale'
 import { isBalanceIncreasing } from '@/lib/money/transaction-sign'
 import type { AccountBalancePoint } from '@/lib/server/services/account-balance-history'
 import type { CashFlowPoint, getActivitySummary } from '@/lib/server/services/activity'
 import type { BudgetProgress } from '@/lib/server/services/budget'
-import type { CurrentPosition } from '@/lib/server/services/position'
+import type { CurrentPosition, PositionAgreements } from '@/lib/server/services/position'
 import type { OccurrenceRow } from '@/lib/server/services/reminder'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import type { listTransactions } from '@/lib/server/services/transaction'
@@ -125,7 +131,34 @@ export interface DashboardInput {
    * function in two viewer zones.
    */
   overdueOccurrenceCount: number
+  /**
+   * The active debts and loans the dashboard already read for Net Worth
+   * (`loadPositionAgreements`) — reused here for their due dates, so the
+   * upcoming list costs no further round trip.
+   */
+  agreements: Pick<PositionAgreements, 'debts' | 'loans'>
 }
+
+/** A debt's or loan's due date as an upcoming-list row. Read-only: it links to its page. */
+export interface DueItemDto {
+  kind: 'debt' | 'loan'
+  id: string
+  /** The person (debt) or lender (loan) — the component builds the label from it. */
+  name: string
+  /** Debts only: decides "Hạn nợ" (payable) versus "Thu nợ" (receivable). */
+  direction: DebtDirection | null
+  /** A loan's scheduled payment; a debt's outstanding — in the row's own currency. */
+  amount: string
+  currency: Currency
+  /** `yyyy-MM-dd`. */
+  dueDate: string
+  daysToDue: number
+  overdue: boolean
+  href: '/debts' | '/loans'
+}
+
+/** One row of the dashboard's upcoming list: a reminder occurrence or a debt/loan due date. */
+export type UpcomingItemDto = { kind: 'reminder'; occurrence: OccurrenceDto } | DueItemDto
 
 export interface KpiDto {
   /**
@@ -285,6 +318,13 @@ export interface DashboardViewModel {
    */
   upcomingReminders: OccurrenceDto[]
   /**
+   * The widget's rows: the reminders above merged with active loans' next due
+   * date and active debts' due date inside the same window (overdue, then the
+   * reminders' lookahead), sorted by date, with the same caps — two overdue,
+   * five in all.
+   */
+  upcomingItems: UpcomingItemDto[]
+  /**
    * How many PENDING occurrences are already past due — *all* of them, not just
    * the ones above, so the widget can say "7 overdue" while showing two of
    * them. Zero when the user is up to date.
@@ -369,6 +409,59 @@ const WIDGET_OVERDUE_ROW_LIMIT = 2
  * sees five upcoming rows, so five is what the upcoming half must be able to
  * supply.
  */
+/** The reminders' own lookahead, restated so debt and loan dates use the same window. */
+const UPCOMING_WINDOW_DAYS = 30
+
+/**
+ * Debt and loan due dates inside the reminders' window: everything overdue plus
+ * what falls within the next 30 days of the user's own today. A debt with
+ * nothing left owed has nothing to collect or pay, so it is not listed.
+ */
+function dueItems(
+  agreements: DashboardInput['agreements'],
+  today: string,
+  locale: Locale,
+): DueItemDto[] {
+  const horizon = formatCalendarDate(
+    new Date(calendarDateToUtcCarrier(today).getTime() + UPCOMING_WINDOW_DAYS * 86_400_000),
+  )
+  const items: DueItemDto[] = []
+  const push = (item: Omit<DueItemDto, 'daysToDue' | 'overdue'>) => {
+    if (compareCalendarDates(item.dueDate, horizon) > 0) return
+    items.push({
+      ...item,
+      daysToDue: calendarDaysBetween(today, item.dueDate),
+      overdue: compareCalendarDates(item.dueDate, today) < 0,
+    })
+  }
+  for (const { debt, outstanding } of agreements.debts) {
+    if (debt.dueDate === null || !outstanding.gt(0)) continue
+    push({
+      kind: 'debt',
+      id: debt.id,
+      name: debt.person,
+      direction: debt.direction,
+      amount: formatMoney(outstanding, debt.currency, locale),
+      currency: debt.currency,
+      dueDate: formatCalendarDate(debt.dueDate),
+      href: '/debts',
+    })
+  }
+  for (const { loan } of agreements.loans) {
+    push({
+      kind: 'loan',
+      id: loan.id,
+      name: loan.lender,
+      direction: null,
+      amount: formatMoney(loan.scheduledPaymentAmount, loan.currency, locale),
+      currency: loan.currency,
+      dueDate: formatCalendarDate(loan.nextDueDate),
+      href: '/loans',
+    })
+  }
+  return items
+}
+
 export const DASHBOARD_OCCURRENCE_LIMITS = {
   overdue: WIDGET_OVERDUE_ROW_LIMIT,
   upcoming: WIDGET_ROW_LIMIT,
@@ -404,6 +497,7 @@ export function buildDashboardViewModel(
     goals,
     occurrences,
     overdueOccurrenceCount,
+    agreements,
   } = input
 
   /** A current-position KPI: a figure, or a gap with the reason for it. */
@@ -473,6 +567,26 @@ export function buildDashboardViewModel(
   // Both halves keep the service's `dueAt asc` order — oldest overdue first,
   // soonest upcoming first — exactly as the Reminders page groups them.
   const upcomingOccurrences = allOccurrences.filter((occurrence) => !occurrence.overdue)
+
+  // Reminders and debt/loan dates, one list by date (reminders first on a tie).
+  // The cap is the reminders' own: two overdue at most, five in all.
+  const merged: UpcomingItemDto[] = [
+    ...allOccurrences.map((occurrence) => ({
+      kind: 'reminder' as const,
+      occurrence,
+    })),
+    ...dueItems(agreements, today, locale),
+  ].sort((a, b) => {
+    const dateOf = (item: UpcomingItemDto) =>
+      item.kind === 'reminder' ? item.occurrence.dueDate : item.dueDate
+    return compareCalendarDates(dateOf(a), dateOf(b))
+  })
+  const isOverdue = (item: UpcomingItemDto) =>
+    item.kind === 'reminder' ? item.occurrence.overdue : item.overdue
+  const upcomingItems = [
+    ...merged.filter(isOverdue).slice(0, WIDGET_OVERDUE_ROW_LIMIT),
+    ...merged.filter((item) => !isOverdue(item)),
+  ].slice(0, WIDGET_ROW_LIMIT)
 
   return {
     displayCurrency: currency,
@@ -596,6 +710,7 @@ export function buildDashboardViewModel(
       ...overdueOccurrences.slice(0, WIDGET_OVERDUE_ROW_LIMIT),
       ...upcomingOccurrences,
     ].slice(0, WIDGET_ROW_LIMIT),
+    upcomingItems,
     // The full tally, not the number shown: the widget's one muted line is the
     // only place the user learns that the two rows above it are the tip of
     // seven. It arrives as a `count` from the service rather than being read

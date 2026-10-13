@@ -148,6 +148,7 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
     // The tally comes from its own `count` query rather than from the array
     // above (Phase 8, finding B-6), so a case that asserts it says so.
     overdueOccurrenceCount: 0,
+    agreements: { debts: [], loans: [] },
     // The user's own calendar day for `NOW` in Ho Chi Minh City — 10:00Z is
     // 17:00 there, still the 15th.
     today: '2026-09-15',
@@ -1049,6 +1050,123 @@ describe('buildDashboardViewModel', () => {
       // only in this state, never with pending rows hidden behind a cap.
       expect(vm.upcomingReminders).toEqual([])
       expect(vm.overdueReminderCount).toBe(0)
+    })
+  })
+
+  describe('upcoming items (reminders + debt and loan due dates)', () => {
+    // Only the fields the mapper reads; the rest of a Debt/Loan row is irrelevant here.
+    function debtRow(o: {
+      id: string
+      person: string
+      direction: 'PAYABLE' | 'RECEIVABLE'
+      dueDate: string | null
+      outstanding?: string
+    }) {
+      return {
+        debt: {
+          id: o.id,
+          person: o.person,
+          direction: o.direction,
+          currency: 'VND',
+          dueDate: o.dueDate === null ? null : new Date(`${o.dueDate}T00:00:00Z`),
+        },
+        outstanding: decimal(o.outstanding ?? '2000000'),
+      }
+    }
+    function loanRow(o: { id: string; lender: string; nextDueDate: string }) {
+      return {
+        loan: {
+          id: o.id,
+          lender: o.lender,
+          currency: 'VND',
+          scheduledPaymentAmount: decimal('1500000'),
+          nextDueDate: new Date(`${o.nextDueDate}T00:00:00Z`),
+        },
+      }
+    }
+    const agreements = (debts: unknown[], loans: unknown[]) =>
+      ({ debts, loans }) as unknown as DashboardInput['agreements']
+
+    it('merges debt and loan dates with reminders, sorted by date, inside the 30-day window', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          // Local midnight on 20 Sep in Ho Chi Minh City.
+          occurrences: [
+            occurrence({ id: 'o1', title: 'Rent', dueAt: new Date('2026-09-19T17:00:00Z') }),
+          ],
+          agreements: agreements(
+            [
+              debtRow({ id: 'd1', person: 'An', direction: 'PAYABLE', dueDate: '2026-09-18' }),
+              debtRow({ id: 'd2', person: 'Binh', direction: 'RECEIVABLE', dueDate: '2026-10-15' }),
+              // 16 Oct is day 31: outside the window. No date and nothing owed: not listed.
+              debtRow({ id: 'd3', person: 'Far', direction: 'PAYABLE', dueDate: '2026-10-16' }),
+              debtRow({ id: 'd4', person: 'None', direction: 'PAYABLE', dueDate: null }),
+              debtRow({
+                id: 'd5',
+                person: 'Paid',
+                direction: 'PAYABLE',
+                dueDate: '2026-09-17',
+                outstanding: '0',
+              }),
+            ],
+            [loanRow({ id: 'l1', lender: 'Bank', nextDueDate: '2026-09-25' })],
+          ),
+        }),
+        'vi',
+      )
+
+      expect(
+        vm.upcomingItems.map((item) =>
+          item.kind === 'reminder'
+            ? ['reminder', item.occurrence.id, item.occurrence.dueDate]
+            : [item.kind, item.id, item.dueDate, item.direction, item.amount, item.href],
+        ),
+      ).toEqual([
+        ['debt', 'd1', '2026-09-18', 'PAYABLE', '2.000.000', '/debts'],
+        ['reminder', 'o1', '2026-09-20'],
+        ['loan', 'l1', '2026-09-25', null, '1.500.000', '/loans'],
+        ['debt', 'd2', '2026-10-15', 'RECEIVABLE', '2.000.000', '/debts'],
+      ])
+    })
+
+    it('keeps the two-overdue cap and the five-row total across both kinds', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          agreements: agreements(
+            ['01', '02', '03'].map((day) =>
+              debtRow({
+                id: `late${day}`,
+                person: day,
+                direction: 'PAYABLE',
+                dueDate: `2026-09-${day}`,
+              }),
+            ),
+            ['20', '21', '22', '23'].map((day) =>
+              loanRow({ id: `loan${day}`, lender: day, nextDueDate: `2026-09-${day}` }),
+            ),
+          ),
+        }),
+        'vi',
+      )
+
+      expect(
+        vm.upcomingItems.map((item) => (item.kind === 'reminder' ? item.occurrence.id : item.id)),
+      ).toEqual(['late01', 'late02', 'loan20', 'loan21', 'loan22'])
+      expect(
+        vm.upcomingItems.slice(0, 2).every((item) => item.kind === 'debt' && item.overdue),
+      ).toBe(true)
+    })
+
+    it('is just the reminders when there are no debts or loans', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          occurrences: [occurrence({ id: 'o1', dueAt: new Date('2026-09-19T17:00:00Z') })],
+        }),
+        'vi',
+      )
+      expect(vm.upcomingItems).toEqual(
+        vm.upcomingReminders.map((occurrence) => ({ kind: 'reminder', occurrence })),
+      )
     })
   })
 })

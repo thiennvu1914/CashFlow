@@ -38,7 +38,7 @@ import { ChartContainer } from '@/components/common/chart-container'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
 import { GoalList } from '@/components/goals/goal-list'
-import { OccurrenceList } from '@/components/reminders/occurrence-list'
+import { UpcomingList } from '@/components/dashboard/upcoming-list'
 
 /** How many months the two trend charts look back over. */
 const TREND_MONTHS = 6
@@ -85,6 +85,7 @@ export default async function DashboardPage() {
     budgets,
     goals,
     occurrences,
+    agreements,
   } = await getDashboardData(user.id, timezone, displayCurrency, now, {
     months: TREND_MONTHS,
     transactions: RECENT_TRANSACTION_COUNT,
@@ -118,6 +119,7 @@ export default async function DashboardPage() {
       // The tally the widget's muted line reports, from its own `count` query:
       // `rows` above is capped at two overdue, so its length is not the answer.
       overdueOccurrenceCount: occurrences.overdueCount,
+      agreements,
     },
     locale,
   )
@@ -179,7 +181,7 @@ export default async function DashboardPage() {
    * otherwise get has nothing in it either.
    */
   const hasPlanningRows =
-    vm.budgets.length > 0 || vm.savingsGoals.length > 0 || vm.upcomingReminders.length > 0
+    vm.budgets.length > 0 || vm.savingsGoals.length > 0 || vm.upcomingItems.length > 0
   const hasDebtOrLoan =
     position === null ||
     !position.receivables.isZero() ||
@@ -495,7 +497,7 @@ export default async function DashboardPage() {
             title={t('dashboard.upcomingReminders')}
             caption={t('dashboard.upcomingRemindersCaption', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
             right={
-              vm.upcomingReminders.length > 0 ? (
+              vm.upcomingItems.length > 0 ? (
                 <Link
                   href="/reminders"
                   className="text-xs/[1rem] text-brand underline-offset-4 hover:underline"
@@ -506,7 +508,7 @@ export default async function DashboardPage() {
             }
             className="order-4 md:col-span-2 xl:order-9 xl:col-span-8"
           >
-            {vm.upcomingReminders.length === 0 ? (
+            {vm.upcomingItems.length === 0 ? (
               <EmptyState
                 icon={BellRing}
                 title={t('dashboard.emptyRemindersTitle', { days: OCCURRENCE_LOOKAHEAD_DAYS })}
@@ -536,12 +538,7 @@ export default async function DashboardPage() {
                   list the user cannot expand. No inner card border either — a
                   card inside `ChartContainer`'s own card would be a
                   card-in-card. */}
-                <OccurrenceList
-                  occurrences={vm.upcomingReminders}
-                  locale={locale}
-                  timeZone={timezone}
-                  compact
-                />
+                <UpcomingList items={vm.upcomingItems} locale={locale} timeZone={timezone} />
               </div>
             )}
           </ChartContainer>

@@ -80,6 +80,8 @@ it.each([false, true])(
     finish()
     const resolved = await result
     expect(resolved.position).toEqual(outage ? null : { fx: 'resolved-current-rate' })
+    // The same rows feed the upcoming list: no second read of the agreements.
+    expect(resolved.agreements).toBe(agreements)
     expect(reads.history).toHaveBeenCalledWith(
       'owner',
       'Asia/Ho_Chi_Minh',
