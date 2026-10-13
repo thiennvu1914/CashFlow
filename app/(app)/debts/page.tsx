@@ -19,6 +19,7 @@ import {
 import { EmptyState } from '@/components/common/empty-state'
 import { MoneyText } from '@/components/common/money-text'
 import { PageHeader } from '@/components/common/page-header'
+import { SectionTabs } from '@/components/common/section-tabs'
 import { SectionHeader } from '@/components/common/section-header'
 
 /**
@@ -101,6 +102,7 @@ export default async function DebtsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <SectionTabs section="debts" active="debts" />
       <PageHeader
         title={t('debts.title')}
         description={t('debts.description')}

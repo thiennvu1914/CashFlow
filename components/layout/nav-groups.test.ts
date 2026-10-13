@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 import viNav from '@/messages/vi/nav.json'
 import enNav from '@/messages/en/nav.json'
 import { NAV_GROUPS } from './nav-groups'
-import { MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS, NAV_ITEMS } from './nav-items'
+import { MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS, NAV_ITEMS, isActiveNavItem } from './nav-items'
 
 function navKey(tree: Record<string, unknown>, key: string): unknown {
   return tree[key.replace(/^nav\./, '')]
 }
 
 describe('navigation', () => {
-  it('groups every destination exactly once, in the spec’s five groups', () => {
+  it('groups every destination exactly once, in five groups', () => {
     expect(NAV_GROUPS.map((group) => group.id)).toEqual([
       'overview',
       'money',
@@ -28,8 +28,8 @@ describe('navigation', () => {
       NAV_GROUPS.map((group) => [group.id, group.items.map((i) => i.href)]),
     )
     expect(byId.overview).toEqual(['/dashboard'])
-    expect(byId.money).toEqual(['/transactions', '/transfers', '/accounts', '/categories'])
-    expect(byId.planning).toEqual(['/budgets', '/goals', '/debts', '/loans', '/reminders'])
+    expect(byId.money).toEqual(['/transactions', '/accounts'])
+    expect(byId.planning).toEqual(['/budgets', '/goals', '/debts', '/reminders'])
     expect(byId.reports).toEqual(['/reports'])
     expect(byId.settings).toEqual(['/settings'])
   })
@@ -52,7 +52,7 @@ describe('navigation', () => {
     }
   })
 
-  it('shows exactly four routes in the bottom bar and the other eight behind More', () => {
+  it('shows exactly four routes in the bottom bar and the other five behind More', () => {
     expect(MOBILE_TAB_ITEMS.map((item) => item.href)).toEqual([
       '/dashboard',
       '/transactions',
@@ -61,5 +61,30 @@ describe('navigation', () => {
     ])
     expect(MOBILE_MORE_ITEMS).toHaveLength(NAV_ITEMS.length - 4)
     expect(MOBILE_MORE_ITEMS.map((item) => item.href)).not.toContain('/dashboard')
+  })
+
+  it('has nine entries, with the tab routes folded into their entry', () => {
+    expect(NAV_ITEMS.map((item) => item.href)).toEqual([
+      '/dashboard',
+      '/transactions',
+      '/accounts',
+      '/budgets',
+      '/goals',
+      '/debts',
+      '/reminders',
+      '/reports',
+      '/settings',
+    ])
+  })
+
+  it('lights an entry for any of its tab routes', () => {
+    const active = (pathname: string) =>
+      NAV_ITEMS.filter((item) => isActiveNavItem(pathname, item)).map((item) => item.href)
+    expect(active('/transfers')).toEqual(['/transactions'])
+    expect(active('/transactions')).toEqual(['/transactions'])
+    expect(active('/loans')).toEqual(['/debts'])
+    expect(active('/debts/abc')).toEqual(['/debts'])
+    expect(active('/categories')).toEqual(['/settings'])
+    expect(active('/accounts')).toEqual(['/accounts'])
   })
 })

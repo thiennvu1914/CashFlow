@@ -1,7 +1,7 @@
 import { NAV_ITEMS, type NavItem } from './nav-items'
 
 /**
- * The rail's five groups (spec §5), so twelve destinations read as a structure
+ * The rail's five groups (spec §5), so nine entries read as a structure
  * rather than a list: Tổng quan, then the things money moves through, then the
  * things you plan with, then Báo cáo, then Cài đặt.
  *
@@ -32,12 +32,12 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'money',
     headerKey: 'nav.groupMoney',
-    items: itemsFor(['/transactions', '/transfers', '/accounts', '/categories']),
+    items: itemsFor(['/transactions', '/accounts']),
   },
   {
     id: 'planning',
     headerKey: 'nav.groupPlanning',
-    items: itemsFor(['/budgets', '/goals', '/debts', '/loans', '/reminders']),
+    items: itemsFor(['/budgets', '/goals', '/debts', '/reminders']),
   },
   { id: 'reports', headerKey: 'nav.groupReports', items: itemsFor(['/reports']) },
   { id: 'settings', headerKey: 'nav.groupSettings', items: itemsFor(['/settings']) },

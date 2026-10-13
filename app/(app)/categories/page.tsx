@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { ChevronLeft } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { displayAccountTypeName, displayCategoryName } from '@/lib/ui/default-names'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
@@ -24,6 +26,13 @@ export default async function CategoriesPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <Link
+        href="/settings"
+        className="inline-flex items-center gap-1 self-start rounded-md text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ChevronLeft aria-hidden="true" className="size-4" />
+        {t('categories.backToSettings')}
+      </Link>
       <PageHeader title={t('categories.title')} description={t('categories.description')} />
 
       {/* One column, not the two-column grid this page had: the three sections

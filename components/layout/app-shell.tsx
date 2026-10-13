@@ -105,7 +105,7 @@ export function AppShell({ userName, children }: { userName: string; children: R
                 <ul className="flex flex-col gap-1">
                   {group.items.map((item) => (
                     <li key={item.href}>
-                      <RailLink item={item} active={isActiveNavItem(pathname, item.href)} />
+                      <RailLink item={item} active={isActiveNavItem(pathname, item)} />
                     </li>
                   ))}
                 </ul>

@@ -70,14 +70,11 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     for (const label of [
       /^(Tổng quan|Dashboard)$/,
       /^(Giao dịch|Transactions)$/,
-      /^(Chuyển tiền|Transfers)$/,
       /^(Tài khoản|Accounts)$/,
       /^(Ngân sách|Budgets)$/,
       /^(Tiết kiệm|Savings)$/,
-      /^(Công nợ|Debts)$/,
-      /^(Khoản vay|Loans)$/,
+      /^(Vay & nợ|Debts & loans)$/,
       /^(Nhắc nhở|Reminders)$/,
-      /^(Danh mục|Categories)$/,
       /^(Báo cáo|Reports)$/,
       /^(Cài đặt|Settings)$/,
     ]) {
@@ -193,9 +190,8 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
 
     await page.getByRole('button', { name: /^(Menu|More)$/ }).click()
     const morePanel = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
-    await expect(morePanel.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ })).toBeVisible()
+    await expect(morePanel.getByRole('link', { name: /^(Vay & nợ|Debts & loans)$/ })).toBeVisible()
     await expect(morePanel.getByRole('link', { name: /^(Ngân sách|Budgets)$/ })).toBeVisible()
-    await expect(morePanel.getByRole('link', { name: /^(Danh mục|Categories)$/ })).toBeVisible()
     await expect(morePanel.getByRole('link', { name: /^(Cài đặt|Settings)$/ })).toBeVisible()
 
     await page.keyboard.press('Escape')

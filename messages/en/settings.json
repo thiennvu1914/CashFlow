@@ -1,4 +1,6 @@
 {
+  "categoriesTitle": "Categories",
+  "categoriesDescription": "Manage income and expense categories and account types.",
   "title": "Settings",
   "profileTitle": "Profile",
   "profileDescription": "The name shown throughout the app.",

@@ -113,7 +113,7 @@ export function MobileTabBar() {
 
 function MobileTab({ item, pathname }: { item: NavItem; pathname: string }) {
   const t = useTranslations()
-  const active = isActiveNavItem(pathname, item.href)
+  const active = isActiveNavItem(pathname, item)
   const Icon = item.icon
   return (
     <li>

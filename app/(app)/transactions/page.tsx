@@ -12,6 +12,7 @@ import { getOccurrencePrefill } from '@/lib/server/services/reminder'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { SectionTabs } from '@/components/common/section-tabs'
 import { toAccountOptions } from '@/components/transactions/account-options'
 import {
   TransactionCreatePanelBody,
@@ -105,6 +106,7 @@ export default async function TransactionsPage({
   if (accounts.length === 0) {
     return (
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+        <SectionTabs section="transactions" active="transactions" />
         <PageHeader title={t('transactions.title')} description={monthTotalDescription} />
         <EmptyState
           icon={Wallet}
@@ -131,6 +133,7 @@ export default async function TransactionsPage({
     >
       {/* max-w 1200 because the two-column desktop layout needs it. */}
       <div className="mx-auto flex w-full max-w-[75rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+        <SectionTabs section="transactions" active="transactions" />
         <PageHeader
           title={t('transactions.title')}
           description={monthTotalDescription}

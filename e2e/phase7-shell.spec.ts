@@ -138,7 +138,7 @@ test.describe.serial('Phase 7 — app shell', () => {
     await expect(trigger).toBeFocused()
   })
 
-  test('the More sheet closes on navigation and lists the eight non-tab routes', async ({
+  test('the More sheet closes on navigation and lists the five non-tab entries', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 375, height: 812 })
@@ -147,20 +147,17 @@ test.describe.serial('Phase 7 — app shell', () => {
     const sheet = page.getByRole('dialog', { name: /^(Tất cả mục|All sections)$/ })
 
     for (const label of [
-      /^(Chuyển tiền|Transfers)$/,
-      /^(Danh mục|Categories)$/,
       /^(Ngân sách|Budgets)$/,
       /^(Tiết kiệm|Savings)$/,
-      /^(Công nợ|Debts)$/,
-      /^(Khoản vay|Loans)$/,
+      /^(Vay & nợ|Debts & loans)$/,
       /^(Nhắc nhở|Reminders)$/,
       /^(Cài đặt|Settings)$/,
     ]) {
       await expect(sheet.getByRole('link', { name: label })).toBeVisible()
     }
 
-    await sheet.getByRole('link', { name: /^(Chuyển tiền|Transfers)$/ }).click()
-    await expect(page).toHaveURL(/\/transfers/)
+    await sheet.getByRole('link', { name: /^(Vay & nợ|Debts & loans)$/ }).click()
+    await expect(page).toHaveURL(/\/debts/)
     await expect(sheet).toBeHidden()
   })
 

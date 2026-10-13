@@ -7,6 +7,7 @@ import { listTransfers } from '@/lib/server/services/transfer'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { SectionTabs } from '@/components/common/section-tabs'
 import { SectionHeader } from '@/components/common/section-header'
 import { TransferForm } from '@/components/transfers/transfer-form'
 import { TransferList } from '@/components/transfers/transfer-list'
@@ -45,6 +46,7 @@ export default async function TransfersPage() {
 
   return (
     <div className="mx-auto flex max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
+      <SectionTabs section="transactions" active="transfers" />
       <PageHeader title={t('transfers.title')} />
 
       {needsTwoAccounts && transfers.length === 0 ? (

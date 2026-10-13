@@ -1,14 +1,11 @@
 import {
-  ArrowLeftRight,
   BellRing,
   ChartColumn,
   HandCoins,
-  Landmark,
   LayoutDashboard,
   PiggyBank,
   Receipt,
   Settings,
-  Tags,
   Target,
   Wallet,
   type LucideIcon,
@@ -37,21 +34,39 @@ export interface NavItem {
   href: string
   labelKey: string
   icon: LucideIcon
+  /**
+   * Every route that lights this item up. Defaults to `href` alone; set when one
+   * sidebar entry holds several routes as tabs (Giao dịch + Chuyển tiền, Vay & nợ)
+   * or a sub-page (Cài đặt + Danh mục). The routes themselves do not move.
+   */
+  matches?: string[]
 }
 
 export const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
-  { href: '/transactions', labelKey: 'nav.transactions', icon: Receipt },
-  { href: '/transfers', labelKey: 'nav.transfers', icon: ArrowLeftRight },
+  {
+    href: '/transactions',
+    labelKey: 'nav.transactions',
+    icon: Receipt,
+    matches: ['/transactions', '/transfers'],
+  },
   { href: '/accounts', labelKey: 'nav.accounts', icon: Wallet },
   { href: '/budgets', labelKey: 'nav.budgets', icon: Target },
   { href: '/goals', labelKey: 'nav.goals', icon: PiggyBank },
-  { href: '/debts', labelKey: 'nav.debts', icon: HandCoins },
-  { href: '/loans', labelKey: 'nav.loans', icon: Landmark },
+  {
+    href: '/debts',
+    labelKey: 'nav.debtsLoans',
+    icon: HandCoins,
+    matches: ['/debts', '/loans'],
+  },
   { href: '/reminders', labelKey: 'nav.reminders', icon: BellRing },
-  { href: '/categories', labelKey: 'nav.categories', icon: Tags },
   { href: '/reports', labelKey: 'nav.reports', icon: ChartColumn },
-  { href: '/settings', labelKey: 'nav.settings', icon: Settings },
+  {
+    href: '/settings',
+    labelKey: 'nav.settings',
+    icon: Settings,
+    matches: ['/settings', '/categories'],
+  },
 ]
 
 /**
@@ -77,10 +92,12 @@ export const MOBILE_TAB_ITEMS = MOBILE_TAB_HREFS.map((href) => {
 export const ADD_TRANSACTION_HREF = '/transactions#new'
 
 /**
- * True when `href` is the section the user is currently in. A prefix match (not
+ * True when `item` is the section the user is currently in. A prefix match (not
  * just equality) so a future `/transactions/<id>` detail page still lights up
  * its parent tab, while `/` never matches anything but itself.
  */
-export function isActiveNavItem(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(`${href}/`)
+export function isActiveNavItem(pathname: string, item: NavItem): boolean {
+  return (item.matches ?? [item.href]).some(
+    (href) => pathname === href || pathname.startsWith(`${href}/`),
+  )
 }

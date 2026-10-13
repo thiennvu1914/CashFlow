@@ -9,7 +9,7 @@ import { Sheet } from '@/components/common/sheet'
 import { MOBILE_MORE_ITEMS, isActiveNavItem } from './nav-items'
 
 /**
- * The phone "Khác" ("More") panel (spec §5): the eight destinations the
+ * The phone "Khác" ("More") panel (spec §5): the destinations the
  * bottom bar has no room for, as a two-column icon grid, plus Log out.
  *
  * A `Sheet` — so it closes by its own button, by Escape, by an overlay tap and
@@ -46,7 +46,7 @@ export function MoreSheet({
       <nav aria-label={t('nav.moreSheetNav')}>
         <ul className="grid grid-cols-2 gap-2">
           {MOBILE_MORE_ITEMS.map((item) => {
-            const active = isActiveNavItem(pathname, item.href)
+            const active = isActiveNavItem(pathname, item)
             const Icon = item.icon
             return (
               <li key={item.href}>

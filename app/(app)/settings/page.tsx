@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { ChevronRight } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
@@ -47,6 +49,19 @@ export default async function SettingsPage() {
         description={t('settings.securityDescription')}
       >
         <ChangePasswordForm />
+      </SettingsCard>
+
+      <SettingsCard
+        title={t('settings.categoriesTitle')}
+        description={t('settings.categoriesDescription')}
+      >
+        <Link
+          href="/categories"
+          className="inline-flex items-center gap-1 self-start rounded-md text-sm font-medium text-brand-on-tint hover:underline"
+        >
+          {t('nav.categories')}
+          <ChevronRight aria-hidden="true" className="size-4" />
+        </Link>
       </SettingsCard>
     </div>
   )
