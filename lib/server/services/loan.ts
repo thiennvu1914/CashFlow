@@ -1668,22 +1668,33 @@ export async function unlinkLoanFromAccount(
   // loan is this user's (no row: P2025), whether its disbursement is recorded,
   // and the account of every transaction this request removes — one row per
   // transaction, so the count beyond the disbursement sizes the transaction.
+  // The linked ids are a UNION (which also drops the NULLs and any repeat) joined
+  // to Transaction by equality, so Postgres reaches each row through the
+  // `(userId, id)` index instead of probing it once per candidate for an
+  // `OR … IN (subquery)`.
   const linkedRows = await prisma.$queryRaw<
     Array<{ disbursementTransactionId: string | null; accountId: string | null }>
   >`
     SELECT l."disbursementTransactionId", t."accountId"
       FROM "Loan" l
-      LEFT JOIN "Transaction" t
-        ON t."userId" = l."userId"
-       AND (t."id" = l."disbursementTransactionId"${
-         includePayments
-           ? Prisma.sql`
-            OR t."id" IN (SELECT p."principalTransactionId" FROM "LoanPayment" p
-                           WHERE p."userId" = l."userId" AND p."loanId" = l."id")
-            OR t."id" IN (SELECT p."interestTransactionId" FROM "LoanPayment" p
-                           WHERE p."userId" = l."userId" AND p."loanId" = l."id")`
-           : Prisma.empty
-       })
+      LEFT JOIN (
+        SELECT o."disbursementTransactionId" AS "id" FROM "Loan" o
+         WHERE o."userId" = ${userId} AND o."id" = ${loanId}
+           AND o."disbursementTransactionId" IS NOT NULL${
+             includePayments
+               ? Prisma.sql`
+        UNION
+        SELECT p."principalTransactionId" FROM "LoanPayment" p
+         WHERE p."userId" = ${userId} AND p."loanId" = ${loanId}
+           AND p."principalTransactionId" IS NOT NULL
+        UNION
+        SELECT p."interestTransactionId" FROM "LoanPayment" p
+         WHERE p."userId" = ${userId} AND p."loanId" = ${loanId}
+           AND p."interestTransactionId" IS NOT NULL`
+               : Prisma.empty
+           }
+      ) linked ON TRUE
+      LEFT JOIN "Transaction" t ON t."userId" = l."userId" AND t."id" = linked."id"
      WHERE l."userId" = ${userId} AND l."id" = ${loanId}`
   if (linkedRows.length === 0) throw prismaNotFound('Loan', loanId)
   if (linkedRows[0].disbursementTransactionId === null) throw new LoanNotLinkedError()

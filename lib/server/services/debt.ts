@@ -1374,20 +1374,29 @@ export async function unlinkDebtFromAccount(
   // debt is this user's (no row at all: P2025), whether its opening is
   // recorded, and the account of every transaction this request removes — one
   // row per transaction, so the count beyond the opening sizes the transaction.
+  // The linked ids are a UNION (which also drops the NULLs and any repeat) joined
+  // to Transaction by equality, so Postgres reaches each row through the
+  // `(userId, id)` index instead of probing it once per candidate for an
+  // `OR … IN (subquery)`.
   const linkedRows = await prisma.$queryRaw<
     Array<{ openingTransactionId: string | null; accountId: string | null }>
   >`
     SELECT d."openingTransactionId", t."accountId"
       FROM "Debt" d
-      LEFT JOIN "Transaction" t
-        ON t."userId" = d."userId"
-       AND (t."id" = d."openingTransactionId"${
-         includePayments
-           ? Prisma.sql`
-            OR t."id" IN (SELECT p."transactionId" FROM "DebtPayment" p
-                           WHERE p."userId" = d."userId" AND p."debtId" = d."id")`
-           : Prisma.empty
-       })
+      LEFT JOIN (
+        SELECT o."openingTransactionId" AS "id" FROM "Debt" o
+         WHERE o."userId" = ${userId} AND o."id" = ${debtId}
+           AND o."openingTransactionId" IS NOT NULL${
+             includePayments
+               ? Prisma.sql`
+        UNION
+        SELECT p."transactionId" FROM "DebtPayment" p
+         WHERE p."userId" = ${userId} AND p."debtId" = ${debtId}
+           AND p."transactionId" IS NOT NULL`
+               : Prisma.empty
+           }
+      ) linked ON TRUE
+      LEFT JOIN "Transaction" t ON t."userId" = d."userId" AND t."id" = linked."id"
      WHERE d."userId" = ${userId} AND d."id" = ${debtId}`
   if (linkedRows.length === 0) throw prismaNotFound('Debt', debtId)
   if (linkedRows[0].openingTransactionId === null) throw new DebtNotLinkedError()
