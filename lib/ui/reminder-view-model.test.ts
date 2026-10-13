@@ -290,7 +290,7 @@ describe('toOccurrenceDto', () => {
     const dto = toOccurrenceDto(
       occurrence({
         reminder: reminder({
-          category: { name: 'Utilities' },
+          category: { name: 'Utilities', isDefault: false },
           account: { name: 'Techcombank' },
         }),
       }),
@@ -336,7 +336,7 @@ describe('toOccurrenceDto', () => {
       occurrence({
         reminder: reminder({
           note: 'Autopay is off',
-          category: { name: 'Utilities' },
+          category: { name: 'Utilities', isDefault: false },
           account: { name: 'Techcombank' },
         }),
       }),
@@ -406,7 +406,7 @@ describe('toReminderDto', () => {
         expectedAmount: new Prisma.Decimal('25000000'),
         frequency: 'MONTHLY',
         interval: 1,
-        category: { name: 'Salary' },
+        category: { name: 'Salary', isDefault: false },
         account: { name: 'Vietcombank' },
       }),
       TIMEZONE,
@@ -432,7 +432,7 @@ describe('toReminderDto', () => {
     const dto = toReminderDto(
       reminder({
         note: 'Autopay is off',
-        category: { name: 'Utilities' },
+        category: { name: 'Utilities', isDefault: false },
         account: { name: 'Techcombank' },
       }),
       TIMEZONE,
@@ -457,7 +457,7 @@ describe('DTOs carry no pre-baked English literal (owner requirement N)', () => 
     const occurrenceDto = toOccurrenceDto(
       occurrence({
         reminder: reminder({
-          category: { name: 'Utilities' },
+          category: { name: 'Utilities', isDefault: false },
           account: { name: 'Techcombank' },
         }),
       }),
@@ -465,7 +465,10 @@ describe('DTOs carry no pre-baked English literal (owner requirement N)', () => 
       TODAY,
     )
     const reminderDto = toReminderDto(
-      reminder({ category: { name: 'Salary' }, account: { name: 'Vietcombank' } }),
+      reminder({
+        category: { name: 'Salary', isDefault: false },
+        account: { name: 'Vietcombank' },
+      }),
       TIMEZONE,
     )
 

@@ -143,6 +143,8 @@ export interface OccurrenceDto {
    *  the component picks says the same thing in words. */
   overdue: boolean
   categoryName: string | null
+  /** Whether `categoryName` is a starter category's (the component translates those). */
+  categoryIsDefault: boolean
   accountName: string | null
   /** PENDING for everything the upcoming list returns; the history view (and a
    *  row the user has just answered) can carry either of the other two. */
@@ -191,6 +193,7 @@ export function toOccurrenceDto(
     // query per row, and none of the category's `userId`/`status` or the
     // account's `initialBalance` reaching a client component.
     categoryName: reminder.category?.name ?? null,
+    categoryIsDefault: reminder.category?.isDefault ?? false,
     accountName: reminder.account?.name ?? null,
     status: row.status,
   }
@@ -215,6 +218,8 @@ export interface ReminderDto {
   active: boolean
   note: string | null
   categoryName: string | null
+  /** Whether `categoryName` is a starter category's (the component translates those). */
+  categoryIsDefault: boolean
   accountName: string | null
 }
 
@@ -239,6 +244,7 @@ export function toReminderDto(
     active: row.active,
     note: row.note,
     categoryName: row.category?.name ?? null,
+    categoryIsDefault: row.category?.isDefault ?? false,
     accountName: row.account?.name ?? null,
   }
 }

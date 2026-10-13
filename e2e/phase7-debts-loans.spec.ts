@@ -685,7 +685,7 @@ test.describe.serial('Money-source linking — debts', () => {
  * Money-source linking for loans (spec 2026-10-12 §6.3, owner decision Q2): a
  * loan received into an account raises its balance; an instalment paid from an
  * account lowers it by the total (principal and interest are two transactions,
- * the interest one filed under "Loan Interest & Fees"); correcting or deleting
+ * the interest one filed under "Lãi vay & phí"); correcting or deleting
  * the instalment moves the balance back — or the loan is not recorded at all
  * and nothing moves.
  *
@@ -759,11 +759,11 @@ test.describe.serial('Money-source linking — loans', () => {
     await expectCashBalance(page, '6.500.000')
 
     // Two transactions: the principal out, and the interest as an expense in
-    // "Loan Interest & Fees".
+    // "Lãi vay & phí".
     await page.goto('/transactions')
     await expect(page.getByText('Trả gốc – Home Bank')).toBeVisible()
     await expect(page.getByText('Lãi vay – Home Bank')).toBeVisible()
-    await expect(page.getByText('Loan Interest & Fees').first()).toBeVisible()
+    await expect(page.getByText('Lãi vay & phí').first()).toBeVisible()
 
     // Edit: the same form, prefilled with what was recorded; a bigger interest
     // on the same total changes the split, not the balance.

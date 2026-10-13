@@ -143,36 +143,36 @@ test.describe.serial('Phase 5 — budgets', () => {
   test('create category budget', async ({ page }) => {
     await createBudgetViaUi(page, {
       scope: 'CATEGORY',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 200_000,
       currency: 'VND',
     })
 
-    await expect(budgetRow(page, page, 'Food & Dining')).toBeVisible()
+    await expect(budgetRow(page, page, 'Ăn uống')).toBeVisible()
   })
 
   test('duplicate category rejected', async ({ page }) => {
     await createBudgetViaUi(page, {
       scope: 'CATEGORY',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 300_000,
       currency: 'VND',
     })
 
     await expect(page.getByText(DUPLICATE_BUDGET_MESSAGE)).toBeVisible()
-    await expect(budgetRow(page, page, 'Food & Dining')).toHaveCount(1)
+    await expect(budgetRow(page, page, 'Ăn uống')).toHaveCount(1)
   })
 
   test('progress after expenses + threshold states', async ({ page }) => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 100_000,
     })
     await page.goto('/budgets')
     await expect(
-      budgetRow(page, page, 'Food & Dining').getByText(/Đã dùng hơn nửa|Over half used/, {
+      budgetRow(page, page, 'Ăn uống').getByText(/Đã dùng hơn nửa|Over half used/, {
         exact: true,
       }),
     ).toBeVisible()
@@ -183,12 +183,12 @@ test.describe.serial('Phase 5 — budgets', () => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 60_000,
     })
     await page.goto('/budgets')
     await expect(
-      budgetRow(page, page, 'Food & Dining').getByText(/Sắp vượt hạn mức|Approaching limit/, {
+      budgetRow(page, page, 'Ăn uống').getByText(/Sắp vượt hạn mức|Approaching limit/, {
         exact: true,
       }),
     ).toBeVisible()
@@ -196,18 +196,18 @@ test.describe.serial('Phase 5 — budgets', () => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 40_000,
     })
     await page.goto('/budgets')
-    const foodRow = budgetRow(page, page, 'Food & Dining')
+    const foodRow = budgetRow(page, page, 'Ăn uống')
     await expect(foodRow.getByText(/Đã đến hạn mức|At limit/, { exact: true })).toBeVisible()
     await expect(foodRow.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
 
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 1,
     })
     await page.goto('/budgets')
@@ -228,7 +228,7 @@ test.describe.serial('Phase 5 — budgets', () => {
     await createTransactionViaUi(page, {
       type: 'INCOME',
       accountName: 'Cash',
-      categoryName: 'Salary',
+      categoryName: 'Lương',
       amount: 999_999,
     })
     await page.goto('/budgets')
@@ -264,15 +264,15 @@ test.describe.serial('Phase 5 — budgets', () => {
 
   test('delete', async ({ page }) => {
     await page.goto('/budgets')
-    const row = budgetRow(page, page, 'Food & Dining')
-    await openRowMenu(page, row, 'Food & Dining')
+    const row = budgetRow(page, page, 'Ăn uống')
+    await openRowMenu(page, row, 'Ăn uống')
     await page.getByRole('menuitem', { name: /^Xóa$|^Delete$/ }).click()
     await page
       .getByRole('dialog')
       .getByRole('button', { name: /^Xóa$|^Delete$/ })
       .click()
 
-    await expect(budgetRow(page, page, 'Food & Dining')).toHaveCount(0)
+    await expect(budgetRow(page, page, 'Ăn uống')).toHaveCount(0)
     await expect(budgetRow(page, page, OVERALL)).toBeVisible()
   })
 
@@ -370,7 +370,7 @@ test.describe.serial('Phase 5 — budgets', () => {
     await expect(
       overallRow.getByText(/Đã dùng hơn nửa|Over half used/, { exact: true }),
     ).toBeVisible()
-    await expect(budgetRow(page, section, 'Food & Dining')).toHaveCount(0)
+    await expect(budgetRow(page, section, 'Ăn uống')).toHaveCount(0)
   })
 
   test('mobile (375x812)', async ({ page }) => {
@@ -442,7 +442,7 @@ test.describe.serial('Phase 5 — budgets', () => {
       'Created',
     ])
 
-    // Exactly one data row: the Food & Dining budget was deleted in an earlier
+    // Exactly one data row: the Ăn uống budget was deleted in an earlier
     // test, and `deleteBudget` is a hard delete — the row does not linger.
     expect(budgetsSheet.actualRowCount).toBe(2)
     const dataRow = budgetsSheet.getRow(2)

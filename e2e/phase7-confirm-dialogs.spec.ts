@@ -84,7 +84,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 100_000,
       })
 
@@ -163,7 +163,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
     {
       name: 'delete transaction',
       url: '/transactions',
-      row: 'Food & Dining',
+      row: 'Ăn uống',
       item: /Xóa giao dịch|Delete transaction/,
       confirm: /^(Xóa|Delete)$/,
       effect: /Chưa có giao dịch|No transactions yet/,
@@ -247,7 +247,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
     page,
   }) => {
     await page.goto('/transactions')
-    const rowMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
+    const rowMenu = page.getByRole('button', { name: rowMenuName('Ăn uống') })
     await expect(rowMenu).toBeVisible()
 
     // The server action's POST never lands. No arbitrary wait anywhere: every
@@ -260,7 +260,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
       },
     )
 
-    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    await rowAction(page, 'Ăn uống', /Xóa giao dịch|Delete transaction/)
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
@@ -285,7 +285,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
     page,
   }) => {
     await page.goto('/transactions')
-    const rowMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
+    const rowMenu = page.getByRole('button', { name: rowMenuName('Ăn uống') })
     await expect(rowMenu).toBeVisible()
 
     let release: () => void = () => {}
@@ -299,7 +299,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
       },
     )
 
-    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    await rowAction(page, 'Ăn uống', /Xóa giao dịch|Delete transaction/)
     const dialog = page.getByRole('dialog')
     await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
 
@@ -326,11 +326,11 @@ test.describe.serial('Phase 7 — confirmations', () => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Transportation',
+      categoryName: 'Di chuyển',
       amount: 20_000,
     })
-    const firstMenu = page.getByRole('button', { name: rowMenuName('Food & Dining') })
-    const otherMenu = page.getByRole('button', { name: rowMenuName('Transportation') })
+    const firstMenu = page.getByRole('button', { name: rowMenuName('Ăn uống') })
+    const otherMenu = page.getByRole('button', { name: rowMenuName('Di chuyển') })
     const deleteItem = page.getByRole('menuitem', { name: /Xóa giao dịch|Delete transaction/ })
     const dialog = page.getByRole('dialog')
     await expect(otherMenu).toBeVisible()
@@ -344,7 +344,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
       await route.abort('failed')
     })
 
-    await rowAction(page, 'Food & Dining', /Xóa giao dịch|Delete transaction/)
+    await rowAction(page, 'Ăn uống', /Xóa giao dịch|Delete transaction/)
     await dialog.getByRole('button', { name: /^(Xóa|Delete)$/ }).click()
     await expect(firstMenu).toHaveCount(0)
 

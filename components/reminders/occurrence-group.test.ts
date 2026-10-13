@@ -16,6 +16,7 @@ function occ(id: string, reminderId: string, dueDate: string, daysToDue: number)
     daysToDue,
     overdue: daysToDue < 0,
     categoryName: null,
+    categoryIsDefault: false,
     accountName: null,
     status: 'PENDING',
   }

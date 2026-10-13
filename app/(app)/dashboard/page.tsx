@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import {
   Activity,
   BarChart3,
@@ -295,7 +296,9 @@ export default async function DashboardPage() {
               <ExpenseByCategoryChart
                 data={vm.expenseByCategory.map((row) => ({
                   ...row,
-                  name: row.nameKey ? t(row.nameKey) : row.name,
+                  name: row.nameKey
+                    ? t(row.nameKey)
+                    : displayCategoryName({ name: row.name, isDefault: row.isDefault ?? false }, t),
                 }))}
                 currency={vm.displayCurrency}
                 locale={locale}

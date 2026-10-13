@@ -34,7 +34,7 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 120_000,
       })
     })
@@ -179,7 +179,7 @@ test.describe.serial('Phase 7 Task 5a — transactions form, a11y and row action
   }) => {
     await page.goto('/transactions')
 
-    const row = page.getByRole('listitem').filter({ hasText: 'Food & Dining' })
+    const row = page.getByRole('listitem').filter({ hasText: 'Ăn uống' })
     await expect(row).toHaveCount(1)
     const menuTrigger = row.getByRole('button', { name: /Tác vụ cho|Actions for/ })
 
@@ -361,7 +361,7 @@ test.describe.serial('Money-source linking — editing transactions and locked r
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 100_000,
         note: 'Lunch',
       })

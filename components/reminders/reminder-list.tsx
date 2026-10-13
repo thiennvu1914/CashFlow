@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryLabel } from '@/lib/ui/default-names'
 import type { Locale } from '@/lib/i18n/locale'
 import { formatDate } from '@/lib/ui/format-date'
 import { recurrenceLabelKey, reminderTypeLabelKey } from '@/lib/ui/labels'
@@ -75,7 +76,10 @@ export async function ReminderList({
             <>
               {(reminder.categoryName || reminder.accountName) && (
                 <p className="text-xs/[1rem] text-muted-foreground">
-                  {[reminder.categoryName, reminder.accountName]
+                  {[
+                    displayCategoryLabel(reminder.categoryName, reminder.categoryIsDefault, t),
+                    reminder.accountName,
+                  ]
                     .filter((part): part is string => Boolean(part))
                     .join(' · ')}
                 </p>

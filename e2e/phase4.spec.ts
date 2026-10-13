@@ -45,13 +45,13 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       await createTransactionViaUi(page, {
         type: 'INCOME',
         accountName: 'Cash',
-        categoryName: 'Salary',
+        categoryName: 'Lương',
         amount: 500_000,
       })
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 200_000,
       })
     })
@@ -121,8 +121,8 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
     const recentSection = page
       .locator('section')
       .filter({ has: page.getByRole('heading', { name: /Giao dịch gần đây|Recent Transactions/ }) })
-    await expect(recentSection.getByText('Salary')).toBeVisible()
-    await expect(recentSection.getByText('Food & Dining')).toBeVisible()
+    await expect(recentSection.getByText('Lương')).toBeVisible()
+    await expect(recentSection.getByText('Ăn uống')).toBeVisible()
 
     // FX status region: `FxRateStatus` renders one <span> inside `PageHeader`'s
     // `meta` slot, in one of four exhaustive shapes. Scoped to `main`'s own

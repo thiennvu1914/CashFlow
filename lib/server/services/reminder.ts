@@ -213,12 +213,12 @@ export class OccurrenceNotPendingError extends Error {
  * The two labels every reminder read carries.
  *
  * Projected to `name` alone rather than `include: { category: true }`: the UI
- * shows a name, and a full join would ship the category's `userId`, `status` and
- * `isDefault` — and the account's `initialBalance` — to a client component that
- * has no use for any of them.
+ * shows a name (plus `isDefault`, so a starter category can be translated), and a
+ * full join would ship the category's `userId` and `status` — and the account's
+ * `initialBalance` — to a client component that has no use for any of them.
  */
 const REMINDER_LABELS = {
-  category: { select: { name: true } },
+  category: { select: { name: true, isDefault: true } },
   account: { select: { name: true } },
 } satisfies Prisma.RecurringReminderInclude
 
@@ -240,14 +240,20 @@ const OCCURRENCE_INCLUDE = {
  * it, rather than silently not seeing the new relation.
  */
 export type ReminderRow = Prisma.RecurringReminderGetPayload<{
-  include: { category: { select: { name: true } }; account: { select: { name: true } } }
+  include: {
+    category: { select: { name: true; isDefault: true } }
+    account: { select: { name: true } }
+  }
 }>
 
 /** One due instance with the reminder it belongs to, labels included. */
 export type OccurrenceRow = Prisma.ReminderOccurrenceGetPayload<{
   include: {
     reminder: {
-      include: { category: { select: { name: true } }; account: { select: { name: true } } }
+      include: {
+        category: { select: { name: true; isDefault: true } }
+        account: { select: { name: true } }
+      }
     }
   }
 }>

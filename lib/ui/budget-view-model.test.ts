@@ -131,6 +131,7 @@ describe('toBudgetProgressDto', () => {
           category: {
             id: 'cat_1',
             name: 'Food',
+            isDefault: false,
             type: 'EXPENSE' as const,
             status: 'ARCHIVED' as const,
           },

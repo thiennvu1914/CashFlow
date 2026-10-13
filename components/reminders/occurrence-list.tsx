@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryLabel } from '@/lib/ui/default-names'
 import { cn } from 'cn'
 import type { Locale } from '@/lib/i18n/locale'
 import { formatDate } from '@/lib/ui/format-date'
@@ -100,7 +101,7 @@ export async function OccurrenceList({
         // missing value.
         const contextParts = [
           t(recurrenceLabelKey(next.frequency, next.interval), { count: next.interval }),
-          next.categoryName,
+          displayCategoryLabel(next.categoryName, next.categoryIsDefault, t),
           next.accountName,
         ].filter((part): part is string => Boolean(part))
 

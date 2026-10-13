@@ -43,6 +43,7 @@ const OCCURRENCE: OccurrenceDto = {
   daysToDue: 0,
   overdue: false,
   categoryName: null,
+  categoryIsDefault: false,
   accountName: null,
   status: 'PENDING',
 }

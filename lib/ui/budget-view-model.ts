@@ -30,6 +30,8 @@ export interface BudgetProgressDto {
   /** The category name, or `null` for an OVERALL budget — the component then
    *  renders `labels.budgetScope.OVERALL`. Was the literal 'Overall'. */
   categoryName: string | null
+  /** Whether `categoryName` is a starter category's (the component translates those). */
+  categoryIsDefault: boolean
   scope: 'OVERALL' | 'CATEGORY'
   categoryArchived: boolean
   currency: Currency
@@ -79,6 +81,7 @@ export function toBudgetProgressDto(
   return {
     id: budget.id,
     categoryName: budget.scope === 'OVERALL' ? null : (budget.category?.name ?? null),
+    categoryIsDefault: budget.scope !== 'OVERALL' && (budget.category?.isDefault ?? false),
     scope: budget.scope,
     categoryArchived: budget.category?.status === 'ARCHIVED',
     currency,

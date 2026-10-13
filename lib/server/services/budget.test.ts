@@ -312,6 +312,7 @@ describe('budget service', () => {
         name: 'Food',
         type: 'EXPENSE',
         status: 'ACTIVE',
+        isDefault: false,
       })
     })
 

@@ -214,7 +214,7 @@ test.describe.serial('Phase 7 Task 6 — accounts, categories', () => {
     // A default expense category (`lib/server/defaults.ts`) is a quiet chip
     // with no actions menu — the server refuses to archive it, so offering
     // the option would be a promise the app breaks.
-    const defaultChip = expenseSection.locator('li').filter({ hasText: 'Food & Dining' })
+    const defaultChip = expenseSection.locator('li').filter({ hasText: 'Ăn uống' })
     await expect(defaultChip.getByRole('button')).toHaveCount(0)
 
     // Add a custom expense category through the section's own inline row.

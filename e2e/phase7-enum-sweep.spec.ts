@@ -124,7 +124,7 @@ test.describe.serial('Phase 7 — no raw enum on screen', () => {
         await createTransactionViaUi(page, {
           type,
           accountName: 'Cash',
-          categoryName: type === 'EXPENSE' ? 'Food & Dining' : 'Salary',
+          categoryName: type === 'EXPENSE' ? 'Ăn uống' : 'Lương',
           amount: 100_000,
         })
       }

@@ -677,7 +677,8 @@ describe('transaction service', () => {
       )
       expect(Object.keys(row.account)).toEqual(['name'])
       expect(row.category).not.toBeNull()
-      expect(Object.keys(row.category as { name: string })).toEqual(['name'])
+      // `isDefault` is the one extra column: it lets the UI translate a starter name.
+      expect(Object.keys(row.category as { name: string }).sort()).toEqual(['isDefault', 'name'])
       // Nothing the list never renders travels to the client component: no
       // `userId`, no FX rate, no opening balance of the joined account.
       expect(row).not.toHaveProperty('userId')

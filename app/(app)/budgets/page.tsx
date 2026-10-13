@@ -1,4 +1,5 @@
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import { Target } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import {
@@ -109,7 +110,7 @@ export default async function BudgetsPage({
               key={`${selected.year}-${selected.month}`}
               year={selected.year}
               month={selected.month}
-              categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+              categories={categories.map((c) => ({ id: c.id, name: displayCategoryName(c, t) }))}
               overallExists={overallExists}
             />
           </>

@@ -15,5 +15,32 @@
   "archiveConfirmBody": "Mục đã lưu trữ không còn xuất hiện khi chọn, nhưng các bản ghi cũ vẫn giữ nguyên.",
   "archivePending": "Đang lưu trữ…",
   "emptyTitle": "Chưa có mục nào",
-  "emptyBody": "Dùng ô bên dưới để thêm mục đầu tiên."
+  "emptyBody": "Dùng ô bên dưới để thêm mục đầu tiên.",
+  "defaultNames": {
+    "category": {
+      "foodDining": "Ăn uống",
+      "transportation": "Di chuyển",
+      "shopping": "Mua sắm",
+      "entertainment": "Giải trí",
+      "billsUtilities": "Hóa đơn & tiện ích",
+      "health": "Sức khỏe",
+      "education": "Giáo dục",
+      "family": "Gia đình",
+      "travel": "Du lịch",
+      "loanInterestFees": "Lãi vay & phí",
+      "salary": "Lương",
+      "bonus": "Thưởng",
+      "freelance": "Làm tự do",
+      "investmentIncome": "Thu nhập đầu tư",
+      "gift": "Quà tặng",
+      "other": "Khác"
+    },
+    "accountType": {
+      "cash": "Tiền mặt",
+      "bankAccount": "Tài khoản ngân hàng",
+      "eWallet": "Ví điện tử",
+      "savingsAccount": "Tài khoản tiết kiệm",
+      "other": "Khác"
+    }
+  }
 }

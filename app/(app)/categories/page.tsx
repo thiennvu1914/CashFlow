@@ -1,4 +1,5 @@
 import { getTranslations } from 'next-intl/server'
+import { displayAccountTypeName, displayCategoryName } from '@/lib/ui/default-names'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { listAccountTypes } from '@/lib/server/services/account-type'
 import { listCategories } from '@/lib/server/services/category'
@@ -32,7 +33,7 @@ export default async function CategoriesPage() {
       <div className="flex flex-col gap-8">
         <CategoryChipList
           title={t('categories.accountTypes')}
-          items={accountTypes}
+          items={accountTypes.map((row) => ({ ...row, name: displayAccountTypeName(row, t) }))}
           addLabel={t('categories.addLabelAccountTypes')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}
@@ -47,7 +48,7 @@ export default async function CategoriesPage() {
         />
         <CategoryChipList
           title={t('categories.expenseCategories')}
-          items={expenseCategories}
+          items={expenseCategories.map((row) => ({ ...row, name: displayCategoryName(row, t) }))}
           addLabel={t('categories.addLabelExpenseCategories')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}
@@ -62,7 +63,7 @@ export default async function CategoriesPage() {
         />
         <CategoryChipList
           title={t('categories.incomeCategories')}
-          items={incomeCategories}
+          items={incomeCategories.map((row) => ({ ...row, name: displayCategoryName(row, t) }))}
           addLabel={t('categories.addLabelIncomeCategories')}
           addPlaceholder={t('categories.addPlaceholder')}
           archiveLabel={t('categories.archiveAction')}

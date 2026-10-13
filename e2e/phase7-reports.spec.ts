@@ -62,13 +62,13 @@ test.describe.serial('Phase 7 Task 10 — reports', () => {
       await createTransactionViaUi(page, {
         type: 'INCOME',
         accountName: 'Cash',
-        categoryName: 'Salary',
+        categoryName: 'Lương',
         amount: 500_000,
       })
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Bank',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 200_000,
       })
     })

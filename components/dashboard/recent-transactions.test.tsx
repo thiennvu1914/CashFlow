@@ -22,6 +22,7 @@ const { RecentTransactions } = await import('./recent-transactions')
 function row(overrides: Partial<RecentTransactionDto> & { id: string }): RecentTransactionDto {
   return {
     categoryName: 'Food',
+    categoryIsDefault: false,
     type: 'EXPENSE',
     accountName: 'Wallet',
     date: new Date('2026-09-14T02:15:00Z'),

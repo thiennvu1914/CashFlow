@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryLabel } from '@/lib/ui/default-names'
 import { budgetStatusLabelKey } from '@/lib/ui/labels'
 import type { Locale } from '@/lib/i18n/locale'
 import type { BudgetProgressDto } from '@/lib/ui/budget-view-model'
@@ -73,7 +74,9 @@ export async function BudgetProgressList({
   return (
     <ul className="divide-y divide-border">
       {budgets.map((budget) => {
-        const scopeLabel = budget.categoryName ?? t('labels.budgetScope.OVERALL')
+        const scopeLabel =
+          displayCategoryLabel(budget.categoryName, budget.categoryIsDefault, t) ??
+          t('labels.budgetScope.OVERALL')
         const tone = STATUS_TONE[budget.status]
 
         // The OVERALL row reads visually stronger than a category budget

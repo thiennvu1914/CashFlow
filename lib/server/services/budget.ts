@@ -84,7 +84,7 @@ export type BudgetStatus = 'ok' | 'warning_50' | 'warning_80' | 'at_100' | 'exce
 /** Only the category columns a budget list renders — not the whole joined row,
  *  whose `userId` has no business crossing to a client component. */
 const BUDGET_CATEGORY_SELECT = {
-  select: { id: true, name: true, type: true, status: true },
+  select: { id: true, name: true, type: true, status: true, isDefault: true },
 } satisfies Prisma.Budget$categoryArgs
 
 /** Derived from `BUDGET_CATEGORY_SELECT` rather than restating it: adding a

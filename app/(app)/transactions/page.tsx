@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
@@ -121,7 +122,7 @@ export default async function TransactionsPage({
       accounts={toAccountOptions(accounts, balances)}
       categories={categories.map((category) => ({
         id: category.id,
-        name: category.name,
+        name: displayCategoryName(category, t),
         type: category.type,
       }))}
       timezone={timezone}

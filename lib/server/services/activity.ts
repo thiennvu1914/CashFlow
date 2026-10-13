@@ -47,7 +47,7 @@ const ACTIVITY_SELECT = {
   accountId: true,
   categoryId: true,
   account: { select: { name: true } },
-  category: { select: { name: true } },
+  category: { select: { name: true, isDefault: true } },
 } satisfies Prisma.TransactionSelect
 
 export interface ActivityRange {
@@ -60,6 +60,8 @@ export interface CategoryTotal {
   /** `null` for expenses filed without a category. */
   categoryId: string | null
   name: string
+  /** Whether the name is a starter category's — the UI translates those. */
+  isDefault: boolean
   total: Prisma.Decimal
 }
 
@@ -142,6 +144,7 @@ export async function getActivitySummary(
       byCategory.set(row.categoryId, {
         categoryId: row.categoryId,
         name: row.category?.name ?? UNCATEGORIZED,
+        isDefault: row.category?.isDefault ?? false,
         total: amount,
       })
     }

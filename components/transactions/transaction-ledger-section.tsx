@@ -1,6 +1,7 @@
 import { getPeriodBounds } from '@/lib/datetime/period-bounds'
 import type { Currency } from '@prisma/client'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import type { Locale } from '@/lib/i18n/locale'
 import { getActivitySummary } from '@/lib/server/services/activity'
 import { listTransactionLinks, listTransactions } from '@/lib/server/services/transaction'
@@ -37,6 +38,7 @@ export async function TransactionLedgerSection({
   today: string
   yesterday: string
 }) {
+  const t = await getTranslations()
   const [transactions, links] = await Promise.all([
     listTransactions(userId),
     listTransactionLinks(userId),
@@ -57,7 +59,7 @@ export async function TransactionLedgerSection({
         accountId: tx.accountId,
         categoryId: tx.categoryId,
         account: { name: tx.account.name },
-        category: tx.category ? { name: tx.category.name } : null,
+        category: tx.category ? { name: displayCategoryName(tx.category, t) } : null,
         link: links.get(tx.id) ?? null,
       }))}
       timezone={timezone}

@@ -1,4 +1,5 @@
 import { getTranslations } from 'next-intl/server'
+import { displayAccountTypeName } from '@/lib/ui/default-names'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { getAccountOverview } from '@/lib/server/services/account-overview'
 import { resolveLocale } from '@/lib/i18n/config'
@@ -21,8 +22,15 @@ export default async function AccountsPage() {
   // a service reading the clock again mid-render, so every balance below is cut
   // at the same instant.
   const now = new Date()
-  const { accounts, archivedAccounts, accountTypes, position, balances, locked, hasFutureEntries } =
-    await getAccountOverview(user.id, displayCurrency, now)
+  const {
+    accounts,
+    archivedAccounts,
+    accountTypes: storedAccountTypes,
+    position,
+    balances,
+    locked,
+    hasFutureEntries,
+  } = await getAccountOverview(user.id, displayCurrency, now)
   // Serialised to a string/number here: a `Prisma.Decimal` cannot cross the
   // server-to-client-component boundary, so `AccountList` receives plain
   // values and formats/edits them for display only. `.get(account.id)` is
@@ -38,11 +46,16 @@ export default async function AccountsPage() {
       description: account.description,
       initialBalance: account.initialBalance.toNumber(),
       accountTypeId: account.accountTypeId,
-      accountType: { name: account.accountType.name },
+      accountType: { name: displayAccountTypeName(account.accountType, t) },
       balance: balance.toFixed(2),
       locked: locked.has(account.id),
     }
   })
+
+  const accountTypes = storedAccountTypes.map((type) => ({
+    id: type.id,
+    name: displayAccountTypeName(type, t),
+  }))
 
   return (
     <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-8 p-4 md:p-6 lg:p-8">
@@ -88,7 +101,7 @@ export default async function AccountsPage() {
               <FinancialListRow
                 key={account.id}
                 title={account.name}
-                meta={`${account.accountType.name} · ${account.currency}`}
+                meta={`${displayAccountTypeName(account.accountType, t)} · ${account.currency}`}
                 wrapMeta
                 amount={<StatusBadge label={t('labels.recordStatus.ARCHIVED')} tone="muted" />}
               />

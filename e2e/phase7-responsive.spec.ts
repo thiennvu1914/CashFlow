@@ -212,7 +212,7 @@ test.describe.serial('Phase 7 — responsive', () => {
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: VND_ACCOUNT,
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 12_500_000,
         note: 'Bữa trưa với khách hàng tại nhà hàng ở quận 1, đã bao gồm phí dịch vụ và thuế giá trị gia tăng',
       })
@@ -222,7 +222,7 @@ test.describe.serial('Phase 7 — responsive', () => {
       // exist before it can mean anything.
       await createDatedTransactionViaUi(page, {
         accountName: VND_ACCOUNT,
-        categoryName: 'Salary',
+        categoryName: 'Lương',
         amount: 30_000_000,
         date: YESTERDAY,
       })

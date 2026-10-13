@@ -356,7 +356,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
       amount: 300_000,
       frequency: 'ONE_TIME',
       startDate: TODAY,
-      categoryName: 'Bills & Utilities',
+      categoryName: 'Hóa đơn & tiện ích',
       accountName: 'Ví nhắc nhở',
     })
 
@@ -399,7 +399,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
       amount: 120_000,
       frequency: 'ONE_TIME',
       startDate: TODAY,
-      categoryName: 'Bills & Utilities',
+      categoryName: 'Hóa đơn & tiện ích',
     })
 
     await page.goto('/reminders?view=due&type=all')
@@ -425,7 +425,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
       'true',
     )
     await expect(panel.getByRole('combobox', { name: 'Danh mục' })).toContainText(
-      'Bills & Utilities',
+      'Hóa đơn & tiện ích',
     )
     await expect(panel.getByLabel(/^Ngày$/)).toHaveValue(TODAY)
 

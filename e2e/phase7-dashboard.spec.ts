@@ -49,7 +49,7 @@ test.describe
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 150_000,
       })
     })
@@ -258,7 +258,7 @@ test.describe
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 120_000,
     })
     await page.goto('/dashboard')

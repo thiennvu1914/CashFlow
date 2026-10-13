@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { PieChart, Wallet } from 'lucide-react'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { isRealCalendarDate } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
@@ -198,7 +199,7 @@ export default async function ReportsPage({
   const largest = summary.byCategory[0]?.total
   const categoryRows = summary.byCategory.map((row) => ({
     id: row.categoryId ?? 'uncategorized',
-    name: row.name,
+    name: displayCategoryName({ name: row.name, isDefault: row.isDefault }, t),
     amount: formatMoney(row.total, displayCurrency, locale),
     percent: largest && !largest.isZero() ? row.total.div(largest).mul(100).toNumber() : 0,
     percentLabel: categoryPercentLabel(row.total, summary.expense, locale),

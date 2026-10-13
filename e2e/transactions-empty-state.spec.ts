@@ -119,14 +119,14 @@ test.describe.serial('Transactions — no active financial account', () => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 50_000,
     })
 
     // The row's title is the category name, its meta carries the account
     // (`TransactionList`'s `FinancialListRow`, title and meta are separate
     // elements now — not one "<category> · <account>" string).
-    const listRow = page.getByRole('listitem').filter({ hasText: 'Food & Dining' })
+    const listRow = page.getByRole('listitem').filter({ hasText: 'Ăn uống' })
     await expect(listRow).toHaveCount(1)
     await expect(listRow).toContainText('Cash')
     await expect(listRow).toContainText('50.000')

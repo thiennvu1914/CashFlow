@@ -197,6 +197,8 @@ export interface BalancePointDto {
 
 export interface NamedAmountDto {
   name: string
+  /** Set on a category row whose `name` is a starter category's (the page translates it). */
+  isDefault?: boolean
   value: number
   /** Set instead of `name` for a synthesised row the component must translate. */
   nameKey?: string
@@ -206,6 +208,8 @@ export interface RecentTransactionDto {
   id: string
   /** The category when there is one; `null` when the TYPE is the meaning. */
   categoryName: string | null
+  /** Whether `categoryName` is a starter category's (the component translates those). */
+  categoryIsDefault: boolean
   /**
    * The raw type. Rendered through `transactionTypeLabelKey` by the component —
    * which is what stopped `CASH_OUT` appearing on the dashboard verbatim.
@@ -306,13 +310,21 @@ const OTHER_CATEGORY_KEY = 'dashboard.expenseByCategoryOther'
  */
 function bucketExpenseCategories(rows: MonthSummary['byCategory']): NamedAmountDto[] {
   if (rows.length <= EXPENSE_CATEGORY_LIMIT) {
-    return rows.map((row) => ({ name: row.name, value: row.total.toNumber() }))
+    return rows.map((row) => ({
+      name: row.name,
+      isDefault: row.isDefault,
+      value: row.total.toNumber(),
+    }))
   }
   const head = rows.slice(0, EXPENSE_CATEGORY_LIMIT - 1)
   const tail = rows.slice(EXPENSE_CATEGORY_LIMIT - 1)
   const tailTotal = tail.reduce((sum, row) => sum.add(row.total), new Prisma.Decimal(0))
   return [
-    ...head.map((row) => ({ name: row.name, value: row.total.toNumber() })),
+    ...head.map((row) => ({
+      name: row.name,
+      isDefault: row.isDefault,
+      value: row.total.toNumber(),
+    })),
     { name: '', nameKey: OTHER_CATEGORY_KEY, value: tailTotal.toNumber() },
   ]
 }
@@ -522,6 +534,7 @@ export function buildDashboardViewModel(
         // The NAME or `null` — never `?? tx.type`, which is how `CASH_OUT`
         // used to reach the screen. The component renders the type's label.
         categoryName: tx.category?.name ?? null,
+        categoryIsDefault: tx.category?.isDefault ?? false,
         type: tx.type,
         accountName: tx.account.name,
         date: tx.date,

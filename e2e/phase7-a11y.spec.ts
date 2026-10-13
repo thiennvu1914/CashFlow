@@ -261,7 +261,7 @@ test.describe.serial('Phase 7 — accessibility', () => {
       await createTransactionViaUi(page, {
         type: 'EXPENSE',
         accountName: 'Cash',
-        categoryName: 'Food & Dining',
+        categoryName: 'Ăn uống',
         amount: 120_000,
       })
       // A second, zero-balance account, archived: that is what renders the

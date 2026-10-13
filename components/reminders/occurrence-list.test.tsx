@@ -32,6 +32,7 @@ function dto(overrides: Partial<OccurrenceDto> = {}): OccurrenceDto {
     daysToDue: 3,
     overdue: false,
     categoryName: null,
+    categoryIsDefault: false,
     accountName: null,
     status: 'PENDING',
     ...overrides,

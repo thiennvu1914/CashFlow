@@ -13,6 +13,7 @@ function dto(overrides: Partial<BudgetProgressDto> = {}): BudgetProgressDto {
   return {
     id: 'b1',
     categoryName: 'Ăn uống',
+    categoryIsDefault: false,
     scope: 'CATEGORY',
     categoryArchived: false,
     currency: 'VND',

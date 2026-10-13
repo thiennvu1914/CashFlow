@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryName } from '@/lib/ui/default-names'
 import { cn } from 'cn'
 import type { ReminderType } from '@prisma/client'
 import { BellRing } from 'lucide-react'
@@ -192,8 +193,14 @@ export default async function RemindersPage({
             // `FinancialAccount` row would ship its `initialBalance` — a
             // `Prisma.Decimal` — into a client component, and a whole
             // `Category` its `userId` and `status`.
-            expenseCategories={expenseCategories.map((c) => ({ id: c.id, name: c.name }))}
-            incomeCategories={incomeCategories.map((c) => ({ id: c.id, name: c.name }))}
+            expenseCategories={expenseCategories.map((c) => ({
+              id: c.id,
+              name: displayCategoryName(c, t),
+            }))}
+            incomeCategories={incomeCategories.map((c) => ({
+              id: c.id,
+              name: displayCategoryName(c, t),
+            }))}
             accounts={accounts.map((a) => ({ id: a.id, name: a.name }))}
           />
         }

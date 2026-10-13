@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
+import { displayCategoryLabel } from '@/lib/ui/default-names'
 import { cn } from 'cn'
 import { ArrowRight, Receipt } from 'lucide-react'
 import { EmptyState } from '@/components/common/empty-state'
@@ -61,7 +62,10 @@ export async function RecentTransactions({
               'px-0',
               mobileLimit !== undefined && index >= mobileLimit && 'hidden xl:flex',
             )}
-            title={tx.categoryName ?? t(transactionTypeLabelKey(tx.type))}
+            title={
+              displayCategoryLabel(tx.categoryName, tx.categoryIsDefault, t) ??
+              t(transactionTypeLabelKey(tx.type))
+            }
             meta={
               <>
                 <span className="tabular-nums">

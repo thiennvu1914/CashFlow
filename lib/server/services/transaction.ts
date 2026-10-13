@@ -267,7 +267,7 @@ export async function listTransactions(userId: string, options?: { limit?: numbe
       accountId: true,
       categoryId: true,
       account: { select: { name: true } },
-      category: { select: { name: true } },
+      category: { select: { name: true, isDefault: true } },
     },
     // `date` alone is not a total order — several transactions a day is the
     // normal case, and a paged or re-rendered list must not shuffle. `createdAt`
@@ -364,7 +364,7 @@ export async function listTransactionsForExport(
       fxRateEffectiveAt: true,
       fxRateSource: true,
       account: { select: { name: true, currency: true } },
-      category: { select: { name: true } },
+      category: { select: { name: true, isDefault: true } },
     },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   })

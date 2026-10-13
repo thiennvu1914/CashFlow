@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
+import { displayCategoryLabel } from '@/lib/ui/default-names'
 import { ChevronDown } from 'lucide-react'
 import { updateBudgetSchema, type UpdateBudgetInput } from '@/lib/validation/budget'
 import { deleteBudgetAction, updateBudgetAction } from '@/lib/server/actions/budget-actions'
@@ -41,7 +42,9 @@ export function BudgetRowActions({ budget }: { budget: BudgetProgressDto }) {
   const { setError } = useRowError()
   const deleteSubmit = useActionSubmit(t)
 
-  const name = budget.categoryName ?? t('labels.budgetScope.OVERALL')
+  const name =
+    displayCategoryLabel(budget.categoryName, budget.categoryIsDefault, t) ??
+    t('labels.budgetScope.OVERALL')
 
   async function confirmDelete() {
     await deleteSubmit.run({

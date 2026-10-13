@@ -74,7 +74,7 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     await createTransactionViaUi(page, {
       type: 'EXPENSE',
       accountName: 'Cash',
-      categoryName: 'Food & Dining',
+      categoryName: 'Ăn uống',
       amount: 850_000,
     })
 
@@ -92,27 +92,27 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
   }) => {
     await createBudgetViaUi(page, {
       scope: 'CATEGORY',
-      categoryName: 'Bills & Utilities',
+      categoryName: 'Hóa đơn & tiện ích',
       amount: 200_000,
       currency: 'VND',
     })
-    const row = budgetRow(page, 'Bills & Utilities')
+    const row = budgetRow(page, 'Hóa đơn & tiện ích')
     await expect(row).toBeVisible()
 
     // Edit through the row's … menu and the edit Dialog.
-    await openRowMenu(page, row, 'Bills & Utilities')
+    await openRowMenu(page, row, 'Hóa đơn & tiện ích')
     await page.getByRole('menuitem', { name: 'Sửa' }).click()
-    const editDialog = page.getByRole('dialog', { name: 'Sửa ngân sách Bills & Utilities' })
+    const editDialog = page.getByRole('dialog', { name: 'Sửa ngân sách Hóa đơn & tiện ích' })
     await editDialog.getByLabel('Hạn mức').fill('250000')
     await editDialog.getByRole('button', { name: 'Lưu' }).click()
     await expect(editDialog).toBeHidden()
     await expect(row).toContainText('250.000')
 
     // Delete: Cancel keeps the row.
-    await openRowMenu(page, row, 'Bills & Utilities')
+    await openRowMenu(page, row, 'Hóa đơn & tiện ích')
     await page.getByRole('menuitem', { name: 'Xóa' }).click()
     const confirmDialog = page.getByRole('dialog', {
-      name: 'Xóa ngân sách Bills & Utilities?',
+      name: 'Xóa ngân sách Hóa đơn & tiện ích?',
     })
     await expect(confirmDialog).toBeVisible()
     await confirmDialog.getByRole('button', { name: 'Hủy' }).click()
@@ -120,13 +120,13 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     await expect(row).toBeVisible()
 
     // Delete: Confirm removes it.
-    await openRowMenu(page, row, 'Bills & Utilities')
+    await openRowMenu(page, row, 'Hóa đơn & tiện ích')
     await page.getByRole('menuitem', { name: 'Xóa' }).click()
     await page
-      .getByRole('dialog', { name: 'Xóa ngân sách Bills & Utilities?' })
+      .getByRole('dialog', { name: 'Xóa ngân sách Hóa đơn & tiện ích?' })
       .getByRole('button', { name: 'Xóa' })
       .click()
-    await expect(budgetRow(page, 'Bills & Utilities')).toHaveCount(0)
+    await expect(budgetRow(page, 'Hóa đơn & tiện ích')).toHaveCount(0)
   })
 
   test('vi: savings goal status, contributing reaches Achieved, and archive via a ConfirmDialog (Cancel keeps, Confirm removes)', async ({

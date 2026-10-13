@@ -79,8 +79,8 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
       netIncome: decimal('22000000'),
       ...SEPTEMBER,
       byCategory: [
-        { categoryId: 'c1', name: 'Food', total: decimal('5000000') },
-        { categoryId: null, name: 'Uncategorized', total: decimal('3000000') },
+        { categoryId: 'c1', name: 'Food', isDefault: false, total: decimal('5000000') },
+        { categoryId: null, name: 'Uncategorized', isDefault: false, total: decimal('3000000') },
       ],
       byAccount: [
         {
@@ -124,7 +124,7 @@ function makeInput(overrides: Partial<DashboardInput> = {}): DashboardInput {
         accountId: 'a1',
         categoryId: 'c1',
         account: { name: 'Wallet' },
-        category: { name: 'Food' },
+        category: { name: 'Food', isDefault: false },
       },
       {
         id: 't2',
@@ -191,7 +191,13 @@ function budgetProgress(overrides: {
       updatedAt: new Date('2026-09-01T00:00:00Z'),
       category:
         scope === 'CATEGORY'
-          ? { id: 'c1', name: overrides.categoryName ?? 'Food', type: 'EXPENSE', status: 'ACTIVE' }
+          ? {
+              id: 'c1',
+              name: overrides.categoryName ?? 'Food',
+              type: 'EXPENSE',
+              status: 'ACTIVE',
+              isDefault: false,
+            }
           : null,
     },
     spent,
@@ -582,8 +588,8 @@ describe('buildDashboardViewModel', () => {
           ...input.monthly,
           expense: decimal('9000000'),
           byCategory: [
-            { categoryId: 'c2', name: 'Rent', total: decimal('6000000') },
-            { categoryId: 'c1', name: 'Food', total: decimal('3000000') },
+            { categoryId: 'c2', name: 'Rent', isDefault: false, total: decimal('6000000') },
+            { categoryId: 'c1', name: 'Food', isDefault: false, total: decimal('3000000') },
           ],
         },
       },
@@ -591,8 +597,8 @@ describe('buildDashboardViewModel', () => {
     )
 
     expect(vm.expenseByCategory).toEqual([
-      { name: 'Rent', value: 6000000 },
-      { name: 'Food', value: 3000000 },
+      { name: 'Rent', isDefault: false, value: 6000000 },
+      { name: 'Food', isDefault: false, value: 3000000 },
     ])
     // One scan, so the slices add up to the card above them.
     const sliceTotal = vm.expenseByCategory.reduce((sum, slice) => sum + slice.value, 0)
@@ -604,6 +610,7 @@ describe('buildDashboardViewModel', () => {
     const byCategory = Array.from({ length: 9 }, (_, index) => ({
       categoryId: `c${index}`,
       name: `Category ${index}`,
+      isDefault: false,
       total: decimal(String(1000000 - index * 1000)),
     }))
     const vm = buildDashboardViewModel(
@@ -616,7 +623,9 @@ describe('buildDashboardViewModel', () => {
 
     expect(vm.expenseByCategory).toHaveLength(8)
     expect(vm.expenseByCategory.slice(0, 7)).toEqual(
-      byCategory.slice(0, 7).map((row) => ({ name: row.name, value: row.total.toNumber() })),
+      byCategory
+        .slice(0, 7)
+        .map((row) => ({ name: row.name, isDefault: false, value: row.total.toNumber() })),
     )
     const last = vm.expenseByCategory[7]
     expect(last.nameKey).toBe('dashboard.expenseByCategoryOther')
@@ -632,13 +641,15 @@ describe('buildDashboardViewModel', () => {
         ...input,
         monthly: {
           ...input.monthly,
-          byCategory: [{ categoryId: 'c1', name: 'Food', total: decimal('1000000') }],
+          byCategory: [
+            { categoryId: 'c1', name: 'Food', isDefault: false, total: decimal('1000000') },
+          ],
         },
       },
       'vi',
     )
 
-    expect(vm.expenseByCategory).toEqual([{ name: 'Food', value: 1000000 }])
+    expect(vm.expenseByCategory).toEqual([{ name: 'Food', isDefault: false, value: 1000000 }])
     expect(vm.expenseByCategory[0]).not.toHaveProperty('nameKey')
   })
 
@@ -658,6 +669,7 @@ describe('buildDashboardViewModel', () => {
       {
         id: 't1',
         categoryName: 'Food',
+        categoryIsDefault: false,
         type: 'EXPENSE',
         accountName: 'Wallet',
         date: new Date('2026-09-14T02:15:00Z'),
@@ -669,6 +681,7 @@ describe('buildDashboardViewModel', () => {
         id: 't2',
         // No category on this row, so the component renders the type's label.
         categoryName: null,
+        categoryIsDefault: false,
         type: 'INCOME',
         accountName: 'Dollars',
         date: new Date('2026-09-13T09:00:00Z'),
