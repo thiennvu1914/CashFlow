@@ -41,7 +41,7 @@ import { Input } from '@/components/ui/input'
  *    `inlineAction`. `variant="outline"` (not filled): the header's "Thêm
  *    công nợ" is the page's one primary action, and a filled button on every
  *    row competed with it (fix round 1, finding 4 — the same treatment
- *    `GoalProgressButton` already got). Hidden entirely once the debt is PAID
+ *    the goal row's inline action got). Hidden entirely once the debt is PAID
  *    (`outstanding` is zero): the service refuses any further payment as
  *    OVERPAYMENT regardless of amount, so the button would offer nothing but
  *    a guaranteed refusal (fix round 1, finding 5).

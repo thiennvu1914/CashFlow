@@ -26,7 +26,7 @@ import { LoanPaymentForm } from './loan-payment-form'
  *    `inlineAction`. `variant="outline"` (not filled): the header's "Thêm
  *    khoản vay" is the page's one primary action, and a filled button on
  *    every row competed with it (fix round 1, finding 4 — the same treatment
- *    `GoalProgressButton` already got). Needs the reader's `locale` (threaded
+ *    the goal row's inline action got). Needs the reader's `locale` (threaded
  *    from the page, same convention as `AccountList`/`TransactionList`) to
  *    format Tổng in the same language the rest of the dialog reads in (fix
  *    round 1, finding 1) — a formatted VND figure is not itself English or

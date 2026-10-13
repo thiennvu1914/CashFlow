@@ -21,6 +21,7 @@ import {
 import { SAVINGS_GOAL_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
+import { buildGoalEditPayload, editAccountOptions } from '@/lib/ui/goal-edit'
 import type { SavingsGoalDto, SavingsGoalEntryDto } from '@/lib/ui/savings-goal-view-model'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
@@ -386,27 +387,6 @@ export function GoalEntryActions({
 }
 
 /**
- * The account choices an edit offers: the active accounts, plus the goal's
- * current account even when it was archived since (kept selected and labelled,
- * so saving does not silently unlink), and — for a goal that already has
- * entries — only accounts in the goal's own currency, because its entries are
- * amounts in that currency and the service refuses to re-denominate them
- * (CURRENCY_LOCKED).
- */
-function editAccountOptions(
-  goal: SavingsGoalDto,
-  accounts: ReadonlyArray<DebtAccountOption>,
-): DebtAccountOption[] {
-  const options =
-    goal.entries.length > 0 ? accounts.filter((a) => a.currency === goal.currency) : [...accounts]
-  const linked = goal.linkedAccount
-  if (linked && !options.some((option) => option.id === linked.id)) {
-    options.push({ id: linked.id, name: linked.name, currency: goal.currency, archived: true })
-  }
-  return options
-}
-
-/**
  * The goal's definition and its progress source (which account it follows, if
  * any) — everything `updateSavingsGoalSchema` takes. Progress itself is never
  * an input: it is the account's balance or the goal's entries. Prefilled from
@@ -417,7 +397,7 @@ function editAccountOptions(
  * absent `linkedAccountId` as "unlink". While an account is chosen the
  * currency select is hidden and the account's currency is what is sent.
  */
-function GoalEditForm({
+export function GoalEditForm({
   goal,
   accounts,
   onDone,
@@ -457,9 +437,7 @@ function GoalEditForm({
   const linkedAccount = options.find((a) => a.id === watchedAccountId)
 
   async function onSubmit(values: UpdateSavingsGoalInput) {
-    const payload: UpdateSavingsGoalInput = linkedAccount
-      ? { ...values, currency: linkedAccount.currency }
-      : values
+    const payload = buildGoalEditPayload(values, linkedAccount, goal)
     await submit.run({
       tag: 'GoalEditForm: update failed',
       action: () => updateSavingsGoalAction(goal.id, payload),
