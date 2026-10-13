@@ -189,7 +189,10 @@ export default async function DashboardPage() {
   /** Every summary label and hint, translated once for the panel. */
   const summaryLabels = {
     'dashboard.netWorth': t('dashboard.netWorth'),
-    'dashboard.netWorthNote': t('dashboard.netWorthNote'),
+    'dashboard.breakdownBalance': t('dashboard.breakdownBalance'),
+    'dashboard.breakdownReceivables': t('dashboard.breakdownReceivables'),
+    'dashboard.breakdownPayables': t('dashboard.breakdownPayables'),
+    'dashboard.breakdownLoan': t('dashboard.breakdownLoan'),
     'dashboard.totalBalance': t('dashboard.totalBalance'),
     'dashboard.monthlyIncome': t('dashboard.monthlyIncome'),
     'dashboard.monthlyExpense': t('dashboard.monthlyExpense'),

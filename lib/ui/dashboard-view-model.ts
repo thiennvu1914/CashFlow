@@ -139,6 +139,20 @@ export interface KpiDto {
   hintKey?: string
   /** Below zero — rendered in the negative colour. */
   negative: boolean
+  /**
+   * The terms of a figure that is a sum (Net Worth), each formatted in the
+   * display currency, so the card can show how it is computed. Absent on the
+   * other KPIs.
+   */
+  parts?: KpiPartDto[]
+}
+
+export interface KpiPartDto {
+  /** A key in `dashboard.json`. */
+  labelKey: string
+  /** Whether the term is added to or subtracted from the figure. */
+  sign: '+' | '-'
+  value: string
 }
 
 interface FxRateDetails {
@@ -388,12 +402,34 @@ export function buildDashboardViewModel(
     return { labelKey, value: formatMoney(value, currency, locale), negative: value.isNegative() }
   }
 
+  /**
+   * Net Worth's terms, from the position that already carries them. The
+   * account balances always show; a debt or loan term shows only when it is
+   * not zero. Nothing for a gap — there is no figure to explain.
+   */
+  function netWorthParts(): KpiPartDto[] | undefined {
+    if (!position) return undefined
+    const terms: [string, '+' | '-', Prisma.Decimal, boolean][] = [
+      ['dashboard.breakdownBalance', '+', position.totalBalance, true],
+      ['dashboard.breakdownReceivables', '+', position.receivables, false],
+      ['dashboard.breakdownPayables', '-', position.payables, false],
+      ['dashboard.breakdownLoan', '-', position.loanOutstanding, false],
+    ]
+    return terms
+      .filter(([, , value, always]) => always || !value.isZero())
+      .map(([labelKey, sign, value]) => ({
+        labelKey,
+        sign,
+        value: formatMoney(value, currency, locale),
+      }))
+  }
+
   // Net Worth FIRST: it is the panel's dominant figure (spec §6.1), with Total
   // Balance beneath it, and the three monthly metrics after. The old order put
   // Total Account Balance first because the five sat in a flat strip where
   // nothing was dominant.
   const kpis: KpiDto[] = [
-    positionKpi('dashboard.netWorth', position?.netWorth),
+    { ...positionKpi('dashboard.netWorth', position?.netWorth), parts: netWorthParts() },
     positionKpi('dashboard.totalBalance', position?.totalBalance),
     {
       labelKey: 'dashboard.monthlyIncome',

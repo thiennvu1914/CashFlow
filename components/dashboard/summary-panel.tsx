@@ -129,7 +129,6 @@ export function SummaryPanel({
         labels={labels}
         hints={hints}
         size="hero"
-        note={labels['dashboard.netWorthNote']}
         className="order-1 col-span-2 md:col-start-1 md:col-span-6 md:row-start-1 xl:col-start-1 xl:col-span-3 xl:border-r xl:border-border"
       />
 
@@ -195,7 +194,6 @@ function Cell({
   size,
   smallSize,
   smallBreakpoint,
-  note,
   className,
 }: {
   kpi: KpiDto
@@ -223,7 +221,6 @@ function Cell({
    * just below `sm`.
    */
   smallBreakpoint?: 'sm' | 'lg'
-  note?: string
   className?: string
 }) {
   const isNetWorth = size === 'hero'
@@ -283,7 +280,20 @@ function Cell({
           smallSize={smallSize}
           smallBreakpoint={smallBreakpoint}
         />
-        {note && <span className="text-xs/[1rem] text-muted-foreground">{note}</span>}
+        {kpi.parts && (
+          // How the figure is computed, one term per line (label left, amount
+          // right) so it reads at 375 px with no wrapping formula.
+          <div className="mt-1 flex flex-col gap-1 text-xs/[1rem] text-muted-foreground">
+            {kpi.parts.map((part) => (
+              <div key={part.labelKey} className="flex items-baseline justify-between gap-3">
+                <span>
+                  {part.sign === '+' ? '+' : '−'} {labels[part.labelKey]}
+                </span>
+                <span className="tabular-nums">{part.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </dd>
     </div>
   )

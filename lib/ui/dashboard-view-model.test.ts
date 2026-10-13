@@ -310,6 +310,39 @@ describe('buildDashboardViewModel', () => {
     }
   })
 
+  it('lists Net Worth’s terms: balances always, debt and loan terms only when not zero', () => {
+    const plain = buildDashboardViewModel(makeInput(), 'vi').kpis[0]
+    expect(plain.parts?.map((part) => [part.labelKey, part.sign])).toEqual([
+      ['dashboard.breakdownBalance', '+'],
+    ])
+
+    const base = makeInput()
+    const vm = buildDashboardViewModel(
+      makeInput({
+        position: {
+          ...base.position!,
+          receivables: decimal('500000'),
+          payables: decimal('200000'),
+          loanOutstanding: decimal('1000000'),
+        },
+      }),
+      'vi',
+    )
+    expect(vm.kpis[0].parts?.map((part) => [part.labelKey, part.sign])).toEqual([
+      ['dashboard.breakdownBalance', '+'],
+      ['dashboard.breakdownReceivables', '+'],
+      ['dashboard.breakdownPayables', '-'],
+      ['dashboard.breakdownLoan', '-'],
+    ])
+    expect(vm.kpis[0].parts?.[1].value).toContain('500.000')
+    expect(vm.kpis[1]).not.toHaveProperty('parts')
+  })
+
+  it('has no terms when the position is unavailable', () => {
+    const vm = buildDashboardViewModel(makeInput({ position: null }), 'vi')
+    expect(vm.kpis[0].parts).toBeUndefined()
+  })
+
   it('puts Net Worth first — the panel’s dominant figure (spec §6.1)', () => {
     const vm = buildDashboardViewModel(makeInput(), 'vi')
     expect(vm.kpis[0].labelKey).toBe('dashboard.netWorth')

@@ -10,13 +10,25 @@ const LABELS = {
   'dashboard.monthlyIncome': 'Thu nhập tháng',
   'dashboard.monthlyExpense': 'Chi tiêu tháng',
   'dashboard.netIncome': 'Thu nhập ròng',
-  'dashboard.netWorthNote': 'gồm phải thu, phải trả và dư nợ gốc',
+  'dashboard.breakdownBalance': 'Số dư tài khoản',
+  'dashboard.breakdownReceivables': 'Phải thu',
+  'dashboard.breakdownPayables': 'Phải trả',
+  'dashboard.breakdownLoan': 'Dư nợ vay',
 }
 const HINTS = { 'dashboard.fxUnavailableHint': 'Chưa có tỷ giá' }
 
 /** The view model's order, which is what `SummaryPanel` destructures. */
 const KPIS: KpiDto[] = [
-  { labelKey: 'dashboard.netWorth', value: '95.600.000', negative: false },
+  {
+    labelKey: 'dashboard.netWorth',
+    value: '95.600.000',
+    negative: false,
+    parts: [
+      { labelKey: 'dashboard.breakdownBalance', sign: '+', value: '72.100.000' },
+      { labelKey: 'dashboard.breakdownReceivables', sign: '+', value: '30.000.000' },
+      { labelKey: 'dashboard.breakdownLoan', sign: '-', value: '6.500.000' },
+    ],
+  },
   { labelKey: 'dashboard.totalBalance', value: '72.100.000', negative: false },
   { labelKey: 'dashboard.monthlyIncome', value: '30.000.000', negative: false },
   { labelKey: 'dashboard.monthlyExpense', value: '11.200.000', negative: false },
@@ -40,9 +52,8 @@ describe('SummaryPanel', () => {
     expect(html).toContain('<dl')
     expect(html.match(/<dt/g)).toHaveLength(5)
     expect(html.match(/<dd/g)).toHaveLength(5)
-    for (const label of Object.values(LABELS)) {
-      if (label.includes('gồm')) continue
-      expect(html).toContain(label)
+    for (const kpi of KPIS) {
+      expect(html).toContain(LABELS[kpi.labelKey as keyof typeof LABELS])
     }
   })
 
@@ -52,7 +63,13 @@ describe('SummaryPanel', () => {
     )
     const netWorthBlock = html.slice(html.indexOf('Tài sản ròng'), html.indexOf('Tổng số dư'))
     expect(netWorthBlock).toContain('text-4xl')
-    expect(netWorthBlock).toContain('gồm phải thu, phải trả và dư nợ gốc')
+    // The terms, signed, each with its amount — and none the KPI did not carry.
+    expect(netWorthBlock).toContain('+ Số dư tài khoản')
+    expect(netWorthBlock).toContain('72.100.000')
+    expect(netWorthBlock).toContain('+ Phải thu')
+    expect(netWorthBlock).toContain('− Dư nợ vay')
+    expect(netWorthBlock).toContain('6.500.000')
+    expect(netWorthBlock).not.toContain('Phải trả')
     // Total Balance is `size="md"` (22/28), below the hero and above the
     // monthly metrics' `lg` (24/30) — which is deliberate: it is a supporting
     // figure for Net Worth, not a fourth monthly metric.
