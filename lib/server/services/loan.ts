@@ -176,9 +176,9 @@ import {
  * the order `debt.ts` documents and uses:
  *
  * 1. the account(s) — `lockAccountsForUpdate`, one sorted statement, taken
- *    *explicitly before* the loan lock even though `insertTransactionInTx`
- *    locks its account again later (re-locking a row the same transaction
- *    already holds returns at once);
+ *    *explicitly before* the loan lock, and the locked row handed to
+ *    `insertTransactionInTx` so it does not lock the account a second time
+ *    (re-locking a held row returns at once but still costs a round trip);
  * 2. the Loan row — `lockLoanRow`;
  * 3. the linked Transaction rows — `lockAndVerifyTransactionRow`.
  *
@@ -1011,12 +1011,12 @@ export async function recordLoanPayment(
     // 4. The money, when it moved through an account. Checked here, before the
     //    first write, rather than left to `insertTransactionInTx`'s own check,
     //    so a refusal writes nothing at all. The account lock is already ours,
-    //    so the core's own lock returns at once.
+    //    so its locked row goes to the core, which does not lock it again.
     if (account !== undefined && account.currency !== loan.currency) {
       throw new LinkedAccountCurrencyMismatchError()
     }
     const linked = { principal: null as string | null, interest: null as string | null }
-    if (accountId !== undefined && fx !== null) {
+    if (accountId !== undefined && account !== undefined && fx !== null) {
       const parts = { principal: principalAmount, interest: interestAmount }
       for (const leg of ['principal', 'interest'] as const) {
         if (!parts[leg].greaterThan(0)) continue
@@ -1035,6 +1035,7 @@ export async function recordLoanPayment(
             expectedCurrency: loan.currency,
           },
           fx,
+          account,
         )
         linked[leg] = created.id
       }
@@ -1285,6 +1286,7 @@ export async function updateLoanPayment(
             expectedCurrency: loan.currency,
           },
           snapshot(),
+          target,
         )
         linkedIds[leg] = created.id
         continue
@@ -1543,6 +1545,7 @@ export async function linkLoanToAccount(
         expectedCurrency: loan.currency,
       },
       fx,
+      account,
     )
 
     // 4. The instalments with neither leg linked, oldest first, each on its own
@@ -1575,6 +1578,7 @@ export async function linkLoanToAccount(
               expectedCurrency: loan.currency,
             },
             fx,
+            account,
           )
           linked[leg] = created.id
         }

@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import { readMigrationSql, splitSqlStatements } from '@/lib/testing/migration-sql'
 import { LOAN_INTEREST_CATEGORY_NAME } from '@/lib/server/defaults'
-import { ArchivedAccountError } from './account-lock'
+import { ArchivedAccountError, lockAccountsForUpdate, type LockedAccountRow } from './account-lock'
 import { InvalidCategoryError } from './transaction'
 import {
   LinkedAccountCurrencyMismatchError,
@@ -267,6 +267,101 @@ describe('linked-transaction core', () => {
       await expect(expense(other.expenseCategoryId)).rejects.toMatchObject({ code: 'P2025' })
 
       expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+    })
+
+    /**
+     * Final review F5: a caller that locked the account first (the module's
+     * lock order) hands its locked row in, and the core does not lock it again
+     * — one round trip less per transaction written, which a link with many
+     * payments pays once per payment. The row is still checked: it must be the
+     * input's account, ACTIVE, and in `expectedCurrency`.
+     */
+    describe('with the account row its caller already locked', () => {
+      /** `tx` with its raw statements counted — the account lock is one. */
+      function countingRaw(tx: Prisma.TransactionClient) {
+        const seen = { raw: 0 }
+        const client = new Proxy(tx, {
+          get(target, property) {
+            const value = Reflect.get(target, property)
+            if (property !== '$queryRaw' || typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              seen.raw += 1
+              return value.apply(target, args)
+            }
+          },
+        })
+        return { client, seen }
+      }
+
+      it('writes the same row without locking the account again', async () => {
+        const s = await setup()
+
+        const { row, raw } = await prisma.$transaction(async (tx) => {
+          const [locked] = await lockAccountsForUpdate(tx, s.userId, [s.usdAccountId])
+          const { client, seen } = countingRaw(tx)
+          const created = await insertTransactionInTx(
+            client,
+            s.userId,
+            cashOut(s.usdAccountId, { expectedCurrency: 'USD' }),
+            fxSnapshot(),
+            locked,
+          )
+          return { row: created, raw: seen.raw }
+        })
+
+        expect(raw).toBe(0)
+        expect(row).toMatchObject({ accountId: s.usdAccountId, currency: 'USD', type: 'CASH_OUT' })
+        expect(row.vndPerUsdAtEntry.toString()).toBe('25432.123456')
+      })
+
+      it('still locks the account itself when no row is handed in', async () => {
+        const s = await setup()
+
+        const raw = await prisma.$transaction(async (tx) => {
+          const { client, seen } = countingRaw(tx)
+          await insertTransactionInTx(client, s.userId, cashOut(s.vndAccountId), fxSnapshot())
+          return seen.raw
+        })
+
+        expect(raw).toBe(1)
+      })
+
+      it.each([
+        [
+          'an archived row',
+          (s: { vndAccountId: string }) =>
+            ({ id: s.vndAccountId, status: 'ARCHIVED', currency: 'VND' }) as LockedAccountRow,
+          ArchivedAccountError,
+        ],
+        [
+          'a row in another currency than expectedCurrency',
+          (s: { vndAccountId: string }) =>
+            ({ id: s.vndAccountId, status: 'ACTIVE', currency: 'USD' }) as LockedAccountRow,
+          LinkedAccountCurrencyMismatchError,
+        ],
+        [
+          "a row that is not the input's account",
+          (s: { usdAccountId: string }) =>
+            ({ id: s.usdAccountId, status: 'ACTIVE', currency: 'VND' }) as LockedAccountRow,
+          RangeError,
+        ],
+      ] as const)('refuses %s and writes nothing', async (_label, row, error) => {
+        const s = await setup()
+
+        await expect(
+          prisma.$transaction((tx) =>
+            insertTransactionInTx(
+              tx,
+              s.userId,
+              cashOut(s.vndAccountId, { expectedCurrency: 'VND' }),
+              fxSnapshot(),
+              row(s),
+            ),
+          ),
+        ).rejects.toThrow(error)
+
+        expect(await prisma.transaction.count({ where: { userId: s.userId } })).toBe(0)
+      })
     })
   })
 

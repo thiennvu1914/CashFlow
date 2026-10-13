@@ -138,9 +138,9 @@ import {
  * A linked write takes up to three kinds of lock, and always in this order:
  *
  * 1. the account(s) — `lockAccountsForUpdate`, one sorted statement, taken
- *    *explicitly before* the debt lock even though `insertTransactionInTx`
- *    locks its account again later (re-locking a row the same transaction
- *    already holds returns at once);
+ *    *explicitly before* the debt lock, and the locked row handed to
+ *    `insertTransactionInTx` so it does not lock the account a second time
+ *    (re-locking a held row returns at once but still costs a round trip);
  * 2. the Debt row — `lockDebtRow`;
  * 3. the linked Transaction row — `lockAndVerifyTransactionRow`.
  *
@@ -838,7 +838,8 @@ export async function recordDebtPayment(
     // 1. The account first, so this path holds nothing while it queues behind
     //    another writer on the same account (P2025 for another user's,
     //    `ArchivedAccountError` for an archived one).
-    if (accountId !== undefined) await lockAccountsForUpdate(tx, userId, [accountId])
+    const [account] =
+      accountId === undefined ? [] : await lockAccountsForUpdate(tx, userId, [accountId])
 
     // 2. The debt: exclusive row lock, tenant-scoped (P2025 for an id that is
     //    not this user's), then the status check under it.
@@ -850,9 +851,10 @@ export async function recordDebtPayment(
     if (amount.gt(outstanding)) throw new DebtOverpaymentError(outstanding)
 
     // 4. The money, when it moved through an account. The account lock is
-    //    already ours, so the core's own lock returns at once.
+    //    already ours, so its locked row goes to the core, which does not lock
+    //    it again.
     const transaction =
-      accountId !== undefined && fx !== null
+      accountId !== undefined && account !== undefined && fx !== null
         ? await insertTransactionInTx(
             tx,
             userId,
@@ -867,6 +869,7 @@ export async function recordDebtPayment(
               expectedCurrency: debt.currency,
             },
             fx,
+            account,
           )
         : null
 
@@ -994,6 +997,9 @@ export async function updateDebtPayment(
 
     const note =
       parsed.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person)
+    // The locked row of the account the money now moves through —
+    // `lockAccountsForUpdate` resolved every id it was given or threw.
+    const target = accounts.find((account) => account.id === nextAccountId)
     let transactionId: string | null = null
     if (nextAccountId !== undefined && linked === null) {
       // `economicChange` is true for a new link, so `fx` is set.
@@ -1010,12 +1016,10 @@ export async function updateDebtPayment(
           expectedCurrency: debt.currency,
         },
         fx,
+        target,
       )
       transactionId = created.id
     } else if (nextAccountId !== undefined && linked !== null) {
-      // The locked row of the account the money now moves through —
-      // `lockAccountsForUpdate` resolved every id it was given or threw.
-      const target = accounts.find((account) => account.id === nextAccountId)
       if (target?.currency !== debt.currency) throw new LinkedAccountCurrencyMismatchError()
       await tx.transaction.update({
         where: { userId_id: { userId, id: linked.id } },
@@ -1224,6 +1228,7 @@ export async function linkDebtToAccount(
         debt.notes ?? linkedNote(context.locale, OPENING_NOTE[debt.direction], debt.person),
       ),
       fx,
+      account,
     )
 
     // 4. The payments with no transaction yet, oldest first, each on its own
@@ -1244,6 +1249,7 @@ export async function linkDebtToAccount(
             payment.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person),
           ),
           fx,
+          account,
         )
         await tx.debtPayment.update({
           where: { userId_id: { userId, id: payment.id } },

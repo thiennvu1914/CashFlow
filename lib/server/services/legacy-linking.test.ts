@@ -299,6 +299,41 @@ function failInsideTransaction(model: 'debt' | 'loan', method: 'update') {
   return failure
 }
 
+/**
+ * Counts the account-lock statements (`SELECT … FROM "FinancialAccount" …
+ * FOR UPDATE`) the next interactive transactions send — final review F5: a
+ * link locks its account once and hands the locked row to the core, rather
+ * than the core locking it again for every transaction it writes.
+ */
+function countAccountLocks() {
+  const original = prisma.$transaction.bind(prisma) as (
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) => Promise<unknown>
+  const seen = { accountLocks: 0 }
+  vi.spyOn(prisma, '$transaction').mockImplementation(((
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) =>
+    original(
+      (tx) =>
+        callback(
+          new Proxy(tx, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              if (property !== '$queryRaw' || typeof value !== 'function') return value
+              return (strings: TemplateStringsArray, ...values: unknown[]) => {
+                if (strings.join('?').includes('FROM "FinancialAccount"')) seen.accountLocks += 1
+                return value.call(target, strings, ...values)
+              }
+            },
+          }),
+        ),
+      options,
+    )) as never)
+  return seen
+}
+
 /** How long a writer gets to show it is *not* waiting on a held lock. */
 const LOCK_WAIT_MS = 300
 /** Every lock a case took, so one that fails before its own `release()` still
@@ -883,6 +918,26 @@ describe('linkDebtToAccount', () => {
     expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(0))
   })
 
+  it('locks its account once, however many payments it records', async () => {
+    const s = await setup()
+    const debt = await createDebt(s.userId, BASE_DEBT)
+    for (const date of ['2026-03-05', '2026-03-06', '2026-03-07']) {
+      await recordDebtPayment(s.userId, debt.id, { amount: 100_000, date })
+    }
+    const { provider } = fakeProvider()
+    const seen = countAccountLocks()
+
+    await linkDebtToAccount(
+      s.userId,
+      debt.id,
+      { accountId: s.walletId, openedOn: '2026-03-01', includePayments: true },
+      provider,
+    )
+
+    expect(seen.accountLocks).toBe(1)
+    expect(await transactionCount(s)).toBe(4)
+  })
+
   it('is what the Debts page reads afterwards: the debt and its payments carry the account', async () => {
     const s = await setup()
     const debt = await createDebt(s.userId, BASE_DEBT)
@@ -1329,6 +1384,53 @@ describe('linkLoanToAccount', () => {
 
     expect(transaction).toHaveBeenCalledTimes(1)
     expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(3))
+  })
+
+  it('locks its account once, however many instalment legs it records', async () => {
+    const s = await setup()
+    const loan = await createLoan(s.userId, BASE_LOAN)
+    for (const paymentDate of ['2026-02-01', '2026-03-01']) {
+      await recordLoanPayment(s.userId, loan.id, {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate,
+      })
+    }
+    const seen = countAccountLocks()
+
+    await linkLoanToAccount(
+      s.userId,
+      loan.id,
+      { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
+      fakeProvider().provider,
+    )
+
+    expect(seen.accountLocks).toBe(1)
+    expect(await transactionCount(s)).toBe(5)
+  })
+
+  it('records an instalment paid from an account with one account lock for both legs', async () => {
+    const s = await setup()
+    const loan = await createLoan(s.userId, BASE_LOAN)
+    const { provider } = fakeProvider()
+    const seen = countAccountLocks()
+
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+        accountId: s.walletId,
+      },
+      provider,
+    )
+
+    expect(seen.accountLocks).toBe(1)
+    expect(await transactionCount(s)).toBe(2)
   })
 
   describe('lock order and concurrency', () => {

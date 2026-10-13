@@ -210,6 +210,40 @@ afterEach(async () => {
   expect(fetchCalls).toBe(0)
 })
 
+/**
+ * Counts the account-lock statements the next interactive transactions send
+ * (final review F5): a Paid locks the account first — the lock order — and
+ * hands the locked row to the shared core, which then does not lock it again.
+ */
+function countAccountLocks() {
+  const original = prisma.$transaction.bind(prisma) as (
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) => Promise<unknown>
+  const seen = { accountLocks: 0 }
+  vi.spyOn(prisma, '$transaction').mockImplementation(((
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) =>
+    original(
+      (tx) =>
+        callback(
+          new Proxy(tx, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              if (property !== '$queryRaw' || typeof value !== 'function') return value
+              return (strings: TemplateStringsArray, ...values: unknown[]) => {
+                if (strings.join('?').includes('FROM "FinancialAccount"')) seen.accountLocks += 1
+                return value.call(target, strings, ...values)
+              }
+            },
+          }),
+        ),
+      options,
+    )) as never)
+  return seen
+}
+
 describe('payOccurrence — one tap records the transaction', () => {
   it('records the EXPENSE in the reminder’s account and category, links it, and moves the balance', async () => {
     const s = await setup()
@@ -246,6 +280,21 @@ describe('payOccurrence — one tap records the transaction', () => {
     expect(stored.transactionId).toBe(result.transactionId)
 
     expect((await getAccountBalance(s.userId, s.walletId)).toString()).toBe('3750000')
+  })
+
+  it('locks the account once: the core gets the locked row instead of locking it again', async () => {
+    const s = await setup()
+    const occurrence = await pendingOccurrence(s.userId, {
+      accountId: s.walletId,
+      categoryId: s.housingId,
+    })
+    const { provider } = fakeProvider(25000)
+    const seen = countAccountLocks()
+
+    const result = await payOccurrence(s.userId, occurrence.id, TIMEZONE, provider, NOW)
+
+    expect(result.status).toBe('created')
+    expect(seen.accountLocks).toBe(1)
   })
 
   it('records an INCOME dated 12:00 on an overdue due day, and adds to the balance', async () => {
@@ -652,6 +701,27 @@ describe('createTransaction with an occurrenceId', () => {
     expect(stored.transactionId).toBe(transaction.id)
     expect(stored.actionedAt).not.toBeNull()
     expect((await getAccountBalance(s.userId, s.walletId)).toString()).toBe('3700000')
+  })
+
+  it('locks the account once — before the occurrence — and hands the row to the core', async () => {
+    const s = await setup()
+    const occurrence = await pendingOccurrence(s.userId)
+    const seen = countAccountLocks()
+
+    await createTransaction(
+      s.userId,
+      {
+        accountId: s.walletId,
+        type: 'EXPENSE',
+        categoryId: s.housingId,
+        amount: 1_250_000,
+        date: NOW,
+        occurrenceId: occurrence.id,
+      },
+      fakeProvider().provider,
+    )
+
+    expect(seen.accountLocks).toBe(1)
   })
 
   it('refuses an occurrence that is no longer pending, writing nothing', async () => {

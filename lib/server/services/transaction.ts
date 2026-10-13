@@ -4,7 +4,7 @@ import type { Currency, TransactionType } from '@prisma/client'
 import { createTransactionSchema, type CreateTransactionInput } from '@/lib/validation/transaction'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
-import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
+import { ArchivedAccountError, lockAccountsForUpdate, type LockedAccountRow } from './account-lock'
 import {
   InvalidCategoryError,
   SNAPSHOT_PAIR,
@@ -400,13 +400,13 @@ export async function createTransaction(
   // transaction entered here and one a debt, loan or reminder records are
   // validated and written by the same code.
   return prisma.$transaction(async (tx) => {
-    if (occurrenceId !== undefined) {
-      // Accounts first, then the occurrence — the lock order `payOccurrence`
-      // and every other linked write keep. The core's own account lock below
-      // then returns at once.
-      await lockAccountsForUpdate(tx, userId, [parsed.accountId])
-      await lockPendingOccurrence(tx, userId, occurrenceId)
-    }
+    // Accounts first, then the occurrence — the lock order `payOccurrence` and
+    // every other linked write keep. The locked row then goes to the core,
+    // which checks it instead of locking the account again; without an
+    // occurrence the core takes the account lock itself, as it always has.
+    const [account]: (LockedAccountRow | undefined)[] =
+      occurrenceId === undefined ? [] : await lockAccountsForUpdate(tx, userId, [parsed.accountId])
+    if (occurrenceId !== undefined) await lockPendingOccurrence(tx, userId, occurrenceId)
     const created = await insertTransactionInTx(
       tx,
       userId,
@@ -422,6 +422,7 @@ export async function createTransaction(
         categoryId: parsed.categoryId,
       },
       fx,
+      account,
     )
     if (occurrenceId !== undefined) {
       await markOccurrencePaidInTx(tx, userId, occurrenceId, created.id, new Date())

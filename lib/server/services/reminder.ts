@@ -1095,9 +1095,9 @@ export async function payOccurrence(
   try {
     const transaction = await prisma.$transaction(async (tx) => {
       // Accounts first, then the occurrence: the lock order of every linked
-      // write. `insertTransactionInTx` locks the account again, which returns
-      // at once for a row this transaction already holds.
-      await lockAccountsForUpdate(tx, userId, [accountId])
+      // write. The locked account row goes to `insertTransactionInTx`, which
+      // then checks it rather than locking the account a second time.
+      const [account] = await lockAccountsForUpdate(tx, userId, [accountId])
       await lockPendingOccurrence(tx, userId, occurrenceId)
       const created = await insertTransactionInTx(
         tx,
@@ -1112,6 +1112,7 @@ export async function payOccurrence(
           expectedCurrency: occurrence.reminder.currency,
         },
         fx,
+        account,
       )
       await markOccurrencePaidInTx(tx, userId, occurrenceId, created.id, now)
       return created

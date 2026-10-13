@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma'
 import type { Currency, Prisma, Transaction, TransactionType } from '@prisma/client'
 import type { UsableRateResult } from '@/lib/currency/current-rate-policy'
 import { LOAN_INTEREST_CATEGORY_NAME } from '@/lib/server/defaults'
-import { lockAccountsForUpdate } from './account-lock'
+import { ArchivedAccountError, lockAccountsForUpdate, type LockedAccountRow } from './account-lock'
 
 /**
  * The shared linking core (money-source linking spec §6.1).
@@ -137,12 +137,27 @@ export interface LinkedTransactionInput {
  * `InvalidCategoryError` (or `P2025` for another user's), and a non-positive
  * amount — a caller bug, since every caller has validated its input already —
  * a `RangeError`.
+ *
+ * `lockedAccount` (final review F5) is for the callers that already hold the
+ * account lock because the lock order makes them take it first — a debt or
+ * loan payment, "Record in an account", a reminder's Paid. Re-locking a row the
+ * transaction already holds returns at once in Postgres but still costs a
+ * round trip (~100 ms in production), once per transaction written, so such a
+ * caller hands in the row `lockAccountsForUpdate` returned and the core does
+ * not lock again. Everything the lock would have checked is checked on that
+ * row instead: it must be the input's account (another one is a caller bug, a
+ * `RangeError`), ACTIVE, and in `expectedCurrency`. The row came from
+ * `lockAccountsForUpdate(tx, userId, …)` on this same transaction, so it is the
+ * user's and its lock is held until commit — the guarantees are unchanged.
+ * `createTransaction` without a reminder passes nothing and keeps the core's
+ * own lock.
  */
 export async function insertTransactionInTx(
   tx: Prisma.TransactionClient,
   userId: string,
   input: LinkedTransactionInput,
   fx: UsableRateResult,
+  lockedAccount?: LockedAccountRow,
 ): Promise<Transaction> {
   // The column's CHECK only enforces >= 0; a zero-amount movement is a
   // meaningless row in the ledger, so it is refused before any lock is taken.
@@ -150,7 +165,13 @@ export async function insertTransactionInTx(
     throw new RangeError('insertTransactionInTx: amount must be greater than zero')
   }
 
-  const [account] = await lockAccountsForUpdate(tx, userId, [input.accountId])
+  const account = lockedAccount ?? (await lockAccountsForUpdate(tx, userId, [input.accountId]))[0]
+  if (account.id !== input.accountId) {
+    throw new RangeError('insertTransactionInTx: the locked account is not the input account')
+  }
+  // `lockAccountsForUpdate` already refused an archived account; a row handed
+  // in is held to the same rule here rather than trusted.
+  if (account.status !== 'ACTIVE') throw new ArchivedAccountError()
   if (input.expectedCurrency !== undefined && account.currency !== input.expectedCurrency) {
     throw new LinkedAccountCurrencyMismatchError()
   }
