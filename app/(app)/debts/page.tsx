@@ -34,7 +34,9 @@ import { SectionHeader } from '@/components/common/section-header'
  * the user says. The pickers start on the most recently used account and list
  * only active accounts, both read here beside the debts. A debt that moved no
  * money yet — live or written off — can be recorded in an account later from
- * its row menu (spec §6.4), which is how old agreements are reconciled.
+ * its row menu (spec §6.4), which is how old agreements are reconciled; one
+ * recorded in the wrong account is taken out of it again from the same menu
+ * ("Remove from account") and recorded in the right one.
  *
  * One query, not two: `getDebtsWithOutstanding` already returns every status
  * (the written-off section needs them anyway), so the split happens in memory.
@@ -256,8 +258,8 @@ export default async function DebtsPage() {
           </summary>
           {/* Read-only, like the archived accounts on `/accounts`: a written-off
               debt refuses every write (`DebtNotActiveError`) — except "Record
-              in an account" (spec 2026-10-12 §6.4), which `DebtRowMenu` alone
-              offers here, and only while the debt moved no money yet. The
+              in an account" (spec 2026-10-12 §6.4) and its undo, "Remove from
+              account", one of which `DebtRowMenu` always offers here. The
               payment history stays — the money really did arrive, and writing
               the rest off does not undo that. */}
           <div className="border-t border-border opacity-70">

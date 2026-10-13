@@ -64,6 +64,12 @@
   "linkArchivedAccount": "That account has just been archived. Reload the page and choose an active account.",
   "linkSubmit": "Record in an account",
   "linkPending": "Recording…",
+  "unlinkAction": "Remove from account",
+  "unlinkConfirmTitle": "Remove the debt with {name} from its account?",
+  "unlinkConfirmBody": "The transaction that recorded this debt in the account is deleted, and the account balance moves back. Payments recorded in an account keep their transactions. The debt stays — you can then record it in the right account.",
+  "unlinkConfirmBodyWithPayments": "The transactions that recorded this debt and its {count, plural, one {# payment} other {# payments}} in an account are deleted, and the account balances move back. The debt and its payments stay — you can then record them all in the right account.",
+  "unlinkIncludePayments": "{count, plural, one {Also remove the # payment recorded in an account} other {Also remove the # payments recorded in an account}}",
+  "unlinkPending": "Removing…",
   "linkedNote": {
     "lend": "Lent to {person}",
     "borrow": "Borrowed from {person}",

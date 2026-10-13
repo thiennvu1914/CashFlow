@@ -64,6 +64,12 @@
   "linkArchivedAccount": "Tài khoản này vừa được lưu trữ — hãy tải lại trang và chọn một tài khoản đang hoạt động.",
   "linkSubmit": "Ghi vào tài khoản",
   "linkPending": "Đang ghi…",
+  "unlinkAction": "Bỏ ghi vào tài khoản",
+  "unlinkConfirmTitle": "Bỏ ghi khoản nợ với {name} khỏi tài khoản?",
+  "unlinkConfirmBody": "Giao dịch ghi khoản nợ này vào tài khoản sẽ bị xóa và số dư tài khoản trở lại như trước. Các lần trả đã ghi vào tài khoản vẫn giữ giao dịch của chúng. Khoản nợ vẫn còn — sau đó bạn có thể ghi lại vào đúng tài khoản.",
+  "unlinkConfirmBodyWithPayments": "Giao dịch ghi khoản nợ này và giao dịch của {count} lần trả đã ghi vào tài khoản sẽ bị xóa, số dư tài khoản trở lại như trước. Khoản nợ và các lần trả vẫn còn — sau đó bạn có thể ghi lại tất cả vào đúng tài khoản.",
+  "unlinkIncludePayments": "Bỏ ghi cả {count} lần trả đã ghi vào tài khoản",
+  "unlinkPending": "Đang bỏ ghi…",
   "linkedNote": {
     "lend": "Cho mượn – {person}",
     "borrow": "Mượn – {person}",

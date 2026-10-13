@@ -13,10 +13,12 @@ import {
   deleteLoanPayment,
   linkLoanToAccount,
   recordLoanPayment,
+  unlinkLoanFromAccount,
   updateLoan,
   updateLoanPayment,
   LoanAlreadyLinkedError,
   LoanNotActiveError,
+  LoanNotLinkedError,
   LoanOverpaymentError,
   LoanSplitMismatchError,
   type LoanLinkContext,
@@ -32,6 +34,10 @@ import {
   type RecordLoanPaymentInput,
   type UpdateLoanInput,
 } from '@/lib/validation/loan'
+import {
+  unlinkFromAccountSchema,
+  type UnlinkFromAccountInput,
+} from '@/lib/validation/link-to-account'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 
 /**
@@ -75,7 +81,9 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * `ALREADY_LINKED`, for a loan whose disbursement another tab or a
  * double-click recorded first, and `TIMEOUT` for Prisma's P2028 — an
  * interactive transaction (a link writes up to two rows per instalment in one)
- * that expired and rolled back.
+ * that expired and rolled back. "Remove from account" (its undo) adds
+ * `NOT_LINKED`, for a loan whose disbursement another tab already removed from
+ * its account.
  */
 export type LoanActionError =
   | 'OVERPAYMENT'
@@ -86,6 +94,7 @@ export type LoanActionError =
   | 'ACCOUNT_CURRENCY_MISMATCH'
   | 'CONFLICT'
   | 'ALREADY_LINKED'
+  | 'NOT_LINKED'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -107,6 +116,7 @@ function mapError(e: unknown): LoanActionResult {
   }
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof LoanAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
+  if (e instanceof LoanNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {
@@ -238,6 +248,23 @@ export async function linkLoanToAccountAction(
       linkLoanToAccountSchema.parse(input),
       linkContext(user),
     )
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** "Remove from account": the undo of recording a loan in an account — deletes
+ *  its disbursement and, when asked, both legs of every instalment paid from
+ *  an account, so the loan can be recorded again in the right account. */
+export async function unlinkLoanFromAccountAction(
+  loanId: string,
+  input: UnlinkFromAccountInput,
+): Promise<LoanActionResult> {
+  const user = await requireUser()
+  try {
+    await unlinkLoanFromAccount(user.id, loanId, unlinkFromAccountSchema.parse(input))
   } catch (e) {
     return mapError(e)
   }

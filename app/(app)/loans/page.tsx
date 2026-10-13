@@ -34,7 +34,9 @@ import { SectionHeader } from '@/components/common/section-header'
  * most recently used account (an instalment's on the loan's own account first)
  * and list only active accounts, both read here beside the loans. A loan that
  * moved no money yet — active or closed — can be recorded in an account later
- * from its row menu (spec §6.4), which is how old loans are reconciled.
+ * from its row menu (spec §6.4), which is how old loans are reconciled; one
+ * recorded in the wrong account is taken out of it again from the same menu
+ * ("Remove from account") and recorded in the right one.
  *
  * One query, not two: `getLoansWithOutstanding` already returns every status
  * (the closed section needs them anyway), so the split happens in memory. The
@@ -198,8 +200,8 @@ export default async function LoansPage() {
           </summary>
           {/* Read-only, like the written-off debts on `/debts`: a closed loan
               refuses every write (`LoanNotActiveError`) — except "Record in an
-              account" (spec 2026-10-12 §6.4), which `LoanRowMenu` alone offers
-              here, and only while the loan moved no money yet. The instalment
+              account" (spec 2026-10-12 §6.4) and its undo, "Remove from
+              account", one of which `LoanRowMenu` always offers here. The instalment
               history stays — the money really was paid, and closing the loan
               does not undo that. */}
           <div className="border-t border-border opacity-70">

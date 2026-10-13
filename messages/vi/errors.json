@@ -56,6 +56,7 @@
     "ACCOUNT_CURRENCY_MISMATCH": "Hãy chọn tài khoản cùng loại tiền với khoản nợ này.",
     "CONFLICT": "Khoản thanh toán hoặc giao dịch liên kết đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
     "ALREADY_LINKED": "Khoản nợ này đã được ghi vào tài khoản.",
+    "NOT_LINKED": "Khoản nợ này không còn được ghi vào tài khoản nào.",
     "TIMEOUT": "Thao tác mất quá nhiều thời gian nên chưa có gì được ghi. Vui lòng thử lại sau một lát.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Khoản nợ này không còn tồn tại."
@@ -69,6 +70,7 @@
     "ACCOUNT_CURRENCY_MISMATCH": "Hãy chọn tài khoản cùng loại tiền với khoản vay này.",
     "CONFLICT": "Kỳ trả hoặc giao dịch liên kết đã thay đổi trong lúc bạn đang sửa. Hãy tải lại và thử lại.",
     "ALREADY_LINKED": "Khoản vay này đã được ghi vào tài khoản.",
+    "NOT_LINKED": "Khoản vay này không còn được ghi vào tài khoản nào.",
     "TIMEOUT": "Thao tác mất quá nhiều thời gian nên chưa có gì được ghi. Vui lòng thử lại sau một lát.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",
     "NOT_FOUND": "Khoản vay này không còn tồn tại."

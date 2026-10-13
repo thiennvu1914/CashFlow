@@ -21,6 +21,10 @@ import {
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
+import {
+  unlinkFromAccountSchema,
+  type UnlinkFromAccountInput,
+} from '@/lib/validation/link-to-account'
 import enDebtMessages from '@/messages/en/debts.json'
 import viDebtMessages from '@/messages/vi/debts.json'
 import { lockAccountsForUpdate } from './account-lock'
@@ -30,7 +34,11 @@ import {
   insertTransactionInTx,
   linkTransactionOptions,
 } from './linked-transaction'
-import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
+import {
+  ConcurrentModificationError,
+  lockAndVerifyTransactionRow,
+  lockTransactionRowsInAccounts,
+} from './transaction'
 
 /**
  * Debt service (spec §4.9) — money someone owes the user (RECEIVABLE) or the
@@ -49,9 +57,10 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  *    predates the app, or cash that never touched a tracked account) the debt
  *    is bookkeeping between two people and nothing else is written — until the
  *    user records it in an account after all (`linkDebtToAccount`, spec §6.4),
- *    which writes the same transactions after the fact. Editing or deleting a
- *    payment keeps both sides in step; writing a debt off moves no money and
- *    creates nothing.
+ *    which writes the same transactions after the fact — and a recording in
+ *    the wrong account is undone by `unlinkDebtFromAccount`, which deletes
+ *    them again. Editing or deleting a payment keeps both sides in step;
+ *    writing a debt off moves no money and creates nothing.
  * 2. **Outstanding is derived, never stored.** `originalAmount − Σ payments`,
  *    computed on read (spec §5, "never store what can drift"). A stored copy
  *    would be a second source of truth that a rolled-back write, a deleted
@@ -223,6 +232,20 @@ export class DebtAlreadyLinkedError extends Error {
   constructor() {
     super('This debt is already recorded in an account.')
     this.name = 'DebtAlreadyLinkedError'
+  }
+}
+
+/**
+ * Thrown when "Remove from account" (`unlinkDebtFromAccount`) is asked of a
+ * debt whose opening is not recorded in one — a stale tab, a double-click, or
+ * another unlink that committed first. The mirror of `DebtAlreadyLinkedError`:
+ * the true state is reported rather than a "done" for a request that did
+ * nothing.
+ */
+export class DebtNotLinkedError extends Error {
+  constructor() {
+    super('This debt is not recorded in an account.')
+    this.name = 'DebtNotLinkedError'
   }
 }
 
@@ -1234,5 +1257,126 @@ export async function linkDebtToAccount(
       data: { openingTransactionId: opening.id },
       include: WITH_PAYMENTS,
     })
+  }, transactionOptions)
+}
+
+/**
+ * "Bỏ ghi vào tài khoản / Remove from account" (final review F1): the undo of
+ * recording a debt in an account — by "Record in an account", or by an account
+ * chosen when the debt was created. Without it a wrong pick (the picker starts
+ * on the most recently used account) would be permanent: the Transactions page
+ * refuses to touch a linked row (Q4), and no other write here changes or
+ * removes the opening.
+ *
+ * Deletes the opening transaction and clears `openingTransactionId`; with
+ * `includePayments`, also every payment's transaction, whichever account it
+ * moved through, clearing each payment's link. The debt and every payment stay
+ * — what is owed is made of them, not of the transactions — and the debt can
+ * then be recorded again (`linkDebtToAccount`) in the right account. The
+ * balances of the accounts involved move back by exactly what those
+ * transactions moved, because balances are derived from the rows that remain.
+ *
+ * Refusals, all before the first write: another user's debt (P2025), a debt
+ * with no recorded opening (`DebtNotLinkedError` — read once before the
+ * transaction and again under the lock, where a concurrent unlink that
+ * committed first is visible), and an archived account among those the money
+ * would leave (`ArchivedAccountError`, the rule `deleteDebtPayment` follows: an
+ * archived account's balance is frozen, so none of its history is removed). A
+ * written-off debt can be unlinked — writing it off did not decide which
+ * account the money moved through — so the debt row is locked with
+ * `lockDebtRow`, without `lockActiveDebt`'s status check, and its status stays.
+ *
+ * Concurrency, in the module's lock order:
+ *
+ * 1. Every account whose balance changes, in one sorted statement. Which ones
+ *    is read before the transaction opens (the one statement below), because an
+ *    account may not be locked after the debt.
+ * 2. The debt row. Every payment writer and `linkDebtToAccount` take it, so
+ *    from here the opening, the payments and their links cannot change: the
+ *    rows to remove are read again under it, and those are what is removed.
+ * 3. Those transaction rows, in one sorted statement
+ *    (`lockTransactionRowsInAccounts`), each confirmed to sit in an account
+ *    locked in step 1. One that does not — a payment recorded or moved into
+ *    another account between the pre-read and the lock — is a
+ *    `ConcurrentModificationError` and nothing is written. A payment edit or
+ *    delete that read its payment as linked before this commits finds the link
+ *    gone under the debt lock and is refused the same way
+ *    (`verifyPaymentUnderLock`).
+ *
+ * The links are cleared before the transactions are deleted — they are
+ * `ON DELETE RESTRICT` — and every write is one statement whatever the number
+ * of payments, so the work does not grow with the history; the transaction is
+ * still opened with the link's options (`linkTransactionOptions`), so a long
+ * history gets the same allowance and the same wait for a connection.
+ */
+export async function unlinkDebtFromAccount(
+  userId: string,
+  debtId: string,
+  input: UnlinkFromAccountInput,
+): Promise<Debt> {
+  const { includePayments } = unlinkFromAccountSchema.parse(input)
+
+  // One statement before the transaction opens, scoped by `userId`: whether the
+  // debt is this user's (no row at all: P2025), whether its opening is
+  // recorded, and the account of every transaction this request removes — one
+  // row per transaction, so the count beyond the opening sizes the transaction.
+  const linkedRows = await prisma.$queryRaw<
+    Array<{ openingTransactionId: string | null; accountId: string | null }>
+  >`
+    SELECT d."openingTransactionId", t."accountId"
+      FROM "Debt" d
+      LEFT JOIN "Transaction" t
+        ON t."userId" = d."userId"
+       AND (t."id" = d."openingTransactionId"${
+         includePayments
+           ? Prisma.sql`
+            OR t."id" IN (SELECT p."transactionId" FROM "DebtPayment" p
+                           WHERE p."userId" = d."userId" AND p."debtId" = d."id")`
+           : Prisma.empty
+       })
+     WHERE d."userId" = ${userId} AND d."id" = ${debtId}`
+  if (linkedRows.length === 0) throw prismaNotFound('Debt', debtId)
+  if (linkedRows[0].openingTransactionId === null) throw new DebtNotLinkedError()
+  const accountIds = [...new Set(linkedRows.flatMap((row) => row.accountId ?? []))]
+  const transactionOptions = linkTransactionOptions(linkedRows.length - 1)
+
+  return prisma.$transaction(async (tx) => {
+    // 1. The accounts (`ArchivedAccountError` for an archived one).
+    await lockAccountsForUpdate(tx, userId, accountIds)
+
+    // 2. The debt, whatever its status, and what is linked to it — read under
+    //    its lock.
+    await lockDebtRow(tx, userId, debtId)
+    const { openingTransactionId } = await tx.debt.findUniqueOrThrow({
+      where: { userId_id: { userId, id: debtId } },
+      select: { openingTransactionId: true },
+    })
+    if (openingTransactionId === null) throw new DebtNotLinkedError()
+    const paymentTransactionIds = includePayments
+      ? (
+          await tx.debtPayment.findMany({
+            where: { userId, debtId, transactionId: { not: null } },
+            select: { transactionId: true },
+          })
+        ).flatMap((payment) => payment.transactionId ?? [])
+      : []
+    const transactionIds = [openingTransactionId, ...paymentTransactionIds]
+
+    // 3. The rows themselves, each still in an account locked above.
+    await lockTransactionRowsInAccounts(tx, userId, transactionIds, accountIds)
+
+    // The links first (`ON DELETE RESTRICT`), then the transactions.
+    if (paymentTransactionIds.length > 0) {
+      await tx.debtPayment.updateMany({
+        where: { userId, debtId, transactionId: { in: paymentTransactionIds } },
+        data: { transactionId: null },
+      })
+    }
+    const debt = await tx.debt.update({
+      where: { userId_id: { userId, id: debtId } },
+      data: { openingTransactionId: null },
+    })
+    await tx.transaction.deleteMany({ where: { userId, id: { in: transactionIds } } })
+    return debt
   }, transactionOptions)
 }

@@ -3,7 +3,11 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
-import { closeLoanAction, deleteLoanPaymentAction } from '@/lib/server/actions/loan-actions'
+import {
+  closeLoanAction,
+  deleteLoanPaymentAction,
+  unlinkLoanFromAccountAction,
+} from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
@@ -12,6 +16,8 @@ import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
 import { RowActionsMenu, type RowAction } from '@/components/common/row-actions-menu'
 import { useRowError } from '@/components/common/row-error-context'
+import { agreementMenuActions } from '@/components/debts/agreement-menu-actions'
+import { UnlinkFromAccountDialog } from '@/components/debts/unlink-from-account-dialog'
 import { Button } from '@/components/ui/button'
 import { LoanEditForm } from './loan-edit-form'
 import { LoanLinkForm } from './loan-link-form'
@@ -33,17 +39,19 @@ import { LoanPaymentForm } from './loan-payment-form'
  *    Vietnamese, but its DIGIT GROUPING is a locale, and `formatMoney`'s
  *    locale parameter defaults to `vi` when omitted, which is what silently
  *    produced Vietnamese grouping inside an otherwise-English dialog.
- *  - `LoanRowMenu` — Edit / Record in an account / Close loan, passed as
- *    `actions`. Its close failure is reported through `useRowError` rather
+ *  - `LoanRowMenu` — Edit / Record in an account (or, once recorded, Remove
+ *    from account) / Close loan, passed as `actions`. Its close and unlink
+ *    failures are reported through `useRowError` rather
  *    than a local `useState`: `LoanList` renders this into `actions` and a
  *    `RowErrorAlert` into `extra` (under the row), and only a shared Context
  *    can connect a menu click to an alert that renders elsewhere in the tree.
  *
  * Neither ever mounts on the Dashboard's compact list (no `renderActions`
- * there). In the page's closed section only the menu mounts, and only for a
- * loan whose disbursement moved no money yet: a closed loan refuses every
- * write except "Record in an account" (spec 2026-10-12 §6.4) — closing it did
- * not undo the money that moved. A PAID_OFF loan is *not* closed and keeps
+ * there). In the page's closed section only the menu mounts: a closed loan
+ * refuses every write except "Record in an account" (spec 2026-10-12 §6.4)
+ * and its undo, "Remove from account" (final review F1) — closing it did not
+ * undo the money that moved, nor decide which account it moved through. A
+ * PAID_OFF loan is *not* closed and keeps
  * both: a final interest charge can still be recorded (ruling R6-6), and
  * closing it is how the user says they are finished with it.
  *
@@ -243,38 +251,62 @@ export function LoanRowMenu({
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const [unlinking, setUnlinking] = useState(false)
+  const [unlinkPayments, setUnlinkPayments] = useState(true)
   const [closing, setClosing] = useState(false)
   const { setError } = useRowError()
   const closeSubmit = useActionSubmit(t)
+  const unlinkSubmit = useActionSubmit(t)
 
-  // Offered while the disbursement moved no money (spec §6.4), and gone once
-  // it has: the page re-renders with `disbursementAccountId` set.
-  const canLink = loan.disbursementAccountId === null
-  if (!loan.active && !canLink) return null
+  // "Record in an account" while the disbursement moved no money (spec §6.4),
+  // "Remove from account" once it has; the page re-renders with
+  // `disbursementAccountId` changed after either, so the other one shows.
+  const linkedPayments = loan.payments.filter((payment) => payment.accountId !== null).length
+  const actions: RowAction[] = agreementMenuActions(
+    { active: loan.active, linked: loan.disbursementAccountId !== null },
+    {
+      edit: { id: 'edit', label: t('loans.editAction'), onSelect: () => setEditOpen(true) },
+      link: {
+        id: 'link',
+        label: t('loans.linkAction'),
+        onSelect: () => {
+          setError(null)
+          setLinkOpen(true)
+        },
+      },
+      unlink: {
+        id: 'unlink',
+        label: t('loans.unlinkAction'),
+        onSelect: () => {
+          setError(null)
+          // Ticked again on every opening — the default, not the last choice.
+          setUnlinkPayments(true)
+          setUnlinking(true)
+        },
+      },
+      finish: {
+        id: 'close',
+        label: t('loans.closeAction'),
+        tone: 'negative',
+        onSelect: () => {
+          setError(null)
+          setClosing(true)
+        },
+      },
+    },
+  )
 
-  const actions: RowAction[] = []
-  if (loan.active) {
-    actions.push({ id: 'edit', label: t('loans.editAction'), onSelect: () => setEditOpen(true) })
-  }
-  if (canLink) {
-    actions.push({
-      id: 'link',
-      label: t('loans.linkAction'),
-      onSelect: () => {
-        setError(null)
-        setLinkOpen(true)
-      },
-    })
-  }
-  if (loan.active) {
-    actions.push({
-      id: 'close',
-      label: t('loans.closeAction'),
-      tone: 'negative',
-      onSelect: () => {
-        setError(null)
-        setClosing(true)
-      },
+  async function confirmUnlink() {
+    await unlinkSubmit.run({
+      tag: 'LoanRowMenu: unlink failed',
+      action: () =>
+        unlinkLoanFromAccountAction(loan.id, {
+          includePayments: linkedPayments > 0 && unlinkPayments,
+        }),
+      errorKeys: LOAN_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes, as closing the loan does.
+      onSettled: () => setUnlinking(false),
     })
   }
 
@@ -319,6 +351,17 @@ export function LoanRowMenu({
           />
         )}
       </Dialog>
+
+      <UnlinkFromAccountDialog
+        namespace="loans"
+        name={loan.lender}
+        linkedPayments={linkedPayments}
+        includePayments={unlinkPayments}
+        onIncludePaymentsChange={setUnlinkPayments}
+        open={unlinking}
+        onOpenChange={setUnlinking}
+        onConfirm={confirmUnlink}
+      />
 
       <ConfirmDialog
         open={closing}

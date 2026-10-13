@@ -26,6 +26,11 @@ import { Dialog } from './dialog'
  * dialog's scrim — so a dialog left open covers the very message that says why
  * nothing happened, and reads as an action that did nothing at all.
  *
+ * `children` is an optional body between the description and the buttons —
+ * for a confirmation that carries one choice of its own, such as "Remove from
+ * account"'s "also remove the recorded payments" box. Nothing else belongs
+ * there: a confirmation is a question, not a form.
+ *
  * Initial focus (spec §7 a11y): `Dialog`'s footer renders Cancel before
  * Confirm, and Base UI's Dialog moves focus to the first tabbable element
  * inside the popup by default — here that is the header's close button,
@@ -43,6 +48,7 @@ export function ConfirmDialog({
   onConfirm,
   pendingLabel,
   tone = 'negative',
+  children,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -53,6 +59,7 @@ export function ConfirmDialog({
   onConfirm: () => void | Promise<void>
   pendingLabel: string
   tone?: 'negative' | 'brand'
+  children?: React.ReactNode
 }) {
   const [pending, setPending] = useState(false)
 
@@ -105,7 +112,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      {null}
+      {children ?? null}
     </Dialog>
   )
 }

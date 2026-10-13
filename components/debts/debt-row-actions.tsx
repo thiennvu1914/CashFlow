@@ -13,6 +13,7 @@ import {
 import {
   deleteDebtPaymentAction,
   recordDebtPaymentAction,
+  unlinkDebtFromAccountAction,
   updateDebtAction,
   updateDebtPaymentAction,
   writeOffDebtAction,
@@ -21,8 +22,10 @@ import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { defaultPaymentAccountId, type DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { DebtDto, DebtPaymentDto } from '@/lib/ui/debt-view-model'
+import { agreementMenuActions } from '@/components/debts/agreement-menu-actions'
 import { DebtAccountField } from '@/components/debts/debt-account-field'
 import { DebtLinkForm } from '@/components/debts/debt-link-form'
+import { UnlinkFromAccountDialog } from '@/components/debts/unlink-from-account-dialog'
 import { ConfirmDialog } from '@/components/common/confirm-dialog'
 import { Dialog } from '@/components/common/dialog'
 import { FormField } from '@/components/common/form-field'
@@ -45,18 +48,20 @@ import { Input } from '@/components/ui/input'
  *    (`outstanding` is zero): the service refuses any further payment as
  *    OVERPAYMENT regardless of amount, so the button would offer nothing but
  *    a guaranteed refusal (fix round 1, finding 5).
- *  - `DebtRowMenu` — Edit / Record in an account / Write off, passed as
- *    `actions`. Its write-off failure is reported through `useRowError`
+ *  - `DebtRowMenu` — Edit / Record in an account (or, once recorded, Remove
+ *    from account) / Write off, passed as `actions`. Its write-off and unlink
+ *    failures are reported through `useRowError`
  *    rather than a local `useState`: `DebtList` renders this into `actions`
  *    and a `RowErrorAlert` into `extra` (under the row), and only a shared
  *    Context can connect a menu click to an alert that renders elsewhere in
  *    the tree.
  *
  * Neither ever mounts on the Dashboard's compact list (no `renderActions`
- * there). In the page's written-off section only the menu mounts, and only
- * for a debt whose opening moved no money yet: a written-off debt refuses
- * every write except "Record in an account" (spec 2026-10-12 §6.4) — writing
- * it off did not undo the money that moved.
+ * there). In the page's written-off section only the menu mounts: a
+ * written-off debt refuses every write except "Record in an account" (spec
+ * 2026-10-12 §6.4) and its undo, "Remove from account" (final review F1) —
+ * writing it off did not undo the money that moved, nor decide which account
+ * it moved through.
  *
  * Money-source linking (spec 2026-10-12 §6.2): a repayment can be recorded in
  * an account, and then the server writes the `DebtPayment` and its linked
@@ -152,38 +157,62 @@ export function DebtRowMenu({
   const t = useTranslations()
   const [editOpen, setEditOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
+  const [unlinking, setUnlinking] = useState(false)
+  const [unlinkPayments, setUnlinkPayments] = useState(true)
   const [writingOff, setWritingOff] = useState(false)
   const { setError } = useRowError()
   const writeOffSubmit = useActionSubmit(t)
+  const unlinkSubmit = useActionSubmit(t)
 
-  // Offered while the opening moved no money (spec §6.4), and gone once it
-  // has: the page re-renders with `openingAccountId` set after the action.
-  const canLink = debt.openingAccountId === null
-  if (!debt.active && !canLink) return null
+  // "Record in an account" while the opening moved no money (spec §6.4),
+  // "Remove from account" once it has; the page re-renders with
+  // `openingAccountId` changed after either, so the other one shows.
+  const linkedPayments = debt.payments.filter((payment) => payment.accountId !== null).length
+  const actions: RowAction[] = agreementMenuActions(
+    { active: debt.active, linked: debt.openingAccountId !== null },
+    {
+      edit: { id: 'edit', label: t('debts.editAction'), onSelect: () => setEditOpen(true) },
+      link: {
+        id: 'link',
+        label: t('debts.linkAction'),
+        onSelect: () => {
+          setError(null)
+          setLinkOpen(true)
+        },
+      },
+      unlink: {
+        id: 'unlink',
+        label: t('debts.unlinkAction'),
+        onSelect: () => {
+          setError(null)
+          // Ticked again on every opening — the default, not the last choice.
+          setUnlinkPayments(true)
+          setUnlinking(true)
+        },
+      },
+      finish: {
+        id: 'writeOff',
+        label: t('debts.writeOffAction'),
+        tone: 'negative',
+        onSelect: () => {
+          setError(null)
+          setWritingOff(true)
+        },
+      },
+    },
+  )
 
-  const actions: RowAction[] = []
-  if (debt.active) {
-    actions.push({ id: 'edit', label: t('debts.editAction'), onSelect: () => setEditOpen(true) })
-  }
-  if (canLink) {
-    actions.push({
-      id: 'link',
-      label: t('debts.linkAction'),
-      onSelect: () => {
-        setError(null)
-        setLinkOpen(true)
-      },
-    })
-  }
-  if (debt.active) {
-    actions.push({
-      id: 'writeOff',
-      label: t('debts.writeOffAction'),
-      tone: 'negative',
-      onSelect: () => {
-        setError(null)
-        setWritingOff(true)
-      },
+  async function confirmUnlink() {
+    await unlinkSubmit.run({
+      tag: 'DebtRowMenu: unlink failed',
+      action: () =>
+        unlinkDebtFromAccountAction(debt.id, {
+          includePayments: linkedPayments > 0 && unlinkPayments,
+        }),
+      errorKeys: DEBT_ERROR_KEYS,
+      onError: (failure) => setError(failure?.message ?? null),
+      // Closes on BOTH outcomes, as the write-off does.
+      onSettled: () => setUnlinking(false),
     })
   }
 
@@ -228,6 +257,17 @@ export function DebtRowMenu({
           />
         )}
       </Dialog>
+
+      <UnlinkFromAccountDialog
+        namespace="debts"
+        name={debt.person}
+        linkedPayments={linkedPayments}
+        includePayments={unlinkPayments}
+        onIncludePaymentsChange={setUnlinkPayments}
+        open={unlinking}
+        onOpenChange={setUnlinking}
+        onConfirm={confirmUnlink}
+      />
 
       <ConfirmDialog
         open={writingOff}

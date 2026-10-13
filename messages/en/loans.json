@@ -70,6 +70,12 @@
   "linkArchivedAccount": "That account has just been archived. Reload the page and choose an active account.",
   "linkSubmit": "Record in an account",
   "linkPending": "Recording…",
+  "unlinkAction": "Remove from account",
+  "unlinkConfirmTitle": "Remove the loan with {name} from its account?",
+  "unlinkConfirmBody": "The transaction that recorded the loan money you received is deleted, and the account balance moves back. Payments recorded in an account keep their transactions. The loan stays — you can then record it in the right account.",
+  "unlinkConfirmBodyWithPayments": "The transaction that recorded the loan money you received and the principal and interest transactions of its {count, plural, one {# payment} other {# payments}} recorded in an account are deleted, and the account balances move back. The loan, its payments and \"Next due\" stay as they are — you can then record them all in the right account.",
+  "unlinkIncludePayments": "{count, plural, one {Also remove the # payment recorded in an account} other {Also remove the # payments recorded in an account}}",
+  "unlinkPending": "Removing…",
   "linkedNote": {
     "disburse": "Loan from {lender}",
     "principal": "Principal repaid to {lender}",

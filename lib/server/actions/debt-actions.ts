@@ -11,11 +11,13 @@ import {
   deleteDebtPayment,
   linkDebtToAccount,
   recordDebtPayment,
+  unlinkDebtFromAccount,
   updateDebt,
   updateDebtPayment,
   writeOffDebt,
   DebtAlreadyLinkedError,
   DebtNotActiveError,
+  DebtNotLinkedError,
   DebtOverpaymentError,
   type DebtLinkContext,
 } from '@/lib/server/services/debt'
@@ -31,6 +33,10 @@ import {
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
 } from '@/lib/validation/debt'
+import {
+  unlinkFromAccountSchema,
+  type UnlinkFromAccountInput,
+} from '@/lib/validation/link-to-account'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 
 /**
@@ -74,7 +80,8 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * account" (spec §6.4) adds `ALREADY_LINKED`, for a debt whose opening another
  * tab or a double-click recorded first, and `TIMEOUT` for Prisma's P2028 — an
  * interactive transaction (a link writes one row per payment in one) that
- * expired and rolled back.
+ * expired and rolled back. "Remove from account" (its undo) adds `NOT_LINKED`,
+ * for a debt whose opening another tab already removed from its account.
  */
 export type DebtActionError =
   | 'OVERPAYMENT'
@@ -84,6 +91,7 @@ export type DebtActionError =
   | 'ACCOUNT_CURRENCY_MISMATCH'
   | 'CONFLICT'
   | 'ALREADY_LINKED'
+  | 'NOT_LINKED'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -100,6 +108,7 @@ function mapError(e: unknown): DebtActionResult {
   }
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof DebtAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
+  if (e instanceof DebtNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {
@@ -228,6 +237,24 @@ export async function linkDebtToAccountAction(
       linkDebtToAccountSchema.parse(input),
       linkContext(user),
     )
+  } catch (e) {
+    return mapError(e)
+  }
+  revalidateMoneyPages()
+  return { ok: true }
+}
+
+/** "Remove from account": the undo of recording a debt in an account — deletes
+ *  its opening transaction and, when asked, every payment's, so the debt can
+ *  be recorded again in the right account. Balances move, so every money page
+ *  re-renders. */
+export async function unlinkDebtFromAccountAction(
+  debtId: string,
+  input: UnlinkFromAccountInput,
+): Promise<DebtActionResult> {
+  const user = await requireUser()
+  try {
+    await unlinkDebtFromAccount(user.id, debtId, unlinkFromAccountSchema.parse(input))
   } catch (e) {
     return mapError(e)
   }

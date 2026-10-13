@@ -22,6 +22,10 @@ import {
   type RecordLoanPaymentInput,
   type UpdateLoanInput,
 } from '@/lib/validation/loan'
+import {
+  unlinkFromAccountSchema,
+  type UnlinkFromAccountInput,
+} from '@/lib/validation/link-to-account'
 import enLoanMessages from '@/messages/en/loans.json'
 import viLoanMessages from '@/messages/vi/loans.json'
 import { lockAccountsForUpdate } from './account-lock'
@@ -32,7 +36,11 @@ import {
   insertTransactionInTx,
   linkTransactionOptions,
 } from './linked-transaction'
-import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './transaction'
+import {
+  ConcurrentModificationError,
+  lockAndVerifyTransactionRow,
+  lockTransactionRowsInAccounts,
+} from './transaction'
 
 /**
  * Loan service (spec §4.10) — money the user owes a lender, and the instalments
@@ -53,8 +61,10 @@ import { ConcurrentModificationError, lockAndVerifyTransactionRow } from './tran
  *    tracked account) the loan is bookkeeping about an agreement with a lender
  *    and nothing else is written — until the user records it in an account
  *    after all (`linkLoanToAccount`, spec §6.4), which writes the same
- *    transactions after the fact. Editing or deleting an instalment keeps all
- *    three rows in step; closing a loan moves no money and creates nothing.
+ *    transactions after the fact — and a recording in the wrong account is
+ *    undone by `unlinkLoanFromAccount`, which deletes them again. Editing or
+ *    deleting an instalment keeps all three rows in step; closing a loan moves
+ *    no money and creates nothing.
  * 2. **Outstanding principal is derived, never stored.** `principal − Σ
  *    principalAmount`, computed on read (spec §5, "never store what can drift").
  *    A stored copy would be a second source of truth that a rolled-back write, a
@@ -287,6 +297,19 @@ export class LoanAlreadyLinkedError extends Error {
   constructor() {
     super('This loan is already recorded in an account.')
     this.name = 'LoanAlreadyLinkedError'
+  }
+}
+
+/**
+ * Thrown when "Remove from account" (`unlinkLoanFromAccount`) is asked of a
+ * loan whose disbursement is not recorded in one — the mirror of
+ * `LoanAlreadyLinkedError`, for a stale tab, a double-click, or another unlink
+ * that committed first.
+ */
+export class LoanNotLinkedError extends Error {
+  constructor() {
+    super('This loan is not recorded in an account.')
+    this.name = 'LoanNotLinkedError'
   }
 }
 
@@ -1569,5 +1592,118 @@ export async function linkLoanToAccount(
       where: { userId_id: { userId, id: loanId } },
       data: { disbursementTransactionId: disbursement.id },
     })
+  }, transactionOptions)
+}
+
+/**
+ * "Bỏ ghi vào tài khoản / Remove from account" (final review F1): the undo of
+ * recording a loan in an account — by "Record in an account", or by the
+ * account chosen when the loan was created — exactly as `debt.ts`'s
+ * `unlinkDebtFromAccount` is for debts, whose comment sets out the reasoning.
+ *
+ * Deletes the disbursement transaction and clears `disbursementTransactionId`;
+ * with `includePayments`, also both legs (principal and interest) of every
+ * instalment paid from an account, clearing its links. The loan, every
+ * instalment and the schedule stay — `nextDueDate` counts instalments, not
+ * transactions — and so does "Loan Interest & Fees". The loan can then be
+ * recorded again (`linkLoanToAccount`) in the right account.
+ *
+ * Refusals before the first write: another user's loan (P2025), a loan with no
+ * recorded disbursement (`LoanNotLinkedError`, read before the transaction and
+ * again under the lock), an archived account among those the money would leave
+ * (`ArchivedAccountError`, as `deleteLoanPayment`). A closed loan can be
+ * unlinked, so the loan row is locked with `lockLoanRow`, without the status
+ * check, and stays closed.
+ *
+ * Lock order is the module's — the accounts (read before the transaction, as
+ * an account may not be locked after the loan), the loan, then the transaction
+ * rows in one sorted statement, each confirmed to sit in a locked account
+ * (`lockTransactionRowsInAccounts`; one that moved or was added elsewhere
+ * meanwhile is a `ConcurrentModificationError`). Under the loan lock no
+ * instalment or link can change, and an instalment edit or delete that read
+ * its links before this commits is refused by `verifyPaymentUnderLock`. Every
+ * write is one statement whatever the history's length, inside a transaction
+ * opened with the link's options (`linkTransactionOptions`).
+ */
+export async function unlinkLoanFromAccount(
+  userId: string,
+  loanId: string,
+  input: UnlinkFromAccountInput,
+): Promise<Loan> {
+  const { includePayments } = unlinkFromAccountSchema.parse(input)
+
+  // One statement before the transaction opens, scoped by `userId`: whether the
+  // loan is this user's (no row: P2025), whether its disbursement is recorded,
+  // and the account of every transaction this request removes — one row per
+  // transaction, so the count beyond the disbursement sizes the transaction.
+  const linkedRows = await prisma.$queryRaw<
+    Array<{ disbursementTransactionId: string | null; accountId: string | null }>
+  >`
+    SELECT l."disbursementTransactionId", t."accountId"
+      FROM "Loan" l
+      LEFT JOIN "Transaction" t
+        ON t."userId" = l."userId"
+       AND (t."id" = l."disbursementTransactionId"${
+         includePayments
+           ? Prisma.sql`
+            OR t."id" IN (SELECT p."principalTransactionId" FROM "LoanPayment" p
+                           WHERE p."userId" = l."userId" AND p."loanId" = l."id")
+            OR t."id" IN (SELECT p."interestTransactionId" FROM "LoanPayment" p
+                           WHERE p."userId" = l."userId" AND p."loanId" = l."id")`
+           : Prisma.empty
+       })
+     WHERE l."userId" = ${userId} AND l."id" = ${loanId}`
+  if (linkedRows.length === 0) throw prismaNotFound('Loan', loanId)
+  if (linkedRows[0].disbursementTransactionId === null) throw new LoanNotLinkedError()
+  const accountIds = [...new Set(linkedRows.flatMap((row) => row.accountId ?? []))]
+  const transactionOptions = linkTransactionOptions(linkedRows.length - 1)
+
+  return prisma.$transaction(async (tx) => {
+    // 1. The accounts (`ArchivedAccountError` for an archived one).
+    await lockAccountsForUpdate(tx, userId, accountIds)
+
+    // 2. The loan, whatever its status, and what is linked to it — read under
+    //    its lock.
+    await lockLoanRow(tx, userId, loanId)
+    const { disbursementTransactionId } = await tx.loan.findUniqueOrThrow({
+      where: { userId_id: { userId, id: loanId } },
+      select: { disbursementTransactionId: true },
+    })
+    if (disbursementTransactionId === null) throw new LoanNotLinkedError()
+    const linkedInstalments = {
+      userId,
+      loanId,
+      OR: [{ principalTransactionId: { not: null } }, { interestTransactionId: { not: null } }],
+    } satisfies Prisma.LoanPaymentWhereInput
+    const legIds = includePayments
+      ? (
+          await tx.loanPayment.findMany({
+            where: linkedInstalments,
+            select: { principalTransactionId: true, interestTransactionId: true },
+          })
+        ).flatMap((instalment) =>
+          [instalment.principalTransactionId, instalment.interestTransactionId].filter(
+            (id): id is string => id !== null,
+          ),
+        )
+      : []
+    const transactionIds = [disbursementTransactionId, ...legIds]
+
+    // 3. The rows themselves, each still in an account locked above.
+    await lockTransactionRowsInAccounts(tx, userId, transactionIds, accountIds)
+
+    // The links first (`ON DELETE RESTRICT`), then the transactions.
+    if (legIds.length > 0) {
+      await tx.loanPayment.updateMany({
+        where: linkedInstalments,
+        data: { principalTransactionId: null, interestTransactionId: null },
+      })
+    }
+    const loan = await tx.loan.update({
+      where: { userId_id: { userId, id: loanId } },
+      data: { disbursementTransactionId: null },
+    })
+    await tx.transaction.deleteMany({ where: { userId, id: { in: transactionIds } } })
+    return loan
   }, transactionOptions)
 }

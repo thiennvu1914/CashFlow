@@ -24,6 +24,7 @@ vi.mock('@/lib/server/actions/loan-actions', () => ({
   deleteLoanPaymentAction: vi.fn(),
   closeLoanAction: vi.fn(),
   linkLoanToAccountAction: vi.fn(),
+  unlinkLoanFromAccountAction: vi.fn(),
 }))
 
 const { LoanLinkForm } = await import('./loan-link-form')
@@ -207,9 +208,11 @@ describe('LoanRowMenu', () => {
     expect(renderMenu(loan({ active: false, status: 'CLOSED' }))).toContain('Tác vụ cho Bank')
   })
 
-  it('offers nothing on a closed loan that is already recorded in an account', () => {
+  it('stays on a closed loan that is recorded in an account, so a wrong account can still be undone', () => {
+    // Its one item is "Remove from account" (`agreementMenuActions`); a closed
+    // menu renders only its trigger here.
     expect(
       renderMenu(loan({ active: false, status: 'CLOSED', disbursementAccountId: 'acc_bank' })),
-    ).toBe('')
+    ).toContain('Tác vụ cho Bank')
   })
 })

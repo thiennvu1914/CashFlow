@@ -20,8 +20,10 @@ import {
   linkDebtToAccount as linkDebtToAccountIn,
   listDebts,
   recordDebtPayment as recordDebtPaymentIn,
+  unlinkDebtFromAccount,
   writeOffDebt,
   DebtAlreadyLinkedError,
+  DebtNotLinkedError,
   type DebtLinkContext,
 } from './debt'
 import {
@@ -30,8 +32,10 @@ import {
   linkLoanToAccount as linkLoanToAccountIn,
   listLoans,
   recordLoanPayment as recordLoanPaymentIn,
+  unlinkLoanFromAccount,
   updateLoanPayment as updateLoanPaymentIn,
   LoanAlreadyLinkedError,
+  LoanNotLinkedError,
   type LoanLinkContext,
 } from './loan'
 
@@ -46,7 +50,10 @@ import {
  * have created — the opening (debt) or disbursement (loan) on the day the user
  * picks, and, when asked, one per existing payment that has none yet (two for a
  * loan instalment with interest), each on its own date — in one database
- * transaction, with one FX snapshot fetched before it opens.
+ * transaction, with one FX snapshot fetched before it opens. Its undo,
+ * "Remove from account" (`unlinkDebtFromAccount` / `unlinkLoanFromAccount`,
+ * final review F1), deletes those transactions again; it is tested at the end
+ * of this file, on the same fixture.
  *
  * Its own file rather than two more blocks in `debt.test.ts` and
  * `loan.test.ts`, which are already the two largest suites in the repo; the
@@ -1435,4 +1442,526 @@ describe('linkLoanToAccount', () => {
     expect(row.payments[0].principalTransaction?.accountId).toBe(s.walletId)
     expect(row.payments[0].interestTransaction?.accountId).toBe(s.walletId)
   })
+})
+
+/**
+ * "Remove from account" — the undo of recording an agreement in an account
+ * (final review F1). An account picked by mistake (the picker pre-selects the
+ * most recently used one) or a "Record in an account" made during live
+ * reconciliation that turns out wrong would otherwise be permanent: the
+ * Transactions page refuses to touch a linked row (Q4), and nothing on the
+ * agreement could change or remove its opening or disbursement. Unlinking
+ * deletes that transaction — and, when asked, every payment's — and clears the
+ * links, so the agreement can be recorded again in the right account.
+ */
+describe('unlinkDebtFromAccount', () => {
+  async function debtById(s: Setup, id: string) {
+    return prisma.debt.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  async function paymentsOf(s: Setup, debtId: string) {
+    return prisma.debtPayment.findMany({
+      where: { userId: s.userId, debtId },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    })
+  }
+
+  /** A debt lent from Wallet with two repayments recorded — one into Wallet,
+   *  one into Bank — and a third recorded in no account. Wallet 5,000,000 −
+   *  1,000,000 + 200,000; Bank 2,000,000 + 100,000. */
+  async function linkedDebt(s: Setup, person = BASE_DEBT.person) {
+    const { provider } = fakeProvider()
+    const debt = await createDebt(
+      s.userId,
+      { ...BASE_DEBT, person, accountId: s.walletId, movedOn: '2026-03-01' },
+      provider,
+    )
+    await recordDebtPayment(
+      s.userId,
+      debt.id,
+      { amount: 200_000, date: '2026-03-05', accountId: s.walletId },
+      provider,
+    )
+    await recordDebtPayment(
+      s.userId,
+      debt.id,
+      { amount: 100_000, date: '2026-03-06', accountId: s.bankId },
+      provider,
+    )
+    await recordDebtPayment(s.userId, debt.id, { amount: 50_000, date: '2026-03-07' })
+    return debt
+  }
+
+  it('deletes the opening transaction and clears its link, leaving the recorded payments in their accounts when asked to', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    const openingId = debt.openingTransactionId
+    expect(await balanceOf(s, s.walletId)).toBe('4200000')
+
+    const unlinked = await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: false })
+
+    expect(unlinked.openingTransactionId).toBeNull()
+    expect((await debtById(s, debt.id)).openingTransactionId).toBeNull()
+    expect(
+      await prisma.transaction.findUnique({
+        where: { userId_id: { userId: s.userId, id: openingId! } },
+      }),
+    ).toBeNull()
+    // The lent 1,000,000 is back; the repayments still count.
+    expect(await balanceOf(s, s.walletId)).toBe('5200000')
+    expect(await balanceOf(s, s.bankId)).toBe('2100000')
+    const payments = await paymentsOf(s, debt.id)
+    expect(payments.map((p) => p.transactionId === null)).toEqual([false, false, true])
+    expect(await transactionCount(s)).toBe(2)
+  })
+
+  it('with the payments, deletes every recorded payment transaction too — whichever account it moved through — and keeps the debt and every payment', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+
+    await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+
+    expect(await transactionCount(s)).toBe(0)
+    expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    expect(await balanceOf(s, s.bankId)).toBe('2000000')
+    const payments = await paymentsOf(s, debt.id)
+    expect(payments.map((p) => p.amount.toString())).toEqual(['200000', '100000', '50000'])
+    expect(payments.every((p) => p.transactionId === null)).toBe(true)
+    // What is owed is made of the payments, which all stay.
+    const [row] = await listDebts(s.userId)
+    expect(row.openingTransaction).toBeNull()
+    expect(row.payments).toHaveLength(3)
+  })
+
+  it('lets the debt be recorded again, in another account, payments included', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+
+    await linkDebtToAccount(
+      s.userId,
+      debt.id,
+      { accountId: s.bankId, openedOn: '2026-03-01', includePayments: true },
+      fakeProvider().provider,
+    )
+
+    expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    // 2,000,000 − 1,000,000 + 200,000 + 100,000 + 50,000.
+    expect(await balanceOf(s, s.bankId)).toBe('1350000')
+    expect(await transactionCount(s)).toBe(4)
+  })
+
+  it('unlinks a written-off debt too, and keeps it written off', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    await writeOffDebt(s.userId, debt.id)
+
+    const unlinked = await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+
+    expect(unlinked.status).toBe('WRITTEN_OFF')
+    expect(await transactionCount(s)).toBe(0)
+  })
+
+  it('refuses a debt that is not recorded in an account and writes nothing', async () => {
+    const s = await setup()
+    const debt = await createDebt(s.userId, BASE_DEBT)
+    await recordDebtPayment(
+      s.userId,
+      debt.id,
+      { amount: 100_000, date: '2026-03-05', accountId: s.walletId },
+      fakeProvider().provider,
+    )
+
+    await expect(
+      unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true }),
+    ).rejects.toThrow(DebtNotLinkedError)
+
+    expect(await transactionCount(s)).toBe(1)
+    expect((await paymentsOf(s, debt.id))[0].transactionId).not.toBeNull()
+  })
+
+  it('lets exactly one of two concurrent unlinks through; the other is refused under the lock', async () => {
+    const s = await setup()
+    for (const run of [1, 2, 3]) {
+      const debt = await linkedDebt(s, `Race ${run}`)
+
+      const results = await Promise.allSettled([
+        unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true }),
+        unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true }),
+      ])
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.find((r) => r.status === 'rejected')
+      expect((rejected as PromiseRejectedResult).reason).toBeInstanceOf(DebtNotLinkedError)
+    }
+    expect(await transactionCount(s)).toBe(0)
+  }, 30_000)
+
+  it('refuses when an account it would take money out of is archived, as deleting a payment does, and writes nothing', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    await prisma.financialAccount.update({
+      where: { userId_id: { userId: s.userId, id: s.bankId } },
+      data: { status: 'ARCHIVED' },
+    })
+
+    await expect(
+      unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true }),
+    ).rejects.toThrow(ArchivedAccountError)
+
+    expect(await transactionCount(s)).toBe(3)
+    expect((await debtById(s, debt.id)).openingTransactionId).toBe(debt.openingTransactionId)
+  })
+
+  it("refuses another user's debt with P2025 and writes nothing for either user", async () => {
+    const s = await setup()
+    const other = await setup()
+    const theirs = await linkedDebt(other)
+
+    await expectPrismaCode(
+      unlinkDebtFromAccount(s.userId, theirs.id, { includePayments: true }),
+      'P2025',
+    )
+
+    expect(await transactionCount(other)).toBe(3)
+    expect((await debtById(other, theirs.id)).openingTransactionId).toBe(
+      theirs.openingTransactionId,
+    )
+  })
+
+  it('rolls everything back when a write fails after the links are cleared', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    const failure = failInsideTransaction('debt', 'update')
+
+    await expect(unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })).rejects.toBe(
+      failure,
+    )
+
+    vi.restoreAllMocks()
+    expect(await transactionCount(s)).toBe(3)
+    expect((await debtById(s, debt.id)).openingTransactionId).toBe(debt.openingTransactionId)
+    expect((await paymentsOf(s, debt.id)).map((p) => p.transactionId === null)).toEqual([
+      false,
+      false,
+      true,
+    ])
+    expect(await balanceOf(s, s.walletId)).toBe('4200000')
+  })
+
+  it('sizes its transaction like the link does, for the payment transactions it removes', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(2))
+  })
+
+  it('sizes its transaction for the opening alone when the payments are left out', async () => {
+    const s = await setup()
+    const debt = await linkedDebt(s)
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await unlinkDebtFromAccount(s.userId, debt.id, { includePayments: false })
+
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(0))
+  })
+
+  describe('lock order and concurrency', () => {
+    it('waits on the accounts before it takes the debt lock', async () => {
+      const s = await setup()
+      const debt = await linkedDebt(s)
+      const lock = await holdRowLock('FinancialAccount', s.userId, s.bankId)
+
+      const pending = unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+      expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+
+      // Queued on an account, the unlink holds no debt lock yet: a payment with
+      // no account — which takes only the debt lock — goes straight through.
+      const payment = recordDebtPayment(s.userId, debt.id, { amount: 10_000, date: '2026-03-08' })
+      expect(await hasSettledWithin(payment, LOCK_WAIT_MS)).toBe(true)
+      await payment
+
+      await lock.release()
+      await pending
+      expect(await transactionCount(s)).toBe(0)
+      expect(await paymentsOf(s, debt.id)).toHaveLength(4)
+    }, 30_000)
+
+    it('refuses a payment delete that read the payment as recorded before the unlink removed its transaction', async () => {
+      const s = await setup()
+      const debt = await linkedDebt(s)
+      const [walletPayment] = await paymentsOf(s, debt.id)
+      const debtLock = await holdRowLock('Debt', s.userId, debt.id)
+
+      // The unlink takes the accounts and queues on the debt…
+      const unlink = unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+      expect(await hasSettledWithin(unlink, LOCK_WAIT_MS)).toBe(false)
+      // …and the delete, which has already read the payment as recorded, queues
+      // behind it on the account.
+      const removal = deleteDebtPayment(s.userId, walletPayment.id)
+      expect(await hasSettledWithin(removal, LOCK_WAIT_MS)).toBe(false)
+
+      await debtLock.release()
+      await unlink
+      // The payment's link is gone, which is not what the delete read.
+      await expect(removal).rejects.toThrow(ConcurrentModificationError)
+      expect(await paymentsOf(s, debt.id)).toHaveLength(3)
+      expect(await transactionCount(s)).toBe(0)
+    }, 30_000)
+
+    it('refuses with CONFLICT when a payment was recorded meanwhile in an account it did not lock, and writes nothing', async () => {
+      const s = await setup()
+      const { provider } = fakeProvider()
+      const debt = await createDebt(
+        s.userId,
+        { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-01' },
+        provider,
+      )
+      const walletLock = await holdRowLock('FinancialAccount', s.userId, s.walletId)
+
+      // The unlink read Wallet as the only account involved, and queues on it…
+      const unlink = unlinkDebtFromAccount(s.userId, debt.id, { includePayments: true })
+      expect(await hasSettledWithin(unlink, LOCK_WAIT_MS)).toBe(false)
+      // …while a payment into Bank — an account it never locked — commits.
+      await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 100_000, date: '2026-03-05', accountId: s.bankId },
+        provider,
+      )
+
+      await walletLock.release()
+      await expect(unlink).rejects.toThrow(ConcurrentModificationError)
+      expect(await transactionCount(s)).toBe(2)
+      expect((await debtById(s, debt.id)).openingTransactionId).toBe(debt.openingTransactionId)
+    }, 30_000)
+  })
+})
+
+describe('unlinkLoanFromAccount', () => {
+  async function loanById(s: Setup, id: string) {
+    return prisma.loan.findUniqueOrThrow({ where: { userId_id: { userId: s.userId, id } } })
+  }
+
+  async function paymentsOf(s: Setup, loanId: string) {
+    return prisma.loanPayment.findMany({
+      where: { userId: s.userId, loanId },
+      orderBy: [{ paymentDate: 'asc' }, { createdAt: 'asc' }],
+    })
+  }
+
+  /** A loan received into Wallet with two instalments paid from it — one with
+   *  interest (two transactions), one interest-only — and one paid from no
+   *  account. Wallet 5,000,000 + 1,000,000 − 90,000 − 10,000. */
+  async function linkedLoan(s: Setup, lender = BASE_LOAN.lender) {
+    const { provider } = fakeProvider()
+    const loan = await createLoan(
+      s.userId,
+      { ...BASE_LOAN, lender, accountId: s.walletId },
+      provider,
+    )
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      {
+        totalAmount: 90_000,
+        principalAmount: 80_000,
+        interestAmount: 10_000,
+        paymentDate: '2026-02-01',
+        accountId: s.walletId,
+      },
+      provider,
+    )
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      {
+        totalAmount: 10_000,
+        principalAmount: 0,
+        interestAmount: 10_000,
+        paymentDate: '2026-03-01',
+        accountId: s.walletId,
+      },
+      provider,
+    )
+    await recordLoanPayment(s.userId, loan.id, {
+      totalAmount: 90_000,
+      principalAmount: 80_000,
+      interestAmount: 10_000,
+      paymentDate: '2026-04-01',
+    })
+    return loan
+  }
+
+  it('deletes the disbursement and clears its link, leaving the instalments paid from an account in place when asked to', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    expect(await balanceOf(s, s.walletId)).toBe('5900000')
+
+    const unlinked = await unlinkLoanFromAccount(s.userId, loan.id, { includePayments: false })
+
+    expect(unlinked.disbursementTransactionId).toBeNull()
+    expect((await loanById(s, loan.id)).disbursementTransactionId).toBeNull()
+    expect(await balanceOf(s, s.walletId)).toBe('4900000')
+    expect(await transactionCount(s)).toBe(3)
+    const payments = await paymentsOf(s, loan.id)
+    expect(payments[0].principalTransactionId).not.toBeNull()
+    expect(payments[0].interestTransactionId).not.toBeNull()
+  })
+
+  it('with the instalments, deletes both legs of every one paid from an account, keeping the instalments, the schedule and the interest category', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    const scheduleBefore = (await loanById(s, loan.id)).nextDueDate
+
+    await unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })
+
+    expect(await transactionCount(s)).toBe(0)
+    expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    const payments = await paymentsOf(s, loan.id)
+    expect(payments).toHaveLength(3)
+    expect(
+      payments.every((p) => p.principalTransactionId === null && p.interestTransactionId === null),
+    ).toBe(true)
+    expect((await loanById(s, loan.id)).nextDueDate).toEqual(scheduleBefore)
+    expect(await interestCategories(s)).toHaveLength(1)
+  })
+
+  it('lets the loan be recorded again, in another account, instalments included', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    await unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })
+
+    await linkLoanToAccount(
+      s.userId,
+      loan.id,
+      { accountId: s.bankId, disbursedOn: '2026-01-01', includePayments: true },
+      fakeProvider().provider,
+    )
+
+    expect(await balanceOf(s, s.walletId)).toBe('5000000')
+    // 2,000,000 + 1,000,000 − 90,000 − 10,000 − 90,000.
+    expect(await balanceOf(s, s.bankId)).toBe('2810000')
+  })
+
+  it('unlinks a closed loan too, and keeps it closed', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    await closeLoan(s.userId, loan.id)
+
+    const unlinked = await unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })
+
+    expect(unlinked.status).toBe('CLOSED')
+    expect(await transactionCount(s)).toBe(0)
+  })
+
+  it('refuses a loan that is not recorded in an account', async () => {
+    const s = await setup()
+    const loan = await createLoan(s.userId, BASE_LOAN)
+
+    await expect(
+      unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true }),
+    ).rejects.toThrow(LoanNotLinkedError)
+  })
+
+  it('lets exactly one of two concurrent unlinks through; the other is refused under the lock', async () => {
+    const s = await setup()
+    for (const run of [1, 2, 3]) {
+      const loan = await linkedLoan(s, `Race ${run}`)
+
+      const results = await Promise.allSettled([
+        unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true }),
+        unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true }),
+      ])
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.find((r) => r.status === 'rejected')
+      expect((rejected as PromiseRejectedResult).reason).toBeInstanceOf(LoanNotLinkedError)
+    }
+    expect(await transactionCount(s)).toBe(0)
+  }, 30_000)
+
+  it('refuses when the account it would take money out of is archived, and writes nothing', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    await prisma.financialAccount.update({
+      where: { userId_id: { userId: s.userId, id: s.walletId } },
+      data: { status: 'ARCHIVED' },
+    })
+
+    await expect(
+      unlinkLoanFromAccount(s.userId, loan.id, { includePayments: false }),
+    ).rejects.toThrow(ArchivedAccountError)
+
+    expect(await transactionCount(s)).toBe(4)
+  })
+
+  it("refuses another user's loan with P2025 and writes nothing for either user", async () => {
+    const s = await setup()
+    const other = await setup()
+    const theirs = await linkedLoan(other)
+
+    await expectPrismaCode(
+      unlinkLoanFromAccount(s.userId, theirs.id, { includePayments: true }),
+      'P2025',
+    )
+
+    expect(await transactionCount(other)).toBe(4)
+    expect((await loanById(other, theirs.id)).disbursementTransactionId).toBe(
+      theirs.disbursementTransactionId,
+    )
+  })
+
+  it('rolls everything back when a write fails after the links are cleared', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    const failure = failInsideTransaction('loan', 'update')
+
+    await expect(unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })).rejects.toBe(
+      failure,
+    )
+
+    vi.restoreAllMocks()
+    expect(await transactionCount(s)).toBe(4)
+    expect((await loanById(s, loan.id)).disbursementTransactionId).toBe(
+      loan.disbursementTransactionId,
+    )
+    const [first] = await paymentsOf(s, loan.id)
+    expect(first.principalTransactionId).not.toBeNull()
+    expect(await balanceOf(s, s.walletId)).toBe('5900000')
+  })
+
+  it('sizes its transaction like the link does, for the instalment transactions it removes', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    const transaction = vi.spyOn(prisma, '$transaction')
+
+    await unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })
+
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.mock.calls[0][1]).toEqual(linkTransactionOptions(3))
+  })
+
+  it('waits on the account before it takes the loan lock', async () => {
+    const s = await setup()
+    const loan = await linkedLoan(s)
+    const lock = await holdRowLock('FinancialAccount', s.userId, s.walletId)
+
+    const pending = unlinkLoanFromAccount(s.userId, loan.id, { includePayments: true })
+    expect(await hasSettledWithin(pending, LOCK_WAIT_MS)).toBe(false)
+
+    // Queued on the account, the unlink holds no loan lock yet: closing the
+    // loan — which takes only the loan lock — goes straight through.
+    const close = closeLoan(s.userId, loan.id)
+    expect(await hasSettledWithin(close, LOCK_WAIT_MS)).toBe(true)
+    await close
+
+    await lock.release()
+    await pending
+    expect(await transactionCount(s)).toBe(0)
+  }, 30_000)
 })

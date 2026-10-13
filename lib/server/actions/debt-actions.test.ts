@@ -33,6 +33,7 @@ const writeOffDebtMock = vi.hoisted(() => vi.fn())
 const updateDebtPaymentMock = vi.hoisted(() => vi.fn())
 const deleteDebtPaymentMock = vi.hoisted(() => vi.fn())
 const linkDebtToAccountMock = vi.hoisted(() => vi.fn())
+const unlinkDebtFromAccountMock = vi.hoisted(() => vi.fn())
 const revalidatePathMock = vi.hoisted(() => vi.fn())
 
 /**
@@ -62,6 +63,13 @@ class MockDebtAlreadyLinkedError extends Error {
   constructor() {
     super('This debt is already recorded in an account.')
     this.name = 'DebtAlreadyLinkedError'
+  }
+}
+
+class MockDebtNotLinkedError extends Error {
+  constructor() {
+    super('This debt is not recorded in an account.')
+    this.name = 'DebtNotLinkedError'
   }
 }
 
@@ -98,9 +106,11 @@ vi.mock('@/lib/server/services/debt', () => ({
   updateDebtPayment: updateDebtPaymentMock,
   deleteDebtPayment: deleteDebtPaymentMock,
   linkDebtToAccount: linkDebtToAccountMock,
+  unlinkDebtFromAccount: unlinkDebtFromAccountMock,
   DebtOverpaymentError: MockDebtOverpaymentError,
   DebtNotActiveError: MockDebtNotActiveError,
   DebtAlreadyLinkedError: MockDebtAlreadyLinkedError,
+  DebtNotLinkedError: MockDebtNotLinkedError,
 }))
 
 vi.mock('@/lib/server/services/linked-transaction', () => ({
@@ -127,6 +137,7 @@ const {
   updateDebtPaymentAction,
   deleteDebtPaymentAction,
   linkDebtToAccountAction,
+  unlinkDebtFromAccountAction,
 } = await import('./debt-actions')
 const { DEBT_ERROR_KEYS } = await import('@/lib/ui/action-error-messages')
 const { ArchivedAccountError } = await import('@/lib/server/services/account-lock')
@@ -222,6 +233,7 @@ beforeEach(() => {
   updateDebtPaymentMock.mockReset()
   deleteDebtPaymentMock.mockReset()
   linkDebtToAccountMock.mockReset()
+  unlinkDebtFromAccountMock.mockReset()
   revalidatePathMock.mockReset()
   requireUserMock.mockResolvedValue(FIXED_USER)
 })
@@ -689,6 +701,68 @@ describe('linkDebtToAccountAction', () => {
   })
 })
 
+describe('unlinkDebtFromAccountAction', () => {
+  it('calls the service with the session user id, the debt id and the parsed input, then revalidates every money page', async () => {
+    unlinkDebtFromAccountMock.mockResolvedValue(undefined)
+
+    const result = await unlinkDebtFromAccountAction('debt_1', { includePayments: true })
+
+    expect(result).toEqual({ ok: true })
+    expect(unlinkDebtFromAccountMock).toHaveBeenCalledTimes(1)
+    expect(unlinkDebtFromAccountMock).toHaveBeenCalledWith(FIXED_USER.id, 'debt_1', {
+      includePayments: true,
+    })
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual(MONEY_PAGES)
+  })
+
+  it('maps an input without the payments choice to INVALID_INPUT without ever calling the service', async () => {
+    const result = await unlinkDebtFromAccountAction(
+      'debt_1',
+      {} as unknown as { includePayments: boolean },
+    )
+
+    expect(result).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(unlinkDebtFromAccountMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['DebtNotLinkedError', () => new MockDebtNotLinkedError(), 'NOT_LINKED'],
+    ['ArchivedAccountError', () => new ArchivedAccountError(), 'ARCHIVED_ACCOUNT'],
+    ['ConcurrentModificationError', () => new MockConcurrentModificationError(), 'CONFLICT'],
+    ['P2028 (transaction timed out)', transactionTimeoutError, 'TIMEOUT'],
+    ['P2025', notFoundError, 'NOT_FOUND'],
+  ] as [string, () => Error, string][])(
+    'maps %s to its own code and does not revalidate',
+    async (_, error, code) => {
+      unlinkDebtFromAccountMock.mockRejectedValue(error())
+
+      const result = await unlinkDebtFromAccountAction('debt_1', { includePayments: false })
+
+      expect(result).toEqual({ ok: false, error: code })
+      expect(revalidatePathMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rethrows an unmapped error, and never revalidates', async () => {
+    unlinkDebtFromAccountMock.mockRejectedValue(new Error('boom'))
+
+    await expect(unlinkDebtFromAccountAction('debt_1', { includePayments: false })).rejects.toThrow(
+      'boom',
+    )
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects when requireUser() rejects, and never calls the service', async () => {
+    requireUserMock.mockRejectedValueOnce(new Error('Not authenticated'))
+
+    await expect(unlinkDebtFromAccountAction('debt_1', { includePayments: false })).rejects.toThrow(
+      'Not authenticated',
+    )
+    expect(unlinkDebtFromAccountMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('DEBT_ERROR_KEYS', () => {
   // The temporary English `DEBT_ERROR_MESSAGES` alias this test used to pin
   // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
@@ -707,6 +781,7 @@ describe('DEBT_ERROR_KEYS', () => {
       ACCOUNT_CURRENCY_MISMATCH: 'errors.debt.ACCOUNT_CURRENCY_MISMATCH',
       CONFLICT: 'errors.debt.CONFLICT',
       ALREADY_LINKED: 'errors.debt.ALREADY_LINKED',
+      NOT_LINKED: 'errors.debt.NOT_LINKED',
       TIMEOUT: 'errors.debt.TIMEOUT',
       INVALID_INPUT: 'errors.debt.INVALID_INPUT',
       NOT_FOUND: 'errors.debt.NOT_FOUND',

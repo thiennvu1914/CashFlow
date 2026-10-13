@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { linkDebtToAccountSchema } from './debt'
-import { linkToAccountFormSchema } from './link-to-account'
+import { linkToAccountFormSchema, unlinkFromAccountSchema } from './link-to-account'
 import { linkLoanToAccountSchema } from './loan'
 
 /**
@@ -42,5 +42,21 @@ describe('linkToAccountFormSchema', () => {
       expect(debt.success).toBe(form.success)
       expect(loan.success).toBe(form.success)
     }
+  })
+})
+
+describe('unlinkFromAccountSchema', () => {
+  it('takes only the payments choice, and drops anything else', () => {
+    expect(unlinkFromAccountSchema.parse({ includePayments: false, accountId: 'acc_1' })).toEqual({
+      includePayments: false,
+    })
+  })
+
+  it.each([[{}], [{ includePayments: 'yes' }]])('refuses %o with product copy', (input) => {
+    const result = unlinkFromAccountSchema.safeParse(input)
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.message)).toEqual([
+      'Choose whether to remove the recorded payments too',
+    ])
   })
 })

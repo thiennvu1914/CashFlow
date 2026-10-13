@@ -44,3 +44,17 @@ export const linkToAccountFormSchema = z.object({
 })
 
 export type LinkToAccountFormValues = z.infer<typeof linkToAccountFormSchema>
+
+/**
+ * "Bỏ ghi vào tài khoản / Remove from account" — the undo of the link above, for
+ * an agreement recorded in the wrong account (or recorded at all by mistake).
+ * The opening (debt) or disbursement (loan) transaction always goes; with
+ * `includePayments`, every payment recorded in an account loses its
+ * transaction too, so the whole agreement can be recorded again elsewhere.
+ * Nothing else is asked: which rows go is the server's to read, under its locks.
+ */
+export const unlinkFromAccountSchema = z.object({
+  includePayments: z.boolean({ error: 'Choose whether to remove the recorded payments too' }),
+})
+
+export type UnlinkFromAccountInput = z.infer<typeof unlinkFromAccountSchema>

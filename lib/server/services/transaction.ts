@@ -135,6 +135,42 @@ export async function lockAndVerifyTransactionRow(
   }
 }
 
+/**
+ * Locks every row of `transactionIds` — one statement, in id order — and
+ * confirms each still sits in one of `lockedAccountIds`, the accounts the
+ * caller has already locked.
+ *
+ * For "Remove from account" (`unlinkDebtFromAccount`, `unlinkLoanFromAccount`),
+ * which deletes a whole agreement's linked transactions at once. It chose the
+ * accounts to lock from a copy read before its transaction opened, and only
+ * then — under the agreement's lock — learns exactly which rows it removes. A
+ * row that lives in an account it did not lock (a payment recorded or moved
+ * there in between) would leave that account unchecked by the archived freeze
+ * while its balance changes, so it is a `ConcurrentModificationError`, exactly
+ * as `lockAndVerifyTransactionRow` treats a row that moved. Accounts first,
+ * then the agreement, then these rows: the order every linked write keeps, and
+ * sorted by id like `lockAccountRows`, so two callers cannot take them in
+ * opposite orders.
+ */
+export async function lockTransactionRowsInAccounts(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  transactionIds: readonly string[],
+  lockedAccountIds: readonly string[],
+): Promise<void> {
+  const ids = [...new Set(transactionIds)].sort()
+  if (ids.length === 0) return
+  const rows = await tx.$queryRaw<Array<{ id: string; accountId: string }>>`
+    SELECT "id", "accountId" FROM "Transaction"
+     WHERE "userId" = ${userId} AND "id" IN (${Prisma.join(ids)})
+     ORDER BY "id"
+     FOR UPDATE`
+  const accounts = new Set(lockedAccountIds)
+  if (rows.length !== ids.length || rows.some((row) => !accounts.has(row.accountId))) {
+    throw new ConcurrentModificationError()
+  }
+}
+
 /** Prisma's own P2025, for the raw reads in this file that find no row — an id
  *  that is not this user's or does not exist, indistinguishably. */
 function transactionNotFound(): Prisma.PrismaClientKnownRequestError {

@@ -578,11 +578,13 @@ test.describe.serial('Money-source linking — debts', () => {
     // Linked debts do not offer it: Minh's opening is already in Cash.
     await page.goto('/debts')
     await openRowMenu(page, namedRow(page, page, 'Minh'), 'Minh')
-    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await expect(
+      page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }),
+    ).toHaveCount(0)
     await page.keyboard.press('Escape')
 
     await openRowMenu(page, row, 'Hoa')
-    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản' }).click()
+    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }).click()
     const link = page.getByRole('dialog', { name: 'Ghi vào tài khoản · Hoa' })
     // Only accounts in the debt's currency, and no "don't record" here.
     const account = link.getByLabel('Tài khoản')
@@ -597,7 +599,9 @@ test.describe.serial('Money-source linking — debts', () => {
     // Recorded: the action is gone from the row's menu.
     await openRowMenu(page, row, 'Hoa')
     await expect(page.getByRole('menuitem', { name: 'Sửa' })).toBeVisible()
-    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await expect(
+      page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }),
+    ).toHaveCount(0)
     await page.keyboard.press('Escape')
 
     // 4.000.000 − 600.000 lent + 200.000 repaid.
@@ -605,6 +609,53 @@ test.describe.serial('Money-source linking — debts', () => {
     await page.goto('/transactions')
     await expect(page.getByText('Cho mượn – Hoa', { exact: true })).toBeVisible()
     await expect(page.getByText('Thu nợ – Hoa', { exact: true })).toBeVisible()
+  })
+
+  test("'Remove from account' takes a debt recorded in the wrong account back out — the balance moves back — and it can then be recorded in another one", async ({
+    page,
+  }) => {
+    // The account Hoa should have been recorded in.
+    await createAccountViaUi(page, { name: 'Bank', currency: 'VND', initialBalance: 1_000_000 })
+
+    await page.goto('/debts')
+    const row = namedRow(page, page, 'Hoa')
+    await openRowMenu(page, row, 'Hoa')
+    // Recorded, so the menu offers the undo rather than recording it again.
+    await expect(
+      page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }),
+    ).toHaveCount(0)
+    await page.getByRole('menuitem', { name: 'Bỏ ghi vào tài khoản' }).click()
+    const confirm = page.getByRole('dialog', { name: 'Bỏ ghi khoản nợ với Hoa khỏi tài khoản?' })
+    const payments = confirm.getByLabel('Bỏ ghi cả 1 lần trả đã ghi vào tài khoản')
+    await expect(payments).toBeChecked()
+    await expect(confirm).toContainText('giao dịch của 1 lần trả')
+    // Unticked, the confirmation says the repayment keeps its transaction.
+    await payments.uncheck()
+    await expect(confirm).toContainText('vẫn giữ giao dịch của chúng')
+    await payments.check()
+    await confirm.getByRole('button', { name: 'Bỏ ghi vào tài khoản' }).click()
+    await expect(confirm).toBeHidden()
+
+    // Back to where Cash was before Hoa was recorded, and both rows are gone.
+    await expectCashBalance(page, '4.000.000')
+    await page.goto('/transactions')
+    await expect(page.getByText('Cho mượn – Hoa', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Thu nợ – Hoa', { exact: true })).toHaveCount(0)
+
+    // The debt and its repayment stay, and "Record in an account" is back.
+    await page.goto('/debts')
+    await expect(row).toContainText('400.000')
+    await openRowMenu(page, row, 'Hoa')
+    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }).click()
+    const link = page.getByRole('dialog', { name: 'Ghi vào tài khoản · Hoa' })
+    await link.getByLabel('Tài khoản').selectOption({ label: 'Bank · VND' })
+    await expect(link.getByLabel('Ghi bù 1 lần trả đã có')).toBeChecked()
+    await link.getByRole('button', { name: 'Ghi vào tài khoản' }).click()
+    await expect(link).toBeHidden()
+
+    await expectCashBalance(page, '4.000.000')
+    // 1.000.000 − 600.000 lent + 200.000 repaid.
+    await expect(namedRow(page, page, 'Bank')).toContainText('600.000')
   })
 })
 
@@ -795,7 +846,7 @@ test.describe.serial('Money-source linking — loans', () => {
 
     await page.goto('/loans')
     await openRowMenu(page, row, 'Family')
-    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản' }).click()
+    await page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }).click()
     const link = page.getByRole('dialog', { name: 'Ghi vào tài khoản · Family' })
     const account = link.getByLabel('Nhận tiền vào tài khoản')
     await expect(account.locator('option')).toHaveCount(1)
@@ -809,7 +860,9 @@ test.describe.serial('Money-source linking — loans', () => {
     // Recorded: the action is gone from the row's menu.
     await openRowMenu(page, row, 'Family')
     await expect(page.getByRole('menuitem', { name: 'Sửa' })).toBeVisible()
-    await expect(page.getByRole('menuitem', { name: 'Ghi vào tài khoản' })).toHaveCount(0)
+    await expect(
+      page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }),
+    ).toHaveCount(0)
     await page.keyboard.press('Escape')
 
     // 7.000.000 + 3.000.000 received − 480.000 principal − 20.000 interest.
@@ -818,5 +871,33 @@ test.describe.serial('Money-source linking — loans', () => {
     await expect(page.getByText('Vay – Family', { exact: true })).toBeVisible()
     await expect(page.getByText('Trả gốc – Family', { exact: true })).toBeVisible()
     await expect(page.getByText('Lãi vay – Family', { exact: true })).toBeVisible()
+  })
+
+  test("'Remove from account' takes a loan's money back out of the account; unticked, the instalment recorded there stays", async ({
+    page,
+  }) => {
+    await page.goto('/loans')
+    const row = namedRow(page, page, 'Family')
+    await openRowMenu(page, row, 'Family')
+    await page.getByRole('menuitem', { name: 'Bỏ ghi vào tài khoản' }).click()
+    const confirm = page.getByRole('dialog', {
+      name: 'Bỏ ghi khoản vay với Family khỏi tài khoản?',
+    })
+    await confirm.getByLabel('Bỏ ghi cả 1 lần trả đã ghi vào tài khoản').uncheck()
+    await confirm.getByRole('button', { name: 'Bỏ ghi vào tài khoản' }).click()
+    await expect(confirm).toBeHidden()
+
+    // 9.500.000 − the 3.000.000 received; the instalment still left Cash.
+    await expectCashBalance(page, '6.500.000')
+    await page.goto('/transactions')
+    await expect(page.getByText('Vay – Family', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Trả gốc – Family', { exact: true })).toBeVisible()
+
+    await page.goto('/loans')
+    await openRowMenu(page, row, 'Family')
+    await expect(
+      page.getByRole('menuitem', { name: 'Ghi vào tài khoản', exact: true }),
+    ).toBeVisible()
+    await page.keyboard.press('Escape')
   })
 })

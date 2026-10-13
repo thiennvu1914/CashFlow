@@ -22,6 +22,7 @@ vi.mock('@/lib/server/actions/debt-actions', () => ({
   updateDebtAction: vi.fn(),
   writeOffDebtAction: vi.fn(),
   linkDebtToAccountAction: vi.fn(),
+  unlinkDebtFromAccountAction: vi.fn(),
 }))
 
 const { DebtPaymentForm, DebtRowMenu } = await import('./debt-row-actions')
@@ -199,9 +200,11 @@ describe('DebtRowMenu', () => {
     expect(renderMenu(debt({ active: false, status: 'WRITTEN_OFF' }))).toContain('Tác vụ cho Minh')
   })
 
-  it('offers nothing on a written-off debt that is already recorded in an account', () => {
+  it('stays on a written-off debt that is recorded in an account, so a wrong account can still be undone', () => {
+    // Its one item is "Remove from account" (`agreementMenuActions`); a closed
+    // menu renders only its trigger here.
     expect(
       renderMenu(debt({ active: false, status: 'WRITTEN_OFF', openingAccountId: 'acc_bank' })),
-    ).toBe('')
+    ).toContain('Tác vụ cho Minh')
   })
 })
