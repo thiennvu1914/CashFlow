@@ -512,3 +512,144 @@ describe('deleteTransaction — a debt or loan owns its transactions (Q4)', () =
     expect(await prisma.transaction.count({ where: { id: owner.linked.loanPrincipal } })).toBe(1)
   })
 })
+
+/**
+ * Every link kind, keyed as `setup()` names them.
+ */
+const LINK_KINDS = [
+  ['debt opening', 'debtOpening'],
+  ['debt repayment', 'debtPayment'],
+  ['loan disbursement', 'loanDisbursement'],
+  ['loan instalment principal', 'loanPrincipal'],
+  ['loan instalment interest', 'loanInterest'],
+] as const
+
+/**
+ * Counts the interactive transactions the next writes open, and the raw
+ * statements sent inside them — the account and row locks are raw, and so was
+ * the link lookup before it moved into the pre-read. Everything else is the
+ * real client on the real transaction.
+ */
+function watchTransactions() {
+  const original = prisma.$transaction.bind(prisma) as (
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) => Promise<unknown>
+  const seen = { transactions: 0, rawStatements: 0 }
+  vi.spyOn(prisma, '$transaction').mockImplementation(((
+    callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+    options?: unknown,
+  ) => {
+    seen.transactions += 1
+    return original(
+      (tx) =>
+        callback(
+          new Proxy(tx, {
+            get(target, property) {
+              const value = Reflect.get(target, property)
+              if (property !== '$queryRaw' || typeof value !== 'function') return value
+              return (...args: unknown[]) => {
+                seen.rawStatements += 1
+                return value.apply(target, args)
+              }
+            },
+          }),
+        ),
+      options,
+    )
+  }) as never)
+  return seen
+}
+
+/**
+ * Final review F4: whether a debt or loan owns the row is read by the same
+ * statement that reads the row before the transaction opens — not by an extra
+ * statement inside it (~100 ms in production, while the locks are held). So a
+ * linked row is refused before any rate lookup or lock, and an ordinary edit
+ * or delete sends nothing inside its transaction but its two locks.
+ */
+describe('the debt/loan link is read with the row, before any transaction (F4)', () => {
+  const failingProvider: ExchangeRateProvider = {
+    getLatestRate: async () => {
+      throw new Error('provider down')
+    },
+    getHistoricalRate: async () => null,
+  }
+
+  it.each(LINK_KINDS)(
+    'refuses an economic edit of a %s before any rate lookup or transaction',
+    async (_label, key) => {
+      const s = await setup()
+      const id = s.linked[key]
+      const before = await transactionById(s, id)
+      // An empty cache and a provider that is down: a rate lookup could only
+      // end in FxUnavailableError.
+      await clearFxCache()
+      const seen = watchTransactions()
+
+      const caught = await captureRejection(
+        updateTransaction(
+          s.userId,
+          id,
+          editOf(before, { amount: Number(before.amount) + 1 }),
+          failingProvider,
+        ),
+      )
+
+      expect(caught).toBeInstanceOf(LinkedTransactionError)
+      expect(seen.transactions).toBe(0)
+      expect(await transactionById(s, id)).toEqual(before)
+    },
+  )
+
+  it.each(LINK_KINDS)(
+    'refuses to delete a %s before any transaction opens',
+    async (_label, key) => {
+      const s = await setup()
+      const id = s.linked[key]
+      const seen = watchTransactions()
+
+      const caught = await captureRejection(deleteTransaction(s.userId, id))
+
+      expect(caught).toBeInstanceOf(LinkedTransactionError)
+      expect(seen.transactions).toBe(0)
+    },
+  )
+
+  it('carries the owning debt or loan from the pre-read, for delete as for edit', async () => {
+    const s = await setup()
+
+    const caught = await captureRejection(deleteTransaction(s.userId, s.linked.debtPayment))
+
+    expect((caught as LinkedTransactionError).link).toEqual({
+      kind: 'debt',
+      debtId: s.debtId,
+      person: 'Minh',
+    })
+  })
+
+  it('sends only the two locks inside the transaction of an ordinary edit', async () => {
+    const s = await setup()
+    const before = await transactionById(s, s.ordinaryId)
+    const seen = watchTransactions()
+
+    await updateTransaction(
+      s.userId,
+      s.ordinaryId,
+      editOf(before, { note: 'Lunch with Minh' }),
+      fakeProvider().provider,
+    )
+
+    expect(seen).toEqual({ transactions: 1, rawStatements: 2 })
+  })
+
+  it('sends only the two locks inside the transaction of an ordinary delete', async () => {
+    const s = await setup()
+    const seen = watchTransactions()
+
+    await deleteTransaction(s.userId, s.ordinaryId)
+
+    expect(seen).toEqual({ transactions: 1, rawStatements: 2 })
+    expect(await prisma.transaction.count({ where: { id: s.ordinaryId } })).toBe(0)
+  })
+})

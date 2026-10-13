@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
+import type { Currency, TransactionType } from '@prisma/client'
 import { createTransactionSchema, type CreateTransactionInput } from '@/lib/validation/transaction'
 import { getUsableCurrentRate } from '@/lib/currency/current-rate-policy'
 import type { ExchangeRateProvider } from '@/lib/currency/provider'
@@ -18,8 +19,11 @@ import {
 } from './reminder'
 import {
   LinkedTransactionError,
-  findTransactionLinks,
+  OWNER_LINK_COLUMNS,
+  OWNER_LINK_JOINS,
   findTransactionLinksAmong,
+  ownerLinkOf,
+  type OwnerLinkColumns,
 } from './transaction-links'
 
 /**
@@ -58,9 +62,9 @@ export { ArchivedAccountError }
 // through; re-exported so the action error map and existing tests are unchanged.
 export { InvalidCategoryError }
 
-// `LinkedTransactionError` lives with `findTransactionLinks`, which decides
-// when it applies; re-exported so the action error map reaches every domain
-// error of this service through one import.
+// `LinkedTransactionError` lives with the link lookups that decide when it
+// applies; re-exported so the action error map reaches every domain error of
+// this service through one import.
 export { LinkedTransactionError }
 
 // `OccurrenceNotPendingError` lives with the reminder occurrence lock that
@@ -185,20 +189,19 @@ function transactionNotFound(): Prisma.PrismaClientKnownRequestError {
  * 2026-10-12 §2 Q4, §6.5): such a row is changed from its source record, which
  * keeps both sides in step in one database transaction.
  *
- * Called inside the caller's transaction, after `lockAndVerifyTransactionRow`:
- * the answer is read under the same locks as the write it guards, and the lock
- * order stays accounts → transaction row (the link tables are only read, never
- * locked, so no new lock is taken and no new ordering is introduced). After the
- * ownership check, deliberately — another user's linked id is a `P2025` from
- * the scoped read before this runs, never a refusal that would confirm it is
- * linked.
+ * Applied to the pre-read of `updateTransaction` / `deleteTransaction`, whose
+ * one statement reads the owner with the row (`OWNER_LINK_JOINS`, final review
+ * F4) — before any rate lookup, lock or transaction, at no round trip of its
+ * own. That is not a check-then-act race: a transaction's link status cannot
+ * change while the row exists (see `OWNER_LINK_JOINS`), so "not owned" at the
+ * pre-read is "not owned" at the write, and an owned row its source removes in
+ * between fails the write on its own row lock. The read is scoped by `userId`,
+ * so another user's linked id is a `P2025`, never a refusal that would confirm
+ * it is linked. The `ON DELETE RESTRICT` foreign keys stay the backstop for a
+ * delete.
  */
-async function refuseLinkedTransaction(
-  tx: Prisma.TransactionClient,
-  userId: string,
-  transactionId: string,
-): Promise<void> {
-  const link = (await findTransactionLinks(userId, [transactionId], tx)).get(transactionId)
+function refuseLinkedTransaction(row: OwnerLinkColumns): void {
+  const link = ownerLinkOf(row)
   if (link) throw new LinkedTransactionError(link)
 }
 
@@ -464,10 +467,31 @@ export async function updateTransaction(
 ) {
   const parsed = createTransactionSchema.parse(input)
   // Ownership-scoped and first: another user's transaction id is a P2025 here,
-  // before any FX call or lock is taken for it.
-  const existing = await prisma.transaction.findUniqueOrThrow({
-    where: { userId_id: { userId, id: transactionId } },
-  })
+  // before any FX call or lock is taken for it. The same statement reads
+  // whether a debt or loan owns the row, and an owned row is refused right here.
+  // Raw rather than typed only to carry the owner joins: the enums come back as
+  // text and the amount as its exact decimal string, never a float.
+  const [existing] = await prisma.$queryRaw<
+    Array<
+      {
+        accountId: string
+        type: TransactionType
+        amount: string
+        currency: Currency
+        categoryId: string | null
+        date: Date
+        updatedAt: Date
+      } & OwnerLinkColumns
+    >
+  >`
+    SELECT t."accountId", t."type"::text AS "type", t."amount"::text AS "amount",
+           t."currency"::text AS "currency", t."categoryId", t."date", t."updatedAt",
+           ${OWNER_LINK_COLUMNS}
+      FROM "Transaction" t
+      ${OWNER_LINK_JOINS}
+     WHERE t."userId" = ${userId} AND t."id" = ${transactionId}`
+  if (!existing) throw transactionNotFound()
+  refuseLinkedTransaction(existing)
 
   // The edit form works to the minute, but a row another flow recorded at "now"
   // (a reminder paid today, money-source linking Ruling P4) carries seconds.
@@ -509,7 +533,6 @@ export async function updateTransaction(
     // nothing about this row, and `economicChange` above was computed from a
     // copy taken before the transaction opened.
     await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
-    await refuseLinkedTransaction(tx, userId, transactionId)
 
     // `amount` carries no currency of its own, so moving a row to an account in
     // another currency would re-label the same number as a different amount of
@@ -573,28 +596,33 @@ export async function updateTransaction(
  * DELETE RESTRICT` link points at is removed.
  */
 export async function deleteTransaction(userId: string, transactionId: string) {
-  // One statement for the two facts the delete needs before its transaction
+  // One statement for the three facts the delete needs before its transaction
   // opens: which account to lock (and the version to re-verify under that
-  // lock), and whether a reminder occurrence was paid with this row. A row can
-  // only gain that link in the transaction that creates it, so a row read
-  // here as unpaid stays unpaid, and its delete skips the release entirely.
+  // lock), whether a debt or loan owns the row (refused right here, rather than
+  // left to the `ON DELETE RESTRICT` foreign key, which would surface as an
+  // unmapped database error), and whether a reminder occurrence was paid with
+  // it. A row can only gain either link in the transaction that creates it, so
+  // a row read here as unowned or unpaid stays so, and its delete skips the
+  // release entirely (see `refuseLinkedTransaction`).
   const [existing] = await prisma.$queryRaw<
-    Array<{ accountId: string; updatedAt: Date; paidOccurrenceId: string | null }>
+    Array<
+      { accountId: string; updatedAt: Date; paidOccurrenceId: string | null } & OwnerLinkColumns
+    >
   >`
-    SELECT t."accountId", t."updatedAt", o."id" AS "paidOccurrenceId"
+    SELECT t."accountId", t."updatedAt", o."id" AS "paidOccurrenceId",
+           ${OWNER_LINK_COLUMNS}
       FROM "Transaction" t
       LEFT JOIN "ReminderOccurrence" o
         ON o."userId" = t."userId" AND o."transactionId" = t."id"
+      ${OWNER_LINK_JOINS}
      WHERE t."userId" = ${userId} AND t."id" = ${transactionId}`
   if (!existing) throw transactionNotFound()
+  refuseLinkedTransaction(existing)
   await prisma.$transaction(async (tx) => {
     // Accounts first, then the transaction row — the same order as
     // `updateTransaction`, so the two can never deadlock against each other.
     await lockAccountsForUpdate(tx, userId, [existing.accountId])
     await lockAndVerifyTransactionRow(tx, userId, transactionId, existing)
-    // Refused before the delete rather than left to the `ON DELETE RESTRICT`
-    // foreign key, which would surface as an unmapped database error.
-    await refuseLinkedTransaction(tx, userId, transactionId)
     if (existing.paidOccurrenceId !== null) {
       await releasePaidOccurrenceInTx(tx, userId, transactionId)
     }

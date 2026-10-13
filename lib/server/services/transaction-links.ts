@@ -14,7 +14,8 @@ import { prisma } from '@/lib/prisma'
  *
  * An owned transaction is locked on the Transactions page (owner decision Q4):
  * the row names its debt or loan and offers to open it instead of edit or
- * delete, and the services refuse to change it with `LinkedTransactionError`.
+ * delete, and the services refuse to change it with `LinkedTransactionError`
+ * (reading the owner with the row itself, `OWNER_LINK_JOINS`).
  * The source record's own edit updates both sides in one database transaction;
  * an edit made here would silently disagree with the agreement it records.
  * The `ON DELETE RESTRICT` foreign keys are the backstop for a delete, but
@@ -40,6 +41,62 @@ export class LinkedTransactionError extends Error {
   }
 }
 
+/**
+ * The owner of ONE transaction, read in the same statement as the row itself:
+ * `OWNER_LINK_JOINS` after `FROM "Transaction" t`, `OWNER_LINK_COLUMNS` in its
+ * select list, and `ownerLinkOf` on the row that comes back.
+ *
+ * This is how `updateTransaction` and `deleteTransaction` refuse a linked row
+ * (final review F4): their pre-read already costs a round trip, and the link
+ * rides on it instead of costing a second one inside their transaction while
+ * the locks are held. Every join is on a `(userId, <link column>)` unique index
+ * (and a payment to its agreement on the composite key), so each matches at
+ * most one row and the statement still returns exactly one row per transaction.
+ *
+ * Reading the link outside the transaction is safe because a transaction's
+ * link status never changes while the row exists: a link is only ever set to a
+ * transaction created in the same database transaction (create, record a
+ * payment, an edit that adds an account, "Record in an account"), and only ever
+ * cleared in the database transaction that deletes that row (an edit that
+ * removes the account, a payment delete, "Remove from account"). So a row read
+ * here as owned is owned until it no longer exists — the write then fails on its
+ * own row lock (P2025 / CONFLICT) — and a row read as not owned can never become
+ * owned. Nothing ever points an existing link at another existing transaction.
+ */
+export const OWNER_LINK_JOINS = Prisma.sql`
+  LEFT JOIN "Debt" od ON od."userId" = t."userId" AND od."openingTransactionId" = t."id"
+  LEFT JOIN "DebtPayment" dp ON dp."userId" = t."userId" AND dp."transactionId" = t."id"
+  LEFT JOIN "Debt" pd ON pd."userId" = dp."userId" AND pd."id" = dp."debtId"
+  LEFT JOIN "Loan" dl ON dl."userId" = t."userId" AND dl."disbursementTransactionId" = t."id"
+  LEFT JOIN "LoanPayment" pp ON pp."userId" = t."userId" AND pp."principalTransactionId" = t."id"
+  LEFT JOIN "Loan" pl ON pl."userId" = pp."userId" AND pl."id" = pp."loanId"
+  LEFT JOIN "LoanPayment" ip ON ip."userId" = t."userId" AND ip."interestTransactionId" = t."id"
+  LEFT JOIN "Loan" il ON il."userId" = ip."userId" AND il."id" = ip."loanId"`
+
+export const OWNER_LINK_COLUMNS = Prisma.sql`
+  COALESCE(od."id", pd."id") AS "ownerDebtId",
+  COALESCE(od."person", pd."person") AS "ownerPerson",
+  COALESCE(dl."id", pl."id", il."id") AS "ownerLoanId",
+  COALESCE(dl."lender", pl."lender", il."lender") AS "ownerLender"`
+
+export interface OwnerLinkColumns {
+  ownerDebtId: string | null
+  ownerPerson: string | null
+  ownerLoanId: string | null
+  ownerLender: string | null
+}
+
+/** The debt or loan `OWNER_LINK_COLUMNS` found, or null for an ordinary row. */
+export function ownerLinkOf(row: OwnerLinkColumns): TransactionLink | null {
+  if (row.ownerDebtId !== null) {
+    return { kind: 'debt', debtId: row.ownerDebtId, person: row.ownerPerson ?? '' }
+  }
+  if (row.ownerLoanId !== null) {
+    return { kind: 'loan', loanId: row.ownerLoanId, lender: row.ownerLender ?? '' }
+  }
+  return null
+}
+
 interface LinkRow {
   transactionId: string
   kind: 'debt' | 'loan'
@@ -51,18 +108,18 @@ interface LinkRow {
  * The debt or loan behind each of `transactionIds`, keyed by transaction id;
  * an id nothing owns is simply absent from the map.
  *
- * `db` is the caller's transaction client when the answer must be read under
- * the caller's locks (`updateTransaction`/`deleteTransaction`); otherwise it
- * reads from the pool. The ledger, which does not have its page's ids yet when
- * it starts, uses `listTransactionLinks` in `transaction.ts` instead.
+ * The by-id form of the statement the ledger runs through
+ * `listTransactionLinks` (`transaction.ts`), which re-selects its own page
+ * instead of waiting for the ids; this one is what the tests check that
+ * statement against. The services read a single row's owner in their pre-read
+ * instead (`OWNER_LINK_JOINS`).
  */
 export async function findTransactionLinks(
   userId: string,
   transactionIds: readonly string[],
-  db: Prisma.TransactionClient = prisma,
 ): Promise<Map<string, TransactionLink>> {
   if (transactionIds.length === 0) return new Map()
-  return findTransactionLinksAmong(userId, Prisma.join([...new Set(transactionIds)]), db)
+  return findTransactionLinksAmong(userId, Prisma.join([...new Set(transactionIds)]))
 }
 
 /**
@@ -75,11 +132,9 @@ export async function findTransactionLinks(
  * scoped by `userId`, and a payment joined to its own agreement through the
  * composite `(userId, id)` key so a name can only ever come from the same
  * user's row — and the five are combined with `UNION ALL` into ONE statement.
- * That is deliberate: four separate queries cost four round trips inside an
- * interactive transaction, where they queue one after another on its single
- * connection (`updateTransaction`/`deleteTransaction` call this while holding
- * their row locks), and every round trip to the production database is about
- * 100 ms. One statement costs one, from the pool or from a transaction alike.
+ * That is deliberate: separate queries would cost a round trip each, and every
+ * round trip to the production database is about 100 ms; one statement costs
+ * one.
  *
  * Every link column is covered by a `(userId, <column>)` unique index, so each
  * branch is an index lookup per id rather than a scan.
@@ -87,9 +142,8 @@ export async function findTransactionLinks(
 export async function findTransactionLinksAmong(
   userId: string,
   wantedIds: Prisma.Sql,
-  db: Prisma.TransactionClient = prisma,
 ): Promise<Map<string, TransactionLink>> {
-  const rows = await db.$queryRaw<LinkRow[]>`
+  const rows = await prisma.$queryRaw<LinkRow[]>`
     SELECT d."openingTransactionId" AS "transactionId", 'debt' AS "kind",
            d."id" AS "sourceId", d."person" AS "name"
       FROM "Debt" d
