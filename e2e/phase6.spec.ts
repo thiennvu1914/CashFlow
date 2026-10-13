@@ -444,10 +444,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // No deadline was set, so the meta line is the "still to go" figure.
     await expect(row).toContainText('7.500.000')
 
-    // Update progress → the whole target, which is what flips the status.
-    await row.getByRole('button', { name: /Cập nhật tiến độ|Update progress/ }).click()
+    // Contribute the rest of the target, which is what flips the status.
+    await row.getByRole('button', { name: /Góp vào|Contribute to/ }).click()
     const progressDialog = page.getByRole('dialog')
-    await progressDialog.getByLabel(/Số tiền hiện có|Current amount/).fill('10000000')
+    await progressDialog.getByLabel(/^Số tiền$|^Amount$/).fill('7500000')
     await progressDialog.getByRole('button', { name: /^Lưu$|^Save$/ }).click()
 
     // "Đạt mục tiêu"/"Achieved" appears once — the status badge only; the meta
@@ -487,7 +487,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     await expect(archivedRow.getByText(/Đã lưu trữ|^Archived$/, { exact: true })).toBeVisible()
     // An archived goal refuses every write, so it is offered no actions at all
     // — showing them would be a promise the service breaks: no inline
-    // "Cập nhật tiến độ" button and no `…` menu trigger.
+    // "Góp"/"Rút" button and no `…` menu trigger.
     await expect(archivedRow.getByRole('button')).toHaveCount(0)
   })
 

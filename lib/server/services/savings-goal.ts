@@ -10,12 +10,10 @@ import { calendarDateToUtcCarrier, todayCalendarDateInZone } from '@/lib/datetim
 import {
   createSavingsGoalSchema,
   savingsGoalEntrySchema,
-  updateSavingsGoalProgressSchema,
   updateSavingsGoalSchema,
   type CreateSavingsGoalInput,
   type SavingsGoalEntryInput,
   type UpdateSavingsGoalInput,
-  type UpdateSavingsGoalProgressInput,
 } from '@/lib/validation/savings-goal'
 import { ArchivedAccountError, lockAccountRows } from './account-lock'
 import { getBalanceTimeline } from './balance-timeline'
@@ -900,48 +898,5 @@ export async function deleteSavingsGoalEntry(userId: string, entryId: string): P
 
     await tx.savingsGoalEntry.delete({ where: { userId_id: { userId, id: entryId } } })
     await storeDerivedStatus(tx, userId, goalId, goal, next)
-  })
-}
-
-/**
- * @deprecated Transitional (money-source linking Task 9 → Task 10): backs the
- * Savings page's existing "Cập nhật tiến độ / Update progress" dialog, which
- * still posts an absolute "current amount", until the contribute/withdraw UI
- * replaces it — Task 10 removes this and its action.
- *
- * The figure is never stored: the DIFFERENCE from the derived progress is
- * recorded as one CONTRIBUTION (up) or WITHDRAWAL (down) dated today in the
- * user's zone, under the same goal lock as every entry writer, so the
- * difference is taken against the true sum. The same figure again records
- * nothing and returns `null`. Linked and archived goals are refused like any
- * entry; the target figure is `>= 0`, so the zero floor holds by construction.
- */
-export async function updateSavingsGoalProgress(
-  userId: string,
-  goalId: string,
-  input: UpdateSavingsGoalProgressInput,
-  context: SavingsGoalContext,
-  now: Date = new Date(),
-): Promise<SavingsGoalEntryRow | null> {
-  const wanted = new Prisma.Decimal(updateSavingsGoalProgressSchema.parse(input).progress)
-  const date = todayCarrier(context.timezone, now)
-
-  return prisma.$transaction(async (tx) => {
-    const goal = await lockGoalForEntries(tx, userId, goalId)
-    const progress = await entryProgress(tx, userId, goalId)
-    const difference = wanted.sub(progress)
-    if (difference.isZero()) return null
-
-    const entry = await tx.savingsGoalEntry.create({
-      data: {
-        userId,
-        goalId,
-        kind: difference.isNegative() ? 'WITHDRAWAL' : 'CONTRIBUTION',
-        amount: difference.abs(),
-        date,
-      },
-    })
-    await storeDerivedStatus(tx, userId, goalId, goal, wanted)
-    return entry
   })
 }

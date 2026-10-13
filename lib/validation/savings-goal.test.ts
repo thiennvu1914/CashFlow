@@ -3,7 +3,6 @@ import type { ZodType } from 'zod'
 import {
   createSavingsGoalSchema,
   savingsGoalEntrySchema,
-  updateSavingsGoalProgressSchema,
   updateSavingsGoalSchema,
 } from './savings-goal'
 
@@ -252,24 +251,6 @@ describe('savingsGoalEntrySchema', () => {
   })
 })
 
-describe('updateSavingsGoalProgressSchema (transitional)', () => {
-  it('accepts zero and any positive amount, including one over the target', () => {
-    expect(updateSavingsGoalProgressSchema.parse({ progress: 0 }).progress).toBe(0)
-    expect(updateSavingsGoalProgressSchema.parse({ progress: 999_999_999 }).progress).toBe(
-      999_999_999,
-    )
-  })
-
-  it.each([
-    [{ progress: -0.01 }, 'Progress cannot be negative'],
-    [{ progress: undefined }, 'Enter an amount'],
-    [{ progress: Number.NaN }, 'Enter an amount'],
-    [{ progress: 1.234 }, 'Use at most 2 decimal places'],
-  ])('rejects %o with product copy', (input, message) => {
-    expect(messagesFor(updateSavingsGoalProgressSchema, input)).toContain(message)
-  })
-})
-
 describe('no raw Zod text can reach the UI', () => {
   /** Every rejection the four schemas can produce from a wrong field, in one
    *  list, so a new field without copy fails this case. */
@@ -305,9 +286,6 @@ describe('no raw Zod text can reach the UI', () => {
     ],
     [savingsGoalEntrySchema('2026-03-12'), { kind: 'WITHDRAWAL', amount: 0, date: 'soon' }],
     [savingsGoalEntrySchema('2026-03-12'), { kind: 'WITHDRAWAL', amount: 1, date: '2026-03-13' }],
-    [updateSavingsGoalProgressSchema, {}],
-    [updateSavingsGoalProgressSchema, { progress: -1 }],
-    [updateSavingsGoalProgressSchema, { progress: 'lots' }],
   ]
 
   it('produces at least one message for every rejection above', () => {

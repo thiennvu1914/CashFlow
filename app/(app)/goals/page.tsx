@@ -3,12 +3,17 @@ import { PiggyBank } from 'lucide-react'
 import { requireUserOrRedirect } from '@/lib/auth/require-user'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { resolveLocale } from '@/lib/i18n/config'
+import { listActiveAccountPickerRows } from '@/lib/server/services/financial-account'
 import { listAllSavingsGoals } from '@/lib/server/services/savings-goal'
 import { toSavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 import { GoalCreateButton } from '@/components/goals/goal-create-button'
 import { GoalList } from '@/components/goals/goal-list'
-import { GoalProgressButton, GoalRowMenu } from '@/components/goals/goal-row-actions'
+import {
+  GoalEntryActions,
+  GoalEntryButtons,
+  GoalRowMenu,
+} from '@/components/goals/goal-row-actions'
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
 
@@ -18,7 +23,7 @@ import { PageHeader } from '@/components/common/page-header'
  *
  * Nothing on this page moves money. A goal's progress is derived — a linked
  * account's balance, or the goal's own contributions and withdrawals (spec
- * 2026-10-12 §6.7) — so creating, editing, progressing or archiving a goal
+ * 2026-10-12 §6.7) — so creating, editing, recording entries or archiving a goal
  * writes no Transaction, no Transfer and no account balance.
  *
  * One listing, not two: `listAllSavingsGoals` already returns every status, and
@@ -50,7 +55,12 @@ export default async function GoalsPage() {
   const today = todayCalendarDateInZone(timezone, now)
 
   // Progress and status arrive derived, a linked goal's read at this `now`.
-  const goals = await listAllSavingsGoals(user.id, { now })
+  const [goals, accountRows] = await Promise.all([
+    listAllSavingsGoals(user.id, { now, entries: true }),
+    listActiveAccountPickerRows(user.id),
+  ])
+  // Projected to what the pickers render, like the debts page does.
+  const accounts = accountRows.map((a) => ({ id: a.id, name: a.name, currency: a.currency }))
 
   // The only place a `Decimal` or a `Date` becomes a string on this page. Every
   // component below renders `SavingsGoalDto`s.
@@ -65,7 +75,7 @@ export default async function GoalsPage() {
       <PageHeader
         title={t('goals.title')}
         description={t('goals.description')}
-        actions={<GoalCreateButton />}
+        actions={<GoalCreateButton accounts={accounts} />}
       />
 
       {active.length === 0 ? (
@@ -82,9 +92,15 @@ export default async function GoalsPage() {
             locale={locale}
             timeZone={timezone}
             renderActions={(goal) => ({
-              actions: <GoalRowMenu goal={goal} />,
-              inlineAction: <GoalProgressButton goal={goal} />,
+              actions: <GoalRowMenu goal={goal} accounts={accounts} />,
+              // A linked goal's progress is its account's balance: no entries.
+              inlineAction: goal.linkedAccount ? undefined : (
+                <GoalEntryButtons goal={goal} today={today} />
+              ),
             })}
+            renderEntryActions={(goal, entry, dateLabel) => (
+              <GoalEntryActions goal={goal} entry={entry} today={today} dateLabel={dateLabel} />
+            )}
           />
         </div>
       )}

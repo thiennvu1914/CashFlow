@@ -68,7 +68,14 @@ export interface SavingsGoalDto {
    *  component does no date maths and the ICU plural in `goals.deadlineMeta`
    *  gets a plain number. */
   daysToDeadline: number | null
-  /** Prefill for the inline edit and progress forms. Strings only — a
+  /** The account whose balance is this goal's progress, or `null` when the
+   *  goal records its own entries. `archived`: the account was archived after
+   *  the link — its balance still counts, but the user should know. */
+  linkedAccount: { id: string; name: string; archived: boolean } | null
+  /** The contribution/withdrawal history, newest first; empty when the read did
+   *  not ask for it (the Dashboard) or the goal has none. */
+  entries: SavingsGoalEntryDto[]
+  /** Prefill for the inline edit form. Strings only — a
    *  `Prisma.Decimal` cannot cross to a client component, and `''` is what an
    *  empty `<input>` needs (the schema reads it back as "no value"). */
   editable: {
@@ -79,10 +86,23 @@ export interface SavingsGoalDto {
     /** `yyyy-MM-dd` for `<input type="date">`; `''` when the goal has none. */
     deadline: string
     note: string
-    /** The derived progress, `toFixed(2)` — the transitional progress
-     *  dialog's prefill (`GoalProgressButton`). */
-    progress: string
+    /** The linked account's id, or `''` for "not linked" — what the edit
+     *  form's account picker starts on, so saving never unlinks by accident. */
+    linkedAccountId: string
   }
+}
+
+/** One contribution or withdrawal, formatted for the history. */
+export interface SavingsGoalEntryDto {
+  id: string
+  kind: 'CONTRIBUTION' | 'WITHDRAWAL'
+  /** In the goal's currency, unsigned — the kind says which way it went. */
+  amount: string
+  /** `toFixed(2)`: the edit form's prefill. */
+  amountValue: string
+  /** The calendar date the entry happened on, `yyyy-MM-dd`. */
+  date: string
+  note: string
 }
 
 /**
@@ -145,13 +165,26 @@ export function toSavingsGoalDto(
       goal.status !== 'ACHIEVED' &&
       compareCalendarDates(deadline, today) === -1,
     daysToDeadline: deadline === null ? null : calendarDaysBetween(today, deadline),
+    linkedAccount: goal.linkedAccount && {
+      id: goal.linkedAccount.id,
+      name: goal.linkedAccount.name,
+      archived: goal.linkedAccount.status === 'ARCHIVED',
+    },
+    entries: (goal.entries ?? []).map((entry) => ({
+      id: entry.id,
+      kind: entry.kind,
+      amount: formatMoney(entry.amount, currency, locale),
+      amountValue: entry.amount.toFixed(2),
+      date: formatCalendarDate(entry.date),
+      note: entry.note ?? '',
+    })),
     editable: {
       name: goal.name,
       targetAmount: target.toFixed(2),
       currency,
       deadline: deadline ?? '',
       note: goal.note ?? '',
-      progress: progress.toFixed(2),
+      linkedAccountId: goal.linkedAccount?.id ?? '',
     },
   }
 }

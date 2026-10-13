@@ -7,7 +7,7 @@ vi.mock('next-intl/server', () => ({
 }))
 
 import { GoalList } from './goal-list'
-import type { SavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
+import type { SavingsGoalDto, SavingsGoalEntryDto } from '@/lib/ui/savings-goal-view-model'
 
 function dto(overrides: Partial<SavingsGoalDto> = {}): SavingsGoalDto {
   return {
@@ -23,13 +23,15 @@ function dto(overrides: Partial<SavingsGoalDto> = {}): SavingsGoalDto {
     deadline: '2026-12-31',
     deadlinePassed: false,
     daysToDeadline: 114,
+    linkedAccount: null,
+    entries: [],
     editable: {
       name: 'MacBook',
       targetAmount: '50000000.00',
       currency: 'VND',
       deadline: '2026-12-31',
       note: '',
-      progress: '20000000.00',
+      linkedAccountId: '',
     },
     ...overrides,
   }
@@ -130,5 +132,67 @@ describe('GoalList', () => {
     )
     expect(html).toContain('aria-valuenow="100"')
     expect(html).toContain('aria-valuetext="120 %"')
+  })
+
+  it('labels a linked goal as automatic and warns when its account is archived', async () => {
+    const linked = async (archived: boolean) =>
+      renderToStaticMarkup(
+        await GoalList({
+          goals: [dto({ linkedAccount: { id: 'a1', name: 'Quỹ', archived } })],
+          locale: 'vi',
+          timeZone: 'Asia/Ho_Chi_Minh',
+        }),
+      )
+    const live = await linked(false)
+    expect(live).toContain('goals.automatic|')
+    expect(live).toContain('Quỹ')
+    expect(live).not.toContain('goals.automaticArchived')
+    const archived = await linked(true)
+    expect(archived).toContain('goals.automaticArchived')
+    expect(archived).toContain('text-warning')
+  })
+
+  it('shows the entry history with signed amounts, and none for a linked goal', async () => {
+    const entries: SavingsGoalEntryDto[] = [
+      {
+        id: 'e2',
+        kind: 'WITHDRAWAL',
+        amount: '500.000',
+        amountValue: '500000.00',
+        date: '2026-09-02',
+        note: 'Sửa xe',
+      },
+      {
+        id: 'e1',
+        kind: 'CONTRIBUTION',
+        amount: '2.000.000',
+        amountValue: '2000000.00',
+        date: '2026-09-01',
+        note: '',
+      },
+    ]
+    const render = async (goal: SavingsGoalDto) =>
+      renderToStaticMarkup(
+        await GoalList({
+          goals: [goal],
+          locale: 'vi',
+          timeZone: 'Asia/Ho_Chi_Minh',
+          renderEntryActions: (_g, entry) => <b data-entry={entry.id} />,
+        }),
+      )
+    const html = await render(dto({ entries }))
+    expect(html).toContain('goals.historySection|{&quot;count&quot;:2}')
+    expect(html).toContain('goals.entryWithdrawal')
+    expect(html).toContain('−')
+    expect(html).toContain('500.000')
+    expect(html).toContain('+')
+    expect(html).toContain('Sửa xe')
+    expect(html).toContain('data-entry="e1"')
+
+    const linked = await render(
+      dto({ entries, linkedAccount: { id: 'a1', name: 'Quỹ', archived: false } }),
+    )
+    expect(linked).not.toContain('goals.historySection')
+    expect(await render(dto())).not.toContain('goals.historySection')
   })
 })

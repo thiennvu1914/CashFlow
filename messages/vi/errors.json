@@ -10,7 +10,7 @@
   "account": {
     "NON_ZERO_BALANCE": "Tài khoản phải có số dư bằng 0 trước khi lưu trữ. Hãy chuyển hoặc điều chỉnh số dư trước.",
     "ACCOUNT_LOCKED": "Không thể đổi tiền tệ và số dư ban đầu sau khi tài khoản đã có phát sinh.",
-    "FOLLOWED_BY_GOAL": "Một mục tiêu tiết kiệm đang gắn với tài khoản này nên không thể đổi tiền tệ. Hãy bỏ gắn mục tiêu trước.",
+    "FOLLOWED_BY_GOAL": "Một mục tiêu tiết kiệm đang theo tài khoản này (kể cả mục tiêu đã lưu trữ) nên không thể đổi tiền tệ.",
     "ARCHIVED_ACCOUNT": "Tài khoản này đã lưu trữ và không thể sửa.",
     "INVALID_ACCOUNT_TYPE": "Hãy chọn một loại tài khoản hợp lệ.",
     "INVALID_INPUT": "Kiểm tra lại các trường được đánh dấu.",

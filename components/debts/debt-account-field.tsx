@@ -20,6 +20,9 @@ import { FormField, SELECT_CLASS } from '@/components/common/form-field'
  * the label differs ("received into" a loan's account, "paid from" an
  * instalment's), so `label` overrides the debts' plain "Account".
  *
+ * The savings goals use it for "Linked account" (`label`, `noneLabel`): the
+ * same list, the same archived-account labelling.
+ *
  * "Record in an account" (spec 2026-10-12 §6.4) passes `allowNone={false}`:
  * recording is the whole point of that dialog, so it lists the accounts alone.
  */
@@ -31,6 +34,7 @@ export function DebtAccountField({
   error,
   helper,
   label,
+  noneLabel,
   allowNone = true,
 }: {
   id: string
@@ -40,6 +44,9 @@ export function DebtAccountField({
   error?: string
   helper?: string
   label?: string
+  /** The first option's wording, when "don't record in an account" is not what
+   *  it means (the savings goals' "Not linked"). */
+  noneLabel?: string
   /** Offer "don't record in an account" as the first option (the default). */
   allowNone?: boolean
 }) {
@@ -54,7 +61,7 @@ export function DebtAccountField({
           defaultValue={defaultAccountId}
           className={SELECT_CLASS}
         >
-          {allowNone && <option value="">{t('debts.accountNone')}</option>}
+          {allowNone && <option value="">{noneLabel ?? t('debts.accountNone')}</option>}
           {accounts.map((account) => (
             <option key={account.id} value={account.id}>
               {t(account.archived ? 'debts.accountOptionArchived' : 'debts.accountOption', {

@@ -114,7 +114,7 @@ test.describe.serial('Phase 7 — confirmations', () => {
 
       await createBudgetViaUi(page, { scope: 'OVERALL', amount: 10_000_000 })
       await createGoalViaUi(page, { name: 'Emergency fund', target: 20_000_000 })
-      // The goal "update progress" acts on: the one above is archived below.
+      // The goal "contribute" acts on: the one above is archived below.
       await createGoalViaUi(page, { name: 'Laptop', target: 30_000_000 })
       await createDebtViaUi(page, { direction: 'RECEIVABLE', person: 'Minh', amount: 2_000_000 })
       await createLoanViaUi(page, {
@@ -450,9 +450,9 @@ test.describe.serial('Phase 7 — confirmations', () => {
       form: false,
     },
     {
-      name: 'update progress',
+      name: 'contribute',
       url: '/goals',
-      button: /Cập nhật tiến độ|Update progress/,
+      button: /Góp vào|Contribute to/,
       form: true,
     },
   ] as const
@@ -466,11 +466,11 @@ test.describe.serial('Phase 7 — confirmations', () => {
 
       const dialog = page.getByRole('dialog')
       if (action.form) {
-        // "Update progress" opens a FORM dialog, which is not a confirmation:
+        // "Contribute" opens a FORM dialog, which is not a confirmation:
         // it has a labelled field to type a figure into and a Save button, not
         // a destructive verb.
         await expect(dialog).toBeVisible()
-        await expect(dialog.getByLabel(/Số tiền hiện có|Current amount/)).toBeVisible()
+        await expect(dialog.getByLabel(/^Số tiền$|^Amount$/)).toBeVisible()
         await expect(dialog.getByRole('button', { name: /^(Lưu|Save)$/ })).toBeVisible()
         await page.keyboard.press('Escape')
         await expect(dialog).toBeHidden()

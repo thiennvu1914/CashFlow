@@ -12,7 +12,6 @@ import {
   deleteSavingsGoalEntry,
   updateSavingsGoal,
   updateSavingsGoalEntry,
-  updateSavingsGoalProgress,
   SavingsGoalArchivedError,
   SavingsGoalCurrencyLockedError,
   SavingsGoalLinkedError,
@@ -22,12 +21,10 @@ import {
 import {
   createSavingsGoalSchema,
   savingsGoalEntrySchema,
-  updateSavingsGoalProgressSchema,
   updateSavingsGoalSchema,
   type CreateSavingsGoalInput,
   type SavingsGoalEntryInput,
   type UpdateSavingsGoalInput,
-  type UpdateSavingsGoalProgressInput,
 } from '@/lib/validation/savings-goal'
 import { resolveProfileDefaults } from '@/lib/validation/profile'
 
@@ -165,32 +162,6 @@ export async function deleteSavingsGoalEntryAction(
   const user = await requireUser()
   try {
     await deleteSavingsGoalEntry(user.id, entryId)
-  } catch (e) {
-    return mapError(e)
-  }
-  revalidateGoalPages()
-  return { ok: true }
-}
-
-/**
- * @deprecated Transitional (money-source linking Task 9 → Task 10): the action
- * behind the Savings page's existing "Cập nhật tiến độ / Update progress"
- * dialog. The absolute figure it posts is recorded as the difference — one
- * contribution or withdrawal dated today — never stored. Task 10 replaces the
- * dialog with contribute/withdraw and removes this action and its service.
- */
-export async function updateSavingsGoalProgressAction(
-  id: string,
-  input: UpdateSavingsGoalProgressInput,
-): Promise<SavingsGoalActionResult> {
-  const user = await requireUser()
-  try {
-    await updateSavingsGoalProgress(
-      user.id,
-      id,
-      updateSavingsGoalProgressSchema.parse(input),
-      goalContext(user),
-    )
   } catch (e) {
     return mapError(e)
   }

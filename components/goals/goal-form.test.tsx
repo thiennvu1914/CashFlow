@@ -27,10 +27,15 @@ const { GoalForm } = await import('./goal-form')
 
 const messages = await loadMessages('vi')
 
+const ACCOUNTS = [
+  { id: 'a1', name: 'Tiền mặt', currency: 'VND' as const },
+  { id: 'a2', name: 'Đô la', currency: 'USD' as const },
+]
+
 function render(): string {
   return renderToStaticMarkup(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
-      <GoalForm />
+      <GoalForm accounts={ACCOUNTS} />
     </NextIntlClientProvider>,
   )
 }
@@ -83,9 +88,9 @@ describe('GoalForm', () => {
 
   it('renders a visible <label for> on every field', () => {
     const html = render()
-    // name, target, current, currency, deadline, note.
+    // name, target, linked account, current, currency, deadline, note.
     const labelCount = (html.match(/<label for="/g) ?? []).length
-    expect(labelCount).toBe(6)
+    expect(labelCount).toBe(7)
   })
 
   it('renders the deadline as a date input, so the browser submits yyyy-MM-dd', () => {
@@ -125,5 +130,14 @@ describe('GoalForm', () => {
     // an inserted 0 would answer for them.
     expect(inputMarkupById(html, 'goal-target')).not.toContain('value=')
     expect(inputMarkupById(html, 'goal-current')).not.toContain('value=')
+  })
+
+  it('offers "Not linked" first, then every account, starting on not linked', () => {
+    const html = render()
+    const select = selectMarkupById(html, 'goal-account')
+    expect(select.indexOf('Không gắn')).toBeLessThan(select.indexOf('Tiền mặt'))
+    expect(select).toContain('Đô la · USD')
+    expect(select).toMatch(selectedOption(''))
+    expect(html).toContain('Gắn với tài khoản')
   })
 })

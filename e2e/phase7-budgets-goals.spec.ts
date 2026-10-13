@@ -129,7 +129,7 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     await expect(budgetRow(page, 'Bills & Utilities')).toHaveCount(0)
   })
 
-  test('vi: savings goal status, progress reaches Achieved through "Cập nhật tiến độ", and archive via a ConfirmDialog (Cancel keeps, Confirm removes)', async ({
+  test('vi: savings goal status, contributing reaches Achieved, and archive via a ConfirmDialog (Cancel keeps, Confirm removes)', async ({
     page,
   }) => {
     await createGoalViaUi(page, { name: 'Máy ảnh', target: 8_000_000, current: 2_000_000 })
@@ -139,11 +139,11 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     await expect(row.getByText('Đang thực hiện', { exact: true })).toBeVisible()
     await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25')
 
-    // "Cập nhật tiến độ" opens a Dialog with exactly one amount field.
-    await row.getByRole('button', { name: 'Cập nhật tiến độ' }).click()
-    const progressDialog = page.getByRole('dialog', { name: 'Cập nhật tiến độ · Máy ảnh' })
+    // "Góp" opens a Dialog with one amount field (plus a date and a note).
+    await row.getByRole('button', { name: 'Góp vào Máy ảnh' }).click()
+    const progressDialog = page.getByRole('dialog', { name: 'Góp vào Máy ảnh' })
     await expect(progressDialog.getByRole('spinbutton')).toHaveCount(1)
-    await progressDialog.getByLabel('Số tiền hiện có').fill('8000000')
+    await progressDialog.getByLabel('Số tiền', { exact: true }).fill('6000000')
     await progressDialog.getByRole('button', { name: 'Lưu' }).click()
     await expect(progressDialog).toBeHidden()
 
@@ -175,6 +175,88 @@ test.describe.serial('Phase 7 Task 7 — budgets, savings goals', () => {
     const archivedRow = goalRow(page, 'Máy ảnh')
     await expect(archivedRow).toBeVisible()
     await expect(archivedRow.getByText('Đã lưu trữ', { exact: true })).toBeVisible()
+  })
+
+  test('vi: a goal linked to an account follows a transfer into it, and offers no entry buttons', async ({
+    page,
+  }) => {
+    await createAccountViaUi(page, { name: 'Savings', currency: 'VND', initialBalance: 1_000_000 })
+
+    await page.goto('/goals')
+    await page.getByRole('button', { name: 'Thêm mục tiêu' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Thêm mục tiêu' })
+    await sheet.getByLabel('Tên mục tiêu').fill('Quỹ nhà')
+    await sheet.getByLabel('Số tiền mục tiêu').fill('10000000')
+    await sheet.getByLabel('Gắn với tài khoản').selectOption({ label: 'Savings · VND' })
+    // The opening amount and currency give way to the account's.
+    await expect(sheet.getByLabel(/Đã tiết kiệm/)).toHaveCount(0)
+    await sheet.getByRole('button', { name: 'Thêm mục tiêu' }).click()
+    await expect(sheet).toBeHidden()
+
+    const row = goalRow(page, 'Quỹ nhà')
+    await expect(row.locator('.tabular-nums').first()).toHaveText(
+      /^1.000.000 \/ 10.000.000 VND · 10\s%$/,
+    )
+    await expect(row.getByText('Tự động theo số dư Savings')).toBeVisible()
+    await expect(row.getByRole('button', { name: /Góp vào|Rút từ/ })).toHaveCount(0)
+
+    // 2.000.000 from Cash into Savings: the goal is never touched, yet it rises.
+    await page.goto('/transfers')
+    await page.getByLabel(/^Từ$/).selectOption({ label: 'Cash (VND)' })
+    await page.getByLabel(/^Đến$/).selectOption({ label: 'Savings (VND)' })
+    await page.getByLabel(/^Số tiền$/).fill('2000000')
+    await page.getByRole('button', { name: /^Chuyển tiền$/ }).click()
+    await expect(page.getByText('Savings', { exact: false }).first()).toBeVisible()
+
+    await page.goto('/goals')
+    await expect(goalRow(page, 'Quỹ nhà').locator('.tabular-nums').first()).toHaveText(
+      /^3.000.000 \/ 10.000.000 VND · 30\s%$/,
+    )
+  })
+
+  test('vi: an unlinked goal records a contribution then a withdrawal, with history', async ({
+    page,
+  }) => {
+    await createGoalViaUi(page, { name: 'Du lịch', target: 10_000_000 })
+    const row = goalRow(page, 'Du lịch')
+
+    await row.getByRole('button', { name: 'Góp vào Du lịch' }).click()
+    const contribute = page.getByRole('dialog', { name: 'Góp vào Du lịch' })
+    await contribute.getByLabel('Số tiền', { exact: true }).fill('3000000')
+    await contribute.getByLabel('Ghi chú (tùy chọn)').fill('Lương')
+    await contribute.getByRole('button', { name: 'Lưu' }).click()
+    await expect(contribute).toBeHidden()
+    await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30')
+
+    await row.getByRole('button', { name: 'Rút từ Du lịch' }).click()
+    const withdraw = page.getByRole('dialog', { name: 'Rút từ Du lịch' })
+    await withdraw.getByLabel('Số tiền', { exact: true }).fill('1000000')
+    await withdraw.getByRole('button', { name: 'Lưu' }).click()
+    await expect(withdraw).toBeHidden()
+    await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '20')
+
+    // More than is saved is refused with the friendly message, nothing recorded.
+    await row.getByRole('button', { name: 'Rút từ Du lịch' }).click()
+    const tooMuch = page.getByRole('dialog', { name: 'Rút từ Du lịch' })
+    await tooMuch.getByLabel('Số tiền', { exact: true }).fill('5000000')
+    await tooMuch.getByRole('button', { name: 'Lưu' }).click()
+    await expect(tooMuch.getByRole('alert')).toBeVisible()
+    await tooMuch.getByRole('button', { name: 'Hủy' }).click()
+    await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '20')
+
+    // The history lists both, newest first.
+    await row.getByText('Lịch sử (2)').click()
+    await expect(row.getByText(/Góp\s*\+3\.000\.000/)).toBeVisible()
+    await expect(row.getByText(/Rút\s*−1\.000\.000/)).toBeVisible()
+    await expect(row.getByText(/· Lương/)).toBeVisible()
+
+    // Deleting the withdrawal puts the money back.
+    await row.getByRole('button', { name: /^Xóa khoản Rút/ }).click()
+    await page
+      .getByRole('dialog', { name: 'Xóa khoản này?' })
+      .getByRole('button', { name: 'Xóa' })
+      .click()
+    await expect(row.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30')
   })
 
   test('vi: the dashboard widgets show Vietnamese budget/goal statuses and no English', async ({

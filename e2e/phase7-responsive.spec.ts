@@ -57,7 +57,7 @@ const SESSION = authenticatedSession('phase7-responsive')
 const INLINE_ROW_ACTIONS = [
   { url: '/debts', name: /Ghi nhận thanh toán|Record payment/ },
   { url: '/loans', name: /Ghi nhận thanh toán|Record payment/ },
-  { url: '/goals', name: /Cập nhật tiến độ|Update progress/ },
+  { url: '/goals', name: /Góp vào|Contribute to|Rút từ|Withdraw from/ },
   { url: '/reminders', name: /^Đã trả |^Paid / },
   { url: '/reminders', name: /^Chỉ đánh dấu |^Mark only / },
   { url: '/reminders', name: /^Bỏ qua |^Dismiss / },

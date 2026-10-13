@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
@@ -14,13 +14,21 @@ import { FormField, SELECT_CLASS } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DebtAccountField } from '@/components/debts/debt-account-field'
+import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 
 /**
  * The create form for a savings goal.
  *
- * Takes no props but `onCreated`: a goal belongs to no month, no account and
- * no category, so there is nothing about the page's state it has to merge in
- * at submit (unlike `BudgetForm`, which carries the selected month).
+ * Takes the user's active accounts (the "Linked account" picker, spec
+ * 2026-10-12 §6.7) and `onCreated`; a goal belongs to no month and no
+ * category, so there is nothing else about the page's state to merge in at
+ * submit (unlike `BudgetForm`, which carries the selected month).
+ *
+ * A linked goal follows its account: the currency select and the opening
+ * amount are hidden while an account is chosen, and the account's currency is
+ * what is sent (the service ignores the posted one anyway, and refuses an
+ * opening amount on a linked goal).
  *
  * Only `currency` gets a `defaultValue` and `name` a default at all. Every
  * money field is left without one on purpose: react-hook-form overwrites the
@@ -33,7 +41,13 @@ function defaultValues(): Partial<CreateSavingsGoalInput> {
   return { name: '', currency: 'VND' }
 }
 
-export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
+export function GoalForm({
+  accounts,
+  onCreated,
+}: {
+  accounts: ReadonlyArray<DebtAccountOption>
+  onCreated?: () => void
+}) {
   const t = useTranslations()
   const [error, setError] = useState<string | null>(null)
   /** See the `<fieldset>` below, and `lib/ui/use-hydrated.ts` for the defect. */
@@ -45,16 +59,25 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
     register,
     handleSubmit,
     reset,
+    control,
     formState: { errors },
   } = useForm<CreateSavingsGoalInput>({
     resolver: zodResolver(createSavingsGoalSchema),
     defaultValues: defaultValues(),
   })
 
+  const watchedAccountId = useWatch({ control, name: 'linkedAccountId' })
+  const linkedAccount = accounts.find((a) => a.id === watchedAccountId)
+
   async function onSubmit(values: CreateSavingsGoalInput) {
+    // The hidden fields keep whatever was typed before an account was chosen;
+    // a linked goal sends neither.
+    const payload: CreateSavingsGoalInput = linkedAccount
+      ? { ...values, currency: linkedAccount.currency, initialContribution: undefined }
+      : values
     await submit.run({
       tag: 'GoalForm: create failed',
-      action: () => createSavingsGoalAction(values),
+      action: () => createSavingsGoalAction(payload),
       errorKeys: SAVINGS_GOAL_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSuccess: () => {
@@ -99,57 +122,74 @@ export function GoalForm({ onCreated }: { onCreated?: () => void } = {}) {
           )}
         </FormField>
 
-        <FormField
-          id={fieldId('current')}
-          label={t('goals.current')}
-          error={errors.initialContribution?.message}
-        >
-          {(aria) => (
-            <Input
-              {...aria}
-              type="number"
-              step="0.01"
-              {...register('initialContribution', {
-                // `setValueAs` rather than `valueAsNumber` (the two are
-                // mutually exclusive in react-hook-form, and `valueAsNumber`
-                // wins): an untouched optional field's DOM value is `''`,
-                // which `valueAsNumber` would hand to Zod as `NaN` — "Enter an
-                // amount" under a field the user is entitled to skip.
-                setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
-              })}
-            />
-          )}
-        </FormField>
+        <DebtAccountField
+          id={fieldId('account')}
+          accounts={accounts}
+          defaultAccountId=""
+          label={t('goals.linkedAccount')}
+          noneLabel={t('goals.linkedAccountNone')}
+          helper={t('goals.linkedAccountHelper')}
+          error={errors.linkedAccountId?.message}
+          registration={register('linkedAccountId', {
+            setValueAs: (v: string) => (v === '' ? undefined : v),
+          })}
+        />
 
-        <FormField
-          id={fieldId('currency')}
-          label={t('goals.currency')}
-          error={errors.currency?.message}
-        >
-          {(aria) => (
-            // `defaultValue` (never `value` — that would make this
-            // controlled). VND is already the first option, so react-dom
-            // would land here anyway; it is passed for symmetry with the
-            // other planning forms, whose defaults are not first, so the
-            // server HTML states the form's own default rather than relying
-            // on a browser fallback.
-            <div className="relative">
-              <select
+        {!linkedAccount && (
+          <FormField
+            id={fieldId('current')}
+            label={t('goals.current')}
+            error={errors.initialContribution?.message}
+          >
+            {(aria) => (
+              <Input
                 {...aria}
-                {...register('currency')}
-                defaultValue="VND"
-                className={SELECT_CLASS}
-              >
-                <option value="VND">VND</option>
-                <option value="USD">USD</option>
-              </select>
-              <ChevronDown
-                aria-hidden
-                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                type="number"
+                step="0.01"
+                {...register('initialContribution', {
+                  // `setValueAs` rather than `valueAsNumber` (the two are
+                  // mutually exclusive in react-hook-form, and `valueAsNumber`
+                  // wins): an untouched optional field's DOM value is `''`,
+                  // which `valueAsNumber` would hand to Zod as `NaN` — "Enter an
+                  // amount" under a field the user is entitled to skip.
+                  setValueAs: (v: string) => (v === '' ? undefined : Number(v)),
+                })}
               />
-            </div>
-          )}
-        </FormField>
+            )}
+          </FormField>
+        )}
+
+        {!linkedAccount && (
+          <FormField
+            id={fieldId('currency')}
+            label={t('goals.currency')}
+            error={errors.currency?.message}
+          >
+            {(aria) => (
+              // `defaultValue` (never `value` — that would make this
+              // controlled). VND is already the first option, so react-dom
+              // would land here anyway; it is passed for symmetry with the
+              // other planning forms, whose defaults are not first, so the
+              // server HTML states the form's own default rather than relying
+              // on a browser fallback.
+              <div className="relative">
+                <select
+                  {...aria}
+                  {...register('currency')}
+                  defaultValue="VND"
+                  className={SELECT_CLASS}
+                >
+                  <option value="VND">VND</option>
+                  <option value="USD">USD</option>
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                />
+              </div>
+            )}
+          </FormField>
+        )}
 
         <FormField
           id={fieldId('deadline')}

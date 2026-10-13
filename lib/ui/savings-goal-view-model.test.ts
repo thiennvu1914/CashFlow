@@ -206,12 +206,56 @@ describe('toSavingsGoalDto', () => {
       currency: 'VND',
       deadline: '2026-06-30',
       note: 'Three months of expenses',
-      progress: '4500000.50',
+      linkedAccountId: '',
     })
     // Plain strings only — a `Prisma.Decimal` cannot cross into a client component.
     for (const value of Object.values(dto.editable)) {
       expect(typeof value).toBe('string')
     }
+  })
+
+  it('carries the linked account into the DTO and the edit prefill', () => {
+    const dto = toSavingsGoalDto(
+      goal({
+        linkedAccountId: 'acc_1',
+        linkedAccount: { id: 'acc_1', name: 'Quỹ', status: 'ARCHIVED' },
+      }),
+      TODAY,
+    )
+    expect(dto.linkedAccount).toEqual({ id: 'acc_1', name: 'Quỹ', archived: true })
+    expect(dto.editable.linkedAccountId).toBe('acc_1')
+    expect(toSavingsGoalDto(goal(), TODAY).linkedAccount).toBeNull()
+  })
+
+  it('formats the history newest first as given, in the goal currency', () => {
+    const dto = toSavingsGoalDto(
+      goal({
+        entries: [
+          {
+            id: 'e1',
+            userId: 'user_1',
+            goalId: 'goal_1',
+            kind: 'WITHDRAWAL',
+            amount: new Prisma.Decimal('500000.5'),
+            date: new Date('2026-03-02T00:00:00.000Z'),
+            note: null,
+            createdAt: CREATED_AT,
+          },
+        ],
+      }),
+      TODAY,
+    )
+    expect(dto.entries).toEqual([
+      {
+        id: 'e1',
+        kind: 'WITHDRAWAL',
+        amount: '500.000,5',
+        amountValue: '500000.50',
+        date: '2026-03-02',
+        note: '',
+      },
+    ])
+    expect(toSavingsGoalDto(goal(), TODAY).entries).toEqual([])
   })
 
   it('empties the edit form fields the goal has no value for', () => {

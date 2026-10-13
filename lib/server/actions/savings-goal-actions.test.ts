@@ -22,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const requireUserMock = vi.hoisted(() => vi.fn())
 const createSavingsGoalMock = vi.hoisted(() => vi.fn())
 const updateSavingsGoalMock = vi.hoisted(() => vi.fn())
-const updateSavingsGoalProgressMock = vi.hoisted(() => vi.fn())
 const archiveSavingsGoalMock = vi.hoisted(() => vi.fn())
 const addSavingsGoalEntryMock = vi.hoisted(() => vi.fn())
 const updateSavingsGoalEntryMock = vi.hoisted(() => vi.fn())
@@ -66,7 +65,6 @@ vi.mock('@/lib/auth/require-user', () => ({
 vi.mock('@/lib/server/services/savings-goal', () => ({
   createSavingsGoal: createSavingsGoalMock,
   updateSavingsGoal: updateSavingsGoalMock,
-  updateSavingsGoalProgress: updateSavingsGoalProgressMock,
   archiveSavingsGoal: archiveSavingsGoalMock,
   addSavingsGoalEntry: addSavingsGoalEntryMock,
   updateSavingsGoalEntry: updateSavingsGoalEntryMock,
@@ -88,7 +86,6 @@ const {
   deleteSavingsGoalEntryAction,
   updateSavingsGoalAction,
   updateSavingsGoalEntryAction,
-  updateSavingsGoalProgressAction,
 } = await import('./savings-goal-actions')
 const { ZodError } = await import('zod')
 const { Prisma } = await import('@prisma/client')
@@ -131,8 +128,6 @@ const validEntryInput = {
   date: '2026-03-01',
   note: 'Repairs',
 }
-
-const validProgressInput = { progress: 2000000 }
 
 function notFoundError() {
   return new Prisma.PrismaClientKnownRequestError('Not found', {
@@ -340,45 +335,6 @@ describe('entry actions', () => {
     expect(addSavingsGoalEntryMock).not.toHaveBeenCalled()
     expect(updateSavingsGoalEntryMock).not.toHaveBeenCalled()
     expect(deleteSavingsGoalEntryMock).not.toHaveBeenCalled()
-  })
-})
-
-describe('updateSavingsGoalProgressAction (transitional)', () => {
-  it('passes the figure and the session zone to the service, then revalidates', async () => {
-    updateSavingsGoalProgressMock.mockResolvedValue(null)
-
-    const result = await updateSavingsGoalProgressAction('goal_1', validProgressInput)
-
-    expect(result).toEqual({ ok: true })
-    expect(updateSavingsGoalProgressMock).toHaveBeenCalledWith(
-      FIXED_USER.id,
-      'goal_1',
-      validProgressInput,
-      CONTEXT,
-    )
-    expectGoalPagesRevalidated()
-  })
-
-  it.each([
-    [new MockSavingsGoalArchivedError(), 'ARCHIVED'],
-    [new MockSavingsGoalLinkedError(), 'LINKED'],
-    [notFoundError(), 'NOT_FOUND'],
-  ])('maps %o to its code and does not revalidate', async (error, code) => {
-    updateSavingsGoalProgressMock.mockRejectedValue(error)
-
-    expect(await updateSavingsGoalProgressAction('goal_1', validProgressInput)).toEqual({
-      ok: false,
-      error: code,
-    })
-    expect(revalidatePathMock).not.toHaveBeenCalled()
-  })
-
-  it('refuses a negative figure before the service is reached', async () => {
-    expect(await updateSavingsGoalProgressAction('goal_1', { progress: -1 })).toEqual({
-      ok: false,
-      error: 'INVALID_INPUT',
-    })
-    expect(updateSavingsGoalProgressMock).not.toHaveBeenCalled()
   })
 })
 

@@ -162,19 +162,6 @@ function isCalendarDate(value: unknown): value is string {
   return typeof value === 'string' && CALENDAR_DATE_RE.test(value) && isRealCalendarDate(value)
 }
 
-/**
- * @deprecated Transitional (money-source linking Task 9 → Task 10): the
- * Savings page's "Cập nhật tiến độ / Update progress" dialog still posts an
- * absolute "current amount". The service records the difference as one entry
- * rather than overwriting anything. Removed with that dialog when the
- * contribute/withdraw UI lands.
- */
-export const updateSavingsGoalProgressSchema = z.object({
-  progress: moneyAmountSchema.refine((v) => v >= 0, 'Progress cannot be negative'),
-})
-
 export type CreateSavingsGoalInput = z.infer<typeof createSavingsGoalSchema>
 export type UpdateSavingsGoalInput = z.infer<typeof updateSavingsGoalSchema>
 export type SavingsGoalEntryInput = z.infer<typeof savingsGoalEntryFields>
-/** @deprecated See `updateSavingsGoalProgressSchema`. */
-export type UpdateSavingsGoalProgressInput = z.infer<typeof updateSavingsGoalProgressSchema>

@@ -21,7 +21,6 @@ import {
   listSavingsGoals,
   updateSavingsGoal,
   updateSavingsGoalEntry,
-  updateSavingsGoalProgress,
   SavingsGoalArchivedError,
   SavingsGoalCurrencyLockedError,
   SavingsGoalLinkedError,
@@ -821,9 +820,6 @@ describe('savings-goal service', () => {
       await expect(deleteSavingsGoalEntry(fx.userId, entry.id)).rejects.toThrow(
         SavingsGoalLinkedError,
       )
-      await expect(
-        updateSavingsGoalProgress(fx.userId, goal.id, { progress: 1 }, CONTEXT),
-      ).rejects.toThrow(SavingsGoalLinkedError)
 
       expect(await prisma.savingsGoalEntry.findMany({ where: { userId: fx.userId } })).toEqual([
         entry,
@@ -1087,52 +1083,6 @@ describe('savings-goal service', () => {
     }, 30_000)
   })
 
-  /**
-   * The progress dialog the Savings page still renders until the entry UI
-   * replaces it (Task 10) posts an absolute "current amount". It is recorded
-   * as the difference — never as an overwritten figure.
-   */
-  describe('updateSavingsGoalProgress (transitional)', () => {
-    it('records the difference as one contribution or withdrawal dated today', async () => {
-      const now = new Date('2026-03-15T20:00:00.000Z')
-      const goal = await createSavingsGoal(
-        fx.userId,
-        { ...BASE_INPUT, targetAmount: 1_000, initialContribution: 250 },
-        CONTEXT,
-      )
-
-      const up = await updateSavingsGoalProgress(
-        fx.userId,
-        goal.id,
-        { progress: 1_000 },
-        CONTEXT,
-        now,
-      )
-      expect(up).toMatchObject({ kind: 'CONTRIBUTION', goalId: goal.id })
-      expect(up?.amount.toString()).toBe('750')
-      expect(up?.date.toISOString()).toBe('2026-03-16T00:00:00.000Z')
-      expect((await listed(fx.userId, goal.id)).status).toBe('ACHIEVED')
-
-      const down = await updateSavingsGoalProgress(
-        fx.userId,
-        goal.id,
-        { progress: 0 },
-        CONTEXT,
-        now,
-      )
-      expect(down).toMatchObject({ kind: 'WITHDRAWAL' })
-      expect(down?.amount.toString()).toBe('1000')
-      expect((await listed(fx.userId, goal.id)).progress.toString()).toBe('0')
-
-      // The same figure again is no change at all.
-      expect(
-        await updateSavingsGoalProgress(fx.userId, goal.id, { progress: 0 }, CONTEXT),
-      ).toBeNull()
-      expect(await prisma.savingsGoalEntry.count({ where: { userId: fx.userId } })).toBe(3)
-      expect((await storedGoal(fx.userId, goal.id)).currentProgress.toString()).toBe('0')
-    })
-  })
-
   describe('archive', () => {
     it('sets ARCHIVED and keeps the row and its entries readable', async () => {
       const goal = await createSavingsGoal(
@@ -1309,10 +1259,6 @@ describe('savings-goal service', () => {
         'P2025',
       )
       await expectPrismaCode(deleteSavingsGoalEntry(fx.userId, theirEntries[0].id), 'P2025')
-      await expectPrismaCode(
-        updateSavingsGoalProgress(fx.userId, theirs.id, { progress: 0 }, CONTEXT),
-        'P2025',
-      )
 
       expect(await storedGoal(other.userId, theirs.id)).toEqual(theirGoal)
       expect(await prisma.savingsGoalEntry.findMany({ where: { userId: other.userId } })).toEqual(
@@ -1479,7 +1425,6 @@ describe('savings-goal service', () => {
         CONTEXT,
       )
       await deleteSavingsGoalEntry(fx.userId, entry.id)
-      await updateSavingsGoalProgress(fx.userId, goal.id, { progress: 5 }, CONTEXT)
       await updateSavingsGoal(fx.userId, goal.id, {
         ...BASE_INPUT,
         linkedAccountId: fx.accountId,

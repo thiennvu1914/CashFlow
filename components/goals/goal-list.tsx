@@ -4,7 +4,7 @@ import { cn } from 'cn'
 import type { Locale } from '@/lib/i18n/locale'
 import { formatDate } from '@/lib/ui/format-date'
 import { goalStatusLabelKey } from '@/lib/ui/labels'
-import type { SavingsGoalDto } from '@/lib/ui/savings-goal-view-model'
+import type { SavingsGoalDto, SavingsGoalEntryDto } from '@/lib/ui/savings-goal-view-model'
 import { PlanningRow } from '@/components/common/planning-row'
 import { Progress } from '@/components/common/progress'
 import { RowErrorAlert, RowErrorProvider } from '@/components/common/row-error-context'
@@ -59,6 +59,7 @@ export async function GoalList({
   locale,
   timeZone,
   renderActions,
+  renderEntryActions,
 }: {
   goals: SavingsGoalDto[]
   locale: Locale
@@ -69,6 +70,13 @@ export async function GoalList({
    *  two separate pieces — they mount in two different `PlanningRow` slots
    *  and share no state. */
   renderActions?: (goal: SavingsGoalDto) => { actions: ReactNode; inlineAction?: ReactNode }
+  /** Edit/Delete for one history line (the Savings page only); `dateLabel` is
+   *  the date as the history prints it. */
+  renderEntryActions?: (
+    goal: SavingsGoalDto,
+    entry: SavingsGoalEntryDto,
+    dateLabel: string,
+  ) => ReactNode
 }) {
   const t = await getTranslations()
 
@@ -121,13 +129,63 @@ export async function GoalList({
               tone="brand"
             />
           ),
-          meta: meta ? (
-            <span className={cn(goal.deadlinePassed && 'text-warning')}>{meta}</span>
-          ) : undefined,
+          meta:
+            meta || goal.linkedAccount ? (
+              <>
+                {meta && <span className={cn(goal.deadlinePassed && 'text-warning')}>{meta}</span>}
+                {goal.linkedAccount && (
+                  // Progress is the account's balance, so there is nothing to
+                  // edit here; an archived account is flagged because its
+                  // balance will no longer follow new activity.
+                  <span className={cn('block', goal.linkedAccount.archived && 'text-warning')}>
+                    {t(
+                      goal.linkedAccount.archived ? 'goals.automaticArchived' : 'goals.automatic',
+                      {
+                        account: goal.linkedAccount.name,
+                      },
+                    )}
+                  </span>
+                )}
+              </>
+            ) : undefined,
         }
 
+        // A linked goal's entries (kept from before it was linked) do not count
+        // towards its progress, so they are not shown as its history.
+        const history =
+          !goal.linkedAccount && goal.entries.length > 0 ? (
+            <details>
+              <summary className="cursor-pointer text-xs/[1rem] text-muted-foreground">
+                {t('goals.historySection', { count: goal.entries.length })}
+              </summary>
+              <ul className="mt-1 flex flex-col gap-1">
+                {goal.entries.map((entry) => {
+                  const dateLabel = formatDate(entry.date, { locale, timeZone, style: 'date' })
+                  const withdrawal = entry.kind === 'WITHDRAWAL'
+                  return (
+                    <li
+                      key={entry.id}
+                      className="flex flex-wrap items-center gap-x-1 text-xs/[1rem] text-muted-foreground"
+                    >
+                      <span>
+                        <span className="tabular-nums">{dateLabel}</span> ·{' '}
+                        {t(withdrawal ? 'goals.entryWithdrawal' : 'goals.entryContribution')}{' '}
+                        <span className="tabular-nums">
+                          {withdrawal ? '−' : '+'}
+                          {entry.amount}
+                        </span>
+                        {entry.note && ` · ${entry.note}`}
+                      </span>
+                      {renderEntryActions?.(goal, entry, dateLabel)}
+                    </li>
+                  )
+                })}
+              </ul>
+            </details>
+          ) : undefined
+
         if (!renderActions) {
-          return <PlanningRow key={goal.id} {...rowContent} />
+          return <PlanningRow key={goal.id} {...rowContent} extra={history} />
         }
 
         const parts = renderActions(goal)
@@ -137,7 +195,12 @@ export async function GoalList({
               {...rowContent}
               inlineAction={parts.inlineAction}
               actions={parts.actions}
-              extra={<RowErrorAlert />}
+              extra={
+                <>
+                  {history}
+                  <RowErrorAlert />
+                </>
+              }
             />
           </RowErrorProvider>
         )

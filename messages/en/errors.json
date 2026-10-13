@@ -10,7 +10,7 @@
   "account": {
     "NON_ZERO_BALANCE": "This account must have a zero balance before it can be archived. Transfer or adjust the balance first.",
     "ACCOUNT_LOCKED": "Currency and opening balance cannot be changed once the account has activity.",
-    "FOLLOWED_BY_GOAL": "A savings goal follows this account, so its currency can't be changed. Unlink the goal first.",
+    "FOLLOWED_BY_GOAL": "A savings goal follows this account (archived goals included), so its currency can't be changed.",
     "ARCHIVED_ACCOUNT": "This account is archived and can no longer be edited.",
     "INVALID_ACCOUNT_TYPE": "Choose a valid account type.",
     "INVALID_INPUT": "Check the highlighted fields.",
