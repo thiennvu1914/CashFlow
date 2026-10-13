@@ -355,6 +355,19 @@ describe('deleteTransactionAction', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/accounts')
   })
 
+  it('revalidates the reminders and the dashboard too — a delete can return a paid occurrence to pending (final review F9)', async () => {
+    deleteTransactionMock.mockResolvedValue(undefined)
+
+    await deleteTransactionAction('tx_1')
+
+    expect(revalidatePathMock.mock.calls.map(([path]) => path)).toEqual([
+      '/transactions',
+      '/accounts',
+      '/reminders',
+      '/dashboard',
+    ])
+  })
+
   it("maps Prisma's P2025 not-found error to NOT_FOUND", async () => {
     deleteTransactionMock.mockRejectedValue(notFoundError())
 

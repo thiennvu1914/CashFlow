@@ -139,6 +139,15 @@ export async function updateTransactionAction(
   return { ok: true }
 }
 
+/**
+ * The ledger row's delete. Deleting a transaction a reminder's "Paid" recorded
+ * returns that occurrence to PENDING in the same write (spec 2026-10-12 §6.5),
+ * so the reminder pages change too — it is due again, on `/reminders` and in
+ * the dashboard's widget, whose balances and recent rows the delete moves as
+ * well (final review F9). Revalidated unconditionally: the service does not
+ * say whether an occurrence was released, and a stale due list is the failure
+ * worth avoiding.
+ */
 export async function deleteTransactionAction(id: string): Promise<TransactionActionResult> {
   const user = await requireUser()
   try {
@@ -148,5 +157,7 @@ export async function deleteTransactionAction(id: string): Promise<TransactionAc
   }
   revalidatePath('/transactions')
   revalidatePath('/accounts')
+  revalidatePath('/reminders')
+  revalidatePath('/dashboard')
   return { ok: true }
 }
