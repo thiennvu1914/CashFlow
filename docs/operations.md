@@ -94,6 +94,81 @@ by the Docker `migrator` stage described below, not by the running app.
    change of any consequence) run `prisma migrate status` to confirm no
    migration is pending or failed.
 
+## Release: money-source linking (2026-10)
+
+The money-source linking batch (spec
+`docs/superpowers/specs/2026-10-12-money-source-linking-design.md`) ships five
+migrations and changes what debts, loans, reminders and savings goals write.
+Release it in this order, with the owner's go-ahead at push time, and nobody
+using the app between steps 2 and 5 (the owner is the only active user —
+confirm that before starting).
+
+1. **Backup** Supabase with `pg_dump -Fc` (see "Backup, restore and recovery
+   verification" below), using a `pg_dump` client **at least as new as the
+   server's major version** — an older client refuses to dump a newer
+   server. Keep the `.dump` file until the release has been verified.
+2. **Migrate**: `npm run db:deploy` (`prisma migrate deploy`) against the
+   Supabase `DATABASE_URL`. Exactly these five folders must be applied, in
+   this order:
+   - `20261012032435_loan_interest_category` (data: a "Loan Interest & Fees"
+     EXPENSE category for every user who has none)
+   - `20261012035244_debt_transaction_links`
+   - `20261012051015_loan_transaction_links`
+   - `20261012090121_occurrence_transaction_link`
+   - `20261012095423_savings_goal_entries` (new table, plus one CONTRIBUTION
+     entry per goal with progress, so derived progress equals today's figure)
+
+   All five are additive (nullable columns, unique indexes, `ON DELETE
+   RESTRICT` foreign keys, a new table, inserted rows), so the running old
+   code keeps working on the new schema. Optional: give the migrating role a
+   lock timeout for the duration (`ALTER ROLE <role> SET lock_timeout =
+   '5s'`, then `ALTER ROLE <role> RESET lock_timeout` afterwards), so a lock
+   held by live traffic makes a step fail fast — re-run the deploy — instead
+   of queueing every request behind it.
+3. **Verify**: `npx prisma migrate status` against the same database reports
+   the schema up to date, with no pending or failed migration.
+4. **Deploy**: push to `main`; Render builds and rolls out the new image.
+5. **Reconcile goals — immediately after go-live**: run the query below. It
+   lists every unlinked goal written after the goal-entries migration whose
+   old `currentProgress` disagrees with the sum of its entries — i.e. a
+   progress update the old code made between step 2 and go-live, which the
+   new code no longer reads. Fix each row by hand (add the missing
+   contribution/withdrawal entry from the goal page, or insert it), then
+   re-run the query until it returns nothing. `finished_at` is `timestamptz`
+   and `updatedAt` is a UTC `timestamp`, hence the conversion:
+
+   ```sql
+   SELECT g.id, g."userId", g.name, g."currentProgress",
+          COALESCE(SUM(CASE e.kind WHEN 'CONTRIBUTION' THEN e.amount ELSE -e.amount END),0) AS derived
+   FROM "SavingsGoal" g
+   LEFT JOIN "SavingsGoalEntry" e ON e."userId"=g."userId" AND e."goalId"=g.id
+   WHERE g."linkedAccountId" IS NULL
+     AND g."updatedAt" > (SELECT finished_at AT TIME ZONE 'UTC' FROM _prisma_migrations
+                          WHERE migration_name='20261012095423_savings_goal_entries')
+   GROUP BY g.id
+   HAVING g."currentProgress" <> COALESCE(SUM(CASE e.kind WHEN 'CONTRIBUTION' THEN e.amount ELSE -e.amount END),0);
+   ```
+
+6. **No goal edits, no demo seed or reset between step 2 and go-live.** The
+   old code still writes `currentProgress` (which the new code ignores), and
+   the old demo scripts know nothing of the new links.
+7. **Roll forward only.** Once the new code has written links, the old code
+   shows stale goal progress (it reads `currentProgress`) and cannot delete a
+   transaction a debt, loan or paid reminder points at (the `ON DELETE
+   RESTRICT` keys refuse it). A problem after go-live is fixed with a new
+   commit, not by redeploying the previous image; restoring the step 1 backup
+   is the last resort and loses everything written since.
+8. **Smoke**, signed in, after `/api/health` answers 200:
+   - `/debts` and `/loans` render; a row menu offers "Ghi vào tài khoản" (or,
+     once recorded, "Bỏ ghi vào tài khoản");
+   - `/transactions`: an ordinary row opens the edit sheet and saves; a row a
+     debt or loan owns shows its badge ("Nợ: …" / "Vay: …") and offers only
+     "Mở khoản nợ / Mở khoản vay";
+   - `/reminders`: "Đã trả" on a pending occurrence records the transaction
+     (or opens the pre-filled form) and the occurrence leaves the due list;
+   - `/goals`: progress matches what it showed before the release, and an
+     unlinked goal accepts "+ Góp" / "− Rút".
+
 ## Health endpoint
 
 `GET /api/health` (`app/api/health/route.ts`) is the only readiness probe.
