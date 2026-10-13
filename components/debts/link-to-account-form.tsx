@@ -1,12 +1,13 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import type { Currency } from '@prisma/client'
+import { compareCalendarDates } from '@/lib/datetime/calendar-date'
 import {
-  linkToAccountFormSchema,
+  linkToAccountFormSchemaAsOf,
   type LinkToAccountFormValues,
 } from '@/lib/validation/link-to-account'
 import {
@@ -60,7 +61,9 @@ export function linkFormErrorKeys<E extends string>(
  *   offering an empty picker.
  * - **Date** (Ruling P7): the agreement's own date (the day a debt was added,
  *   a loan's start date) or the oldest payment still to record, whichever is
- *   earlier, so the opening never lands after its own repayments.
+ *   earlier, so the opening never lands after its own repayments — and never
+ *   later than `today` (Ruling P12: money recorded in an account cannot have
+ *   moved in the future), which the form also refuses.
  * - **"Ghi bù N lần trả đã có / Also record the N existing payments"**: on by
  *   default, counting only the payments with no transaction yet (one already
  *   recorded in an account is skipped by the service), and not shown when
@@ -75,6 +78,7 @@ export function LinkToAccountForm<E extends string>({
   namespace,
   currency,
   agreementDate,
+  today,
   payments,
   accounts,
   mostRecentAccountId,
@@ -86,6 +90,9 @@ export function LinkToAccountForm<E extends string>({
   currency: Currency
   /** `yyyy-MM-dd`: the day a debt was added, or a loan's start date. */
   agreementDate: string
+  /** The user's own calendar day, from the page (`todayCalendarDateInZone` in
+   *  the profile zone) — never a browser clock. */
+  today: string
   /** The agreement's payments; `accountId` null means not recorded yet. */
   payments: ReadonlyArray<{ date: string; accountId: string | null }>
   /** Every active account; the dialog keeps the ones in `currency`. */
@@ -103,14 +110,18 @@ export function LinkToAccountForm<E extends string>({
   const fieldId = (name: string) => `${ID_PREFIX[namespace]}-${name}-${uid}`
   const options = accounts.filter((account) => account.currency === currency)
   const initialAccountId = defaultLinkAccountId(options, mostRecentAccountId)
-  const initialDate = defaultLinkDate(agreementDate, payments)
+  const linkDate = defaultLinkDate(agreementDate, payments)
+  // A loan that starts later can only be recorded once its money has arrived,
+  // so the default never proposes a day the form would refuse.
+  const initialDate = compareCalendarDates(linkDate, today) > 0 ? today : linkDate
+  const schema = useMemo(() => linkToAccountFormSchemaAsOf(today), [today])
   const unlinkedPayments = payments.filter((payment) => payment.accountId === null).length
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<LinkToAccountFormValues>({
-    resolver: zodResolver(linkToAccountFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       accountId: initialAccountId,
       date: initialDate,

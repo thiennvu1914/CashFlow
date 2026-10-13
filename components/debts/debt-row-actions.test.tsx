@@ -190,7 +190,12 @@ describe('DebtRowMenu', () => {
     return renderToStaticMarkup(
       <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
         <RowErrorProvider>
-          <DebtRowMenu debt={dto} accounts={ACCOUNTS} mostRecentAccountId={null} />
+          <DebtRowMenu
+            debt={dto}
+            today="2026-10-12"
+            accounts={ACCOUNTS}
+            mostRecentAccountId={null}
+          />
         </RowErrorProvider>
       </NextIntlClientProvider>,
     )

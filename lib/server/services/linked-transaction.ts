@@ -59,6 +59,22 @@ export class LinkedAccountCurrencyMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown when "Record in an account" (`linkDebtToAccount`, `linkLoanToAccount`)
+ * would record an existing payment dated later than today in the user's zone
+ * (Ruling P12, final review F8). Money recorded in an account cannot have moved
+ * in the future: the payment already counts against the agreement, while the
+ * account's balance would only move on that day. A payment noted with "don't
+ * record in an account" may carry a planned date, so this is decided when it
+ * is recorded in one; the user corrects its date, or leaves the payments out.
+ */
+export class FutureLinkedPaymentError extends Error {
+  constructor() {
+    super('A payment dated later than today cannot be recorded in an account yet.')
+    this.name = 'FutureLinkedPaymentError'
+  }
+}
+
 const P_AND_L_TYPES = new Set<TransactionType>(['INCOME', 'EXPENSE'])
 
 /**

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { linkDebtToAccountSchema } from './debt'
-import { linkToAccountFormSchema, unlinkFromAccountSchema } from './link-to-account'
+import {
+  linkToAccountFormSchema,
+  linkToAccountFormSchemaAsOf,
+  unlinkFromAccountSchema,
+} from './link-to-account'
 import { linkLoanToAccountSchema } from './loan'
 
 /**
@@ -58,5 +62,16 @@ describe('unlinkFromAccountSchema', () => {
     expect(result.error?.issues.map((issue) => issue.message)).toEqual([
       'Choose whether to remove the recorded payments too',
     ])
+  })
+})
+
+describe('linkToAccountFormSchemaAsOf', () => {
+  it("refuses a day later than the user's today on the date field (Ruling P12), and accepts today", () => {
+    const schema = linkToAccountFormSchemaAsOf('2026-03-15')
+    const result = schema.safeParse({ ...VALID, date: '2026-03-16' })
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['date'], message: 'The date cannot be later than today' }),
+    ])
+    expect(schema.safeParse({ ...VALID, date: '2026-03-15' }).success).toBe(true)
   })
 })

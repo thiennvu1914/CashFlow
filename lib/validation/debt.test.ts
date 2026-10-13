@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { ZodType } from 'zod'
 import {
   createDebtSchema,
+  createDebtSchemaAsOf,
   linkDebtToAccountSchema,
+  linkDebtToAccountSchemaAsOf,
   recordDebtPaymentSchema,
+  recordDebtPaymentSchemaAsOf,
   updateDebtSchema,
 } from './debt'
 
@@ -356,5 +359,70 @@ describe('no raw Zod text reaches a form', () => {
         expect(message).not.toMatch(RAW_ZOD_TEXT)
       }
     }
+  })
+})
+
+/**
+ * Ruling P12 (final review F8): money recorded in an account cannot have moved
+ * later than today in the user's zone — the account's balance would not move
+ * until that day while the debt's outstanding drops now. Without an account
+ * nothing moves, so the date keeps today's rules. The schemas are built for the
+ * user's `today`, as `savingsGoalEntrySchema` is.
+ */
+describe('no future-dated money movement in an account (P12)', () => {
+  const TODAY = '2026-03-15'
+  const LATER = 'The date cannot be later than today'
+
+  it('refuses a debt opened in an account on a later day, on the money-moved field', () => {
+    const result = createDebtSchemaAsOf(TODAY).safeParse({
+      ...VALID_DEBT,
+      accountId: 'acc_1',
+      movedOn: '2026-03-16',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['movedOn'], message: LATER }),
+    ])
+  })
+
+  it('accepts one opened today or earlier, and any day without an account', () => {
+    const schema = createDebtSchemaAsOf(TODAY)
+    expect(schema.safeParse({ ...VALID_DEBT, accountId: 'acc_1', movedOn: TODAY }).success).toBe(
+      true,
+    )
+    expect(
+      schema.safeParse({ ...VALID_DEBT, accountId: 'acc_1', movedOn: '2026-01-02' }).success,
+    ).toBe(true)
+    expect(schema.safeParse({ ...VALID_DEBT, movedOn: '2026-12-31' }).success).toBe(true)
+  })
+
+  it('refuses a repayment recorded in an account on a later day, on the date field', () => {
+    const schema = recordDebtPaymentSchemaAsOf(TODAY)
+    const result = schema.safeParse({ ...VALID_PAYMENT, date: '2026-03-16', accountId: 'acc_1' })
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['date'], message: LATER }),
+    ])
+    expect(schema.safeParse({ ...VALID_PAYMENT, date: TODAY, accountId: 'acc_1' }).success).toBe(
+      true,
+    )
+    // "Don't record in an account": nothing moves, so a planned repayment stays allowed.
+    expect(schema.safeParse({ ...VALID_PAYMENT, date: '2026-03-16' }).success).toBe(true)
+  })
+
+  it('refuses "Record in an account" on a later day', () => {
+    const schema = linkDebtToAccountSchemaAsOf(TODAY)
+    const link = { accountId: 'acc_1', includePayments: true }
+    expect(messagesFor(schema, { ...link, openedOn: '2026-03-16' })).toEqual([LATER])
+    expect(schema.safeParse({ ...link, openedOn: TODAY }).success).toBe(true)
+  })
+
+  it('leaves a malformed date to its own message rather than adding this one', () => {
+    expect(
+      messagesFor(recordDebtPaymentSchemaAsOf(TODAY), {
+        ...VALID_PAYMENT,
+        date: '2026-02-30',
+        accountId: 'acc_1',
+      }),
+    ).toEqual(['Enter a real date'])
   })
 })

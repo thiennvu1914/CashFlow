@@ -1,11 +1,11 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import type { Currency } from '@prisma/client'
-import { createLoanSchema, type CreateLoanInput } from '@/lib/validation/loan'
+import { createLoanSchemaAsOf, type CreateLoanInput } from '@/lib/validation/loan'
 import { createLoanAction } from '@/lib/server/actions/loan-actions'
 import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
@@ -101,6 +101,9 @@ export function LoanForm({
   const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `loan-${name}-${uid}`
+  // Built for the page's `today` in the profile zone: a loan received into an
+  // account cannot start later — its start date is the money's (Ruling P12).
+  const schema = useMemo(() => createLoanSchemaAsOf(today), [today])
   const {
     register,
     handleSubmit,
@@ -110,7 +113,7 @@ export function LoanForm({
     setValue,
     formState: { errors },
   } = useForm<CreateLoanInput>({
-    resolver: zodResolver(createLoanSchema),
+    resolver: zodResolver(schema),
     defaultValues: defaultValues(baseCurrency, defaultAccountId, today),
   })
   const accountId = useWatch({ control, name: 'accountId' })

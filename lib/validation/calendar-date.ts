@@ -1,5 +1,9 @@
 import * as z from 'zod'
-import { CALENDAR_DATE_RE, isRealCalendarDate } from '@/lib/datetime/calendar-date'
+import {
+  CALENDAR_DATE_RE,
+  compareCalendarDates,
+  isRealCalendarDate,
+} from '@/lib/datetime/calendar-date'
 
 /**
  * The shared `yyyy-MM-dd` field rule, for every Phase 6 planning date — a
@@ -61,3 +65,21 @@ export const optionalCalendarDateSchema = z
   .optional()
   .transform((value) => (value === '' ? undefined : value))
   .pipe(calendarDateStringSchema.optional())
+
+/**
+ * Whether `date` is a real calendar date later than `today` — the user's own
+ * calendar day, from `todayCalendarDateInZone` in their zone (Ruling P12: money
+ * recorded in an account cannot have moved in the future).
+ *
+ * Anything that is not a real calendar date answers `false`: Zod runs an object
+ * refinement even when a field already failed, and such a value is left to its
+ * field's own message rather than given a second, misleading one.
+ */
+export function isLaterThanToday(date: unknown, today: string): boolean {
+  return (
+    typeof date === 'string' &&
+    CALENDAR_DATE_RE.test(date) &&
+    isRealCalendarDate(date) &&
+    compareCalendarDates(date, today) > 0
+  )
+}

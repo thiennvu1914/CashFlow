@@ -1,10 +1,10 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
-import { createDebtSchema, type CreateDebtInput } from '@/lib/validation/debt'
+import { createDebtSchemaAsOf, type CreateDebtInput } from '@/lib/validation/debt'
 import type { Currency } from '@prisma/client'
 import { createDebtAction } from '@/lib/server/actions/debt-actions'
 import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
@@ -89,6 +89,9 @@ export function DebtForm({
   const submit = useActionSubmit(t)
   const uid = useId().replace(/:/g, '')
   const fieldId = (name: string) => `debt-${name}-${uid}`
+  // Built for the page's `today` in the profile zone, never a browser clock:
+  // money recorded in an account cannot have moved later (Ruling P12).
+  const schema = useMemo(() => createDebtSchemaAsOf(today), [today])
   const {
     register,
     handleSubmit,
@@ -96,7 +99,7 @@ export function DebtForm({
     control,
     formState: { errors },
   } = useForm<CreateDebtInput>({
-    resolver: zodResolver(createDebtSchema),
+    resolver: zodResolver(schema),
     defaultValues: defaultValues(baseCurrency, defaultAccountId, today),
   })
   const accountId = useWatch({ control, name: 'accountId' })

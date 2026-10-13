@@ -9,13 +9,14 @@ import {
   calendarDateToUtcCarrier,
   compareCalendarDates,
   formatCalendarDate,
+  todayCalendarDateInZone,
 } from '@/lib/datetime/calendar-date'
 import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/datetime/local-date-time'
 import type { Locale } from '@/lib/i18n/locale'
 import {
-  createLoanSchema,
-  linkLoanToAccountSchema,
-  recordLoanPaymentSchema,
+  createLoanSchemaAsOf,
+  linkLoanToAccountSchemaAsOf,
+  recordLoanPaymentSchemaAsOf,
   updateLoanSchema,
   type CreateLoanInput,
   type LinkLoanToAccountInput,
@@ -30,6 +31,7 @@ import enLoanMessages from '@/messages/en/loans.json'
 import viLoanMessages from '@/messages/vi/loans.json'
 import { lockAccountsForUpdate } from './account-lock'
 import {
+  FutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError,
   SNAPSHOT_PAIR,
   ensureLoanInterestCategoryId,
@@ -224,7 +226,8 @@ export interface LoanLinkContext {
   /** The user's IANA zone. A start or payment *date* becomes the linked
    *  transactions' instant here (`calendarDateToEntryInstant`: now for today,
    *  else 12:00 that day), so it lands on the same calendar day the user
-   *  picked whichever zone later reads it. */
+   *  picked whichever zone later reads it — and "today" here is the latest day
+   *  money recorded in an account may have moved (Ruling P12). */
   timezone: string
   /** The language of the default transaction note, rendered once at write
    *  time and stored — never re-rendered on read or on a later edit. */
@@ -752,7 +755,9 @@ export async function createLoan(
   context: LoanLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<Loan> {
-  const parsed = createLoanSchema.parse(input)
+  // Against the user's today: a loan received into an account cannot start
+  // later — its start date is the disbursement's date (Ruling P12).
+  const parsed = createLoanSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   const nextDueDate = calendarDateToUtcCarrier(parsed.nextDueDate)
   const data = {
     userId,
@@ -975,8 +980,10 @@ export async function recordLoanPayment(
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<{ payment: LoanPayment; nextDueDate: Date }> {
   // Hoisted out of the transaction: parsing and date conversion are pure CPU
-  // work that must not happen while a row lock is held.
-  const parsed = recordLoanPaymentSchema.parse(input)
+  // work that must not happen while a row lock is held. Against the user's
+  // today: an instalment paid from an account cannot be dated later (Ruling
+  // P12).
+  const parsed = recordLoanPaymentSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   const totalAmount = new Prisma.Decimal(String(parsed.totalAmount))
   const principalAmount = new Prisma.Decimal(String(parsed.principalAmount))
   const interestAmount = new Prisma.Decimal(String(parsed.interestAmount))
@@ -1188,7 +1195,8 @@ export async function updateLoanPayment(
   context: LoanLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<LoanPayment> {
-  const parsed = recordLoanPaymentSchema.parse(input)
+  // Against the user's today, as on recording (Ruling P12).
+  const parsed = recordLoanPaymentSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   const totalAmount = new Prisma.Decimal(String(parsed.totalAmount))
   const principalAmount = new Prisma.Decimal(String(parsed.principalAmount))
   const interestAmount = new Prisma.Decimal(String(parsed.interestAmount))
@@ -1463,9 +1471,11 @@ export async function closeLoan(userId: string, loanId: string): Promise<Loan> {
  * (`LoanAlreadyLinkedError` — checked once before the FX lookup and again under
  * the lock, where a concurrent link that committed first is visible), an
  * account in another currency (`LinkedAccountCurrencyMismatchError`), an
- * archived account, another user's loan or account (P2025), and no usable
- * rate. Any later failure rolls the whole operation back, the interest
- * category included.
+ * archived account, another user's loan or account (P2025), no usable rate,
+ * and — Ruling P12 — a disbursement date after today (a `ZodError`) or, with
+ * `includePayments`, an instalment to record dated after today
+ * (`FutureLinkedPaymentError`). Any later failure rolls the whole operation
+ * back, the interest category included.
  *
  * A closed loan can be linked too — closing it records that the user is
  * finished with it, not that no money ever moved — so the loan row is locked
@@ -1488,7 +1498,12 @@ export async function linkLoanToAccount(
   context: LoanLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<Loan> {
-  const parsed = linkLoanToAccountSchema.parse(input)
+  // One "now" for the whole operation, so a disbursement and an instalment
+  // both dated today land on the same instant — and one "today" for the date
+  // rule (Ruling P12).
+  const now = new Date()
+  const today = todayCalendarDateInZone(context.timezone, now)
+  const parsed = linkLoanToAccountSchemaAsOf(today).parse(input)
   const { accountId } = parsed
 
   // Ownership-scoped and first: another user's loan id is a P2025 here, and a
@@ -1512,9 +1527,6 @@ export async function linkLoanToAccount(
     parsed.includePayments ? existing._count.payments : 0,
   )
 
-  // One "now" for the whole operation, so a disbursement and an instalment
-  // both dated today land on the same instant.
-  const now = new Date()
   const instantOf = (calendarDate: string) =>
     calendarDateToEntryInstant(calendarDate, context.timezone, now)
   const disbursedAt = instantOf(parsed.disbursedOn)
@@ -1531,7 +1543,24 @@ export async function linkLoanToAccount(
     if (loan.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
     if (account.currency !== loan.currency) throw new LinkedAccountCurrencyMismatchError()
 
-    // 3. The disbursement. `principal` is > 0 (`Loan_principal_positive`), so
+    // 3. The instalments with neither leg linked, read under the loan lock —
+    //    and refused, before anything is written, if one is dated after today
+    //    (Ruling P12: noted with no account it could carry a planned date).
+    const unlinked = parsed.includePayments
+      ? await tx.loanPayment.findMany({
+          where: { userId, loanId, principalTransactionId: null, interestTransactionId: null },
+          orderBy: PAYMENT_ORDER,
+        })
+      : []
+    if (
+      unlinked.some(
+        (payment) => compareCalendarDates(formatCalendarDate(payment.paymentDate), today) > 0,
+      )
+    ) {
+      throw new FutureLinkedPaymentError()
+    }
+
+    // 4. The disbursement. `principal` is > 0 (`Loan_principal_positive`), so
     //    the core's zero-amount refusal is unreachable.
     const disbursement = await insertTransactionInTx(
       tx,
@@ -1548,48 +1577,42 @@ export async function linkLoanToAccount(
       account,
     )
 
-    // 4. The instalments with neither leg linked, oldest first, each on its own
-    //    day. A part of zero writes nothing (the core refuses a zero amount).
-    if (parsed.includePayments) {
-      const unlinked = await tx.loanPayment.findMany({
-        where: { userId, loanId, principalTransactionId: null, interestTransactionId: null },
-        orderBy: PAYMENT_ORDER,
-      })
-      let interestCategoryId: string | null = null
-      for (const payment of unlinked) {
-        const date = instantOf(formatCalendarDate(payment.paymentDate))
-        const parts = { principal: payment.principalAmount, interest: payment.interestAmount }
-        const linked = { principal: null as string | null, interest: null as string | null }
-        for (const leg of ['principal', 'interest'] as const) {
-          if (!parts[leg].greaterThan(0)) continue
-          if (leg === 'interest') {
-            interestCategoryId ??= await ensureLoanInterestCategoryId(tx, userId)
-          }
-          const created = await insertTransactionInTx(
-            tx,
-            userId,
-            {
-              accountId,
-              type: LEG_TYPE[leg],
-              amount: parts[leg],
-              date,
-              note: payment.note ?? linkedNote(context.locale, leg, loan.lender),
-              categoryId: leg === 'interest' ? interestCategoryId : null,
-              expectedCurrency: loan.currency,
-            },
-            fx,
-            account,
-          )
-          linked[leg] = created.id
+    // 5. Those instalments, oldest first, each on its own day. A part of zero
+    //    writes nothing (the core refuses a zero amount).
+    let interestCategoryId: string | null = null
+    for (const payment of unlinked) {
+      const date = instantOf(formatCalendarDate(payment.paymentDate))
+      const parts = { principal: payment.principalAmount, interest: payment.interestAmount }
+      const linked = { principal: null as string | null, interest: null as string | null }
+      for (const leg of ['principal', 'interest'] as const) {
+        if (!parts[leg].greaterThan(0)) continue
+        if (leg === 'interest') {
+          interestCategoryId ??= await ensureLoanInterestCategoryId(tx, userId)
         }
-        await tx.loanPayment.update({
-          where: { userId_id: { userId, id: payment.id } },
-          data: {
-            principalTransactionId: linked.principal,
-            interestTransactionId: linked.interest,
+        const created = await insertTransactionInTx(
+          tx,
+          userId,
+          {
+            accountId,
+            type: LEG_TYPE[leg],
+            amount: parts[leg],
+            date,
+            note: payment.note ?? linkedNote(context.locale, leg, loan.lender),
+            categoryId: leg === 'interest' ? interestCategoryId : null,
+            expectedCurrency: loan.currency,
           },
-        })
+          fx,
+          account,
+        )
+        linked[leg] = created.id
       }
+      await tx.loanPayment.update({
+        where: { userId_id: { userId, id: payment.id } },
+        data: {
+          principalTransactionId: linked.principal,
+          interestTransactionId: linked.interest,
+        },
+      })
     }
 
     return tx.loan.update({

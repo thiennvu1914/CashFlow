@@ -518,6 +518,28 @@ test.describe.serial('Money-source linking — debts', () => {
     await expectCashBalance(page, '4.000.000')
   })
 
+  test('a repayment recorded in an account cannot be dated after today (Ruling P12)', async ({
+    page,
+  }) => {
+    const tomorrow = formatCalendarDate(
+      new Date(calendarDateToUtcCarrier(TODAY).getTime() + 24 * 60 * 60 * 1000),
+    )
+    await page.goto('/debts')
+    const row = namedRow(page, page, 'Minh')
+    await row.getByRole('button', { name: 'Ghi nhận thanh toán' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Ghi nhận thanh toán · Minh' })
+    await expect(dialog.getByLabel('Tài khoản').locator('option:checked')).toHaveText('Cash · VND')
+    await dialog.getByLabel('Số tiền').fill('100000')
+    await dialog.getByLabel('Ngày thanh toán').fill(tomorrow)
+    await dialog.getByRole('button', { name: 'Lưu' }).click()
+
+    // Refused on the date field, from the page's own "today" — nothing written.
+    await expect(dialog.getByText('Ngày không được sau hôm nay')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expectCashBalance(page, '4.000.000')
+  })
+
   test("choosing 'don't record in an account' creates the debt and a repayment without touching any balance, and offers the currency choice", async ({
     page,
   }) => {

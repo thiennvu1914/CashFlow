@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import { requireUser } from '@/lib/auth/require-user'
 import { mapCommonActionError } from './map-action-error'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { ArchivedAccountError } from '@/lib/server/services/account-lock'
 import {
   createDebt,
@@ -21,12 +22,15 @@ import {
   DebtOverpaymentError,
   type DebtLinkContext,
 } from '@/lib/server/services/debt'
-import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked-transaction'
+import {
+  FutureLinkedPaymentError,
+  LinkedAccountCurrencyMismatchError,
+} from '@/lib/server/services/linked-transaction'
 import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
-  createDebtSchema,
-  linkDebtToAccountSchema,
-  recordDebtPaymentSchema,
+  createDebtSchemaAsOf,
+  linkDebtToAccountSchemaAsOf,
+  recordDebtPaymentSchemaAsOf,
   updateDebtSchema,
   type CreateDebtInput,
   type LinkDebtToAccountInput,
@@ -82,6 +86,12 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * interactive transaction (a link writes one row per payment in one) that
  * expired and rolled back. "Remove from account" (its undo) adds `NOT_LINKED`,
  * for a debt whose opening another tab already removed from its account.
+ *
+ * Ruling P12 (final review F8): money recorded in an account cannot have moved
+ * later than the session user's today, so the writes that can record it parse
+ * against that day (`…SchemaAsOf`) — a later date is `INVALID_INPUT` on its
+ * field, refused before any lock — and "Record in an account" answers
+ * `FUTURE_PAYMENT` when an existing payment it would record is dated later.
  */
 export type DebtActionError =
   | 'OVERPAYMENT'
@@ -92,6 +102,7 @@ export type DebtActionError =
   | 'CONFLICT'
   | 'ALREADY_LINKED'
   | 'NOT_LINKED'
+  | 'FUTURE_PAYMENT'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -109,6 +120,7 @@ function mapError(e: unknown): DebtActionResult {
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof DebtAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   if (e instanceof DebtNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
+  if (e instanceof FutureLinkedPaymentError) return { ok: false, error: 'FUTURE_PAYMENT' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {
@@ -123,6 +135,12 @@ function mapError(e: unknown): DebtActionResult {
 function linkContext(user: Parameters<typeof resolveProfileDefaults>[0]): DebtLinkContext {
   const { timezone, locale } = resolveProfileDefaults(user)
   return { timezone, locale }
+}
+
+/** The session user's calendar day in their zone — the latest day money
+ *  recorded in an account may have moved (Ruling P12). */
+function todayOf(context: DebtLinkContext): string {
+  return todayCalendarDateInZone(context.timezone)
 }
 
 /** The two pages a debt's own terms appear on. Called only after a write
@@ -143,10 +161,11 @@ function revalidateMoneyPages(): void {
 
 export async function createDebtAction(input: CreateDebtInput): Promise<DebtActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     // Inside the `try`, so a `ZodError` from the parse is mapped by the same
     // clause as one raised by the service.
-    await createDebt(user.id, createDebtSchema.parse(input), linkContext(user))
+    await createDebt(user.id, createDebtSchemaAsOf(todayOf(context)).parse(input), context)
   } catch (e) {
     return mapError(e)
   }
@@ -176,12 +195,13 @@ export async function recordDebtPaymentAction(
   input: RecordDebtPaymentInput,
 ): Promise<DebtActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await recordDebtPayment(
       user.id,
       debtId,
-      recordDebtPaymentSchema.parse(input),
-      linkContext(user),
+      recordDebtPaymentSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)
@@ -197,12 +217,13 @@ export async function updateDebtPaymentAction(
   input: RecordDebtPaymentInput,
 ): Promise<DebtActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await updateDebtPayment(
       user.id,
       paymentId,
-      recordDebtPaymentSchema.parse(input),
-      linkContext(user),
+      recordDebtPaymentSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)
@@ -230,12 +251,13 @@ export async function linkDebtToAccountAction(
   input: LinkDebtToAccountInput,
 ): Promise<DebtActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await linkDebtToAccount(
       user.id,
       debtId,
-      linkDebtToAccountSchema.parse(input),
-      linkContext(user),
+      linkDebtToAccountSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)

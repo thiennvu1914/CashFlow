@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { displayPrincipal, paymentResolver, principalFromParts } from './loan-payment-math'
+import { displayPrincipal, paymentResolverAsOf, principalFromParts } from './loan-payment-math'
 
 /**
  * Unit cases for the two pure functions the payment form derives its Gốc
@@ -26,6 +26,12 @@ const BASE = {
   paymentDate: '2026-04-15',
   note: undefined,
 }
+
+/** The user's calendar day the form is built for (the page passes it). */
+const TODAY = '2026-04-20'
+
+/** The resolver the form builds for `TODAY`. */
+const paymentResolver = paymentResolverAsOf(TODAY)
 
 /**
  * What react-hook-form hands a resolver. `fields` is only read by
@@ -98,6 +104,34 @@ describe('displayPrincipal', () => {
     expect(displayPrincipal(5_000_000, Number.NaN)).toBe(5_000_000)
     expect(displayPrincipal(Number.NaN, 500_000)).toBe(-500_000)
     expect(displayPrincipal(Number.NaN, Number.NaN)).toBe(0)
+  })
+})
+
+describe('paymentResolverAsOf', () => {
+  it("refuses an instalment paid from an account on a day after the form's today (Ruling P12)", async () => {
+    const { errors } = await paymentResolver(
+      {
+        ...BASE,
+        paymentDate: '2026-04-21',
+        accountId: 'acc_1',
+        totalAmount: 900_000,
+        interestAmount: 0,
+      } as never,
+      undefined,
+      RESOLVER_OPTIONS,
+    )
+
+    expect(errors.paymentDate?.message).toBe('The date cannot be later than today')
+  })
+
+  it('accepts that day when no account is involved', async () => {
+    const { errors } = await paymentResolver(
+      { ...BASE, paymentDate: '2026-04-21', totalAmount: 900_000, interestAmount: 0 } as never,
+      undefined,
+      RESOLVER_OPTIONS,
+    )
+
+    expect(errors).toEqual({})
   })
 })
 

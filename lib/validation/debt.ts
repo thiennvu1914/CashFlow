@@ -1,6 +1,7 @@
 import * as z from 'zod'
 import {
   calendarDateStringSchema,
+  isLaterThanToday,
   optionalCalendarDateSchema,
 } from '@/lib/validation/calendar-date'
 import {
@@ -160,6 +161,57 @@ export const linkDebtToAccountSchema = z.object({
   /** Also record every payment that has no transaction yet. */
   includePayments: includePaymentsSchema,
 })
+
+/**
+ * The create, payment and link schemas for a user whose calendar day is
+ * `today` (Ruling P12, final review F8): money recorded in an account cannot
+ * have moved later than today in the user's zone. Recorded on a later day, the
+ * debt's outstanding would drop at once while the account's balance moved only
+ * then — the rule a reminder payment (P8) and a goal entry (P11) already
+ * follow. Without an account nothing moves, so the date keeps its usual rules
+ * (a planned repayment can still be noted).
+ *
+ * Factories rather than constants because "today" belongs to the user's zone,
+ * which neither this module nor a browser clock knows — exactly as
+ * `savingsGoalEntrySchema`: the action builds it from the session, the service
+ * from the context it is given, and a form from the day its page was rendered
+ * for. The refinement sits on the date field so a form highlights it.
+ */
+export function createDebtSchemaAsOf(today: string) {
+  return createDebtSchema.superRefine((value, ctx) => {
+    if (value.accountId !== undefined && isLaterThanToday(value.movedOn, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['movedOn'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
+
+export function recordDebtPaymentSchemaAsOf(today: string) {
+  return recordDebtPaymentSchema.superRefine((value, ctx) => {
+    if (value.accountId !== undefined && isLaterThanToday(value.date, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['date'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
+
+export function linkDebtToAccountSchemaAsOf(today: string) {
+  return linkDebtToAccountSchema.superRefine((value, ctx) => {
+    if (isLaterThanToday(value.openedOn, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['openedOn'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
 
 export type CreateDebtInput = z.infer<typeof createDebtSchema>
 export type UpdateDebtInput = z.infer<typeof updateDebtSchema>

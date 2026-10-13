@@ -163,6 +163,7 @@ export default async function DebtsPage() {
                     actions: (
                       <DebtRowMenu
                         debt={debt}
+                        today={today}
                         accounts={accounts}
                         mostRecentAccountId={mostRecentAccountId}
                       />
@@ -219,6 +220,7 @@ export default async function DebtsPage() {
                     actions: (
                       <DebtRowMenu
                         debt={debt}
+                        today={today}
                         accounts={accounts}
                         mostRecentAccountId={mostRecentAccountId}
                       />
@@ -271,6 +273,7 @@ export default async function DebtsPage() {
                 actions: (
                   <DebtRowMenu
                     debt={debt}
+                    today={today}
                     accounts={accounts}
                     mostRecentAccountId={mostRecentAccountId}
                   />

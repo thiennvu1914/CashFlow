@@ -1,6 +1,6 @@
-import type { FieldPath, Resolver } from 'react-hook-form'
+import type { FieldPath, Resolver, ResolverResult } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { recordLoanPaymentSchema, type RecordLoanPaymentInput } from '@/lib/validation/loan'
+import { recordLoanPaymentSchemaAsOf, type RecordLoanPaymentInput } from '@/lib/validation/loan'
 
 /**
  * The loan payment dialog's pure arithmetic and its RHF resolver — split out of
@@ -31,7 +31,7 @@ const cents = (value: number) => Math.round(value * 100)
  * `null` when either figure is missing or not a number — an emptied number
  * field arrives as `NaN` through `valueAsNumber` — because a principal of "0"
  * for a form the user has not filled in would state a figure nobody entered.
- * This is the value that is SUBMITTED (via `paymentResolver`, below);
+ * This is the value that is SUBMITTED (via `paymentResolverAsOf`, below);
  * `displayPrincipal` is what the read-only field SHOWS while the user is still
  * typing, and the two deliberately differ — see its own doc comment.
  *
@@ -93,11 +93,11 @@ export function displayPrincipal(total: number, interest: number): number {
  */
 export const DERIVED_FIELD: FieldPath<RecordLoanPaymentInput>[] = ['principalAmount']
 
-const validatePayment = zodResolver(recordLoanPaymentSchema)
-
 /**
- * `recordLoanPaymentSchema`, with the principal supplied by the form instead of
- * by the user.
+ * `recordLoanPaymentSchemaAsOf(today)`, with the principal supplied by the form
+ * instead of by the user. `today` is the user's own calendar day from the page
+ * (profile zone): an instalment paid from an account cannot be dated later
+ * (Ruling P12), so the resolver is built per form for that day.
  *
  * The user types the total and the interest, and the principal is arithmetic,
  * so asking for it as a third number would be asking them to do a subtraction
@@ -124,22 +124,21 @@ const validatePayment = zodResolver(recordLoanPaymentSchema)
  * The one thing it does post-process is the duplicate message a blank part
  * produces — see `dropDuplicatePrincipalError`.
  */
-export const paymentResolver: Resolver<RecordLoanPaymentInput> = async (
-  values,
-  context,
-  options,
-) => {
-  const result = await validatePayment(
-    {
-      ...values,
-      // `NaN` when a part is missing, which `moneyAmountSchema` rejects — the
-      // duplicate the helper below then removes.
-      principalAmount: principalFromParts(values.totalAmount, values.interestAmount) ?? NaN,
-    },
-    context,
-    options,
-  )
-  return dropDuplicatePrincipalError(result, values)
+export function paymentResolverAsOf(today: string): Resolver<RecordLoanPaymentInput> {
+  const validatePayment = zodResolver(recordLoanPaymentSchemaAsOf(today))
+  return async (values, context, options) => {
+    const result = await validatePayment(
+      {
+        ...values,
+        // `NaN` when a part is missing, which `moneyAmountSchema` rejects — the
+        // duplicate the helper below then removes.
+        principalAmount: principalFromParts(values.totalAmount, values.interestAmount) ?? NaN,
+      },
+      context,
+      options,
+    )
+    return dropDuplicatePrincipalError(result, values)
+  }
 }
 
 /**
@@ -160,9 +159,9 @@ export const paymentResolver: Resolver<RecordLoanPaymentInput> = async (
  * true if the part schemas are ever reworded.)
  */
 function dropDuplicatePrincipalError(
-  result: Awaited<ReturnType<typeof validatePayment>>,
+  result: ResolverResult<RecordLoanPaymentInput>,
   values: RecordLoanPaymentInput,
-): Awaited<ReturnType<typeof validatePayment>> {
+): ResolverResult<RecordLoanPaymentInput> {
   const bothPartsPresent =
     Number.isFinite(values.totalAmount) && Number.isFinite(values.interestAmount)
   if (bothPartsPresent) return result

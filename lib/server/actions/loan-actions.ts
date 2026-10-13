@@ -5,8 +5,12 @@ import { Prisma } from '@prisma/client'
 import { requireUser } from '@/lib/auth/require-user'
 import { mapCommonActionError } from './map-action-error'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
+import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { ArchivedAccountError } from '@/lib/server/services/account-lock'
-import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked-transaction'
+import {
+  FutureLinkedPaymentError,
+  LinkedAccountCurrencyMismatchError,
+} from '@/lib/server/services/linked-transaction'
 import {
   closeLoan,
   createLoan,
@@ -25,9 +29,9 @@ import {
 } from '@/lib/server/services/loan'
 import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
-  createLoanSchema,
-  linkLoanToAccountSchema,
-  recordLoanPaymentSchema,
+  createLoanSchemaAsOf,
+  linkLoanToAccountSchemaAsOf,
+  recordLoanPaymentSchemaAsOf,
   updateLoanSchema,
   type CreateLoanInput,
   type LinkLoanToAccountInput,
@@ -84,6 +88,12 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * that expired and rolled back. "Remove from account" (its undo) adds
  * `NOT_LINKED`, for a loan whose disbursement another tab already removed from
  * its account.
+ *
+ * Ruling P12 (final review F8): money recorded in an account cannot have moved
+ * later than the session user's today, so the writes that can record it parse
+ * against that day (`…SchemaAsOf`) — a later date is `INVALID_INPUT` on its
+ * field — and "Record in an account" answers `FUTURE_PAYMENT` when an existing
+ * instalment it would record is dated later.
  */
 export type LoanActionError =
   | 'OVERPAYMENT'
@@ -95,6 +105,7 @@ export type LoanActionError =
   | 'CONFLICT'
   | 'ALREADY_LINKED'
   | 'NOT_LINKED'
+  | 'FUTURE_PAYMENT'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -117,6 +128,7 @@ function mapError(e: unknown): LoanActionResult {
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof LoanAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   if (e instanceof LoanNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
+  if (e instanceof FutureLinkedPaymentError) return { ok: false, error: 'FUTURE_PAYMENT' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {
@@ -131,6 +143,12 @@ function mapError(e: unknown): LoanActionResult {
 function linkContext(user: Parameters<typeof resolveProfileDefaults>[0]): LoanLinkContext {
   const { timezone, locale } = resolveProfileDefaults(user)
   return { timezone, locale }
+}
+
+/** The session user's calendar day in their zone — the latest day money
+ *  recorded in an account may have moved (Ruling P12). */
+function todayOf(context: LoanLinkContext): string {
+  return todayCalendarDateInZone(context.timezone)
 }
 
 /** The two pages a loan's own terms appear on. Called only after a write
@@ -151,10 +169,11 @@ function revalidateMoneyPages(): void {
 
 export async function createLoanAction(input: CreateLoanInput): Promise<LoanActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     // Inside the `try`, so a `ZodError` from the parse is mapped by the same
     // clause as one raised by the service.
-    await createLoan(user.id, createLoanSchema.parse(input), linkContext(user))
+    await createLoan(user.id, createLoanSchemaAsOf(todayOf(context)).parse(input), context)
   } catch (e) {
     return mapError(e)
   }
@@ -185,12 +204,13 @@ export async function recordLoanPaymentAction(
   input: RecordLoanPaymentInput,
 ): Promise<LoanActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await recordLoanPayment(
       user.id,
       loanId,
-      recordLoanPaymentSchema.parse(input),
-      linkContext(user),
+      recordLoanPaymentSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)
@@ -206,12 +226,13 @@ export async function updateLoanPaymentAction(
   input: RecordLoanPaymentInput,
 ): Promise<LoanActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await updateLoanPayment(
       user.id,
       paymentId,
-      recordLoanPaymentSchema.parse(input),
-      linkContext(user),
+      recordLoanPaymentSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)
@@ -241,12 +262,13 @@ export async function linkLoanToAccountAction(
   input: LinkLoanToAccountInput,
 ): Promise<LoanActionResult> {
   const user = await requireUser()
+  const context = linkContext(user)
   try {
     await linkLoanToAccount(
       user.id,
       loanId,
-      linkLoanToAccountSchema.parse(input),
-      linkContext(user),
+      linkLoanToAccountSchemaAsOf(todayOf(context)).parse(input),
+      context,
     )
   } catch (e) {
     return mapError(e)

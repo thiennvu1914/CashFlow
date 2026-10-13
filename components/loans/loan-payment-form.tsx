@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslations } from 'next-intl'
 import type { Locale } from '@/lib/i18n/locale'
@@ -16,7 +16,7 @@ import { FormField } from '@/components/common/form-field'
 import { InlineAlert } from '@/components/common/inline-alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { DERIVED_FIELD, displayPrincipal, paymentResolver } from './loan-payment-math'
+import { DERIVED_FIELD, displayPrincipal, paymentResolverAsOf } from './loan-payment-math'
 
 /**
  * "How much did I pay, how much of it was interest, and when?" — the only write
@@ -109,13 +109,16 @@ export function LoanPaymentForm({
   // statement when there is some. (This form mounts only after hydration, so
   // pre-filled numbers cannot hit the create forms' DOM-default hazard.)
   const initialTotal = Number(payment ? payment.totalInput : loan.scheduledPaymentInput)
+  // Built for the page's `today` (profile zone): an instalment paid from an
+  // account cannot be dated later (Ruling P12).
+  const resolver = useMemo(() => paymentResolverAsOf(today), [today])
   const {
     control,
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<RecordLoanPaymentInput>({
-    resolver: paymentResolver,
+    resolver,
     defaultValues: {
       paymentDate: payment ? payment.date : today,
       totalAmount: initialTotal,
@@ -223,7 +226,7 @@ export function LoanPaymentForm({
           error={errors.principalAmount?.message}
         >
           {/* Read-only and unregistered: the principal is derived, not
-              entered. See `paymentResolver` (`loan-payment-math.ts`) for what
+              entered. See `paymentResolverAsOf` (`loan-payment-math.ts`) for what
               is SUBMITTED and `displayPrincipal` for what is SHOWN — the two
               differ on purpose while a part is blank, and this field must never
               read "—" for a valid number, including zero. `FormField`'s own

@@ -1,11 +1,11 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslations } from 'next-intl'
 import {
-  recordDebtPaymentSchema,
+  recordDebtPaymentSchemaAsOf,
   updateDebtSchema,
   type RecordDebtPaymentInput,
   type UpdateDebtInput,
@@ -145,10 +145,14 @@ export function DebtPaymentButton({
 
 export function DebtRowMenu({
   debt,
+  today,
   accounts,
   mostRecentAccountId,
 }: {
   debt: DebtDto
+  /** The user's own calendar day (`todayCalendarDateInZone` on the page): the
+   *  latest day "Record in an account" may date the money (Ruling P12). */
+  today: string
   /** Every active account; "Record in an account" keeps the ones in the
    *  debt's currency. */
   accounts: ReadonlyArray<DebtAccountOption>
@@ -251,6 +255,7 @@ export function DebtRowMenu({
         {linkOpen && (
           <DebtLinkForm
             debt={debt}
+            today={today}
             accounts={accounts}
             mostRecentAccountId={mostRecentAccountId}
             onDone={() => setLinkOpen(false)}
@@ -347,12 +352,15 @@ export function DebtPaymentForm({
       ? payment.accountId!
       : ''
     : defaultPaymentAccountId(options, debt.openingAccountId, mostRecentAccountId)
+  // Built for the page's `today` (profile zone): a repayment recorded in an
+  // account cannot be dated later (Ruling P12).
+  const schema = useMemo(() => recordDebtPaymentSchemaAsOf(today), [today])
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<RecordDebtPaymentInput>({
-    resolver: zodResolver(recordDebtPaymentSchema),
+    resolver: zodResolver(schema),
     // No default for a new payment's `amount`: a pre-filled `0` is the one
     // value the schema always rejects, and react-hook-form would write it into
     // the DOM.

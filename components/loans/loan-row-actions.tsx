@@ -239,10 +239,14 @@ export function LoanPaymentActions({
 
 export function LoanRowMenu({
   loan,
+  today,
   accounts,
   mostRecentAccountId,
 }: {
   loan: LoanDto
+  /** The user's own calendar day (`todayCalendarDateInZone` on the page): the
+   *  latest day "Record in an account" may date the money (Ruling P12). */
+  today: string
   /** Every active account; "Record in an account" keeps the ones in the
    *  loan's currency. */
   accounts: ReadonlyArray<DebtAccountOption>
@@ -345,6 +349,7 @@ export function LoanRowMenu({
         {linkOpen && (
           <LoanLinkForm
             loan={loan}
+            today={today}
             accounts={accounts}
             mostRecentAccountId={mostRecentAccountId}
             onDone={() => setLinkOpen(false)}

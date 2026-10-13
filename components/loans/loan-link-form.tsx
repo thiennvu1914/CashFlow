@@ -17,11 +17,13 @@ import { LinkToAccountForm } from '@/components/debts/link-to-account-form'
  */
 export function LoanLinkForm({
   loan,
+  today,
   accounts,
   mostRecentAccountId,
   onDone,
 }: {
   loan: LoanDto
+  today: string
   accounts: ReadonlyArray<DebtAccountOption>
   mostRecentAccountId: string | null
   onDone: () => void
@@ -31,6 +33,7 @@ export function LoanLinkForm({
       namespace="loans"
       currency={loan.currency}
       agreementDate={loan.startDate}
+      today={today}
       payments={loan.payments}
       accounts={accounts}
       mostRecentAccountId={mostRecentAccountId}

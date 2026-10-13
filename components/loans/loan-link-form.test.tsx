@@ -33,6 +33,9 @@ const { linkFormErrorKeys } = await import('@/components/debts/link-to-account-f
 
 const messages = await loadMessages('vi')
 
+/** The user's calendar day, as the page passes it (profile zone). */
+const TODAY = '2026-10-12'
+
 const ACCOUNTS = [
   { id: 'acc_wallet', name: 'Ví tiền mặt', currency: 'VND' as const },
   { id: 'acc_bank', name: 'Ngân hàng', currency: 'VND' as const },
@@ -90,6 +93,7 @@ function render(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
       <LoanLinkForm
         loan={props.loan ?? loan()}
+        today={TODAY}
         accounts={props.accounts ?? ACCOUNTS}
         mostRecentAccountId={
           props.mostRecentAccountId === undefined ? null : props.mostRecentAccountId
@@ -137,6 +141,12 @@ describe('LoanLinkForm ("Record in an account")', () => {
 
     expect(html).toContain(viLoans.linkDate)
     expect(html).toMatch(/type="date"[^>]*value="2026-01-15"|value="2026-01-15"[^>]*type="date"/)
+  })
+
+  it('never proposes a day later than today: a loan that starts later defaults to today (Ruling P12)', () => {
+    const html = render({ loan: loan({ startDate: '2026-11-01', payments: [] }) })
+
+    expect(html).toMatch(/type="date"[^>]*value="2026-10-12"|value="2026-10-12"[^>]*type="date"/)
   })
 
   it('dates the disbursement on the oldest instalment still to record when that is earlier (Ruling P7)', () => {
@@ -217,7 +227,12 @@ describe('LoanRowMenu', () => {
     return renderToStaticMarkup(
       <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
         <RowErrorProvider>
-          <LoanRowMenu loan={dto} accounts={ACCOUNTS} mostRecentAccountId={null} />
+          <LoanRowMenu
+            loan={dto}
+            today="2026-10-12"
+            accounts={ACCOUNTS}
+            mostRecentAccountId={null}
+          />
         </RowErrorProvider>
       </NextIntlClientProvider>,
     )

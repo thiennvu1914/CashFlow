@@ -25,6 +25,9 @@ const { linkFormErrorKeys } = await import('./link-to-account-form')
 
 const messages = await loadMessages('vi')
 
+/** The user's calendar day, as the page passes it (profile zone). */
+const TODAY = '2026-10-12'
+
 const ACCOUNTS = [
   { id: 'acc_wallet', name: 'Ví tiền mặt', currency: 'VND' as const },
   { id: 'acc_bank', name: 'Ngân hàng', currency: 'VND' as const },
@@ -75,6 +78,7 @@ function render(
     <NextIntlClientProvider locale="vi" timeZone="Asia/Ho_Chi_Minh" messages={messages}>
       <DebtLinkForm
         debt={props.debt ?? debt()}
+        today={TODAY}
         accounts={props.accounts ?? ACCOUNTS}
         mostRecentAccountId={
           props.mostRecentAccountId === undefined ? null : props.mostRecentAccountId

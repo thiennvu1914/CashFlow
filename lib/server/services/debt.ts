@@ -8,13 +8,14 @@ import {
   calendarDateToUtcCarrier,
   compareCalendarDates,
   formatCalendarDate,
+  todayCalendarDateInZone,
 } from '@/lib/datetime/calendar-date'
 import { calendarDateToEntryInstant, instantToLocalDateTime } from '@/lib/datetime/local-date-time'
 import type { Locale } from '@/lib/i18n/locale'
 import {
-  createDebtSchema,
-  linkDebtToAccountSchema,
-  recordDebtPaymentSchema,
+  createDebtSchemaAsOf,
+  linkDebtToAccountSchemaAsOf,
+  recordDebtPaymentSchemaAsOf,
   updateDebtSchema,
   type CreateDebtInput,
   type LinkDebtToAccountInput,
@@ -29,6 +30,7 @@ import enDebtMessages from '@/messages/en/debts.json'
 import viDebtMessages from '@/messages/vi/debts.json'
 import { lockAccountsForUpdate } from './account-lock'
 import {
+  FutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError,
   SNAPSHOT_PAIR,
   insertTransactionInTx,
@@ -178,7 +180,9 @@ import {
 export interface DebtLinkContext {
   /** The user's IANA zone. A payment or money-moved *date* becomes the linked
    *  transaction's instant (`calendarDateToEntryInstant`: now for today, else 12:00 that day) in this zone, so it lands on the
-   *  same calendar day the user picked whichever zone later reads it. */
+   *  same calendar day the user picked whichever zone later reads it — and
+   *  "today" here is the latest day money recorded in an account may have
+   *  moved (Ruling P12). */
   timezone: string
   /** The language of the default transaction note, rendered once at write
    *  time and stored — never re-rendered on read. */
@@ -657,7 +661,9 @@ export async function createDebt(
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<Debt> {
-  const parsed = createDebtSchema.parse(input)
+  // Against the user's today: an opening recorded in an account cannot be
+  // dated later (Ruling P12).
+  const parsed = createDebtSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   const data = {
     userId,
     direction: parsed.direction,
@@ -832,7 +838,9 @@ export async function recordDebtPayment(
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<DebtPayment> {
-  const parsed = recordDebtPaymentSchema.parse(input)
+  // Against the user's today: a repayment recorded in an account cannot be
+  // dated later (Ruling P12).
+  const parsed = recordDebtPaymentSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   const amount = new Prisma.Decimal(String(parsed.amount))
   const date = calendarDateToUtcCarrier(parsed.date)
   const { accountId } = parsed
@@ -954,7 +962,8 @@ export async function updateDebtPayment(
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<DebtPayment> {
-  const parsed = recordDebtPaymentSchema.parse(input)
+  // Against the user's today, as on recording (Ruling P12).
+  const parsed = recordDebtPaymentSchemaAsOf(todayCalendarDateInZone(context.timezone)).parse(input)
   // The schema refuses zero, so `insertTransactionInTx`'s RangeError and the
   // amount CHECKs are unreachable from here.
   const amount = new Prisma.Decimal(String(parsed.amount))
@@ -1166,8 +1175,10 @@ export async function writeOffDebt(userId: string, debtId: string): Promise<Debt
  * tab costs no rate request, and again under the lock, where a concurrent link
  * that committed first is visible), an account in another currency
  * (`LinkedAccountCurrencyMismatchError`), an archived account, another user's
- * debt or account (P2025), and no usable rate. Any later failure rolls the whole
- * operation back.
+ * debt or account (P2025), no usable rate, and — Ruling P12 — an opening date
+ * after today (a `ZodError`) or, with `includePayments`, a payment to record
+ * dated after today (`FutureLinkedPaymentError`). Any later failure rolls the
+ * whole operation back.
  *
  * A written-off debt can be linked too — writing it off records that the rest
  * will not come back, not that no money ever moved — so the debt row is locked
@@ -1189,7 +1200,12 @@ export async function linkDebtToAccount(
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
 ): Promise<Debt> {
-  const parsed = linkDebtToAccountSchema.parse(input)
+  // One "now" for the whole operation, so an opening and a payment both dated
+  // today land on the same instant rather than a few milliseconds apart — and
+  // one "today" for the date rule (Ruling P12).
+  const now = new Date()
+  const today = todayCalendarDateInZone(context.timezone, now)
+  const parsed = linkDebtToAccountSchemaAsOf(today).parse(input)
   const { accountId } = parsed
 
   // Ownership-scoped and first: another user's debt id is a P2025 here, and a
@@ -1209,9 +1225,6 @@ export async function linkDebtToAccount(
     parsed.includePayments ? existing._count.payments : 0,
   )
 
-  // One "now" for the whole operation, so an opening and a payment both dated
-  // today land on the same instant rather than a few milliseconds apart.
-  const now = new Date()
   const instantOf = (calendarDate: string) =>
     calendarDateToEntryInstant(calendarDate, context.timezone, now)
   const openedAt = instantOf(parsed.openedOn)
@@ -1235,7 +1248,22 @@ export async function linkDebtToAccount(
       note: string,
     ) => ({ accountId, type, amount, date, note, expectedCurrency: debt.currency })
 
-    // 3. The opening. `originalAmount` is > 0 (`Debt_originalAmount_positive`),
+    // 3. The payments with no transaction yet, read under the debt lock — and
+    //    refused, before anything is written, if one is dated after today
+    //    (Ruling P12: noted with no account it could carry a planned date).
+    const unlinked = parsed.includePayments
+      ? await tx.debtPayment.findMany({
+          where: { userId, debtId, transactionId: null },
+          orderBy: PAYMENT_ORDER,
+        })
+      : []
+    if (
+      unlinked.some((payment) => compareCalendarDates(formatCalendarDate(payment.date), today) > 0)
+    ) {
+      throw new FutureLinkedPaymentError()
+    }
+
+    // 4. The opening. `originalAmount` is > 0 (`Debt_originalAmount_positive`),
     //    so the core's zero-amount refusal is unreachable.
     const opening = await insertTransactionInTx(
       tx,
@@ -1250,31 +1278,25 @@ export async function linkDebtToAccount(
       account,
     )
 
-    // 4. The payments with no transaction yet, oldest first, each on its own
-    //    day (`DebtPayment_amount_positive`: never zero either).
-    if (parsed.includePayments) {
-      const unlinked = await tx.debtPayment.findMany({
-        where: { userId, debtId, transactionId: null },
-        orderBy: PAYMENT_ORDER,
+    // 5. Those payments, oldest first, each on its own day
+    //    (`DebtPayment_amount_positive`: never zero either).
+    for (const payment of unlinked) {
+      const created = await insertTransactionInTx(
+        tx,
+        userId,
+        linkedInput(
+          PAYMENT_TYPE[debt.direction],
+          payment.amount,
+          instantOf(formatCalendarDate(payment.date)),
+          payment.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person),
+        ),
+        fx,
+        account,
+      )
+      await tx.debtPayment.update({
+        where: { userId_id: { userId, id: payment.id } },
+        data: { transactionId: created.id },
       })
-      for (const payment of unlinked) {
-        const created = await insertTransactionInTx(
-          tx,
-          userId,
-          linkedInput(
-            PAYMENT_TYPE[debt.direction],
-            payment.amount,
-            instantOf(formatCalendarDate(payment.date)),
-            payment.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person),
-          ),
-          fx,
-          account,
-        )
-        await tx.debtPayment.update({
-          where: { userId_id: { userId, id: payment.id } },
-          data: { transactionId: created.id },
-        })
-      }
     }
 
     return tx.debt.update({

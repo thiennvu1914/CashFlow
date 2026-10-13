@@ -1,5 +1,5 @@
 import * as z from 'zod'
-import { calendarDateStringSchema } from '@/lib/validation/calendar-date'
+import { calendarDateStringSchema, isLaterThanToday } from '@/lib/validation/calendar-date'
 
 /**
  * "Record in an account" (spec 2026-10-12 §6.4): the fields a debt's and a
@@ -44,6 +44,25 @@ export const linkToAccountFormSchema = z.object({
 })
 
 export type LinkToAccountFormValues = z.infer<typeof linkToAccountFormSchema>
+
+/**
+ * The dialog's schema for a user whose calendar day is `today` (Ruling P12,
+ * final review F8): the opening or disbursement it records cannot be dated
+ * later — the account's balance would only move on that day while the
+ * agreement already counts it. The form builds it from the day its page was
+ * rendered for in the profile zone, never from a browser clock.
+ */
+export function linkToAccountFormSchemaAsOf(today: string) {
+  return linkToAccountFormSchema.superRefine((value, ctx) => {
+    if (isLaterThanToday(value.date, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['date'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
 
 /**
  * "Bỏ ghi vào tài khoản / Remove from account" — the undo of the link above, for

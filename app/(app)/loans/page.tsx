@@ -162,6 +162,7 @@ export default async function LoansPage() {
                 actions: (
                   <LoanRowMenu
                     loan={loan}
+                    today={today}
                     accounts={accounts}
                     mostRecentAccountId={mostRecentAccountId}
                   />
@@ -213,6 +214,7 @@ export default async function LoansPage() {
                 actions: (
                   <LoanRowMenu
                     loan={loan}
+                    today={today}
                     accounts={accounts}
                     mostRecentAccountId={mostRecentAccountId}
                   />

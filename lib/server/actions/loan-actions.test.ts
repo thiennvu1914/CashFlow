@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {
+  calendarDateToUtcCarrier,
+  formatCalendarDate,
+  todayCalendarDateInZone,
+} from '@/lib/datetime/calendar-date'
 
 /**
  * `loan-actions.ts` starts with `'use server'`; Vitest ignores server-action
@@ -66,6 +71,13 @@ class MockLoanAlreadyLinkedError extends Error {
   }
 }
 
+class MockFutureLinkedPaymentError extends Error {
+  constructor() {
+    super('A payment dated later than today cannot be recorded in an account yet.')
+    this.name = 'FutureLinkedPaymentError'
+  }
+}
+
 class MockLoanNotLinkedError extends Error {
   constructor() {
     super('This loan is not recorded in an account.')
@@ -122,6 +134,7 @@ vi.mock('@/lib/server/services/loan', () => ({
 }))
 
 vi.mock('@/lib/server/services/linked-transaction', () => ({
+  FutureLinkedPaymentError: MockFutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError: MockLinkedAccountCurrencyMismatchError,
 }))
 
@@ -858,6 +871,62 @@ describe('unlinkLoanFromAccountAction', () => {
   })
 })
 
+/**
+ * Ruling P12 (final review F8): each money-capable action parses against the
+ * session user's today, so a write recorded in an account on a later day is
+ * refused at the edge. Two days ahead, clear of a run that crosses midnight in
+ * the user's zone.
+ */
+describe('no future-dated money movement in an account (P12)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const LATER = formatCalendarDate(
+    new Date(
+      calendarDateToUtcCarrier(todayCalendarDateInZone(FIXED_USER.timezone)).getTime() + 2 * DAY_MS,
+    ),
+  )
+
+  it.each([
+    ['createLoanAction', () => createLoanAction({ ...linkedCreateInput, startDate: LATER })],
+    [
+      'recordLoanPaymentAction',
+      () => recordLoanPaymentAction('loan_1', { ...linkedPaymentInput, paymentDate: LATER }),
+    ],
+    [
+      'updateLoanPaymentAction',
+      () => updateLoanPaymentAction('payment_1', { ...linkedPaymentInput, paymentDate: LATER }),
+    ],
+    [
+      'linkLoanToAccountAction',
+      () => linkLoanToAccountAction('loan_1', { ...linkInput, disbursedOn: LATER }),
+    ],
+  ] as const)('%s refuses a later day in an account as INVALID_INPUT', async (_name, act) => {
+    expect(await act()).toEqual({ ok: false, error: 'INVALID_INPUT' })
+    expect(createLoanMock).not.toHaveBeenCalled()
+    expect(recordLoanPaymentMock).not.toHaveBeenCalled()
+    expect(updateLoanPaymentMock).not.toHaveBeenCalled()
+    expect(linkLoanToAccountMock).not.toHaveBeenCalled()
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+
+  it('still creates a loan that starts later when it is received into no account', async () => {
+    createLoanMock.mockResolvedValue(undefined)
+
+    const result = await createLoanAction({ ...validCreateInput, startDate: LATER })
+
+    expect(result).toEqual({ ok: true })
+    expect(createLoanMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('maps a later-dated instalment that "Record in an account" would record to FUTURE_PAYMENT', async () => {
+    linkLoanToAccountMock.mockRejectedValue(new MockFutureLinkedPaymentError())
+
+    const result = await linkLoanToAccountAction('loan_1', linkInput)
+
+    expect(result).toEqual({ ok: false, error: 'FUTURE_PAYMENT' })
+    expect(revalidatePathMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('LOAN_ERROR_KEYS', () => {
   // The temporary English `LOAN_ERROR_MESSAGES` alias this test used to pin
   // (Phase 7, Tasks 2–13) is gone (Task 13): every code's copy now lives only
@@ -878,6 +947,7 @@ describe('LOAN_ERROR_KEYS', () => {
       CONFLICT: 'errors.loan.CONFLICT',
       ALREADY_LINKED: 'errors.loan.ALREADY_LINKED',
       NOT_LINKED: 'errors.loan.NOT_LINKED',
+      FUTURE_PAYMENT: 'errors.loan.FUTURE_PAYMENT',
       TIMEOUT: 'errors.loan.TIMEOUT',
       INVALID_INPUT: 'errors.loan.INVALID_INPUT',
       NOT_FOUND: 'errors.loan.NOT_FOUND',

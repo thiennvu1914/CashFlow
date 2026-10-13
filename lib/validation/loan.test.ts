@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { ZodType } from 'zod'
 import {
   createLoanSchema,
+  createLoanSchemaAsOf,
   linkLoanToAccountSchema,
+  linkLoanToAccountSchemaAsOf,
   recordLoanPaymentSchema,
+  recordLoanPaymentSchemaAsOf,
   updateLoanSchema,
 } from './loan'
 
@@ -542,5 +545,61 @@ describe('no raw Zod text reaches a form', () => {
         expect(message).not.toMatch(RAW_ZOD_TEXT)
       }
     }
+  })
+})
+
+/**
+ * Ruling P12 (final review F8): money recorded in an account cannot have moved
+ * later than today in the user's zone. A loan received into an account is
+ * disbursed on its start date, so that date is held to it; an instalment paid
+ * from an account likewise. Without an account nothing moves and the dates keep
+ * today's rules.
+ */
+describe('no future-dated money movement in an account (P12)', () => {
+  const TODAY = '2026-03-15'
+  const LATER = 'The date cannot be later than today'
+
+  it('refuses a loan received into an account with a later start date, on the start date', () => {
+    const schema = createLoanSchemaAsOf(TODAY)
+    const result = schema.safeParse({
+      ...VALID_LOAN,
+      startDate: '2026-03-16',
+      nextDueDate: '2026-04-16',
+      accountId: 'acc_1',
+    })
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['startDate'], message: LATER }),
+    ])
+    expect(schema.safeParse({ ...VALID_LOAN, startDate: TODAY, accountId: 'acc_1' }).success).toBe(
+      true,
+    )
+    // Not received into an account: a loan that starts next month is fine.
+    expect(
+      schema.safeParse({ ...VALID_LOAN, startDate: '2026-04-01', nextDueDate: '2026-05-01' })
+        .success,
+    ).toBe(true)
+  })
+
+  it('refuses an instalment paid from an account on a later day, on the payment date', () => {
+    const schema = recordLoanPaymentSchemaAsOf(TODAY)
+    const result = schema.safeParse({
+      ...VALID_PAYMENT,
+      paymentDate: '2026-03-16',
+      accountId: 'acc_1',
+    })
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['paymentDate'], message: LATER }),
+    ])
+    expect(
+      schema.safeParse({ ...VALID_PAYMENT, paymentDate: TODAY, accountId: 'acc_1' }).success,
+    ).toBe(true)
+    expect(schema.safeParse({ ...VALID_PAYMENT, paymentDate: '2026-03-16' }).success).toBe(true)
+  })
+
+  it('refuses "Record in an account" on a later day', () => {
+    const schema = linkLoanToAccountSchemaAsOf(TODAY)
+    const link = { accountId: 'acc_1', includePayments: true }
+    expect(messagesFor(schema, { ...link, disbursedOn: '2026-03-16' })).toEqual([LATER])
+    expect(schema.safeParse({ ...link, disbursedOn: TODAY }).success).toBe(true)
   })
 })

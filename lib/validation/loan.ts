@@ -1,5 +1,5 @@
 import * as z from 'zod'
-import { calendarDateStringSchema } from '@/lib/validation/calendar-date'
+import { calendarDateStringSchema, isLaterThanToday } from '@/lib/validation/calendar-date'
 import {
   includePaymentsSchema,
   linkAccountIdSchema,
@@ -285,6 +285,52 @@ export const linkLoanToAccountSchema = z.object({
   /** Also record every instalment that has no transaction yet. */
   includePayments: includePaymentsSchema,
 })
+
+/**
+ * The create, instalment and link schemas for a user whose calendar day is
+ * `today` (Ruling P12, final review F8): money recorded in an account cannot
+ * have moved later than today in the user's zone — the loan's figures would
+ * change at once while the account's balance moved only on that day. A loan
+ * received into an account is disbursed on its start date, so that date is the
+ * one held to it. Without an account nothing moves and the dates keep their
+ * usual rules. Factories for the reason `debt.ts` gives (the user's zone owns
+ * "today").
+ */
+export function createLoanSchemaAsOf(today: string) {
+  return createLoanSchema.superRefine((value, ctx) => {
+    if (value.accountId !== undefined && isLaterThanToday(value.startDate, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['startDate'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
+
+export function recordLoanPaymentSchemaAsOf(today: string) {
+  return recordLoanPaymentSchema.superRefine((value, ctx) => {
+    if (value.accountId !== undefined && isLaterThanToday(value.paymentDate, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['paymentDate'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
+
+export function linkLoanToAccountSchemaAsOf(today: string) {
+  return linkLoanToAccountSchema.superRefine((value, ctx) => {
+    if (isLaterThanToday(value.disbursedOn, today)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['disbursedOn'],
+        message: 'The date cannot be later than today',
+      })
+    }
+  })
+}
 
 export type CreateLoanInput = z.infer<typeof createLoanSchema>
 export type UpdateLoanInput = z.infer<typeof updateLoanSchema>
