@@ -361,26 +361,28 @@ test.describe.serial('Phase 6 — planning modules', () => {
     // visibility checks that would pass in any order. Note: the rail's links
     // now include the "Thêm giao dịch" action and the wordmark link, which are
     // outside the `<nav>` — so scoping `allTextContents()` to the `nav` (as
-    // `rail` already does) still yields exactly the twelve destination labels,
+    // `rail` already does) still yields exactly the nine destination labels,
     // and the icon-rail's `sr-only` span still carries the label text at 1280.
     const labels = await rail.getByRole('link').allTextContents()
     const budgetsIndex = labels.findIndex((label) => /^(Ngân sách|Budgets)$/.test(label))
     expect(budgetsIndex).toBeGreaterThanOrEqual(0)
-    const nextFour = labels.slice(budgetsIndex + 1, budgetsIndex + 5)
+    const nextThree = labels.slice(budgetsIndex + 1, budgetsIndex + 4)
     // Position, not just membership: each of the four must be the SPECIFIC
     // label at that index, not merely one of the four somewhere in the slice
     // — a `toEqual(slice.filter(...))` comparison would let a duplicate
     // through (e.g. two "Công nợ" and no "Tiết kiệm" would still pass a
     // membership check).
-    expect(nextFour[0]).toMatch(/^(Tiết kiệm|Savings)$/)
-    expect(nextFour[1]).toMatch(/^(Công nợ|Debts)$/)
-    expect(nextFour[2]).toMatch(/^(Khoản vay|Loans)$/)
-    expect(nextFour[3]).toMatch(/^(Nhắc nhở|Reminders)$/)
+    // Debts and Loans are ONE rail entry ("Vay & nợ"), two tabs inside it.
+    expect(nextThree[0]).toMatch(/^(Tiết kiệm|Savings)$/)
+    expect(nextThree[1]).toMatch(/^(Vay & nợ|Debts & loans)$/)
+    expect(nextThree[2]).toMatch(/^(Nhắc nhở|Reminders)$/)
 
     // Each link lands on its own page, and each page states what it has:
     // Savings is `/goals`' h1 (the route and the label differ on purpose).
     const destinations: {
       label: RegExp
+      /** Set when the destination is a tab of the current page, not a rail link. */
+      tab?: RegExp
       url: RegExp
       heading: string | RegExp
       empty: string | RegExp
@@ -392,13 +394,15 @@ test.describe.serial('Phase 6 — planning modules', () => {
         empty: /Chưa có mục tiêu tiết kiệm|No savings goals yet/,
       },
       {
-        label: /^(Công nợ|Debts)$/,
+        label: /^(Vay & nợ|Debts & loans)$/,
         url: /\/debts/,
         heading: /Công nợ|^Debts$/,
         empty: /Chưa có công nợ|No debts yet/,
       },
       {
+        // The Loans tab inside the "Vay & nợ" entry, not a rail link.
         label: /^(Khoản vay|Loans)$/,
+        tab: /^(Vay & nợ|Debts & loans)$/,
         url: /\/loans/,
         heading: /Khoản vay|^Loans$/,
         empty: /Chưa có khoản vay|No loans yet/,
@@ -417,7 +421,10 @@ test.describe.serial('Phase 6 — planning modules', () => {
     ]
 
     for (const destination of destinations) {
-      await rail.getByRole('link', { name: destination.label }).click()
+      const source = destination.tab
+        ? page.getByRole('navigation', { name: destination.tab })
+        : rail
+      await source.getByRole('link', { name: destination.label }).click()
       await expect(page).toHaveURL(destination.url)
       await expect(page.getByRole('heading', { name: destination.heading, level: 1 })).toBeVisible()
       await expect(page.getByText(destination.empty, { exact: true })).toBeVisible()
@@ -1043,8 +1050,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
 
     for (const label of [
       /^(Tiết kiệm|Savings)$/,
-      /^(Công nợ|Debts)$/,
-      /^(Khoản vay|Loans)$/,
+      /^(Vay & nợ|Debts & loans)$/,
       /^(Nhắc nhở|Reminders)$/,
     ]) {
       await expect(morePanel.getByRole('link', { name: label })).toBeVisible()
