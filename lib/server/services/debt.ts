@@ -410,7 +410,13 @@ const PAYMENT_ORDER = [
 
 /** The one include every read here uses, so no caller can accidentally fetch a
  *  debt without its payments or with them in a different order — or without
- *  the linked accounts `DebtRow` promises. */
+ *  the linked accounts `DebtRow` promises.
+ *
+ *  Reads only. The writes return the plain `Debt` row they committed, as the
+ *  loan writes do (final review F6): loading the payments and their accounts
+ *  inside a write's own transaction costs extra statements while its locks
+ *  are held, and no caller reads them — the actions ignore the result and the
+ *  page reads through `listDebts` / `getDebtsWithOutstanding`. */
 const WITH_PAYMENTS = {
   payments: {
     orderBy: PAYMENT_ORDER,
@@ -641,13 +647,16 @@ export async function getDebtOutstanding(userId: string, debtId: string): Promis
  * Only the account is locked (by `insertTransactionInTx`): the debt row is
  * being created inside this transaction, so no one else can see it, let alone
  * lock it, before it commits.
+ *
+ * Returns the committed `Debt` row as written — its relations are the read
+ * path's to load (see `WITH_PAYMENTS`).
  */
 export async function createDebt(
   userId: string,
   input: CreateDebtInput,
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
-): Promise<DebtRow> {
+): Promise<Debt> {
   const parsed = createDebtSchema.parse(input)
   const data = {
     userId,
@@ -667,10 +676,7 @@ export async function createDebt(
 
   const { accountId, movedOn } = parsed
   if (accountId === undefined) {
-    return prisma.debt.create({
-      data: { ...data, currency: parsed.currency },
-      include: WITH_PAYMENTS,
-    })
+    return prisma.debt.create({ data: { ...data, currency: parsed.currency } })
   }
   // `createDebtSchema` refuses an account without a money-moved date, so this
   // is a caller bug that skipped the parse, not a user error.
@@ -700,7 +706,6 @@ export async function createDebt(
       // `opening.currency` was copied from the locked account row, so the
       // debt and its opening transaction cannot disagree about the currency.
       data: { ...data, currency: opening.currency, openingTransactionId: opening.id },
-      include: WITH_PAYMENTS,
     })
   })
 }
@@ -723,12 +728,14 @@ export async function createDebt(
  * it cannot race a payment into breaking an invariant. The worst a concurrent
  * write-off can do is let an edit land a moment before the freeze — which is
  * indistinguishable from the user having clicked Save a moment earlier.
+ *
+ * Returns the updated `Debt` row as written (see `WITH_PAYMENTS`).
  */
 export async function updateDebt(
   userId: string,
   debtId: string,
   input: UpdateDebtInput,
-): Promise<DebtRow> {
+): Promise<Debt> {
   const parsed = updateDebtSchema.parse(input)
   const existing = await prisma.debt.findUniqueOrThrow({
     where: { userId_id: { userId, id: debtId } },
@@ -746,7 +753,6 @@ export async function updateDebt(
       dueDate: dueDateCarrier(parsed.dueDate),
       notes: parsed.notes ?? null,
     },
-    include: WITH_PAYMENTS,
   })
 }
 
@@ -1105,21 +1111,19 @@ export async function deleteDebtPayment(userId: string, paymentId: string): Prom
  * return is a true no-op — no write at all, so `updatedAt` is not bumped
  * either. Payments and edits still throw, because those ask for a change that
  * will not happen.
+ *
+ * Returns the `Debt` row as it stands under the lock (see `WITH_PAYMENTS`).
  */
-export async function writeOffDebt(userId: string, debtId: string): Promise<DebtRow> {
+export async function writeOffDebt(userId: string, debtId: string): Promise<Debt> {
   return prisma.$transaction(async (tx) => {
     await lockDebtRow(tx, userId, debtId)
 
-    const debt = await tx.debt.findUniqueOrThrow({
-      where: { userId_id: { userId, id: debtId } },
-      include: WITH_PAYMENTS,
-    })
+    const debt = await tx.debt.findUniqueOrThrow({ where: { userId_id: { userId, id: debtId } } })
     if (debt.status === 'WRITTEN_OFF') return debt
 
     return tx.debt.update({
       where: { userId_id: { userId, id: debtId } },
       data: { status: 'WRITTEN_OFF' },
-      include: WITH_PAYMENTS,
     })
   })
 }
@@ -1161,7 +1165,8 @@ export async function writeOffDebt(userId: string, debtId: string): Promise<Debt
  * One FX snapshot, fetched before the transaction opens, is shared by every
  * transaction written: they are all entered now, whatever day they are dated.
  * The transaction's timeout is sized for the number of payments to record
- * (`linkTransactionOptions`), since one link may write dozens of rows.
+ * (`linkTransactionOptions`), since one link may write dozens of rows. Returns
+ * the committed `Debt` row as written (see `WITH_PAYMENTS`).
  */
 export async function linkDebtToAccount(
   userId: string,
@@ -1169,7 +1174,7 @@ export async function linkDebtToAccount(
   input: LinkDebtToAccountInput,
   context: DebtLinkContext,
   providerOverride?: ExchangeRateProvider, // tests only; production callers omit it
-): Promise<DebtRow> {
+): Promise<Debt> {
   const parsed = linkDebtToAccountSchema.parse(input)
   const { accountId } = parsed
 
@@ -1261,7 +1266,6 @@ export async function linkDebtToAccount(
     return tx.debt.update({
       where: { userId_id: { userId, id: debtId } },
       data: { openingTransactionId: opening.id },
-      include: WITH_PAYMENTS,
     })
   }, transactionOptions)
 }

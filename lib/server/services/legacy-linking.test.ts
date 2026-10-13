@@ -456,8 +456,10 @@ describe('linkDebtToAccount', () => {
     )
 
     expect(linked.openingTransactionId).not.toBeNull()
-    // What the payment picker pre-selects from now on travels with the row.
-    expect(linked.openingTransaction).toMatchObject({ accountId: s.walletId })
+    // What the payment picker pre-selects from now on is what the page reads.
+    expect((await listDebts(s.userId))[0].openingTransaction).toMatchObject({
+      accountId: s.walletId,
+    })
     const opening = await transactionById(s, linked.openingTransactionId)
     expect(opening).toMatchObject({
       accountId: s.walletId,
@@ -528,8 +530,9 @@ describe('linkDebtToAccount', () => {
       expect(row.fxRateFetchedAt.toISOString()).toBe(fetchedAt.toISOString())
       expect(row.fxRateSource).toBe(FX_SOURCE)
     }
-    // The returned row carries each payment's account, for the edit form.
-    expect(linked.payments.map((p) => p.transaction?.accountId)).toEqual([s.walletId, s.walletId])
+    // The page reads each payment's account, for the edit form.
+    const [listed] = await listDebts(s.userId)
+    expect(listed.payments.map((p) => p.transaction?.accountId)).toEqual([s.walletId, s.walletId])
 
     // 5,000,000 − 1,000,000 lent + 300,000 repaid.
     expect(await transactionCount(s)).toBe(3)
@@ -830,9 +833,10 @@ describe('linkDebtToAccount', () => {
       await payment
 
       await lock.release()
-      const linked = await pending
+      await pending
       // It read the payments under the debt lock, after that one committed.
-      expect(linked.payments.map((p) => p.transaction?.accountId)).toEqual([s.walletId])
+      const [listed] = await listDebts(s.userId)
+      expect(listed.payments.map((p) => p.transaction?.accountId)).toEqual([s.walletId])
       expect(await balanceOf(s, s.walletId)).toBe('4100000')
     }, 30_000)
 

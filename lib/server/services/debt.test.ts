@@ -23,6 +23,7 @@ import {
   deriveDebtOutstanding,
   getDebtOutstanding,
   getDebtsWithOutstanding,
+  linkDebtToAccount,
   listDebts,
   recordDebtPayment as recordDebtPaymentIn,
   updateDebt,
@@ -368,7 +369,7 @@ describe('debt service', () => {
       expect(debt.currency).toBe('VND')
       expect(debt.notes).toBe('Paying back monthly')
       expect(debt.status).toBe('ACTIVE')
-      expect(debt.payments).toEqual([])
+      expect((await listDebts(fx.userId))[0].payments).toEqual([])
 
       // Not 2026-06-29T17:00Z (the +07 midnight) and not the 29th read back:
       // the stored instant's UTC components ARE the calendar date the user
@@ -1339,8 +1340,9 @@ describe('money-source linking', () => {
 
       expect(debt.currency).toBe('VND')
       expect(debt.openingTransactionId).not.toBeNull()
-      // What the payment picker pre-selects (spec §6.2) travels with the row.
-      expect(debt.openingTransaction).toMatchObject({
+      // What the payment picker pre-selects (spec §6.2) is what the page reads.
+      const [listed] = await listDebts(s.userId)
+      expect(listed.openingTransaction).toMatchObject({
         accountId: s.walletId,
         account: { status: 'ACTIVE' },
       })
@@ -1397,7 +1399,7 @@ describe('money-source linking', () => {
 
       expect(debt.currency).toBe('USD')
       expect(debt.openingTransactionId).toBeNull()
-      expect(debt.openingTransaction).toBeNull()
+      expect((await listDebts(s.userId))[0].openingTransaction).toBeNull()
       expect(await transactionCount(s)).toBe(0)
       expect(await balanceOf(s, s.walletId)).toBe('5000000')
     })
@@ -2008,6 +2010,56 @@ describe('money-source linking', () => {
 
       expect(await transactionCount(s)).toBe(2)
       expect(await balanceOf(s, s.walletId)).toBe('4100000')
+    })
+  })
+
+  /**
+   * Final review F6: a write returns the plain `Debt` row it committed, as the
+   * loan writes do — never with the payments and linked accounts included.
+   * Loading those inside the write's own transaction costs extra statements
+   * while the account and debt locks are held, and no caller reads them (the
+   * actions ignore the result; the page reads through `listDebts`).
+   */
+  describe('writes return the committed row, without its relations', () => {
+    function expectPlainDebt(row: object, id: string) {
+      expect(row).toMatchObject({ id })
+      expect(row).not.toHaveProperty('payments')
+      expect(row).not.toHaveProperty('openingTransaction')
+    }
+
+    it('createDebt, with an account and without', async () => {
+      const s = await setup()
+
+      const linked = await createDebt(
+        s.userId,
+        { ...BASE_DEBT, accountId: s.walletId, movedOn: '2026-03-01' },
+        fakeProvider().provider,
+      )
+      const unlinked = await unlinkedDebt(s)
+
+      expectPlainDebt(linked, linked.id)
+      expect(linked.openingTransactionId).not.toBeNull()
+      expectPlainDebt(unlinked, unlinked.id)
+    })
+
+    it('updateDebt, writeOffDebt (first and repeated) and linkDebtToAccount', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+
+      expectPlainDebt(await updateDebt(s.userId, debt.id, { person: 'An' }), debt.id)
+      const linked = await linkDebtToAccount(
+        s.userId,
+        debt.id,
+        { accountId: s.walletId, openedOn: '2026-03-01', includePayments: false },
+        CONTEXT,
+        fakeProvider().provider,
+      )
+      expectPlainDebt(linked, debt.id)
+      expect(linked.openingTransactionId).not.toBeNull()
+      const writtenOff = await writeOffDebt(s.userId, debt.id)
+      expectPlainDebt(writtenOff, debt.id)
+      expect(writtenOff.status).toBe('WRITTEN_OFF')
+      expectPlainDebt(await writeOffDebt(s.userId, debt.id), debt.id)
     })
   })
 
