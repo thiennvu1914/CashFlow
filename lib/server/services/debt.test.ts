@@ -1741,6 +1741,66 @@ describe('money-source linking', () => {
       expect((await getDebtOutstanding(s.userId, debt.id)).toString()).toBe('700000')
     })
 
+    /**
+     * Final review F7, as loans do it: the default label is rendered once, when
+     * the transaction is created, in the user's locale then — an edit of a
+     * payment that still has no note of its own keeps it rather than
+     * re-rendering it in whatever language the editing session uses.
+     */
+    it('keeps the default note written at creation rather than re-rendering it in the current locale', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPaymentIn(
+        s.userId,
+        debt.id,
+        { amount: 200_000, date: '2026-03-05', accountId: s.walletId },
+        { timezone: TEST_TIMEZONE, locale: 'en' },
+        fakeProvider().provider,
+      )
+
+      // Edited later from a Vietnamese session — another amount, then another
+      // account — still with no note of its own.
+      await updateDebtPaymentIn(
+        s.userId,
+        payment.id,
+        { amount: 250_000, date: '2026-03-05', accountId: s.walletId },
+        { timezone: TEST_TIMEZONE, locale: 'vi' },
+        fakeProvider().provider,
+      )
+      await updateDebtPaymentIn(
+        s.userId,
+        payment.id,
+        { amount: 250_000, date: '2026-03-05', accountId: s.bankId },
+        { timezone: TEST_TIMEZONE, locale: 'vi' },
+        fakeProvider().provider,
+      )
+
+      const after = await transactionById(s, payment.transactionId)
+      expect(after.accountId).toBe(s.bankId)
+      expect(after.note).toBe('Repaid by Nguyen An')
+    })
+
+    it('brings the default note back when the user clears their own', async () => {
+      const s = await setup()
+      const debt = await unlinkedDebt(s)
+      const payment = await recordDebtPayment(
+        s.userId,
+        debt.id,
+        { amount: 200_000, date: '2026-03-05', note: 'Typo', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      await updateDebtPayment(
+        s.userId,
+        payment.id,
+        { amount: 200_000, date: '2026-03-05', accountId: s.walletId },
+        fakeProvider().provider,
+      )
+
+      expect((await transactionById(s, payment.transactionId)).note).toBe('Thu nợ – Nguyen An')
+      expect((await paymentById(s, payment.id)).note).toBeNull()
+    })
+
     it('moves the transaction to the new payment day', async () => {
       const s = await setup()
       const { payment, transaction } = await linkedPayment(s)

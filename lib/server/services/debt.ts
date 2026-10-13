@@ -936,6 +936,10 @@ async function verifyPaymentUnderLock(
  *   another account, another amount, another instant — and fetched before the
  *   transaction opens; a note-only edit keeps the snapshot exactly and needs no
  *   rate at all.
+ * - **Notes**: the user's note when given; without one, the default label the
+ *   transaction was created with is kept (rendered once, never re-rendered in
+ *   the current locale), and only a new transaction — or a payment whose own
+ *   note was just cleared — gets the label rendered now.
  * - **Frozen history**: a payment of a written-off debt cannot be edited.
  *
  * Concurrency: the payment and its linked transaction are read once outside
@@ -1001,8 +1005,18 @@ export async function updateDebtPayment(
     const outstanding = await outstandingUnderLock(tx, userId, debt, paymentId)
     if (amount.gt(outstanding)) throw new DebtOverpaymentError(outstanding)
 
+    // The user's note when given. Without one, a transaction whose payment had
+    // no note either keeps the label it got when it was created — rendered
+    // once, in the locale of that moment, never again in the editing session's
+    // (as `updateLoanPayment` does) — and anything else (a new transaction, or
+    // a payment whose own note was just cleared) gets the label rendered now.
+    // The pre-read copies are safe here: an edit of this payment since then
+    // also rewrote its linked transaction, which the row check above refuses.
     const note =
-      parsed.note ?? linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person)
+      parsed.note ??
+      (existing.note === null && linked?.note != null
+        ? linked.note
+        : linkedNote(context.locale, PAYMENT_NOTE[debt.direction], debt.person))
     // The locked row of the account the money now moves through —
     // `lockAccountsForUpdate` resolved every id it was given or threw.
     const target = accounts.find((account) => account.id === nextAccountId)
