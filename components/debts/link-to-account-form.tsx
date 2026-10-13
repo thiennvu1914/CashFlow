@@ -65,9 +65,10 @@ export function linkFormErrorKeys<E extends string>(
  *   later than `today` (Ruling P12: money recorded in an account cannot have
  *   moved in the future), which the form also refuses.
  * - **"Ghi bù N lần trả đã có / Also record the N existing payments"**: on by
- *   default, counting only the payments with no transaction yet (one already
- *   recorded in an account is skipped by the service), and not shown when
- *   there are none. A native checkbox, like the native `<select>` beside it:
+ *   default, counting only the payments with no transaction yet and dated up
+ *   to today (one already recorded in an account, or dated later, is skipped by
+ *   the service — a line says how many are left for later), and not shown when
+ *   there are none to record. A native checkbox, like the native `<select>` beside it:
  *   uncontrolled, it gets its server-rendered `checked` from `defaultChecked`.
  *   The whole label is the hit area, at least 44 px tall below the icon rail.
  *
@@ -115,7 +116,14 @@ export function LinkToAccountForm<E extends string>({
   // so the default never proposes a day the form would refuse.
   const initialDate = compareCalendarDates(linkDate, today) > 0 ? today : linkDate
   const schema = useMemo(() => linkToAccountFormSchemaAsOf(today), [today])
-  const unlinkedPayments = payments.filter((payment) => payment.accountId === null).length
+  // Only the payments the server will record: none in an account yet and dated
+  // up to today. Later-dated ones are left as they are (Ruling P12) — counted
+  // apart so the dialog can say so.
+  const unrecorded = payments.filter((payment) => payment.accountId === null)
+  const unlinkedPayments = unrecorded.filter(
+    (payment) => compareCalendarDates(payment.date, today) <= 0,
+  ).length
+  const futurePayments = unrecorded.length - unlinkedPayments
   const {
     register,
     handleSubmit,
@@ -209,6 +217,12 @@ export function LinkToAccountForm<E extends string>({
               {t(`${namespace}.linkIncludePaymentsHelper`)}
             </p>
           </div>
+        )}
+
+        {futurePayments > 0 && (
+          <p className="text-xs/[1rem] text-muted-foreground">
+            {t(`${namespace}.linkFuturePayments`, { count: futurePayments })}
+          </p>
         )}
 
         {error && <InlineAlert tone="negative">{error}</InlineAlert>}

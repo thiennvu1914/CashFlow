@@ -71,13 +71,6 @@ class MockLoanAlreadyLinkedError extends Error {
   }
 }
 
-class MockFutureLinkedPaymentError extends Error {
-  constructor() {
-    super('A payment dated later than today cannot be recorded in an account yet.')
-    this.name = 'FutureLinkedPaymentError'
-  }
-}
-
 class MockLoanNotLinkedError extends Error {
   constructor() {
     super('This loan is not recorded in an account.')
@@ -134,7 +127,6 @@ vi.mock('@/lib/server/services/loan', () => ({
 }))
 
 vi.mock('@/lib/server/services/linked-transaction', () => ({
-  FutureLinkedPaymentError: MockFutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError: MockLinkedAccountCurrencyMismatchError,
 }))
 
@@ -916,15 +908,6 @@ describe('no future-dated money movement in an account (P12)', () => {
     expect(result).toEqual({ ok: true })
     expect(createLoanMock).toHaveBeenCalledTimes(1)
   })
-
-  it('maps a later-dated instalment that "Record in an account" would record to FUTURE_PAYMENT', async () => {
-    linkLoanToAccountMock.mockRejectedValue(new MockFutureLinkedPaymentError())
-
-    const result = await linkLoanToAccountAction('loan_1', linkInput)
-
-    expect(result).toEqual({ ok: false, error: 'FUTURE_PAYMENT' })
-    expect(revalidatePathMock).not.toHaveBeenCalled()
-  })
 })
 
 describe('LOAN_ERROR_KEYS', () => {
@@ -947,7 +930,6 @@ describe('LOAN_ERROR_KEYS', () => {
       CONFLICT: 'errors.loan.CONFLICT',
       ALREADY_LINKED: 'errors.loan.ALREADY_LINKED',
       NOT_LINKED: 'errors.loan.NOT_LINKED',
-      FUTURE_PAYMENT: 'errors.loan.FUTURE_PAYMENT',
       TIMEOUT: 'errors.loan.TIMEOUT',
       INVALID_INPUT: 'errors.loan.INVALID_INPUT',
       NOT_FOUND: 'errors.loan.NOT_FOUND',

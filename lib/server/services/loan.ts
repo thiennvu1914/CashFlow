@@ -31,7 +31,6 @@ import enLoanMessages from '@/messages/en/loans.json'
 import viLoanMessages from '@/messages/vi/loans.json'
 import { lockAccountsForUpdate } from './account-lock'
 import {
-  FutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError,
   SNAPSHOT_PAIR,
   ensureLoanInterestCategoryId,
@@ -474,6 +473,19 @@ export interface LoanWithOutstanding extends LoanTotals {
  * can tie inside a millisecond. Without the tie-breaks the same history could
  * render in one order on one request and another order on the next.
  */
+/**
+ * The instalments "Record in an account" records: neither leg in an account
+ * yet, and dated up to the user's `today` (`yyyy-MM-dd`) — a later one is left
+ * alone (Ruling P12). `paymentDate` is a calendar carrier.
+ */
+function unlinkedBy(today: string) {
+  return {
+    principalTransactionId: null,
+    interestTransactionId: null,
+    paymentDate: { lte: calendarDateToUtcCarrier(today) },
+  }
+}
+
 const PAYMENT_ORDER = [
   { paymentDate: 'asc' },
   { createdAt: 'asc' },
@@ -1472,10 +1484,10 @@ export async function closeLoan(userId: string, loanId: string): Promise<Loan> {
  * the lock, where a concurrent link that committed first is visible), an
  * account in another currency (`LinkedAccountCurrencyMismatchError`), an
  * archived account, another user's loan or account (P2025), no usable rate,
- * and — Ruling P12 — a disbursement date after today (a `ZodError`) or, with
- * `includePayments`, an instalment to record dated after today
- * (`FutureLinkedPaymentError`). Any later failure rolls the whole operation
- * back, the interest category included.
+ * and — Ruling P12 — a disbursement date after today (a `ZodError`). With
+ * `includePayments`, an instalment dated after today is skipped rather than
+ * refused. Any later failure rolls the whole operation back, the interest
+ * category included.
  *
  * A closed loan can be linked too — closing it records that the user is
  * finished with it, not that no money ever moved — so the loan row is locked
@@ -1513,11 +1525,9 @@ export async function linkLoanToAccount(
     where: { userId_id: { userId, id: loanId } },
     select: {
       disbursementTransactionId: true,
-      _count: {
-        select: {
-          payments: { where: { principalTransactionId: null, interestTransactionId: null } },
-        },
-      },
+      // The instalments to record: neither leg in an account and dated up to
+      // today — later ones are left alone (Ruling P12).
+      _count: { select: { payments: { where: unlinkedBy(today) } } },
     },
   })
   if (existing.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
@@ -1543,22 +1553,17 @@ export async function linkLoanToAccount(
     if (loan.disbursementTransactionId !== null) throw new LoanAlreadyLinkedError()
     if (account.currency !== loan.currency) throw new LinkedAccountCurrencyMismatchError()
 
-    // 3. The instalments with neither leg linked, read under the loan lock —
-    //    and refused, before anything is written, if one is dated after today
-    //    (Ruling P12: noted with no account it could carry a planned date).
+    // 3. The instalments with neither leg linked and dated up to today, read
+    //    under the loan lock. One dated later is skipped, not refused (Ruling
+    //    P12: money in an account cannot have moved in the future — noted with
+    //    no account it may carry a planned date); it stays as it is, and the
+    //    dialog says how many are left.
     const unlinked = parsed.includePayments
       ? await tx.loanPayment.findMany({
-          where: { userId, loanId, principalTransactionId: null, interestTransactionId: null },
+          where: { userId, loanId, ...unlinkedBy(today) },
           orderBy: PAYMENT_ORDER,
         })
       : []
-    if (
-      unlinked.some(
-        (payment) => compareCalendarDates(formatCalendarDate(payment.paymentDate), today) > 0,
-      )
-    ) {
-      throw new FutureLinkedPaymentError()
-    }
 
     // 4. The disbursement. `principal` is > 0 (`Loan_principal_positive`), so
     //    the core's zero-amount refusal is unreachable.

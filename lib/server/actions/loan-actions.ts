@@ -7,10 +7,7 @@ import { mapCommonActionError } from './map-action-error'
 import { isFxUnavailableError } from '@/lib/currency/current-rate-policy'
 import { todayCalendarDateInZone } from '@/lib/datetime/calendar-date'
 import { ArchivedAccountError } from '@/lib/server/services/account-lock'
-import {
-  FutureLinkedPaymentError,
-  LinkedAccountCurrencyMismatchError,
-} from '@/lib/server/services/linked-transaction'
+import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked-transaction'
 import {
   closeLoan,
   createLoan,
@@ -92,8 +89,8 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * Ruling P12 (final review F8): money recorded in an account cannot have moved
  * later than the session user's today, so the writes that can record it parse
  * against that day (`…SchemaAsOf`) — a later date is `INVALID_INPUT` on its
- * field — and "Record in an account" answers `FUTURE_PAYMENT` when an existing
- * instalment it would record is dated later.
+ * field — and "Record in an account" skips an
+ * existing instalment dated later rather than refusing.
  */
 export type LoanActionError =
   | 'OVERPAYMENT'
@@ -105,7 +102,6 @@ export type LoanActionError =
   | 'CONFLICT'
   | 'ALREADY_LINKED'
   | 'NOT_LINKED'
-  | 'FUTURE_PAYMENT'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -128,7 +124,6 @@ function mapError(e: unknown): LoanActionResult {
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof LoanAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   if (e instanceof LoanNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
-  if (e instanceof FutureLinkedPaymentError) return { ok: false, error: 'FUTURE_PAYMENT' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {

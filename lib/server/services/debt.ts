@@ -30,7 +30,6 @@ import enDebtMessages from '@/messages/en/debts.json'
 import viDebtMessages from '@/messages/vi/debts.json'
 import { lockAccountsForUpdate } from './account-lock'
 import {
-  FutureLinkedPaymentError,
   LinkedAccountCurrencyMismatchError,
   SNAPSHOT_PAIR,
   insertTransactionInTx,
@@ -406,6 +405,15 @@ export interface DebtWithOutstanding extends DebtTotals {
  * a millisecond. Without the tie-breaks the same history could render in one
  * order on one request and another order on the next.
  */
+/**
+ * The payments "Record in an account" records: none in an account yet, and
+ * dated up to the user's `today` (`yyyy-MM-dd`) — a later one is left alone
+ * (Ruling P12). `date` is a calendar carrier, so the comparison is on carriers.
+ */
+function unlinkedBy(today: string) {
+  return { transactionId: null, date: { lte: calendarDateToUtcCarrier(today) } }
+}
+
 const PAYMENT_ORDER = [
   { date: 'asc' },
   { createdAt: 'asc' },
@@ -1176,9 +1184,9 @@ export async function writeOffDebt(userId: string, debtId: string): Promise<Debt
  * that committed first is visible), an account in another currency
  * (`LinkedAccountCurrencyMismatchError`), an archived account, another user's
  * debt or account (P2025), no usable rate, and — Ruling P12 — an opening date
- * after today (a `ZodError`) or, with `includePayments`, a payment to record
- * dated after today (`FutureLinkedPaymentError`). Any later failure rolls the
- * whole operation back.
+ * after today (a `ZodError`). With `includePayments`, a payment dated after
+ * today is skipped rather than refused. Any later failure rolls the whole
+ * operation back.
  *
  * A written-off debt can be linked too — writing it off records that the rest
  * will not come back, not that no money ever moved — so the debt row is locked
@@ -1215,7 +1223,10 @@ export async function linkDebtToAccount(
     where: { userId_id: { userId, id: debtId } },
     select: {
       openingTransactionId: true,
-      _count: { select: { payments: { where: { transactionId: null } } } },
+      // The payments to record: not yet in an account and dated up to today.
+      // Later-dated ones are left as they are (Ruling P12), so they do not
+      // size the transaction either.
+      _count: { select: { payments: { where: unlinkedBy(today) } } },
     },
   })
   if (existing.openingTransactionId !== null) throw new DebtAlreadyLinkedError()
@@ -1248,20 +1259,17 @@ export async function linkDebtToAccount(
       note: string,
     ) => ({ accountId, type, amount, date, note, expectedCurrency: debt.currency })
 
-    // 3. The payments with no transaction yet, read under the debt lock — and
-    //    refused, before anything is written, if one is dated after today
-    //    (Ruling P12: noted with no account it could carry a planned date).
+    // 3. The payments with no transaction yet and dated up to today, read under
+    //    the debt lock. One dated later is skipped, not refused (Ruling P12:
+    //    money in an account cannot have moved in the future — noted with no
+    //    account it may carry a planned date); it stays as it is, and the
+    //    dialog says how many are left.
     const unlinked = parsed.includePayments
       ? await tx.debtPayment.findMany({
-          where: { userId, debtId, transactionId: null },
+          where: { userId, debtId, ...unlinkedBy(today) },
           orderBy: PAYMENT_ORDER,
         })
       : []
-    if (
-      unlinked.some((payment) => compareCalendarDates(formatCalendarDate(payment.date), today) > 0)
-    ) {
-      throw new FutureLinkedPaymentError()
-    }
 
     // 4. The opening. `originalAmount` is > 0 (`Debt_originalAmount_positive`),
     //    so the core's zero-amount refusal is unreachable.

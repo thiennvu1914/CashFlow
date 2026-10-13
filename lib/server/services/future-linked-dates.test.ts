@@ -18,7 +18,6 @@ import {
   updateDebtPayment,
   type DebtLinkContext,
 } from './debt'
-import { FutureLinkedPaymentError } from './linked-transaction'
 import {
   createLoan,
   linkLoanToAccount,
@@ -232,7 +231,7 @@ describe('debts', () => {
     expect(await transactionCount(s)).toBe(0)
   })
 
-  it('refuses to record a later-dated payment with "Record in an account", writing nothing; without the payments it links', async () => {
+  it('skips a later-dated payment with "Record in an account", recording the opening and the earlier payment', async () => {
     const s = await setup()
     const debt = await createDebt(s.userId, BASE_DEBT, DEBT_CONTEXT)
     await recordDebtPayment(
@@ -243,32 +242,21 @@ describe('debts', () => {
     )
     await recordDebtPayment(s.userId, debt.id, { amount: 100_000, date: LATER }, DEBT_CONTEXT)
 
-    await expect(
-      linkDebtToAccount(
-        s.userId,
-        debt.id,
-        { accountId: s.walletId, openedOn: '2026-03-01', includePayments: true },
-        DEBT_CONTEXT,
-        provider,
-      ),
-    ).rejects.toThrow(FutureLinkedPaymentError)
-    expect(await transactionCount(s)).toBe(0)
-    expect(
-      (
-        await prisma.debt.findUniqueOrThrow({
-          where: { userId_id: { userId: s.userId, id: debt.id } },
-        })
-      ).openingTransactionId,
-    ).toBeNull()
-
     await linkDebtToAccount(
       s.userId,
       debt.id,
-      { accountId: s.walletId, openedOn: '2026-03-01', includePayments: false },
+      { accountId: s.walletId, openedOn: '2026-03-01', includePayments: true },
       DEBT_CONTEXT,
       provider,
     )
-    expect(await transactionCount(s)).toBe(1)
+
+    // The opening and the 5 March payment; the later one has no transaction.
+    expect(await transactionCount(s)).toBe(2)
+    const payments = await prisma.debtPayment.findMany({
+      where: { userId: s.userId, debtId: debt.id },
+      orderBy: { date: 'asc' },
+    })
+    expect(payments.map((payment) => payment.transactionId !== null)).toEqual([true, false])
   })
 })
 
@@ -347,23 +335,34 @@ describe('loans', () => {
     expect(await transactionCount(s)).toBe(0)
   })
 
-  it('refuses to record a later-dated instalment with "Record in an account", writing nothing', async () => {
+  it('skips a later-dated instalment with "Record in an account", recording the disbursement and the earlier one', async () => {
     const s = await setup()
     const loan = await createLoan(s.userId, BASE_LOAN, LOAN_CONTEXT)
+    await recordLoanPayment(
+      s.userId,
+      loan.id,
+      { ...INSTALMENT, paymentDate: '2026-02-01' },
+      LOAN_CONTEXT,
+    )
     await recordLoanPayment(s.userId, loan.id, { ...INSTALMENT, paymentDate: LATER }, LOAN_CONTEXT)
 
-    await expect(
-      linkLoanToAccount(
-        s.userId,
-        loan.id,
-        { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
-        LOAN_CONTEXT,
-        provider,
-      ),
-    ).rejects.toThrow(FutureLinkedPaymentError)
-    expect(await transactionCount(s)).toBe(0)
-    expect(
-      await prisma.category.count({ where: { userId: s.userId, name: 'Loan Interest & Fees' } }),
-    ).toBe(0)
+    await linkLoanToAccount(
+      s.userId,
+      loan.id,
+      { accountId: s.walletId, disbursedOn: '2026-01-01', includePayments: true },
+      LOAN_CONTEXT,
+      provider,
+    )
+
+    // The disbursement and the February instalment's two legs; nothing for the later one.
+    expect(await transactionCount(s)).toBe(3)
+    const payments = await prisma.loanPayment.findMany({
+      where: { userId: s.userId, loanId: loan.id },
+      orderBy: { paymentDate: 'asc' },
+    })
+    expect(payments.map((payment) => payment.principalTransactionId !== null)).toEqual([
+      true,
+      false,
+    ])
   })
 })

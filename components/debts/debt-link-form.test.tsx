@@ -183,11 +183,36 @@ describe('DebtLinkForm ("Record in an account")', () => {
     expect(enDebts.linkIncludePaymentsHelper).toContain('untick this box')
   })
 
+  it('counts only the payments dated up to today, and says how many later-dated ones are left out', () => {
+    const html = render({
+      debt: debt({
+        payments: [
+          UNLINKED_PAYMENT,
+          { ...UNLINKED_PAYMENT, id: 'pay_3', date: TODAY },
+          { ...UNLINKED_PAYMENT, id: 'pay_4', date: '2026-10-20' },
+        ],
+      }),
+    })
+
+    expect(html).toContain('Ghi bù 2 lần trả đã có')
+    expect(html).toContain('Có 1 lần trả ghi ngày sau hôm nay')
+  })
+
+  it('offers no box, only the note, when every unrecorded payment is dated later', () => {
+    const html = render({
+      debt: debt({ payments: [{ ...UNLINKED_PAYMENT, date: '2026-10-20' }] }),
+    })
+
+    expect(html).not.toContain('type="checkbox"')
+    expect(html).toContain('Có 1 lần trả ghi ngày sau hôm nay')
+  })
+
   it('asks nothing about payments when none is left to record', () => {
     const html = render({ debt: debt({ payments: [LINKED_PAYMENT] }) })
 
     expect(html).not.toContain('Ghi bù')
     expect(html).not.toContain('type="checkbox"')
+    expect(html).not.toContain('ngày sau hôm nay')
   })
 
   it("says so, and offers no picker, when no account holds the debt's currency", () => {

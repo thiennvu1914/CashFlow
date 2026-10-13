@@ -22,10 +22,7 @@ import {
   DebtOverpaymentError,
   type DebtLinkContext,
 } from '@/lib/server/services/debt'
-import {
-  FutureLinkedPaymentError,
-  LinkedAccountCurrencyMismatchError,
-} from '@/lib/server/services/linked-transaction'
+import { LinkedAccountCurrencyMismatchError } from '@/lib/server/services/linked-transaction'
 import { ConcurrentModificationError } from '@/lib/server/services/transaction'
 import {
   createDebtSchemaAsOf,
@@ -90,8 +87,8 @@ import { resolveProfileDefaults } from '@/lib/validation/profile'
  * Ruling P12 (final review F8): money recorded in an account cannot have moved
  * later than the session user's today, so the writes that can record it parse
  * against that day (`…SchemaAsOf`) — a later date is `INVALID_INPUT` on its
- * field, refused before any lock — and "Record in an account" answers
- * `FUTURE_PAYMENT` when an existing payment it would record is dated later.
+ * field, refused before any lock — and "Record in an account" skips an
+ * existing payment dated later rather than refusing.
  */
 export type DebtActionError =
   | 'OVERPAYMENT'
@@ -102,7 +99,6 @@ export type DebtActionError =
   | 'CONFLICT'
   | 'ALREADY_LINKED'
   | 'NOT_LINKED'
-  | 'FUTURE_PAYMENT'
   | 'TIMEOUT'
   | 'INVALID_INPUT'
   | 'NOT_FOUND'
@@ -120,7 +116,6 @@ function mapError(e: unknown): DebtActionResult {
   if (e instanceof ConcurrentModificationError) return { ok: false, error: 'CONFLICT' }
   if (e instanceof DebtAlreadyLinkedError) return { ok: false, error: 'ALREADY_LINKED' }
   if (e instanceof DebtNotLinkedError) return { ok: false, error: 'NOT_LINKED' }
-  if (e instanceof FutureLinkedPaymentError) return { ok: false, error: 'FUTURE_PAYMENT' }
   // P2028: the interactive transaction expired (or could not start in time).
   // Everything in it rolled back, so the user can be told nothing was written.
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2028') {

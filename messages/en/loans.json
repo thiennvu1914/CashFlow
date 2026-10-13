@@ -66,6 +66,7 @@
   "linkDate": "Money received on",
   "linkIncludePayments": "{count, plural, one {Also record the # existing payment} other {Also record the # existing payments}}",
   "linkIncludePaymentsHelper": "Each payment is recorded on its own date, principal and interest as two transactions; payments already recorded in an account are left as they are. Payments you entered yourself on the Transactions page are not detected — delete those transactions first, or untick this box, so nothing is counted twice.",
+  "linkFuturePayments": "{count, plural, one {# payment is dated after today, so it is not recorded in an account; it is left as it is.} other {# payments are dated after today, so they are not recorded in an account; they are left as they are.}}",
   "linkNoAccounts": "You have no active {currency} account yet — add one first.",
   "linkArchivedAccount": "That account has just been archived. Reload the page and choose an active account.",
   "linkSubmit": "Record in an account",
