@@ -49,8 +49,9 @@ import type { Currency, RecordStatus } from '@prisma/client'
  * timeout would roll back work that had already succeeded. So every caller
  * resolves FX first (`getUsableCurrentRate`) and opens the transaction with the
  * snapshot already in hand; the transaction then contains only local queries
- * and comfortably fits the default timeout. No caller passes custom
- * transaction options.
+ * and fits the default timeout. The exception is the debt and loan link and
+ * unlink operations, which write or remove one row per payment and so size
+ * their transaction for that count (`linkTransactionOptions`).
  *
  * ## Why `updateTransaction` also re-reads its own row under the lock
  *

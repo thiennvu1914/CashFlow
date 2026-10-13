@@ -60,16 +60,26 @@ outstanding debts/loans, computed on read — nothing is cached in a column.
 Budgets and savings goals are period-scoped views over the same transaction
 data; they read, they do not mutate balances.
 
-## Debts and loans — payment history is immutable (K6)
+## Debts and loans — editable payments and account linking (K6)
 
-Debt and loan payments are append-only through the product UI: there is no
-correction, reversal, edit or delete flow for a `DebtPayment` or a
-`LoanPayment` once recorded, and `nextDueDate` semantics are untouched by
-Phase 8. This is an explicit owner ruling, not an oversight — if a payment
-was recorded wrong today, the only paths are a new offsetting payment
-recorded through the same service, or a direct database intervention outside
-the product. Any future correction/reversal feature is new product work, not
-a bug fix.
+A debt or loan stays a record of what is owed; recording it in an account is
+what makes it move a balance. A payment (`DebtPayment`, `LoanPayment`) can be
+edited or deleted, within the rules of what it still owes: an edit or delete
+never overpays, and one whose transaction sits in an archived account is
+refused because an archived account's history is frozen. A payment recorded in
+an account owns its transaction (principal and interest are two for a loan), so
+an edit rewrites it and a delete removes it in the same database transaction.
+
+An agreement created without an account can be recorded in one later
+("Record in an account"): its opening (debt) or disbursement (loan) is written,
+and, if asked, a transaction for every existing payment dated up to today — a
+later-dated one is skipped and stays as it is, since money in an account
+cannot have moved in the future. "Remove from account" is the undo: it deletes
+those transactions and clears the links, leaving the debt or loan and every
+payment in place. Both lock the account first, then the agreement, then the
+transactions, like every other writer, and size their database transaction for
+the number of rows they touch. Balances stay derived from transactions; no
+link stores one.
 
 ## Reminders
 

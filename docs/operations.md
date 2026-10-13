@@ -485,8 +485,11 @@ this shape — mentioned only as illustrations, not dependencies:
 
 ## Known constraints (read before relying on this system)
 
-- **Debt/loan payment history is immutable through the product UI** — see
-  `docs/architecture.md`. There is no correction, reversal or delete flow.
+- **Debt/loan payments are editable and deletable** (amount, date, note; a
+  payment recorded in an account moves its transaction with it) — see
+  `docs/architecture.md`. A debt or loan can be recorded in, or removed from,
+  an account after the fact; the transactions that creates or removes are the
+  only way its payments touch a balance.
 - **Registration failure copy is intentionally uninformative**: a duplicate
   email and any other registration failure show the same generic message,
   by owner ruling, to avoid confirming whether an address has an account.
