@@ -162,6 +162,25 @@ describe('LoanLinkForm ("Record in an account")', () => {
     expect(html).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
   })
 
+  it('warns beside the box that instalments entered by hand on the Transactions page are not detected — delete them or untick it', () => {
+    const html = render({ loan: loan({ payments: [PAYMENT] }) })
+
+    expect(html).toContain('Lần trả bạn đã tự nhập ở trang Giao dịch không được nhận ra')
+    expect(html).toContain('hãy xóa các giao dịch đó trước, hoặc bỏ chọn ô này')
+    expect(html).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
+  })
+
+  it("says in the dialog's description, in both languages, that a hand-entered disbursement is not detected either", () => {
+    expect(viLoans.linkDescription).toContain(
+      'Giao dịch bạn đã tự nhập ở trang Giao dịch không được nhận ra',
+    )
+    expect(viLoans.linkDescription).toContain('hãy xóa giao dịch đó trước')
+    expect(enLoans.linkDescription).toContain(
+      'Transactions you entered yourself on the Transactions page are not detected',
+    )
+    expect(enLoans.linkIncludePaymentsHelper).toContain('untick this box')
+  })
+
   it('asks nothing about instalments when none is left to record', () => {
     const html = render()
 

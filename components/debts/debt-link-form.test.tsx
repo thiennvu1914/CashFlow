@@ -159,6 +159,26 @@ describe('DebtLinkForm ("Record in an account")', () => {
     expect(html).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
   })
 
+  it('warns beside the box that payments entered by hand on the Transactions page are not detected — delete them or untick it', () => {
+    const html = render({ debt: debt({ payments: [UNLINKED_PAYMENT] }) })
+
+    expect(html).toContain('Lần trả bạn đã tự nhập ở trang Giao dịch không được nhận ra')
+    expect(html).toContain('hãy xóa các giao dịch đó trước, hoặc bỏ chọn ô này')
+    // The box stays ticked by default all the same.
+    expect(html).toMatch(/type="checkbox"[^>]*checked=""|checked=""[^>]*type="checkbox"/)
+  })
+
+  it("says in the dialog's description, in both languages, that a hand-entered opening is not detected either", () => {
+    expect(viDebts.linkDescription).toContain(
+      'Giao dịch bạn đã tự nhập ở trang Giao dịch không được nhận ra',
+    )
+    expect(viDebts.linkDescription).toContain('hãy xóa giao dịch đó trước')
+    expect(enDebts.linkDescription).toContain(
+      'Transactions you entered yourself on the Transactions page are not detected',
+    )
+    expect(enDebts.linkIncludePaymentsHelper).toContain('untick this box')
+  })
+
   it('asks nothing about payments when none is left to record', () => {
     const html = render({ debt: debt({ payments: [LINKED_PAYMENT] }) })
 
