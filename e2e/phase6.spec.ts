@@ -933,7 +933,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
       /Tiến độ ngân sách|Budget Progress/,
       /Mục tiêu tiết kiệm|Savings Goals/,
       /Công nợ và khoản vay|Debt \/ Loan Overview/,
-      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /^(Sắp tới|Upcoming)$/,
       /Giao dịch gần đây|Recent Transactions/,
     ].forEach((pattern, index) => expect(lastFive[index]).toMatch(pattern))
 
@@ -1009,7 +1009,7 @@ test.describe.serial('Phase 6 — planning modules', () => {
     expect(await kpiValue(/Tổng số dư|Total Balance/)).toBe('5000000')
     expect(await kpiValue(/Tài sản ròng|Net Worth/)).toBe('2500000')
 
-    const remindersWidget = sectionFor(page, /Nhắc nhở sắp tới|Upcoming Reminders/)
+    const remindersWidget = sectionFor(page, /^(Sắp tới|Upcoming)$/)
     const rentRow = namedRow(page, remindersWidget, 'Rent')
     await expect(rentRow).toBeVisible()
     await expect(rentRow).toContainText(occurrenceDueLine('Ngày mai', 'Tomorrow', TOMORROW))

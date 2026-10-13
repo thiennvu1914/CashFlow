@@ -333,7 +333,7 @@ Current boundaries include:
 - no automatic bank synchronization
 - no cryptocurrency or investment trading
 - no background cron required for reminders; occurrences are materialized lazily
-- debt and loan payment history is append-only through the product UI
+- debt and loan payments can be corrected (edited or deleted), but there is no separate reversal or audit-trail feature
 - the default rate-limiting approach is intended for the current single-instance deployment model
 
 These are explicit product decisions, not hidden implementation gaps.

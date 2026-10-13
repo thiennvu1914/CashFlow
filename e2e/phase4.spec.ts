@@ -109,7 +109,7 @@ test.describe.serial('Phase 4 — dashboard, reports and export', () => {
       /Tiến độ ngân sách|Budget Progress/,
       /Mục tiêu tiết kiệm|Savings Goals/,
       /Công nợ và khoản vay|Debt \/ Loan Overview/,
-      /Nhắc nhở sắp tới|Upcoming Reminders/,
+      /^(Sắp tới|Upcoming)$/,
       /Giao dịch gần đây|Recent Transactions/,
     ]) {
       await expect(page.getByRole('heading', { name: heading })).toBeVisible()

@@ -288,11 +288,7 @@ test.describe
     for (const [heading, empty, action] of [
       [/Tiến độ ngân sách|Budget Progress/, 'Chưa có ngân sách tháng này', /Đặt ngân sách/],
       [/Mục tiêu tiết kiệm|Savings Goals/, 'Chưa có mục tiêu tiết kiệm', /Đặt mục tiêu/],
-      [
-        /Nhắc nhở sắp tới|Upcoming Reminders/,
-        'Không có gì đến hạn trong 30 ngày tới',
-        /Thêm nhắc nhở/,
-      ],
+      [/^(Sắp tới|Upcoming)$/, 'Không có gì đến hạn trong 30 ngày tới', /Thêm nhắc nhở/],
     ] as const) {
       const section = page
         .locator('section')

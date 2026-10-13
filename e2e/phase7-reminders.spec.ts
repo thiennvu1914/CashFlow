@@ -220,7 +220,7 @@ test.describe.serial('Phase 7 Task 9 — reminders', () => {
     })
 
     await page.goto('/dashboard')
-    const widget = sectionFor(page, /Nhắc nhở sắp tới/)
+    const widget = sectionFor(page, /^Sắp tới$/)
     await expect(widget).toBeVisible()
     await expect(namedRow(page, widget, 'Gas bill')).toContainText('Ngày mai')
 

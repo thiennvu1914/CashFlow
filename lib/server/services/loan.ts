@@ -466,14 +466,6 @@ export interface LoanWithOutstanding extends LoanTotals {
 }
 
 /**
- * Oldest instalment first — the order a history reads in.
- *
- * All three keys are compared so the order is total: `paymentDate` is a
- * calendar-date carrier, so several instalments can share a day, and `createdAt`
- * can tie inside a millisecond. Without the tie-breaks the same history could
- * render in one order on one request and another order on the next.
- */
-/**
  * The instalments "Record in an account" records: neither leg in an account
  * yet, and dated up to the user's `today` (`yyyy-MM-dd`) — a later one is left
  * alone (Ruling P12). `paymentDate` is a calendar carrier.
@@ -486,6 +478,14 @@ function unlinkedBy(today: string) {
   }
 }
 
+/**
+ * Oldest instalment first — the order a history reads in.
+ *
+ * All three keys are compared so the order is total: `paymentDate` is a
+ * calendar-date carrier, so several instalments can share a day, and `createdAt`
+ * can tie inside a millisecond. Without the tie-breaks the same history could
+ * render in one order on one request and another order on the next.
+ */
 const PAYMENT_ORDER = [
   { paymentDate: 'asc' },
   { createdAt: 'asc' },

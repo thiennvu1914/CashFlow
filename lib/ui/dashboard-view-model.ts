@@ -17,6 +17,7 @@ import type { OccurrenceRow } from '@/lib/server/services/reminder'
 import type { SavingsGoalRow } from '@/lib/server/services/savings-goal'
 import type { listTransactions } from '@/lib/server/services/transaction'
 import { type BudgetProgressDto, toBudgetProgressDto } from './budget-view-model'
+import { OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/datetime/occurrence-lookahead'
 import { formatDate } from './format-date'
 import { formatMoney, formatRate } from './format-money'
 import { type OccurrenceDto, toOccurrenceDto } from './reminder-view-model'
@@ -395,24 +396,6 @@ const WIDGET_ROW_LIMIT = 5
 const WIDGET_OVERDUE_ROW_LIMIT = 2
 
 /**
- * The two caps the dashboard's occurrence read must honour, derived from the
- * widget's own row limits (Phase 8, finding B-6).
- *
- * Exported so `app/(app)/dashboard/page.tsx` can hand them to
- * `listDashboardOccurrences` instead of restating them: the query fetches at
- * most this many rows of each half and this module slices with the same two
- * numbers, so the bound and the widget can never drift apart. Raising either
- * limit above widens the query with it.
- *
- * `upcoming` is `WIDGET_ROW_LIMIT` rather than
- * `WIDGET_ROW_LIMIT − WIDGET_OVERDUE_ROW_LIMIT`: a user with nothing overdue
- * sees five upcoming rows, so five is what the upcoming half must be able to
- * supply.
- */
-/** The reminders' own lookahead, restated so debt and loan dates use the same window. */
-const UPCOMING_WINDOW_DAYS = 30
-
-/**
  * Debt and loan due dates inside the reminders' window: everything overdue plus
  * what falls within the next 30 days of the user's own today. A debt with
  * nothing left owed has nothing to collect or pay, so it is not listed.
@@ -423,7 +406,7 @@ function dueItems(
   locale: Locale,
 ): DueItemDto[] {
   const horizon = formatCalendarDate(
-    new Date(calendarDateToUtcCarrier(today).getTime() + UPCOMING_WINDOW_DAYS * 86_400_000),
+    new Date(calendarDateToUtcCarrier(today).getTime() + OCCURRENCE_LOOKAHEAD_DAYS * 86_400_000),
   )
   const items: DueItemDto[] = []
   const push = (item: Omit<DueItemDto, 'daysToDue' | 'overdue'>) => {
@@ -447,7 +430,9 @@ function dueItems(
       href: '/debts',
     })
   }
-  for (const { loan } of agreements.loans) {
+  for (const { loan, outstandingPrincipal } of agreements.loans) {
+    // Paid off but still ACTIVE until closed: nothing left to pay (as the position does).
+    if (!outstandingPrincipal.gt(0)) continue
     push({
       kind: 'loan',
       id: loan.id,
@@ -462,6 +447,21 @@ function dueItems(
   return items
 }
 
+/**
+ * The two caps the dashboard's occurrence read must honour, derived from the
+ * widget's own row limits (Phase 8, finding B-6).
+ *
+ * Exported so `app/(app)/dashboard/page.tsx` can hand them to
+ * `listDashboardOccurrences` instead of restating them: the query fetches at
+ * most this many rows of each half and this module slices with the same two
+ * numbers, so the bound and the widget can never drift apart. Raising either
+ * limit above widens the query with it.
+ *
+ * `upcoming` is `WIDGET_ROW_LIMIT` rather than
+ * `WIDGET_ROW_LIMIT − WIDGET_OVERDUE_ROW_LIMIT`: a user with nothing overdue
+ * sees five upcoming rows, so five is what the upcoming half must be able to
+ * supply.
+ */
 export const DASHBOARD_OCCURRENCE_LIMITS = {
   overdue: WIDGET_OVERDUE_ROW_LIMIT,
   upcoming: WIDGET_ROW_LIMIT,

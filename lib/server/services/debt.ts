@@ -398,14 +398,6 @@ export interface DebtWithOutstanding extends DebtTotals {
 }
 
 /**
- * Oldest payment first — the order a history reads in.
- *
- * All three keys are compared so the order is total: `date` is a calendar-date
- * carrier, so several payments can share a day, and `createdAt` can tie inside
- * a millisecond. Without the tie-breaks the same history could render in one
- * order on one request and another order on the next.
- */
-/**
  * The payments "Record in an account" records: none in an account yet, and
  * dated up to the user's `today` (`yyyy-MM-dd`) — a later one is left alone
  * (Ruling P12). `date` is a calendar carrier, so the comparison is on carriers.
@@ -414,6 +406,14 @@ function unlinkedBy(today: string) {
   return { transactionId: null, date: { lte: calendarDateToUtcCarrier(today) } }
 }
 
+/**
+ * Oldest payment first — the order a history reads in.
+ *
+ * All three keys are compared so the order is total: `date` is a calendar-date
+ * carrier, so several payments can share a day, and `createdAt` can tie inside
+ * a millisecond. Without the tie-breaks the same history could render in one
+ * order on one request and another order on the next.
+ */
 const PAYMENT_ORDER = [
   { date: 'asc' },
   { createdAt: 'asc' },

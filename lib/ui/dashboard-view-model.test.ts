@@ -1073,7 +1073,12 @@ describe('buildDashboardViewModel', () => {
         outstanding: decimal(o.outstanding ?? '2000000'),
       }
     }
-    function loanRow(o: { id: string; lender: string; nextDueDate: string }) {
+    function loanRow(o: {
+      id: string
+      lender: string
+      nextDueDate: string
+      outstandingPrincipal?: string
+    }) {
       return {
         loan: {
           id: o.id,
@@ -1082,6 +1087,7 @@ describe('buildDashboardViewModel', () => {
           scheduledPaymentAmount: decimal('1500000'),
           nextDueDate: new Date(`${o.nextDueDate}T00:00:00Z`),
         },
+        outstandingPrincipal: decimal(o.outstandingPrincipal ?? '5000000'),
       }
     }
     const agreements = (debts: unknown[], loans: unknown[]) =>
@@ -1126,6 +1132,30 @@ describe('buildDashboardViewModel', () => {
         ['reminder', 'o1', '2026-09-20'],
         ['loan', 'l1', '2026-09-25', null, '1.500.000', '/loans'],
         ['debt', 'd2', '2026-10-15', 'RECEIVABLE', '2.000.000', '/debts'],
+      ])
+    })
+
+    it('does not list a paid-off loan that is still ACTIVE', () => {
+      const vm = buildDashboardViewModel(
+        makeInput({
+          agreements: agreements(
+            [],
+            [
+              loanRow({
+                id: 'paid',
+                lender: 'Old',
+                nextDueDate: '2026-09-20',
+                outstandingPrincipal: '0',
+              }),
+              loanRow({ id: 'open', lender: 'Bank', nextDueDate: '2026-09-21' }),
+            ],
+          ),
+        }),
+        'vi',
+      )
+
+      expect(vm.upcomingItems.map((item) => (item.kind === 'reminder' ? '' : item.id))).toEqual([
+        'open',
       ])
     })
 

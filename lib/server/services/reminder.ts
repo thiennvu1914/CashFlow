@@ -11,6 +11,7 @@ import {
   todayCalendarDateInZone,
 } from '@/lib/datetime/calendar-date'
 import { calendarDateToEntryInstant } from '@/lib/datetime/local-date-time'
+import { OCCURRENCE_LOOKAHEAD_DAYS } from '@/lib/datetime/occurrence-lookahead'
 import { ArchivedAccountError, lockAccountsForUpdate } from './account-lock'
 import {
   InvalidCategoryError,
@@ -147,7 +148,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000
  * page and Group 8's dashboard widget both describe the window to the user, and
  * two different numbers in two places would be a lie in one of them.
  */
-export const OCCURRENCE_LOOKAHEAD_DAYS = 30
+export { OCCURRENCE_LOOKAHEAD_DAYS }
 
 /** How many occurrences the history view loads when no caller says otherwise. A
  *  weekly reminder produces 52 rows a year, so an unbounded history is a page
