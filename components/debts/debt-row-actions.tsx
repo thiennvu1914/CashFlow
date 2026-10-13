@@ -18,7 +18,7 @@ import {
   updateDebtPaymentAction,
   writeOffDebtAction,
 } from '@/lib/server/actions/debt-actions'
-import { DEBT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { DEBT_ERROR_KEYS, DEBT_FROZEN_ACCOUNT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import { defaultPaymentAccountId, type DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { DebtDto, DebtPaymentDto } from '@/lib/ui/debt-view-model'
@@ -213,7 +213,7 @@ export function DebtRowMenu({
         unlinkDebtFromAccountAction(debt.id, {
           includePayments: linkedPayments > 0 && unlinkPayments,
         }),
-      errorKeys: DEBT_ERROR_KEYS,
+      errorKeys: DEBT_FROZEN_ACCOUNT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       // Closes on BOTH outcomes, as the write-off does.
       onSettled: () => setUnlinking(false),
@@ -509,7 +509,7 @@ export function DebtPaymentActions({
     await deleteSubmit.run({
       tag: 'DebtPaymentActions: delete failed',
       action: () => deleteDebtPaymentAction(payment.id),
-      errorKeys: DEBT_ERROR_KEYS,
+      errorKeys: DEBT_FROZEN_ACCOUNT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       onSettled: () => setDeleting(false),
     })

@@ -103,6 +103,23 @@ export const LOAN_ERROR_KEYS: Record<LoanActionError, string> = {
   NOT_FOUND: 'errors.loan.NOT_FOUND',
 }
 
+/**
+ * For the two paths that change an existing payment's transactions — Remove
+ * from account, and deleting a payment recorded in an account. The usual
+ * ARCHIVED_ACCOUNT copy tells the user to choose another account or not to
+ * record, which reads oddly when there is nothing to choose: here the account
+ * is simply frozen.
+ */
+export const DEBT_FROZEN_ACCOUNT_ERROR_KEYS: Record<DebtActionError, string> = {
+  ...DEBT_ERROR_KEYS,
+  ARCHIVED_ACCOUNT: 'errors.debt.ARCHIVED_ACCOUNT_FROZEN',
+}
+
+export const LOAN_FROZEN_ACCOUNT_ERROR_KEYS: Record<LoanActionError, string> = {
+  ...LOAN_ERROR_KEYS,
+  ARCHIVED_ACCOUNT: 'errors.loan.ARCHIVED_ACCOUNT_FROZEN',
+}
+
 export const REMINDER_ERROR_KEYS: Record<ReminderActionError, string> = {
   INVALID_CATEGORY: 'errors.reminder.INVALID_CATEGORY',
   INVALID_ACCOUNT: 'errors.reminder.INVALID_ACCOUNT',

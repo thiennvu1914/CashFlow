@@ -8,7 +8,7 @@ import {
   deleteLoanPaymentAction,
   unlinkLoanFromAccountAction,
 } from '@/lib/server/actions/loan-actions'
-import { LOAN_ERROR_KEYS } from '@/lib/ui/action-error-messages'
+import { LOAN_ERROR_KEYS, LOAN_FROZEN_ACCOUNT_ERROR_KEYS } from '@/lib/ui/action-error-messages'
 import type { DebtAccountOption } from '@/lib/ui/debt-accounts'
 import { useActionSubmit } from '@/lib/ui/use-action-submit'
 import type { LoanDto, LoanPaymentDto } from '@/lib/ui/loan-view-model'
@@ -166,7 +166,7 @@ export function LoanPaymentActions({
     await deleteSubmit.run({
       tag: 'LoanPaymentActions: delete failed',
       action: () => deleteLoanPaymentAction(payment.id),
-      errorKeys: LOAN_ERROR_KEYS,
+      errorKeys: LOAN_FROZEN_ACCOUNT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       // Closes on BOTH outcomes: the row's message renders behind this
       // dialog's own scrim (`components/common/confirm-dialog.tsx`).
@@ -307,7 +307,7 @@ export function LoanRowMenu({
         unlinkLoanFromAccountAction(loan.id, {
           includePayments: linkedPayments > 0 && unlinkPayments,
         }),
-      errorKeys: LOAN_ERROR_KEYS,
+      errorKeys: LOAN_FROZEN_ACCOUNT_ERROR_KEYS,
       onError: (failure) => setError(failure?.message ?? null),
       // Closes on BOTH outcomes, as closing the loan does.
       onSettled: () => setUnlinking(false),
